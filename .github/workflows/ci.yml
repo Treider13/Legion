@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [cursor/**]
+  pull_request:
+
+jobs:
+  # ------------------------------------------------------------------
+  # Прошивка: сборка под ВСЕ поддерживаемые платы (факт T5)
+  # ------------------------------------------------------------------
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, esp32-s3, esp32-s2, esp32-c3, esp32-c6, esp32-h2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build firmware (${{ matrix.env }})
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+
+  # ------------------------------------------------------------------
+  # Web-фронтенд: сборка Vite
+  # ------------------------------------------------------------------
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build web
+        working-directory: app
+        run: npm ci && npm run build
+
+  # ------------------------------------------------------------------
+  # Tauri desktop: проверка сборки (факт T2: serialplugin + React 19)
+  # ------------------------------------------------------------------
+  tauri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Build frontend + Tauri
+        working-directory: app
+        run: npm ci && npm run tauri build -- --no-bundle
+
+  # ------------------------------------------------------------------
+  # CLI: синтаксис и базовая проверка
+  # ------------------------------------------------------------------
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyserial && python3 -m py_compile tools/legion_cli.py && python3 tools/legion_cli.py --list
