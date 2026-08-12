@@ -24,7 +24,14 @@ jobs:
         run: pip install platformio
       - name: Build firmware (${{ matrix.env }})
         working-directory: firmware
-        run: pio run -e ${{ matrix.env }}
+        # Retry: скачки сети при загрузке toolchain дают transient ConnectionError
+        run: |
+          for attempt in 1 2 3; do
+            pio run -e ${{ matrix.env }} && exit 0
+            echo "::warning::pio run failed (attempt $attempt), retrying..."
+            sleep 10
+          done
+          exit 1
 
   # ------------------------------------------------------------------
   # Web-фронтенд: сборка Vite
