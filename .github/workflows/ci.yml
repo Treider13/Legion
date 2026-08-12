@@ -53,7 +53,10 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          # libudev-dev — требуется крейтом serialport (проверено локальной сборкой)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:

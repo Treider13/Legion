@@ -9,14 +9,19 @@
     "core:default",
     "serialplugin:default",
     "serialplugin:allow-available-ports",
-    "serialplugin:allow-available-ports-direct",
+    "serialplugin:allow-managed-ports",
     "serialplugin:allow-open",
     "serialplugin:allow-close",
     "serialplugin:allow-close-all",
     "serialplugin:allow-force-close",
     "serialplugin:allow-read",
+    "serialplugin:allow-read-binary",
     "serialplugin:allow-write",
     "serialplugin:allow-write-binary",
-    "serialplugin:allow-cancel-read"
+    "serialplugin:allow-cancel-read",
+    "serialplugin:allow-watch",
+    "serialplugin:allow-unwatch",
+    "serialplugin:allow-watch-ports",
+    "serialplugin:allow-unwatch-ports"
   ]
 }
