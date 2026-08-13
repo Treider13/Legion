@@ -182,7 +182,7 @@ function makeCircuitTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(2, 1);
-  tex.anisotropy = 8;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   return tex;
 }
 
@@ -200,6 +200,7 @@ function makeRoughnessTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(3, 2);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   return tex;
 }
 
@@ -615,7 +616,13 @@ scene.add(sparks);
 
 /* ---------------- Постобработка: bloom для свечения ---------------- */
 
-const composer = new EffectComposer(renderer);
+// MSAA-таргет: без него композер отключает сглаживание и края «зубрятся»
+const composerTarget = new THREE.WebGLRenderTarget(
+  window.innerWidth * renderer.getPixelRatio(),
+  window.innerHeight * renderer.getPixelRatio(),
+  { type: THREE.HalfFloatType, samples: 4 }
+);
+const composer = new EffectComposer(renderer, composerTarget);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -650,7 +657,6 @@ const glitch = { level: 0, next: 2.5, until: 0 };
 const scan = { t: -1, next: 3.5, DUR: 1.6 };
 
 function animate() {
-  requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
   const k = (rate) => 1 - Math.exp(-dt * rate);
@@ -755,7 +761,7 @@ function animate() {
   controls.update();
   composer.render();
 }
-animate();
+renderer.setAnimationLoop(animate);
 
 /* ---------------- Служебное ---------------- */
 
