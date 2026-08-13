@@ -34,7 +34,20 @@ const Scene = __LEGION_LITE__
 
 function App() {
   const [booted, setBooted] = useState(false);
+  const [mount3d, setMount3d] = useState(false);
   const tier = useDeviceTier();
+
+  // Отложенный монтаж 3D: сначала красим текстовый UI (FCP/LCP), затем WebGL
+  // (Lighthouse: LCP 3.8с → цель <2.5с; тяжёлая сцена не блокирует первый кадр)
+  useEffect(() => {
+    if (!booted) return;
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(() => setMount3d(true), { timeout: 800 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const t = setTimeout(() => setMount3d(true), 300);
+    return () => clearTimeout(t);
+  }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const telemFreq = useLegion((s) => s.telemFreq);
 
@@ -84,7 +97,7 @@ function App() {
       {/* HERO: RF-СФЕРА + дайл в скобках LOCK */}
       <section className="hero">
         <div className="hero-canvas">
-          {__LEGION_LITE__ || Scene === null ? (
+          {__LEGION_LITE__ || Scene === null || !mount3d ? (
             <LiteRadar />
           ) : (
             <Suspense fallback={<LiteRadar />}>

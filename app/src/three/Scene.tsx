@@ -2,7 +2,7 @@
 // LEGION — 3D-сцена: Canvas + камера с pointer-parallax + постпроцессинг
 // (Bloom/Noise/Vignette — @react-three/postprocessing, стандарт 2026).
 // ============================================================================
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
@@ -46,18 +46,42 @@ export function Scene({ tier }: SceneProps) {
     >
       <CameraRig />
       <RfSphere tier={tier} />
-      {tier === "high" && (
-        <EffectComposer multisampling={0}>
-          <Bloom
-            intensity={0.85}
-            luminanceThreshold={0.18}
-            luminanceSmoothing={0.75}
-            mipmapBlur
-          />
-          <Noise opacity={0.05} />
-          <Vignette eskil={false} offset={0.18} darkness={0.85} />
-        </EffectComposer>
-      )}
+      {tier === "high" && <FxWithGuard />}
     </Canvas>
+  );
+}
+
+/** Постпроцессинг с runtime-защитой: если FPS < 30 устойчиво — снимаем эффекты
+ *  (динамическая деградация, тренд 2026: device-tier не только на старте). */
+function FxWithGuard() {
+  const [enabled, setEnabled] = useState(true);
+  const acc = useRef({ frames: 0, t: 0, slow: 0 });
+
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    const a = acc.current;
+    a.frames++;
+    a.t += delta;
+    if (a.t >= 1) {
+      const fps = a.frames / a.t;
+      a.slow = fps < 30 ? a.slow + 1 : 0;
+      if (a.slow >= 2) setEnabled(false); // 2 секунды подряд <30 fps
+      a.frames = 0;
+      a.t = 0;
+    }
+  });
+
+  if (!enabled) return null;
+  return (
+    <EffectComposer multisampling={0}>
+      <Bloom
+        intensity={0.85}
+        luminanceThreshold={0.18}
+        luminanceSmoothing={0.75}
+        mipmapBlur
+      />
+      <Noise opacity={0.05} />
+      <Vignette eskil={false} offset={0.18} darkness={0.85} />
+    </EffectComposer>
   );
 }

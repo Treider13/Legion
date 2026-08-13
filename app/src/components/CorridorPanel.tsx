@@ -21,6 +21,7 @@ export function CorridorPanel() {
         <label>
           MODE
           <select
+            aria-label="Режим коридора"
             value={s.corrMode}
             onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
             disabled={!connected || s.corridorRunning}

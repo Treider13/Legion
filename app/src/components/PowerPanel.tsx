@@ -27,6 +27,7 @@ export function PowerPanel() {
         <span className="att-label">ATT</span>
         <input
           type="range"
+          aria-label="Затухание PE43702, дБ"
           min={0}
           max={31.75}
           step={0.25}

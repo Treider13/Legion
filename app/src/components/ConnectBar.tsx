@@ -44,6 +44,7 @@ export function ConnectBar() {
     <section className="panel connect-bar">
       <span className="panel-title">LINK</span>
       <select
+        aria-label="Транспорт подключения"
         value={s.transportKind}
         onChange={(e) => s.setTransportKind(e.target.value as TransportKind)}
         disabled={connected}
@@ -62,6 +63,7 @@ export function ConnectBar() {
               udev-железо (ttyUSB/ttyACM); виртуальные PTY — ручным вводом. */}
           <input
             list="legion-ports"
+            aria-label="Serial-порт"
             placeholder="/dev/ttyUSB0"
             value={s.selectedPort}
             onChange={(e) => s.setSelectedPort(e.target.value)}
@@ -83,6 +85,7 @@ export function ConnectBar() {
 
       {s.transportKind === "websocket" && (
         <input
+          aria-label="WebSocket URL"
           value={s.wsUrl}
           onChange={(e) => s.setWsUrl(e.target.value)}
           disabled={connected}
