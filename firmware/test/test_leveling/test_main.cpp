@@ -115,6 +115,35 @@ void test_upsert_full() {
   TEST_ASSERT_EQUAL_INT(-1, lvl_upsert(t, n, 2, 300.0, 3.0));  // нет места
 }
 
+void test_single_point_flat() {
+  // Одна точка → плато на всём диапазоне
+  LevelPoint t[1] = {{915.0, 2.0}};
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 2.0, lvl_interp_dbm(t, 1, 35.0));
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 2.0, lvl_interp_dbm(t, 1, 4400.0));
+  // Затухание до цели −1 дБм всюду = 3 дБ
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 3.0, lvl_atten_for(t, 1, 100.0, -1.0));
+}
+
+void test_atten_monotonic_in_measured() {
+  // При фиксированной цели: чем выше измеренный уровень, тем больше затухание
+  // (или равно из-за квантования/клампа) — физически обязательное свойство.
+  const double target = -4.0;
+  double prev = -1.0;
+  for (double m = -4.0; m <= 20.0; m += 0.5) {
+    const double db = lvl_required_atten_db(m, target);
+    TEST_ASSERT(db >= prev - 1e-9);
+    prev = db;
+  }
+}
+
+void test_degenerate_equal_freq_points() {
+  // Две точки с одинаковой частотой (после upsert такого не бывает, но
+  // интерполятор не должен делить на ноль)
+  LevelPoint t[2] = {{2400.0, 4.0}, {2400.0, 1.0}};
+  const double v = lvl_interp_dbm(t, 2, 2400.0);
+  TEST_ASSERT(v == 4.0 || v == 1.0);  // конечное значение, без NaN/inf
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -130,5 +159,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_upsert_insert_sorted);
   RUN_TEST(test_upsert_replace);
   RUN_TEST(test_upsert_full);
+  RUN_TEST(test_single_point_flat);
+  RUN_TEST(test_atten_monotonic_in_measured);
+  RUN_TEST(test_degenerate_equal_freq_points);
   return UNITY_END();
 }

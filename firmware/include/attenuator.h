@@ -20,6 +20,12 @@ class Attenuator {
 
  private:
   float _db = 0.0f;
+  // Мьютекс bit-bang записи: setDb теперь зовётся из двух задач — sweep_task
+  // (через leveling_apply на каждом шаге) и cmd-контекст (SET ATT / SET LEVEL).
+  // Без сериализации 8-битный сдвиг мог бы переплестись → мусорный код
+  // затухания. Тип void* — чтобы заголовок компилировался в host-тестах
+  // (FreeRTOS-семафор создаётся в begin(), см. attenuator.cpp).
+  void* _mtx = nullptr;
 };
 
 }  // namespace legion

@@ -69,6 +69,53 @@ void test_nothing_changes_still_writes_r0() {
   TEST_ASSERT_EQUAL_INT(0, out[0]);  // R0 (band select re-trigger)
 }
 
+// «Симулятор чипа»: применяем delta-записи к состоянию чипа (= prev) и
+// проверяем, что оно становится равно цели cur. Это ключевой инвариант
+// корректности fast-scan: delta относительно РЕАЛЬНОГО состояния чипа всегда
+// приводит чип к целевому плану (обоснование единого кэша в synth).
+static void apply_delta_to_chip(uint32_t chip[6], const uint32_t cur[6]) {
+  int out[6];
+  const int n = plan_delta_regs(chip, cur, out);
+  for (int i = 0; i < n; ++i) {
+    chip[out[i]] = cur[out[i]];
+  }
+}
+
+void test_delta_converges_to_target() {
+  uint32_t chip[6] = {0, 0, 0, 0, 0, 0};
+  uint32_t st = 0x1234567u;  // детерминированный xorshift
+  for (int iter = 0; iter < 5000; ++iter) {
+    uint32_t cur[6];
+    for (int i = 0; i < 6; ++i) {
+      st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+      // Часто повторяем часть регистров (реалистично: R2..R5 стабильны)
+      cur[i] = (st % 4 == 0) ? chip[i] : st;
+    }
+    apply_delta_to_chip(chip, cur);
+    TEST_ASSERT_EQUAL_MEMORY(cur, chip, sizeof(cur));  // чип == цель
+  }
+}
+
+void test_delta_last_write_is_r0_always() {
+  uint32_t st = 0xC0FFEEu;
+  for (int iter = 0; iter < 2000; ++iter) {
+    uint32_t prev[6], cur[6];
+    for (int i = 0; i < 6; ++i) {
+      st ^= st << 13; st ^= st >> 17; st ^= st << 5; prev[i] = st;
+      st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+      cur[i] = (st % 3 == 0) ? prev[i] : st;
+    }
+    int out[6];
+    const int n = plan_delta_regs(prev, cur, out);
+    TEST_ASSERT(n >= 1 && n <= 6);
+    TEST_ASSERT_EQUAL_INT(0, out[n - 1]);  // R0 всегда последний
+    // Порядок строго убывающий среди записанных
+    for (int i = 1; i < n; ++i) {
+      TEST_ASSERT(out[i] < out[i - 1]);
+    }
+  }
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -78,5 +125,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_r0_always_last_even_if_unchanged);
   RUN_TEST(test_all_change_descending);
   RUN_TEST(test_nothing_changes_still_writes_r0);
+  RUN_TEST(test_delta_converges_to_target);
+  RUN_TEST(test_delta_last_write_is_r0_always);
   return UNITY_END();
 }

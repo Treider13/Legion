@@ -25,12 +25,6 @@ static uint32_t s_rand_state = 1;
 // найдено при ревизии гонок (п.1). Все доступы под s_cfg_mtx.
 static SemaphoreHandle_t s_cfg_mtx = nullptr;
 
-// Fast-scan: предыдущий применённый план для delta-записи (только изменившиеся
-// регистры + R0 последним). Сбрасывается на старте сессии коридора → первый
-// шаг пишет полный план R5→R0 (известное состояние). См. reg_delta.h.
-static SynthPlan s_prev_plan;
-static bool s_prev_valid = false;
-
 static void sweep_task(void*);
 static void telem_task(void*);
 
@@ -46,13 +40,10 @@ void corridor_init(Adf4351Driver& drv, PlannerConfig& planner_cfg,
 
 PlanStatus corridor_apply_fast(uint64_t freq_hz) {
   SynthPlan plan;
-  // Delta-запись относительно предыдущего шага (fast-scan); первый шаг сессии
-  // (s_prev_valid=false) → полная запись. Физику ФАПЧ не обходит (F5).
-  const PlanStatus st =
-      synth_apply_fast(freq_hz, s_prev_valid ? &s_prev_plan : nullptr, plan);
+  // Delta-запись относительно кэша реального состояния чипа (synth); физику
+  // ФАПЧ не обходит (F5) — срезает лишь время SPI-записи.
+  const PlanStatus st = synth_apply_fast(freq_hz, plan);
   if (st == PlanStatus::OK) {
-    s_prev_plan = plan;
-    s_prev_valid = true;
     // Выравнивание уровня по калибровке (если включено) — PE43702 (F: dd1us).
     leveling_apply(freq_hz);
     xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
@@ -233,8 +224,10 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
   xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
   s_cfg = cfg;
   s_active = true;
-  s_prev_valid = false;  // новая сессия → первый шаг пишет полный план R5→R0
   xSemaphoreGive(s_cfg_mtx);
+  // Новая сессия коридора → первый шаг пишет полный план R5→R0 (гарантированно
+  // корректное состояние всех 6 регистров, даташит Register Initialization).
+  synth_invalidate_cache();
   // MTLD в коридоре: гасим выход до захвата на каждом шаге (факт F9)
   s_planner->mute_till_lock = true;
   return true;
