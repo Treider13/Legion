@@ -8,6 +8,8 @@
 #include "board_config.h"
 #include "board_pins.h"
 #include "cmd_server.h"
+#include "sweep_engine.h"
+#include "synth.h"
 
 #ifndef LEGION_VERSION
 #define LEGION_VERSION "0.0.0-dev"
@@ -29,6 +31,8 @@ void setup() {
 
   g_adf.begin();  // CE=LOW: RF гашен до явной команды (compliance)
   g_state.drv = &g_adf;
+  legion::synth_init(g_adf, g_state.cfg);
+  legion::corridor_init(g_adf, g_state.cfg, Serial);
   g_cmd.begin(g_state, Serial);
 
   Serial.println();

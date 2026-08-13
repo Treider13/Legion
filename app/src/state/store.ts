@@ -40,6 +40,16 @@ interface LegionStore {
   powerDbm: number;
   rfOn: boolean;
   status: StatusJson | null;
+  // коридор (фаза 3)
+  corrF1: string;
+  corrF2: string;
+  corrStepKhz: string;
+  corrDwellMs: string;
+  corrSeed: string;
+  corrMode: "SWEEP" | "HOP";
+  corridorRunning: boolean;
+  telemFreq: number | null;
+  telemLock: boolean | null;
   // журнал
   log: LogEntry[];
 
@@ -47,6 +57,8 @@ interface LegionStore {
   setSelectedPort(p: string): void;
   setWsUrl(u: string): void;
   setFreqMhz(f: string): void;
+  setCorrField(field: "corrF1" | "corrF2" | "corrStepKhz" | "corrDwellMs" | "corrSeed", v: string): void;
+  setCorrMode(m: "SWEEP" | "HOP"): void;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -56,6 +68,8 @@ interface LegionStore {
   setRf(on: boolean): Promise<void>;
   pollStatus(): Promise<void>;
   runSelftest(): Promise<void>;
+  corridorStart(): Promise<void>;
+  corridorStop(): Promise<void>;
   clearLog(): void;
 }
 
@@ -85,12 +99,23 @@ export const useLegion = create<LegionStore>((set, get) => {
     powerDbm: 5,
     rfOn: false,
     status: null,
+    corrF1: "2400",
+    corrF2: "2500",
+    corrStepKhz: "1000",
+    corrDwellMs: "10",
+    corrSeed: "1337",
+    corrMode: "SWEEP",
+    corridorRunning: false,
+    telemFreq: null,
+    telemLock: null,
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
     setSelectedPort: (p) => set({ selectedPort: p }),
     setWsUrl: (u) => set({ wsUrl: u }),
     setFreqMhz: (f) => set({ freqMhz: f }),
+    setCorrField: (field, v) => set({ [field]: v }),
+    setCorrMode: (m) => set({ corrMode: m }),
     clearLog: () => set({ log: [] }),
 
     refreshPorts: async () => {
@@ -134,6 +159,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("rx", line);
         const lock = parseLockFrom(line);
         if (lock !== null) set({ lock });
+      };
+      gClient.onTelemetry = (t) => {
+        set({ telemFreq: t.freq, telemLock: t.lock === 1, corridorRunning: true });
       };
       gClient.onStateChange = (st, detail) => {
         set({ transportState: st, transportDetail: detail });
@@ -186,6 +214,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await gClient.setFreq(mhz);
       const lock = parseLockFrom(r.statusLine);
       if (lock !== null) set({ lock });
+      // Прошивка: ручная установка останавливает коридор (политика)
+      if (r.ok) set({ corridorRunning: false, telemFreq: null });
     },
 
     setPower: async (dbm) => {
@@ -226,6 +256,43 @@ export const useLegion = create<LegionStore>((set, get) => {
         } catch {
           /* ignore */
         }
+      }
+    },
+
+    corridorStart: async () => {
+      if (!gClient) return;
+      const s = get();
+      const f1 = parseFloat(s.corrF1);
+      const f2 = parseFloat(s.corrF2);
+      const step = parseInt(s.corrStepKhz, 10);
+      const dwell = parseInt(s.corrDwellMs, 10);
+      const seed = parseInt(s.corrSeed, 10) || 1;
+      if (![f1, f2, step, dwell].every(Number.isFinite)) {
+        pushLog("sys", "bad corridor params");
+        return;
+      }
+      const cmd =
+        s.corrMode === "SWEEP"
+          ? `SWEEP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
+          : `HOP START ${f1} ${f2} RATE ${dwell} SEED ${seed} STEP ${step}`;
+      pushLog("tx", cmd);
+      const r =
+        s.corrMode === "SWEEP"
+          ? await gClient.sweepStart(f1, f2, step, dwell)
+          : await gClient.hopStart(f1, f2, dwell, seed, step);
+      if (r.ok) {
+        set({ corridorRunning: true });
+      } else {
+        pushLog("sys", `corridor rejected: ${r.statusLine}`);
+      }
+    },
+
+    corridorStop: async () => {
+      if (!gClient) return;
+      pushLog("tx", "STOP");
+      const r = await gClient.stop();
+      if (r.ok) {
+        set({ corridorRunning: false, telemFreq: null, telemLock: null });
       }
     },
   };

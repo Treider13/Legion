@@ -9,6 +9,7 @@
 
 #include "adf4351.h"
 #include "freq_planner.h"
+#include "sweep_engine.h"
 
 namespace legion {
 
@@ -39,6 +40,7 @@ class CmdServer {
   void cmdRegs();
   void cmdCalRef(char* arg);
   void cmdSelftest();
+  void cmdCorridor(char* arg, CorridorMode mode);
 
   AppState* _s = nullptr;
   Stream* _port = nullptr;

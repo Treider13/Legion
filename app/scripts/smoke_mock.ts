@@ -95,6 +95,43 @@ async function main(): Promise<void> {
   r = await client.cmd("FOOBAR");
   check("unknown → ERR SYNTAX", !r.ok && r.statusLine.startsWith("ERR SYNTAX"), r.statusLine);
 
+  // --- Коридор (фаза 3) ---
+  // Телеметрия
+  const telem: number[] = [];
+  client.onTelemetry = (t) => telem.push(t.freq);
+
+  r = await client.sweepStart(2400, 2500, 1000, 10);
+  check("SWEEP START", r.ok && r.statusLine.includes("SWEEP RUNNING"), r.statusLine);
+
+  await new Promise((res) => setTimeout(res, 350));
+  check("телеметрия идёт (≥2 точки)", telem.length >= 2, `got ${telem.length}`);
+  check(
+    "телеметрия в коридоре",
+    telem.every((f) => f >= 2400 && f <= 2500),
+    telem.join(","),
+  );
+
+  r = await client.stop();
+  check("STOP", r.ok && r.statusLine === "OK IDLE", r.statusLine);
+
+  const telemCount = telem.length;
+  await new Promise((res) => setTimeout(res, 250));
+  check("телеметрия остановлена", telem.length === telemCount, `${telemCount} → ${telem.length}`);
+
+  // HOP с seed — воспроизводимость
+  r = await client.hopStart(2400, 2500, 10, 1337, 1000);
+  check("HOP START", r.ok && r.statusLine.includes("HOP RUNNING"), r.statusLine);
+  await new Promise((res) => setTimeout(res, 150));
+  await client.stop();
+
+  // Dwell < 1 мс → ERR DWELL
+  r = await client.sweepStart(2400, 2500, 1000, 0);
+  check("DWELL 0 → ERR DWELL", !r.ok && r.statusLine.startsWith("ERR DWELL"), r.statusLine);
+
+  // Обратный диапазон → ERR RANGE
+  r = await client.sweepStart(2500, 2400, 1000, 10);
+  check("f1>f2 → ERR RANGE", !r.ok && r.statusLine.startsWith("ERR RANGE"), r.statusLine);
+
   await transport.disconnect();
 
   console.log(failures === 0 ? "\nSMOKE: ALL PASS" : `\nSMOKE: ${failures} FAILURES`);

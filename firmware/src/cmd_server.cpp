@@ -8,39 +8,24 @@
 #include <string.h>
 
 #include "selftest.h"
+#include "sweep_engine.h"
+#include "synth.h"
 
 namespace legion {
 
-// Таймаут захвата: band select 20 мкс (F4) + settling ~0.1–0.3 мс (F5);
-// опрашиваем до 50 мс, требуем 5 подряд HIGH (debounce, факт F12).
-static constexpr uint32_t LOCK_TIMEOUT_MS = 50;
-static constexpr uint8_t LOCK_DEBOUNCE = 5;
-
 PlanStatus apply_frequency(AppState& s, uint64_t freq_hz, bool& lock) {
+  // Ручная установка во время коридора = остановка коридора (политика)
+  if (corridor_active()) {
+    corridor_stop();
+  }
   SynthPlan plan;
-  const PlanStatus st = plan_frequency(freq_hz, s.cfg, plan);
+  const PlanStatus st = synth_apply(freq_hz, true, lock, &plan);
   if (st != PlanStatus::OK) {
     return st;
   }
   s.plan = plan;
   s.plan_valid = true;
   s.freq_hz = freq_hz;
-  s.drv->writePlan(plan);
-
-  lock = false;
-  uint8_t streak = 0;
-  const uint32_t t0 = millis();
-  while (millis() - t0 < LOCK_TIMEOUT_MS) {
-    if (s.drv->readLock()) {
-      if (++streak >= LOCK_DEBOUNCE) {
-        lock = true;
-        break;
-      }
-    } else {
-      streak = 0;
-    }
-    delay(1);
-  }
   return PlanStatus::OK;
 }
 
@@ -106,6 +91,13 @@ void CmdServer::handleLine(char* line) {
     }
   } else if (strcasecmp(tok, "RF") == 0 && rest) {
     cmdRf(rest);
+  } else if (strcasecmp(tok, "SWEEP") == 0 && rest) {
+    cmdCorridor(rest, CorridorMode::SWEEP);
+  } else if (strcasecmp(tok, "HOP") == 0 && rest) {
+    cmdCorridor(rest, CorridorMode::HOP);
+  } else if (strcasecmp(tok, "STOP") == 0) {
+    corridor_stop();
+    _port->println(F("OK IDLE"));
   } else if (strcasecmp(tok, "STATUS?") == 0) {
     cmdStatus();
   } else if (strcasecmp(tok, "REGS?") == 0) {
@@ -199,10 +191,78 @@ void CmdServer::cmdRf(char* arg) {
   _port->println(on ? F("ON") : F("OFF"));
 }
 
+// SWEEP START <f1> <f2> STEP <kHz> DWELL <ms> | SWEEP STOP
+// HOP   START <f1> <f2> RATE <ms> [SEED <n>] [STEP <kHz>] | HOP STOP
+void CmdServer::cmdCorridor(char* arg, CorridorMode mode) {
+  char* save = nullptr;
+  char* sub = strtok_r(arg, " ", &save);
+  if (!sub) {
+    _port->println(F("ERR SYNTAX START|STOP expected"));
+    return;
+  }
+  if (strcasecmp(sub, "STOP") == 0) {
+    corridor_stop();
+    _port->println(F("OK IDLE"));
+    return;
+  }
+  if (strcasecmp(sub, "START") != 0) {
+    _port->println(F("ERR SYNTAX START|STOP expected"));
+    return;
+  }
+
+  CorridorConfig cfg;
+  cfg.mode = mode;
+  cfg.f1_hz = 0;
+  cfg.f2_hz = 0;
+
+  // Позиционные: f1 f2 (МГц), затем именованные STEP/DWELL/RATE/SEED
+  char* f1s = strtok_r(nullptr, " ", &save);
+  char* f2s = strtok_r(nullptr, " ", &save);
+  if (!f1s || !f2s) {
+    _port->println(F("ERR SYNTAX f1 f2 required"));
+    return;
+  }
+  cfg.f1_hz = (uint64_t)(strtod(f1s, nullptr) * 1e6 + 0.5);
+  cfg.f2_hz = (uint64_t)(strtod(f2s, nullptr) * 1e6 + 0.5);
+  cfg.dwell_ms = 10;    // дефолт (практика joseluu: 10 мс стабильно, E4)
+  cfg.step_khz = 1000;  // дефолт 1 МГц
+  cfg.seed = 1;
+
+  char* kv = nullptr;
+  while ((kv = strtok_r(nullptr, " ", &save)) != nullptr) {
+    char* val = strtok_r(nullptr, " ", &save);
+    if (!val) {
+      break;
+    }
+    if (strcasecmp(kv, "STEP") == 0) {
+      cfg.step_khz = (uint32_t)strtoul(val, nullptr, 10);
+    } else if (strcasecmp(kv, "DWELL") == 0 || strcasecmp(kv, "RATE") == 0) {
+      cfg.dwell_ms = (uint32_t)strtoul(val, nullptr, 10);
+    } else if (strcasecmp(kv, "SEED") == 0) {
+      cfg.seed = (uint32_t)strtoul(val, nullptr, 10);
+    }
+  }
+
+  char err[64];
+  if (!corridor_start(cfg, err, sizeof(err))) {
+    _port->println(err);
+    return;
+  }
+  _port->print(F("OK "));
+  _port->print(mode == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+  _port->println(F(" RUNNING"));
+}
+
 void CmdServer::cmdStatus() {
   _port->print(F("{\"freq\":"));
   _port->print(_s->freq_hz / 1e6, 6);
-  _port->print(F(",\"mode\":\"MANUAL\",\"lock\":"));
+  _port->print(F(",\"mode\":\""));
+  if (corridor_active()) {
+    _port->print(corridor_mode() == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+  } else {
+    _port->print(F("MANUAL"));
+  }
+  _port->print(F("\",\"lock\":"));
   _port->print(_s->drv->readLock() ? 1 : 0);
   _port->print(F(",\"rf\":"));
   _port->print(_s->rf_on ? 1 : 0);

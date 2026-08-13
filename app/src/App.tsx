@@ -3,6 +3,7 @@
 import "./App.css";
 
 import { ConnectBar } from "./components/ConnectBar";
+import { CorridorPanel } from "./components/CorridorPanel";
 import { FrequencyPanel } from "./components/FrequencyPanel";
 import { LogPanel } from "./components/LogPanel";
 import { PowerPanel } from "./components/PowerPanel";
@@ -19,6 +20,7 @@ function App() {
         <FrequencyPanel />
         <PowerPanel />
       </div>
+      <CorridorPanel />
       <LogPanel />
     </main>
   );

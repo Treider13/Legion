@@ -18,6 +18,15 @@ export class MockTransport implements Transport {
   private power = 5;
   private rfOn = false;
   private ppm = 0;
+  // Коридор (фаза 3)
+  private corrActive = false;
+  private corrMode: "SWEEP" | "HOP" = "SWEEP";
+  private corrF1 = 2400;
+  private corrF2 = 2500;
+  private corrStepKhz = 1000;
+  private corrCur = 2400;
+  private corrTimer: ReturnType<typeof setInterval> | null = null;
+  private hopState = 1;
 
   setEvents(ev: TransportEvents): void {
     this.ev = ev;
@@ -95,6 +104,11 @@ export class MockTransport implements Transport {
           ],
         }),
       );
+    } else if (upper.startsWith("SWEEP") || upper.startsWith("HOP")) {
+      this.handleCorridor(t, upper.startsWith("SWEEP"));
+    } else if (upper === "STOP") {
+      this.stopCorridor();
+      this.reply("OK IDLE");
     } else if (upper === "SELFTEST") {
       this.reply(
         '{"selftest":{"mux_gnd":1,"mux_dvdd":1,"lock":1,"pass":1}}',
@@ -109,6 +123,84 @@ export class MockTransport implements Transport {
   }
 
   async disconnect(): Promise<void> {
+    this.stopCorridor();
     this.emitState("disconnected");
+  }
+
+  // --- Коридор (фаза 3) ---------------------------------------------------
+
+  private handleCorridor(line: string, isSweep: boolean): void {
+    const parts = line.split(/\s+/);
+    const sub = (parts[1] ?? "").toUpperCase();
+    if (sub === "STOP") {
+      this.stopCorridor();
+      this.reply("OK IDLE");
+      return;
+    }
+    if (sub !== "START") {
+      this.reply("ERR SYNTAX START|STOP expected");
+      return;
+    }
+    const f1 = parseFloat(parts[2] ?? "NaN");
+    const f2 = parseFloat(parts[3] ?? "NaN");
+    if (!Number.isFinite(f1) || !Number.isFinite(f2) || f1 < 34.375 || f2 > 4400 || f1 >= f2) {
+      this.reply("ERR RANGE corridor");
+      return;
+    }
+    let step = 1000;
+    let dwell = 10;
+    let seed = 1;
+    for (let i = 4; i + 1 < parts.length; i += 2) {
+      const k = parts[i].toUpperCase();
+      const v = parts[i + 1];
+      if (k === "STEP") step = parseInt(v, 10);
+      if (k === "DWELL" || k === "RATE") dwell = parseInt(v, 10);
+      if (k === "SEED") seed = parseInt(v, 10);
+    }
+    if (dwell < 1) {
+      this.reply("ERR DWELL min 1 ms");
+      return;
+    }
+    this.corrMode = isSweep ? "SWEEP" : "HOP";
+    this.corrF1 = f1;
+    this.corrF2 = f2;
+    this.corrStepKhz = step;
+    this.corrCur = f1;
+    this.hopState = seed || 0x9e3779b9;
+    this.corrActive = true;
+    this.reply(`OK ${this.corrMode} RUNNING`);
+
+    // Телеметрия 10 Гц + перестройка по dwell (как прошивка)
+    const dwellClamped = Math.max(dwell, 20); // в mock не быстрее 50 Гц — достаточно для UI
+    this.corrTimer = setInterval(() => {
+      if (!this.corrActive) return;
+      if (this.corrMode === "SWEEP") {
+        this.corrCur += this.corrStepKhz / 1000;
+        if (this.corrCur > this.corrF2) this.corrCur = this.corrF1;
+      } else {
+        this.hopState ^= (this.hopState << 13) >>> 0;
+        this.hopState ^= this.hopState >>> 17;
+        this.hopState ^= (this.hopState << 5) >>> 0;
+        const steps = Math.floor(((this.corrF2 - this.corrF1) * 1000) / this.corrStepKhz);
+        this.corrCur =
+          this.corrF1 + ((this.hopState % (steps + 1)) * this.corrStepKhz) / 1000;
+      }
+      this.ev?.onLine(
+        JSON.stringify({
+          t: Date.now() & 0xffffffff,
+          freq: Math.round(this.corrCur * 1e6) / 1e6,
+          lock: 1,
+          mode: this.corrMode,
+        }),
+      );
+    }, dwellClamped);
+  }
+
+  private stopCorridor(): void {
+    this.corrActive = false;
+    if (this.corrTimer) {
+      clearInterval(this.corrTimer);
+      this.corrTimer = null;
+    }
   }
 }

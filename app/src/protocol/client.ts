@@ -5,6 +5,14 @@
 // ============================================================================
 import type { Transport } from "../transport/types";
 
+/** Телеметрия коридора (прошивка шлёт 10 Гц в режиме SWEEP/HOP) */
+export interface TelemetryLine {
+  t: number;
+  freq: number;
+  lock: number;
+  mode: "SWEEP" | "HOP";
+}
+
 export interface CmdResult {
   ok: boolean;
   lines: string[];
@@ -35,6 +43,8 @@ export class LegionClient {
 
   /** Сырой поток (для журнала) */
   onRawLine: ((line: string) => void) | null = null;
+  /** Телеметрия коридора (JSON с полем "t") — приходит незапрошенной */
+  onTelemetry: ((t: TelemetryLine) => void) | null = null;
   /** Состояние транспорта */
   onStateChange:
     | ((state: import("../transport/types").TransportState, detail?: string) => void)
@@ -42,6 +52,15 @@ export class LegionClient {
 
   private dispatch(line: string): void {
     this.onRawLine?.(line);
+    // Телеметрия: JSON с маркером "t" — не является ответом на команду
+    if (line.startsWith("{") && line.includes("\"t\":")) {
+      try {
+        this.onTelemetry?.(JSON.parse(line) as TelemetryLine);
+      } catch {
+        /* повреждённая телеметрия — пропускаем */
+      }
+      return;
+    }
     const w = this.waiters[0];
     if (!w) return;
     w.lines.push(line);
@@ -79,4 +98,13 @@ export class LegionClient {
   regs() { return this.cmd("REGS?"); }
   selftest() { return this.cmd("SELFTEST", 5000); }
   calRef(ppm: number) { return this.cmd(`CAL REF ${ppm}`); }
+
+  /** Коридор (фаза 3) */
+  sweepStart(f1: number, f2: number, stepKhz: number, dwellMs: number) {
+    return this.cmd(`SWEEP START ${f1} ${f2} STEP ${stepKhz} DWELL ${dwellMs}`);
+  }
+  hopStart(f1: number, f2: number, rateMs: number, seed: number, stepKhz: number) {
+    return this.cmd(`HOP START ${f1} ${f2} RATE ${rateMs} SEED ${seed} STEP ${stepKhz}`);
+  }
+  stop() { return this.cmd("STOP"); }
 }

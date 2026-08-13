@@ -210,6 +210,67 @@ button:disabled {
   color: var(--amber);
 }
 
+.corr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.corr-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+}
+
+.corr-grid input,
+.corr-grid select {
+  width: 100%;
+}
+
+/* Range gate: полоса коридора с маркером */
+.range-gate {
+  position: relative;
+  height: 22px;
+  margin-top: 14px;
+  border: 1px solid var(--amber);
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(212, 160, 23, 0.08) 0 1px,
+    transparent 1px 10%
+  );
+}
+
+.range-marker {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  transition: left 0.08s linear;
+}
+
+.range-marker.unlocked {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+.range-cur {
+  color: var(--green);
+}
+
 .log-panel {
   min-height: 220px;
 }
