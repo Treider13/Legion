@@ -7,7 +7,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
 
-import { RfSphere } from "./RfSphere";
+import { CyberEye } from "./CyberEye";
 
 interface SceneProps {
   tier: "low" | "high";
@@ -45,7 +45,7 @@ export function Scene({ tier }: SceneProps) {
       style={{ background: "transparent" }}
     >
       <CameraRig />
-      <RfSphere tier={tier} />
+      <CyberEye tier={tier} />
       {tier === "high" && <FxWithGuard />}
     </Canvas>
   );
@@ -75,8 +75,8 @@ function FxWithGuard() {
   return (
     <EffectComposer multisampling={0}>
       <Bloom
-        intensity={0.4}
-        luminanceThreshold={0.5}
+        intensity={0.55}
+        luminanceThreshold={0.7}
         luminanceSmoothing={0.9}
         mipmapBlur
       />
