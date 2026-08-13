@@ -130,16 +130,13 @@ export const eyeFrag = /* glsl */ `
     float lring = smoothstep(0.02, 0.0, abs(r - 0.99)) * step(r, 1.06);
     col += circuitCol * lring * 0.5;
 
-    // ---------------- РОГОВИЦА: влажные блики ----------------
+    // ---------------- РОГОВИЦА: лёгкий подсвет (основной блик даёт 3D-купол) ----
     float corneaMask = smoothstep(1.05, 0.12, polar);
     vec3 Lk = normalize(vec3(0.45, 0.6, 0.85));
     float s1 = pow(max(dot(N, normalize(Lk + V)), 0.0), 220.0);
-    col += vec3(1.0) * s1 * corneaMask * 1.3;                 // острый catchlight
+    col += vec3(1.0) * s1 * corneaMask * 0.4;
     float s2 = pow(max(dot(N, normalize(Lk + V)), 0.0), 10.0);
-    col += vec3(0.55, 0.72, 0.8) * s2 * corneaMask * 0.14;    // широкий влажный блеск
-    vec3 Lk2 = normalize(vec3(-0.4, -0.2, 0.9));
-    float s3 = pow(max(dot(N, normalize(Lk2 + V)), 0.0), 340.0);
-    col += vec3(0.9, 1.0, 1.0) * s3 * corneaMask * 0.7;       // второй маленький блик
+    col += vec3(0.55, 0.72, 0.8) * s2 * corneaMask * 0.1;
 
     // fresnel-обводка
     float fres = pow(1.0 - ndv, 3.0);

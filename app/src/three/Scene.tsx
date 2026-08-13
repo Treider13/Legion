@@ -2,12 +2,13 @@
 // LEGION — 3D-сцена: Canvas + камера с pointer-parallax + постпроцессинг
 // (Bloom/Noise/Vignette — @react-three/postprocessing, стандарт 2026).
 // ============================================================================
-import { useRef, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Environment, Lightformer } from "@react-three/drei";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
 
-import { CyberEye } from "./CyberEye";
+import { RealisticEye } from "./RealisticEye";
 
 interface SceneProps {
   tier: "low" | "high";
@@ -45,7 +46,18 @@ export function Scene({ tier }: SceneProps) {
       style={{ background: "transparent" }}
     >
       <CameraRig />
-      <CyberEye tier={tier} />
+      <ambientLight intensity={0.18} />
+      <directionalLight position={[3, 4, 5]} intensity={1.5} />
+      <directionalLight position={[-4, -1, 2]} intensity={0.4} color="#88aaff" />
+      <Suspense fallback={null}>
+        <Environment resolution={256} frames={1}>
+          <Lightformer form="rect" intensity={2.2} position={[2.5, 2, 3]} scale={[5, 5, 1]} color="#cdeeff" />
+          <Lightformer form="rect" intensity={1.3} position={[-3, 1, 2]} scale={[3, 4, 1]} color="#8ff5e6" />
+          <Lightformer form="ring" intensity={1.6} position={[0, 0, 4]} scale={[3, 3, 1]} color="#ffffff" />
+          <Lightformer form="rect" intensity={0.6} position={[0, -3, 1]} scale={[6, 2, 1]} color="#5a6a7a" />
+        </Environment>
+      </Suspense>
+      <RealisticEye tier={tier} />
       {tier === "high" && <FxWithGuard />}
     </Canvas>
   );
@@ -81,7 +93,7 @@ function FxWithGuard() {
         mipmapBlur
       />
       <Noise opacity={0.035} />
-      <Vignette eskil={false} offset={0.22} darkness={0.7} />
+      <Vignette eskil={false} offset={0.3} darkness={1.05} />
     </EffectComposer>
   );
 }

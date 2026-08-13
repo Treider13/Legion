@@ -77,27 +77,6 @@
 .hero-canvas {
   position: absolute;
   inset: 0;
-  z-index: 1;
-}
-
-/* Биомех-«оправа»: размытый концепт-кадр как окружение для 3D-глаза.
-   Картинка задаётся inline-стилем только в PC-сборке (в lite не грузится). */
-.hero-biomech {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
-  filter: blur(12px) brightness(0.45) saturate(1.15);
-  transform: scale(1.1);
-}
-
-.hero-biomech::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(closest-side, transparent 28%, rgba(3, 5, 10, 0.88) 92%);
 }
 
 .lite-radar {
