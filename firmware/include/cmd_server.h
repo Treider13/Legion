@@ -47,6 +47,10 @@ class CmdServer {
   void cmdCalRef(char* arg, Print& out);
   void cmdSelftest(Print& out);
   void cmdSetAtt(char* arg, Print& out);
+  void cmdSetLevel(char* arg, Print& out);
+  void cmdCalLevel(char* arg, Print& out);
+  void cmdLevelStatus(Print& out);
+  void persistLevel();
   void cmdCorridor(char* arg, CorridorMode mode, Print& out);
   void cmdGlide(char* arg, Print& out);
   void cmdFm(char* arg, Print& out);

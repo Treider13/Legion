@@ -58,6 +58,24 @@ PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
   return PlanStatus::OK;
 }
 
+PlanStatus synth_apply_fast(uint64_t freq_hz, const SynthPlan* prev,
+                            SynthPlan& out_plan) {
+  SynthPlan plan;
+  const PlanStatus st = plan_frequency(freq_hz, *s_cfg, plan);
+  if (st != PlanStatus::OK) {
+    return st;
+  }
+  xSemaphoreTakeRecursive(s_mtx, portMAX_DELAY);
+  if (prev) {
+    s_drv->writePlanDelta(*prev, plan);  // fast-scan: только изменившиеся
+  } else {
+    s_drv->writePlan(plan);  // первый шаг сессии — полная запись R5→R0
+  }
+  xSemaphoreGiveRecursive(s_mtx);
+  out_plan = plan;
+  return PlanStatus::OK;
+}
+
 Adf4351Driver& synth_driver() { return *s_drv; }
 
 void synth_acquire() { xSemaphoreTakeRecursive(s_mtx, portMAX_DELAY); }

@@ -21,6 +21,11 @@ class Adf4351Driver {
   // Записать готовый план: строго R5, R4, R3, R2, R1, R0.
   void writePlan(const SynthPlan& plan);
 
+  // Быстрая delta-запись: только изменившиеся регистры относительно prev,
+  // R0 всегда последним (защёлка + band select). Логика выбора — reg_delta.h
+  // (host-тест). Срезает время SPI-записи, физику ФАПЧ не обходит (fast-scan).
+  void writePlanDelta(const SynthPlan& prev, const SynthPlan& cur);
+
   // Записать один регистр (32 бита, MSB first, LE-импульс).
   void writeRegister(uint32_t word);
 

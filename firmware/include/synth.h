@@ -22,6 +22,13 @@ void synth_init(Adf4351Driver& drv, PlannerConfig& cfg);
 PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
                        SynthPlan* out_plan = nullptr);
 
+// Быстрый путь для коридора (fast-scan): delta-запись относительно prev.
+// prev == nullptr → полная запись R5→R0 (первый шаг сессии, известное
+// состояние). Без ожидания LOCK (телеметрия сэмплирует LD отдельно).
+// out_plan получает применённый план — вызывающий хранит его как prev.
+PlanStatus synth_apply_fast(uint64_t freq_hz, const SynthPlan* prev,
+                            SynthPlan& out_plan);
+
 // Доступ к драйверу для read-only операций (LD).
 Adf4351Driver& synth_driver();
 
