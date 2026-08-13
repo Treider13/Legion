@@ -78,11 +78,14 @@ void storage_save_ppm(int32_t) {}
 void storage_save_att(float) {}
 void storage_save_corridor(bool, const CorridorConfig&) {}
 
-// --- net / selftest ---
+// --- net / selftest / serial_sync ---
 void net_wifi_cmd(AppState&, char*, Print& out) { out.println("{\"wifi\":{}}"); }
 void selftest_run(AppState&, Print& out) {
   out.println("{\"selftest\":{\"pass\":1}}");
 }
+void serial_sync_init() {}
+void serial_lock() {}
+void serial_unlock() {}
 
 }  // namespace legion
 

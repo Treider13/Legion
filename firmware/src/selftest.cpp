@@ -4,6 +4,9 @@
 // ============================================================================
 #include "selftest.h"
 
+#include "sweep_engine.h"
+#include "synth.h"
+
 namespace legion {
 
 // MUXOUT значения (даташит Figure 26 / pyadf435x MuxOut)
@@ -16,6 +19,14 @@ static uint32_t r2_with_mux(uint32_t r2, uint32_t mux) {
 }
 
 void selftest_run(AppState& s, Print& out) {
+  // SELFTEST пишет драйвер напрямую (MUXOUT-варианты R2) — обязан быть
+  // эксклюзивным: останавливаем коридор и держим мьютекс синтезатора
+  // (иначе гонка с sweep_task — найдено при ревизии гонок, п.1).
+  if (corridor_active()) {
+    corridor_stop();
+  }
+  synth_acquire();
+
   // Базовый R2: из текущего плана, либо свежерассчитанный на 2475 МГц
   if (!s.plan_valid) {
     bool lock;
@@ -48,6 +59,7 @@ void selftest_run(AppState& s, Print& out) {
   }
 
   const bool pass = gnd_ok && dvdd_ok && lock;
+  synth_release();  // отпускаем мьютекс синтезатора (взят в начале)
   out.print(F("{\"selftest\":{\"mux_gnd\":"));
   out.print(gnd_ok ? 1 : 0);
   out.print(F(",\"mux_dvdd\":"));

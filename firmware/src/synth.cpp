@@ -15,7 +15,10 @@ static constexpr uint8_t LOCK_DEBOUNCE = 5;
 void synth_init(Adf4351Driver& drv, PlannerConfig& cfg) {
   s_drv = &drv;
   s_cfg = &cfg;
-  s_mtx = xSemaphoreCreateMutex();
+  // Рекурсивный мьютекс: SELFTEST держит его и вызывает apply_frequency →
+  // synth_apply (тот же мьютекс) из того же таска — нерекурсивный дал бы
+  // дедлок (найдено при ревизии гонок, п.1).
+  s_mtx = xSemaphoreCreateRecursiveMutex();
 }
 
 PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
@@ -26,9 +29,9 @@ PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
     return st;
   }
 
-  xSemaphoreTake(s_mtx, portMAX_DELAY);
+  xSemaphoreTakeRecursive(s_mtx, portMAX_DELAY);
   s_drv->writePlan(plan);
-  xSemaphoreGive(s_mtx);
+  xSemaphoreGiveRecursive(s_mtx);
 
   if (out_plan) {
     *out_plan = plan;
@@ -56,5 +59,8 @@ PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
 }
 
 Adf4351Driver& synth_driver() { return *s_drv; }
+
+void synth_acquire() { xSemaphoreTakeRecursive(s_mtx, portMAX_DELAY); }
+void synth_release() { xSemaphoreGiveRecursive(s_mtx); }
 
 }  // namespace legion

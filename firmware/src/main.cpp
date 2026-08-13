@@ -11,6 +11,7 @@
 #include "board_pins.h"
 #include "cmd_server.h"
 #include "net_server.h"
+#include "serial_sync.h"
 #include "storage.h"
 #include "sweep_engine.h"
 #include "synth.h"
@@ -34,6 +35,7 @@ void setup() {
   while (!Serial && (millis() - t0 < 2000)) { /* ждём USB CDC */ }
 #endif
 
+  legion::serial_sync_init();  // мьютекс UART ДО старта задач (анти-гонка)
   g_adf.begin();  // CE=LOW: RF гашен до явной команды (compliance)
   g_att.begin();  // PE43702: 0 дБ при старте
   g_state.drv = &g_adf;

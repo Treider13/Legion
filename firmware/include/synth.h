@@ -25,4 +25,9 @@ PlanStatus synth_apply(uint64_t freq_hz, bool wait_lock, bool& lock,
 // Доступ к драйверу для read-only операций (LD).
 Adf4351Driver& synth_driver();
 
+// Эксклюзивный доступ для многошаговых операций (SELFTEST пишет драйвер
+// напрямую — обязан держать мьютекс, иначе гонка с коридором; аудит п.1).
+void synth_acquire();
+void synth_release();
+
 }  // namespace legion

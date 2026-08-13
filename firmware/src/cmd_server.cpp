@@ -10,6 +10,7 @@
 
 #include "net_server.h"
 #include "selftest.h"
+#include "serial_sync.h"
 #include "storage.h"
 #include "sweep_engine.h"
 #include "synth.h"
@@ -62,7 +63,18 @@ void CmdServer::poll() {
   }
 }
 
-void CmdServer::processLine(char* line, Print& out) { handleLine(line, out); }
+void CmdServer::processLine(char* line, Print& out) {
+  // Вывод ответа под мьютексом UART: иначе строки перемешиваются с
+  // телеметрией telem_task посреди кадра (найдено при ревизии гонок, п.1).
+  const bool is_uart = (&out == _port);
+  if (is_uart) {
+    serial_lock();
+  }
+  handleLine(line, out);
+  if (is_uart) {
+    serial_unlock();
+  }
+}
 
 void CmdServer::handleLine(char* line, Print& out) {
   char* save = nullptr;

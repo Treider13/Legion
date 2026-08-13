@@ -7,6 +7,7 @@
 #include "engine_math.h"
 #include "ble_server.h"
 #include "net_server.h"
+#include "serial_sync.h"
 #include "synth.h"
 
 namespace legion {
@@ -18,6 +19,10 @@ static CorridorConfig s_cfg;
 static volatile bool s_active = false;
 static uint64_t s_cur_hz = 0;
 static uint32_t s_rand_state = 1;
+// Мьютекс конфигурации/текущей частоты: s_cur_hz — 64 бита на 32-битном MCU,
+// чтение/запись НЕ атомарны (torn reads между sweep_task и telem_task) —
+// найдено при ревизии гонок (п.1). Все доступы под s_cfg_mtx.
+static SemaphoreHandle_t s_cfg_mtx = nullptr;
 
 static void sweep_task(void*);
 static void telem_task(void*);
@@ -27,6 +32,7 @@ void corridor_init(Adf4351Driver& drv, PlannerConfig& planner_cfg,
   (void)drv;  // запись идёт через synth_apply (единый мьютекс)
   s_planner = &planner_cfg;
   s_telem = &telem_port;
+  s_cfg_mtx = xSemaphoreCreateMutex();
   xTaskCreate(sweep_task, "legion_sweep", 4096, nullptr, 2, nullptr);
   xTaskCreate(telem_task, "legion_telem", 4096, nullptr, 1, nullptr);
 }
@@ -35,7 +41,9 @@ PlanStatus corridor_apply_fast(uint64_t freq_hz) {
   bool lock_unused;
   const PlanStatus st = synth_apply(freq_hz, false, lock_unused);
   if (st == PlanStatus::OK) {
+    xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
     s_cur_hz = freq_hz;
+    xSemaphoreGive(s_cfg_mtx);
   }
   return st;
 }
@@ -59,6 +67,7 @@ static void sweep_task(void*) {
   uint32_t glide_step = 0;
   uint32_t fm_t = 0;
   bool was_active = false;
+  CorridorConfig cfg;  // локальный снимок конфигурации на цикл (анти-гонка)
 
   for (;;) {
     if (!s_active) {
@@ -66,9 +75,12 @@ static void sweep_task(void*) {
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-    if (!was_active) {  // старт цикла
-      f = s_cfg.f1_hz;
-      s_rand_state = s_cfg.seed ? s_cfg.seed : 0x9E3779B9UL;
+    if (!was_active) {  // старт цикла: снимок конфигурации под мьютексом
+      xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
+      cfg = s_cfg;
+      xSemaphoreGive(s_cfg_mtx);
+      f = cfg.f1_hz;
+      s_rand_state = cfg.seed ? cfg.seed : 0x9E3779B9UL;
       glide_step = 0;
       fm_t = 0;
       last = xTaskGetTickCount();
@@ -78,32 +90,31 @@ static void sweep_task(void*) {
     corridor_apply_fast(f);
 
     // Темп: FM — обновление каждый 1 мс (плавная модуляция), остальные — dwell
-    const uint32_t tick_ms =
-        (s_cfg.mode >= CorridorMode::FM_SIN) ? 1 : s_cfg.dwell_ms;
+    const uint32_t tick_ms = (cfg.mode >= CorridorMode::FM_SIN) ? 1 : cfg.dwell_ms;
     vTaskDelayUntil(&last, pdMS_TO_TICKS(tick_ms));
 
-    switch (s_cfg.mode) {
+    switch (cfg.mode) {
       case CorridorMode::SWEEP:
       case CorridorMode::CHIRP:
-        f = engine_sweep_next(f, s_cfg.f1_hz, s_cfg.f2_hz, s_cfg.step_hz);
+        f = engine_sweep_next(f, cfg.f1_hz, cfg.f2_hz, cfg.step_hz);
         break;
 
       case CorridorMode::HOP:
-        f = engine_hop_next(s_rand_state, s_cfg.f1_hz, s_cfg.f2_hz,
-                            s_cfg.step_hz);
+        f = engine_hop_next(s_rand_state, cfg.f1_hz, cfg.f2_hz,
+                            cfg.step_hz);
         break;
 
       case CorridorMode::GLIDE: {
         // Одноразовый переход за dwell_ms с шагом 1 мс
-        const uint32_t total = s_cfg.dwell_ms;
+        const uint32_t total = cfg.dwell_ms;
         ++glide_step;
         if (glide_step >= total) {
-          corridor_apply_fast(s_cfg.f2_hz);
+          corridor_apply_fast(cfg.f2_hz);
           s_active = false;  // авто-стоп в конце глайда
           s_telem->println(F("{\"t\":0,\"event\":\"GLIDE DONE\"}"));
           break;
         }
-        f = engine_glide_at(s_cfg.f1_hz, s_cfg.f2_hz, glide_step, total);
+        f = engine_glide_at(cfg.f1_hz, cfg.f2_hz, glide_step, total);
         break;
       }
 
@@ -111,13 +122,13 @@ static void sweep_task(void*) {
       case CorridorMode::FM_TRI:
       case CorridorMode::FM_RAND: {
         fm_t += 1;
-        const int m = s_cfg.mode == CorridorMode::FM_SIN
+        const int m = cfg.mode == CorridorMode::FM_SIN
                           ? 0
-                          : s_cfg.mode == CorridorMode::FM_TRI ? 1 : 2;
+                          : cfg.mode == CorridorMode::FM_TRI ? 1 : 2;
         const double dev =
-            engine_fm_deviation(m, fm_t, s_cfg.dwell_ms,
-                                s_cfg.fm_depth_hz, s_rand_state);
-        int64_t nf = (int64_t)s_cfg.f1_hz + (int64_t)dev;
+            engine_fm_deviation(m, fm_t, cfg.dwell_ms,
+                                cfg.fm_depth_hz, s_rand_state);
+        int64_t nf = (int64_t)cfg.f1_hz + (int64_t)dev;
         if (nf < (int64_t)ADF_FREQ_MIN_HZ) nf = (int64_t)ADF_FREQ_MIN_HZ;
         if (nf > (int64_t)ADF_FREQ_MAX_HZ) nf = (int64_t)ADF_FREQ_MAX_HZ;
         f = (uint64_t)nf;
@@ -193,23 +204,42 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
     return false;
   }
 
+  // Запись конфигурации и флага активности — атомарно (анти-гонка со
+  // sweep_task); рестарт на ходу = корректная смена конфигурации.
+  xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
   s_cfg = cfg;
+  s_active = true;
+  xSemaphoreGive(s_cfg_mtx);
   // MTLD в коридоре: гасим выход до захвата на каждом шаге (факт F9)
   s_planner->mute_till_lock = true;
-  s_active = true;
   return true;
 }
 
 void corridor_stop() {
+  xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
   s_active = false;
+  xSemaphoreGive(s_cfg_mtx);
   if (s_planner) {
     s_planner->mute_till_lock = false;
   }
 }
 
 bool corridor_active() { return s_active; }
-CorridorMode corridor_mode() { return s_cfg.mode; }
-uint64_t corridor_current_hz() { return s_cur_hz; }
+
+CorridorMode corridor_mode() {
+  xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
+  const CorridorMode m = s_cfg.mode;
+  xSemaphoreGive(s_cfg_mtx);
+  return m;
+}
+
+uint64_t corridor_current_hz() {
+  xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
+  const uint64_t v = s_cur_hz;
+  xSemaphoreGive(s_cfg_mtx);
+  return v;
+}
+
 const CorridorConfig& corridor_config() { return s_cfg; }
 
 }  // namespace legion
