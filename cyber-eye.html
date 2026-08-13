@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LEGION — Cyber Eye</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #f2f3f5; height: 100%; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  /* лёгкая студийная виньетка поверх рендера */
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 42%, rgba(0,0,0,0) 55%, rgba(30,32,38,0.10) 100%);
+  }
+  #hint {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    font: 500 12px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(40, 44, 52, 0.55);
+    background: rgba(255,255,255,0.55); backdrop-filter: blur(6px);
+    border: 1px solid rgba(40,44,52,0.08); border-radius: 999px;
+    padding: 7px 16px; user-select: none; pointer-events: none;
+    transition: opacity 1.2s ease; white-space: nowrap;
+  }
+  #hint.hidden { opacity: 0; }
+  #err {
+    position: fixed; inset: 0; display: none; place-items: center;
+    font: 400 15px/1.6 system-ui, sans-serif; color: #333; text-align: center; padding: 24px;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="hint">Перетащите — вращение &nbsp;·&nbsp; Колесо — масштаб</div>
+<div id="err">Не удалось инициализировать WebGL. Откройте страницу в современном браузере с поддержкой WebGL&nbsp;2.</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+
+/* ============================================================
+   LEGION — кибер-глаз. Один файл, только Three.js (CDN).
+   Референс: тёмный «robot eye» на белом изолированном фоне,
+   металл + красная светящаяся оптика, студийный свет.
+   ============================================================ */
+
+const EYE_Y = 1.18;            // высота центра глаза над «полом»
+const RED    = new THREE.Color(0xff2d18);
+const ORANGE = new THREE.Color(0xff7a2a);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+} catch (e) {
+  document.getElementById("err").style.display = "grid";
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.VSMShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.getElementById("app").appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f3f5);
+
+// PBR-окружение для реалистичных отражений металла (без внешних файлов)
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.75;
+
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(1.9, 1.75, 4.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, EYE_Y, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.enablePan = false;
+controls.minDistance = 2.1;
+controls.maxDistance = 10;
+controls.maxPolarAngle = Math.PI * 0.62;
+
+/* ---------------- Освещение ---------------- */
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.6);
+keyLight.position.set(3.5, 6.5, 3.2);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -3; keyLight.shadow.camera.right = 3;
+keyLight.shadow.camera.top = 3;   keyLight.shadow.camera.bottom = -3;
+keyLight.shadow.camera.near = 1;  keyLight.shadow.camera.far = 20;
+keyLight.shadow.radius = 14;
+keyLight.shadow.blurSamples = 16;
+keyLight.shadow.bias = -0.0004;
+scene.add(keyLight, keyLight.target);
+keyLight.target.position.set(0, EYE_Y, 0);
+
+const fillLight = new THREE.DirectionalLight(0xdfe6ff, 0.55);
+fillLight.position.set(-4, 2.5, 1.5);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xbcd2ff, 1.1);
+rimLight.position.set(-1.5, 3, -4.5);
+scene.add(rimLight);
+
+// красная «оптика» подсвечивает пространство перед глазом
+const irisLight = new THREE.PointLight(RED, 3, 7, 2);
+irisLight.position.set(0, EYE_Y, 1.6);
+scene.add(irisLight);
+
+/* ---------------- Пол: белый, только мягкая тень ---------------- */
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(16, 48),
+  new THREE.ShadowMaterial({ opacity: 0.22 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ============================================================
+   Процедурные текстуры корпуса (canvas): панельные швы,
+   «цифровые» дорожки-схемы (emissive) и карта шероховатости.
+   ============================================================ */
+
+function makeCircuitTexture() {
+  const c = document.createElement("canvas");
+  c.width = 2048; c.height = 1024;
+  const g = c.getContext("2d");
+  g.fillStyle = "#000"; g.fillRect(0, 0, c.width, c.height);
+
+  // панельные швы — слабые линии
+  g.strokeStyle = "rgba(255,255,255,0.16)";
+  g.lineWidth = 3;
+  for (let i = 0; i < 7; i++) {
+    const y = (i + 0.5) * c.height / 7 + (Math.random() - 0.5) * 40;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(c.width, y); g.stroke();
+  }
+  for (let i = 0; i < 12; i++) {
+    const x = Math.random() * c.width;
+    g.beginPath(); g.moveTo(x, Math.random() * c.height * 0.4);
+    g.lineTo(x, Math.random() * c.height * 0.6 + c.height * 0.4); g.stroke();
+  }
+
+  // «цифровые» дорожки: ломаные под 90° с контактными площадками
+  for (let t = 0; t < 90; t++) {
+    let x = Math.random() * c.width;
+    let y = Math.random() * c.height;
+    const bright = Math.random() < 0.45;
+    g.strokeStyle = bright ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.4)";
+    g.lineWidth = bright ? 3 : 2;
+    g.beginPath(); g.moveTo(x, y);
+    const steps = 3 + Math.floor(Math.random() * 5);
+    for (let s = 0; s < steps; s++) {
+      const len = 20 + Math.random() * 90;
+      if (s % 2 === 0) x += (Math.random() < 0.5 ? -1 : 1) * len;
+      else             y += (Math.random() < 0.5 ? -1 : 1) * len;
+      g.lineTo(x, y);
+    }
+    g.stroke();
+    if (bright) { g.fillStyle = "rgba(255,255,255,0.95)"; g.fillRect(x - 4, y - 4, 8, 8); }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 1);
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function makeRoughnessTexture() {
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 256;
+  const g = c.getContext("2d");
+  g.fillStyle = "#5a5a5a"; g.fillRect(0, 0, c.width, c.height); // базовая шероховатость ~0.35
+  for (let i = 0; i < 2600; i++) {
+    const v = 60 + Math.random() * 120;
+    g.fillStyle = `rgba(${v},${v},${v},0.25)`;
+    const r = 1 + Math.random() * 14;
+    g.beginPath(); g.arc(Math.random() * c.width, Math.random() * c.height, r, 0, 7); g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  return tex;
+}
+
+const circuitTex = makeCircuitTexture();
+const roughTex = makeRoughnessTexture();
+
+/* ============================================================
+   Сборка глаза
+   ============================================================ */
+
+const eyeGroup = new THREE.Group();      // весь глаз (yaw/pitch — «взгляд»)
+eyeGroup.position.set(0, EYE_Y, 0);
+scene.add(eyeGroup);
+
+const spinGroup = new THREE.Group();     // вращение вокруг собственной (зрительной) оси
+eyeGroup.add(spinGroup);
+
+// --- корпус: тёмный металл со швами и светящимися дорожками ---
+const shellMat = new THREE.MeshStandardMaterial({
+  color: 0x181b20,
+  metalness: 0.92,
+  roughness: 0.42,
+  roughnessMap: roughTex,
+  emissive: RED.clone(),
+  emissiveMap: circuitTex,
+  emissiveIntensity: 0.7,
+  bumpMap: circuitTex,
+  bumpScale: -0.6,
+  side: THREE.DoubleSide,   // изнутри корпус тоже виден через открытую оптику
+});
+// сфера с вырезом спереди под оптику (полюс выреза повёрнут к +Z)
+const OPEN_ANGLE = 0.62;    // половинный угол выреза: sin(0.62) ≈ 0.58 — под обод 0.62
+const shell = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 160, 120, 0, Math.PI * 2, OPEN_ANGLE, Math.PI - OPEN_ANGLE),
+  shellMat
+);
+shell.rotation.x = Math.PI / 2;
+shell.castShadow = true;
+shell.receiveShadow = true;
+spinGroup.add(shell);
+
+// --- экваториальный шов-кольцо и затылочный порт ---
+const seamMat = new THREE.MeshStandardMaterial({ color: 0x0c0e11, metalness: 0.9, roughness: 0.5 });
+const seam = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.012, 12, 200), seamMat);
+seam.rotation.x = Math.PI / 2;
+spinGroup.add(seam);
+
+const backPort = new THREE.Group();
+{
+  const portMat = new THREE.MeshStandardMaterial({ color: 0x24282f, metalness: 0.95, roughness: 0.3 });
+  const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.18, 32), portMat);
+  p1.rotation.x = Math.PI / 2; p1.position.z = -1.0;
+  const p2 = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.3, 24), portMat);
+  p2.rotation.x = Math.PI / 2; p2.position.z = -1.1;
+  const tip = new THREE.Mesh(
+    new THREE.SphereGeometry(0.045, 16, 16),
+    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: ORANGE, emissiveIntensity: 3 })
+  );
+  tip.position.z = -1.26;
+  p1.castShadow = p2.castShadow = true;
+  backPort.add(p1, p2, tip);
+}
+spinGroup.add(backPort);
+
+/* ---------------- Передняя оптика ---------------- */
+
+const optics = new THREE.Group();
+spinGroup.add(optics);
+
+const gunmetal = new THREE.MeshStandardMaterial({ color: 0x2b3038, metalness: 0.95, roughness: 0.28 });
+const darkMetal = new THREE.MeshStandardMaterial({ color: 0x101317, metalness: 0.9, roughness: 0.45, side: THREE.DoubleSide });
+
+// внешний обод объектива (утоплен в сферу)
+const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.075, 24, 96), gunmetal);
+bezel.position.z = 0.792;
+bezel.castShadow = true;
+optics.add(bezel);
+
+// болты по ободу
+{
+  const boltGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.03, 6);
+  const boltMat = new THREE.MeshStandardMaterial({ color: 0x454b55, metalness: 0.95, roughness: 0.25 });
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const b = new THREE.Mesh(boltGeo, boltMat);
+    b.position.set(Math.cos(a) * 0.62, Math.sin(a) * 0.62, 0.862);
+    b.rotation.x = Math.PI / 2;
+    optics.add(b);
+  }
+}
+
+// короткая шахта-раструб (оптика близко к поверхности, как у объектива)
+const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.585, 0.42, 0.14, 96, 1, true), darkMetal);
+barrel.rotation.x = Math.PI / 2;
+barrel.position.z = 0.735;
+optics.add(barrel);
+
+// ступень-кольцо внутри раструба
+{
+  const step = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.02, 12, 96), gunmetal);
+  step.position.z = 0.705;
+  optics.add(step);
+}
+
+// задняя стенка оптической шахты (закрывает щели за радужкой)
+{
+  const backplate = new THREE.Mesh(new THREE.CircleGeometry(0.46, 96), darkMetal);
+  backplate.position.z = 0.66;
+  optics.add(backplate);
+}
+
+// --- светящиеся кольца вокруг зрачка ---
+function glowRing(radius, tube, color, intensity) {
+  return new THREE.Mesh(
+    new THREE.TorusGeometry(radius, tube, 16, 96),
+    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: intensity, roughness: 1 })
+  );
+}
+const ringOuter = glowRing(0.515, 0.014, RED, 4);
+ringOuter.position.z = 0.76;
+const ringMid = glowRing(0.41, 0.010, ORANGE, 3.2);
+ringMid.position.z = 0.72;
+const ringInner = glowRing(0.295, 0.009, RED, 4.5);
+ringInner.position.z = 0.775;
+optics.add(ringOuter, ringMid, ringInner);
+
+/* --- радужка: процедурный HUD-шейдер (кольца, деления, сектора) --- */
+
+const irisUniforms = {
+  uTime:   { value: 0 },
+  uPulse:  { value: 0 },
+  uGlitch: { value: 0 },
+  uBlink:  { value: 0 },
+};
+const irisMat = new THREE.ShaderMaterial({
+  uniforms: irisUniforms,
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uTime, uPulse, uGlitch, uBlink;
+    varying vec2 vUv;
+
+    float hash(float n) { return fract(sin(n) * 43758.5453); }
+
+    void main() {
+      vec2 p = vUv * 2.0 - 1.0;
+
+      // глитч: построчный сдвиг + мерцание
+      if (uGlitch > 0.01) {
+        float row = floor(vUv.y * 26.0);
+        float n = hash(row * 91.7 + floor(uTime * 28.0) * 7.13);
+        if (n > 0.72) p.x += (n - 0.86) * 0.9 * uGlitch;
+      }
+
+      float r = length(p);
+      if (r > 1.0) discard;
+      float ang = atan(p.y, p.x);
+      const float TAU = 6.28318530718;
+
+      vec3 red    = vec3(2.3, 0.32, 0.16);
+      vec3 orange = vec3(2.1, 0.92, 0.24);
+      vec3 col    = vec3(0.012, 0.012, 0.015); // тёмная линза-подложка
+
+      // тонкие концентрические кольца
+      col += vec3(0.05, 0.012, 0.008) * (smoothstep(0.35, 1.0, sin(r * 110.0) * 0.5 + 0.5));
+
+      // внешний светящийся обод радужки
+      col += red * smoothstep(0.90, 0.985, r) * (1.0 - smoothstep(0.985, 1.0, r)) * (1.4 + 0.9 * uPulse);
+
+      // шкала делений (60 штрихов)
+      float tick = step(0.86, fract(ang / TAU * 60.0));
+      col += red * tick * smoothstep(0.795, 0.81, r) * (1.0 - smoothstep(0.875, 0.89, r)) * 1.15;
+
+      // вращающиеся сегменты-дуги (в разные стороны)
+      float a1 = fract((ang + uTime * 0.55) / TAU * 3.0);
+      float arc1 = step(0.18, a1) * step(a1, 0.5);
+      col += red * arc1 * smoothstep(0.66, 0.675, r) * (1.0 - smoothstep(0.73, 0.745, r)) * (0.9 + 0.6 * uPulse);
+
+      float a2 = fract((ang - uTime * 0.34) / TAU * 5.0);
+      float arc2 = step(0.32, a2) * step(a2, 0.78);
+      col += orange * arc2 * smoothstep(0.545, 0.56, r) * (1.0 - smoothstep(0.605, 0.62, r)) * 0.75;
+
+      // пунктирное кольцо ближе к центру
+      float dots = step(0.5, fract(ang / TAU * 24.0 + uTime * 0.12));
+      col += red * dots * smoothstep(0.44, 0.455, r) * (1.0 - smoothstep(0.485, 0.50, r)) * 0.9;
+
+      // тёплое свечение из глубины зрачка
+      col += orange * smoothstep(0.34, 0.0, r) * (0.7 + 0.7 * uPulse);
+      col += vec3(2.8, 0.65, 0.28) * smoothstep(0.10, 0.0, r) * (1.0 + 0.8 * uPulse);
+
+      // редкие пробегающие искры по кольцам
+      float spark = step(0.995, hash(floor(ang / TAU * 90.0) + floor(uTime * 3.0) * 13.7));
+      col += red * spark * smoothstep(0.55, 0.9, r) * 2.0;
+
+      col *= (1.0 - 0.9 * uBlink);          // при моргании оптика гаснет
+      col *= 0.75 + 0.25 * uPulse;
+
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const iris = new THREE.Mesh(new THREE.CircleGeometry(0.40, 96), irisMat);
+iris.position.z = 0.695;
+optics.add(iris);
+
+// точечный «сенсор» в центре зрачка — ярко цветёт в bloom
+const sensor = new THREE.Mesh(
+  new THREE.SphereGeometry(0.035, 24, 24),
+  new THREE.MeshBasicMaterial({ color: new THREE.Color(5, 0.7, 0.3), toneMapped: false })
+);
+sensor.position.z = 0.72;
+optics.add(sensor);
+
+/* --- механический зрачок: 7 лепестков диафрагмы --- */
+
+const N_BLADES = 7;
+const PIVOT_R = 0.34;                     // пивоты лепестков на этом радиусе
+const bladeGroup = new THREE.Group();
+bladeGroup.position.z = 0.745;
+optics.add(bladeGroup);
+
+const bladeMat = new THREE.MeshStandardMaterial({
+  color: 0x22262d, metalness: 0.95, roughness: 0.32, side: THREE.DoubleSide,
+});
+const bladeEdgeMat = new THREE.MeshStandardMaterial({
+  color: 0x000000, emissive: RED, emissiveIntensity: 1.6,
+});
+
+// форма лепестка: изогнутый «серп», пивот в (0,0)
+const bladeShape = new THREE.Shape();
+bladeShape.moveTo(0, 0.045);
+bladeShape.quadraticCurveTo(0.27, 0.125, 0.50, 0.02);
+bladeShape.quadraticCurveTo(0.30, -0.12, 0.02, -0.07);
+bladeShape.quadraticCurveTo(-0.05, -0.02, 0, 0.045);
+
+const bladeGeo = new THREE.ExtrudeGeometry(bladeShape, {
+  depth: 0.014, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 2, curveSegments: 24,
+});
+
+const blades = [];
+for (let i = 0; i < N_BLADES; i++) {
+  const pivotAngle = (i / N_BLADES) * Math.PI * 2;
+  const pivot = new THREE.Group();
+  pivot.position.set(Math.cos(pivotAngle) * PIVOT_R, Math.sin(pivotAngle) * PIVOT_R, (i % 2) * 0.006);
+
+  const blade = new THREE.Mesh(bladeGeo, bladeMat);
+  blade.castShadow = true;
+
+  // светящаяся заклёпка на пивоте
+  const rivet = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 12), bladeEdgeMat);
+  rivet.rotation.x = Math.PI / 2;
+
+  pivot.add(blade, rivet);
+  pivot.userData.baseAngle = pivotAngle;
+  bladeGroup.add(pivot);
+  blades.push(pivot);
+}
+
+// aperture: 0 — закрыто, 1 — открыто
+function setAperture(open) {
+  const closedRot = Math.PI + 0.50;  // лепесток смотрит внутрь, перекрывая центр
+  const openRot   = Math.PI + 1.30;  // лепесток убран к периферии
+  const rot = closedRot + (openRot - closedRot) * open;
+  for (const p of blades) p.rotation.z = p.userData.baseAngle + rot;
+}
+setAperture(0.75);
+
+/* --- стеклянный купол-«роговица» поверх оптики --- */
+
+const glass = new THREE.Mesh(
+  new THREE.SphereGeometry(1.005, 96, 48, 0, Math.PI * 2, 0, 0.69),
+  new THREE.MeshPhysicalMaterial({
+    color: 0x0a0c10,
+    metalness: 0,
+    roughness: 0.03,
+    transparent: true,
+    opacity: 0.16,
+    envMapIntensity: 1.1,
+    clearcoat: 1,
+    clearcoatRoughness: 0.05,
+    depthWrite: false,
+  })
+);
+glass.rotation.x = Math.PI / 2;   // купол смотрит по +Z
+spinGroup.add(glass);
+
+/* ---------------- Гироскопические кольца вокруг глаза ---------------- */
+
+const gyro1 = new THREE.Group();
+const gyro2 = new THREE.Group();
+eyeGroup.add(gyro1, gyro2);
+{
+  const ringMat = new THREE.MeshStandardMaterial({ color: 0x30353d, metalness: 0.95, roughness: 0.3 });
+  const r1 = new THREE.Mesh(new THREE.TorusGeometry(1.38, 0.02, 12, 160), ringMat);
+  r1.castShadow = true;
+  gyro1.add(r1);
+  const r2 = new THREE.Mesh(new THREE.TorusGeometry(1.58, 0.013, 10, 180), ringMat);
+  r2.castShadow = true;
+  gyro2.add(r2);
+
+  // светящиеся бусины на кольцах
+  const beadGeo = new THREE.SphereGeometry(0.032, 12, 12);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const bead = new THREE.Mesh(beadGeo, new THREE.MeshStandardMaterial({
+      color: 0x000000, emissive: i % 2 ? ORANGE : RED, emissiveIntensity: 4,
+    }));
+    bead.position.set(Math.cos(a) * 1.38, Math.sin(a) * 1.38, 0);
+    gyro1.add(bead);
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    const bead = new THREE.Mesh(beadGeo, new THREE.MeshStandardMaterial({
+      color: 0x000000, emissive: RED, emissiveIntensity: 3.5,
+    }));
+    bead.position.set(Math.cos(a) * 1.58, Math.sin(a) * 1.58, 0);
+    gyro2.add(bead);
+  }
+  gyro1.rotation.x = 1.15;
+  gyro2.rotation.set(0.4, 0.9, 0.3);
+}
+
+/* ---------------- Сканирующее кольцо-глитч по корпусу ---------------- */
+
+const scanRing = new THREE.Mesh(
+  new THREE.TorusGeometry(1, 0.006, 8, 128),
+  new THREE.MeshBasicMaterial({
+    color: new THREE.Color(3, 0.4, 0.2), transparent: true, opacity: 0,
+    toneMapped: false, depthWrite: false,
+  })
+);
+scanRing.rotation.x = Math.PI / 2;
+eyeGroup.add(scanRing);
+
+/* ---------------- Частицы вокруг глаза ---------------- */
+
+// тёмная техническая «пыль»
+function makeShellPoints(count, rMin, rMax) {
+  const pos = new Float32Array(count * 3);
+  const seed = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const v = new THREE.Vector3().randomDirection()
+      .multiplyScalar(rMin + Math.random() * (rMax - rMin));
+    pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.z;
+    seed[i] = Math.random() * 100;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
+  return geo;
+}
+
+// круглый спрайт, чтобы точки не выглядели квадратами
+function makeDotSprite() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.5, "rgba(255,255,255,0.6)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
+const dust = new THREE.Points(
+  makeShellPoints(260, 1.7, 3.4),
+  new THREE.PointsMaterial({
+    color: 0x596069, size: 0.03, sizeAttenuation: true, map: makeDotSprite(),
+    transparent: true, opacity: 0.45, depthWrite: false, alphaTest: 0.05,
+  })
+);
+dust.position.y = EYE_Y;
+scene.add(dust);
+
+// светящиеся «киберпанк»-искры (шейдер: круглый спрайт + твинкл)
+const sparkMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 }, uPulse: { value: 0 } },
+  transparent: true,
+  depthWrite: false,
+  vertexShader: /* glsl */`
+    attribute float aSeed;
+    uniform float uTime;
+    varying float vTwinkle;
+    varying float vHue;
+    void main() {
+      vHue = fract(aSeed * 0.37);
+      vTwinkle = 0.35 + 0.65 * (0.5 + 0.5 * sin(uTime * (1.2 + fract(aSeed) * 2.2) + aSeed));
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = (26.0 + 22.0 * fract(aSeed * 7.7)) * vTwinkle / -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uPulse;
+    varying float vTwinkle;
+    varying float vHue;
+    void main() {
+      vec2 d = gl_PointCoord - 0.5;
+      float r = length(d) * 2.0;
+      if (r > 1.0) discard;
+      float core = smoothstep(1.0, 0.15, r);
+      vec3 col = vHue > 0.75 ? vec3(2.2, 1.0, 0.35) : vec3(2.6, 0.5, 0.25);
+      col *= (0.8 + 0.7 * uPulse) * vTwinkle;
+      gl_FragColor = vec4(col, core * vTwinkle);
+    }`,
+});
+const sparks = new THREE.Points(makeShellPoints(130, 1.55, 3.0), sparkMat);
+sparks.position.y = EYE_Y;
+scene.add(sparks);
+
+/* ---------------- Постобработка: bloom для свечения ---------------- */
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.5,    // сила
+  0.4,    // радиус
+  1.0     // порог: белый фон (~0.9 в linear) не цветёт, эмиссия > 1 — цветёт
+);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ============================================================
+   Анимация
+   ============================================================ */
+
+const clock = new THREE.Clock();
+
+// состояние взгляда (саккады)
+const gaze = { yaw: 0, pitch: 0, tYaw: 0, tPitch: 0, next: 1.5 };
+
+// состояние диафрагмы и моргания
+const ap = {
+  value: 0.75, target: 0.75, nextAdjust: 3,
+  blinkT: -1,                 // <0 — не моргаем; иначе фаза [0..1]
+  nextBlink: 4,
+  BLINK_DUR: 0.9,             // медленное «механическое» моргание
+};
+
+// состояние глитча
+const glitch = { level: 0, next: 2.5, until: 0 };
+
+// состояние скан-кольца
+const scan = { t: -1, next: 3.5, DUR: 1.6 };
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  const k = (rate) => 1 - Math.exp(-dt * rate);
+
+  /* -- пульс свечения (общий «сердечный ритм» машины) -- */
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.1) * (0.7 + 0.3 * Math.sin(t * 0.37));
+
+  /* -- вращение глаза вокруг собственной оси + медленный дрейф взгляда -- */
+  spinGroup.rotation.z = t * 0.12;
+  if (t > gaze.next) {
+    gaze.tYaw = (Math.random() * 2 - 1) * 0.38;
+    gaze.tPitch = (Math.random() * 2 - 1) * 0.22;
+    gaze.next = t + 1.8 + Math.random() * 2.6;
+  }
+  gaze.yaw += (gaze.tYaw - gaze.yaw) * k(3.2);
+  gaze.pitch += (gaze.tPitch - gaze.pitch) * k(3.2);
+  eyeGroup.rotation.y = gaze.yaw + Math.sin(t * 1.3) * 0.012;
+  eyeGroup.rotation.x = -gaze.pitch + Math.cos(t * 1.7) * 0.008;
+
+  /* -- радужка внутри вращается в противоход -- */
+  iris.rotation.z = -t * 0.3;
+
+  /* -- диафрагма: автофокус + медленное моргание -- */
+  if (t > ap.nextAdjust && ap.blinkT < 0) {
+    ap.target = 0.45 + Math.random() * 0.5;
+    ap.nextAdjust = t + 1.5 + Math.random() * 3.5;
+  }
+  if (t > ap.nextBlink && ap.blinkT < 0) {
+    ap.blinkT = 0;
+    ap.nextBlink = t + 4 + Math.random() * 4;
+  }
+  let blinkClose = 0;
+  if (ap.blinkT >= 0) {
+    ap.blinkT += dt / ap.BLINK_DUR;
+    if (ap.blinkT >= 1) { ap.blinkT = -1; }
+    else {
+      // закрыть — задержка — открыть (плавная механика)
+      const ph = ap.blinkT;
+      blinkClose = ph < 0.38 ? THREE.MathUtils.smoothstep(ph, 0, 0.38)
+                 : ph < 0.55 ? 1
+                 : 1 - THREE.MathUtils.smoothstep(ph, 0.55, 1);
+    }
+  }
+  ap.value += (ap.target - ap.value) * k(6);
+  const apertureNow = ap.value * (1 - blinkClose);
+  setAperture(apertureNow);
+  irisUniforms.uBlink.value = blinkClose;
+  sensor.visible = blinkClose < 0.85;
+
+  /* -- глитч-события -- */
+  if (t > glitch.next) {
+    glitch.until = t + 0.12 + Math.random() * 0.3;
+    glitch.next = t + 2.2 + Math.random() * 4.5;
+  }
+  const active = t < glitch.until;
+  glitch.level += ((active ? 1 : 0) - glitch.level) * k(active ? 30 : 12);
+  irisUniforms.uGlitch.value = glitch.level;
+  if (active && Math.random() < 0.35) {
+    circuitTex.offset.x = Math.random();          // «цифровой» сдвиг дорожек
+    circuitTex.offset.y = Math.random() * 0.3;
+  }
+
+  /* -- скан-кольцо пробегает по корпусу -- */
+  if (t > scan.next && scan.t < 0) {
+    scan.t = 0;
+    scan.next = t + 5 + Math.random() * 5;
+  }
+  if (scan.t >= 0) {
+    scan.t += dt / scan.DUR;
+    if (scan.t >= 1) { scan.t = -1; scanRing.material.opacity = 0; }
+    else {
+      const y = 1.04 - scan.t * 2.08;
+      const s = Math.sqrt(Math.max(0.0001, 1.045 - y * y));
+      scanRing.position.y = y;
+      scanRing.scale.setScalar(s);
+      scanRing.material.opacity = 0.75 * Math.sin(scan.t * Math.PI);
+    }
+  }
+
+  /* -- пульсация всех светящихся элементов -- */
+  const glowK = 0.55 + 0.45 * pulse + glitch.level * 1.2;
+  shellMat.emissiveIntensity = 0.45 * glowK + glitch.level * 2.2;
+  ringOuter.material.emissiveIntensity = 2.6 * glowK;
+  ringMid.material.emissiveIntensity = 2.2 * glowK;
+  ringInner.material.emissiveIntensity = 3.0 * glowK;
+  irisUniforms.uPulse.value = pulse;
+  irisUniforms.uTime.value = t;
+  sparkMat.uniforms.uTime.value = t;
+  sparkMat.uniforms.uPulse.value = pulse;
+  irisLight.intensity = (1.5 + 2 * pulse) * (1 - blinkClose * 0.9);
+  sensor.scale.setScalar(0.85 + 0.45 * pulse);
+
+  /* -- гиро-кольца и частицы -- */
+  gyro1.rotation.z += dt * 0.25;
+  gyro1.rotation.x = 1.15 + Math.sin(t * 0.4) * 0.12;
+  gyro2.rotation.z -= dt * 0.18;
+  gyro2.rotation.y += dt * 0.1;
+  dust.rotation.y += dt * 0.03;
+  sparks.rotation.y -= dt * 0.05;
+  sparks.rotation.x = Math.sin(t * 0.1) * 0.1;
+
+  controls.update();
+  composer.render();
+}
+animate();
+
+/* ---------------- Служебное ---------------- */
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+setTimeout(() => document.getElementById("hint").classList.add("hidden"), 6000);
+</script>
+</body>
+</html>
