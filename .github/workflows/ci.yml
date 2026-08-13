@@ -25,11 +25,12 @@ jobs:
       - name: Build firmware (${{ matrix.env }})
         working-directory: firmware
         # Retry: скачки сети при загрузке toolchain дают transient ConnectionError
+        # (случалось 3 подряд на одном раннере — увеличено до 5 с backoff)
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             pio run -e ${{ matrix.env }} && exit 0
             echo "::warning::pio run failed (attempt $attempt), retrying..."
-            sleep 10
+            sleep $((attempt * 15))
           done
           exit 1
 
