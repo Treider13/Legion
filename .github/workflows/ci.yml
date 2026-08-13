@@ -95,6 +95,45 @@ jobs:
         run: npm ci && npm run tauri build -- --no-bundle
 
   # ------------------------------------------------------------------
+  # Релиз: Tauri-бандлы (win/mac/linux) по тегу v* (фаза 9)
+  # ------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Build frontend
+        working-directory: app
+        run: npm ci && npm run build
+      - name: Tauri build + upload artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          args: --verbose
+
+  # ------------------------------------------------------------------
   # CLI: синтаксис и базовая проверка
   # ------------------------------------------------------------------
   tools:

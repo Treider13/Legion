@@ -9,6 +9,7 @@
 #if LEGION_HAS_WIFI
 
 #include <ArduinoWebsockets.h>
+#include <HTTPUpdateServer.h>
 #include <LittleFS.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -26,6 +27,7 @@ static constexpr const char* AP_SSID = "LEGION";
 static constexpr const char* AP_PASS = "legion4351";  // WPA2, сменить в проде
 
 static WebServer s_http(80);
+static HTTPUpdateServer s_ota;  // OTA: POST /update (firmware.bin) — фаза 9
 static WebsocketsServer s_ws;
 static CmdServer* s_cmd = nullptr;
 static AppState* s_state = nullptr;
@@ -102,6 +104,12 @@ void net_init(AppState& state, CmdServer& cmd) {
   s_ws.listen(WS_PORT);
   Serial.print(F("WS listen :"));
   Serial.println(WS_PORT);
+
+  // OTA (фаза 9): POST /update с firmware.bin. Регистрируем ДО serveStatic
+  // (wildcard), чтобы /update матчился первым. Таблица разделов app0/app1
+  // (partitions_legion.csv) — OTA-безопасна.
+  s_ota.setup(&s_http, "/update");
+  Serial.println(F("OTA /update ready"));
 
   // HTTP :80 — статика из LittleFS (lite-UI)
   if (LittleFS.begin(true)) {

@@ -50,3 +50,13 @@
 ## Upgrade path
 
 TI LMX2594/2595 (калибровка <20 мкс, аппаратная рампа) — миграция без смены архитектуры, если ADF4351 перестанет хватать.
+
+## Дополнительные подсистемы (фазы 4–9)
+
+- **WiFi AP/STA + WebSocket :81 + HTTP :80** (lite-UI из LittleFS, gzip). Клиентский пул — 4 слота. (фаза 4)
+- **NVS-автономность**: freq/power/ppm/коридор/WiFi восстанавливаются после reboot (паттерн joseluu). RF ON не восстанавливается (compliance). (фаза 4)
+- **BLE NUS** (Nordic UART Service, NimBLE 2.5.1): тот же протокол, notify-телеметрия; нет на S2. (фаза 7)
+- **PE43702**: аттенюатор 0–31.75 дБ шаг 0.25 дБ, 3 GPIO, MSB-first latch. (фаза 8)
+- **Таблица разделов** `partitions_legion.csv`: app 1.6 МБ ×2 (OTA) + LittleFS 512 КБ — default.csv не вмещал WiFi+BLE стек на C3/C6 (проверено сборкой). (фаза 7)
+- **OTA**: HTTPUpdateServer, `POST /update` (curl -F image=@firmware.bin). (фаза 9)
+- **Релизы**: GitHub Actions → tauri-action, бандлы win/mac/linux по тегу `v*`. (фаза 9)

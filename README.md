@@ -23,13 +23,34 @@
 # Прошивка (пример для ESP32-S3)
 cd firmware && pio run -e esp32-s3 --target upload
 
-# ПО на ПК
+# lite-UI на ESP32 (LittleFS): сборка + заливка ФС
+../tools/build_lite_ui.sh && pio run -e esp32-s3 --target uploadfs
+
+# ПО на ПК (Tauri desktop)
 cd app && npm install && npm run tauri dev
 
 # CLI
 python3 tools/legion_cli.py --list
 python3 tools/legion_cli.py --port /dev/ttyUSB0 --cmd "SET FREQ 2475.000"
+
+# Эмулятор ESP32 на виртуальном PTY (разработка без железа)
+python3 tools/esp32_emulator.py   # → печатает /dev/pts/N
 ```
+
+## Возможности
+
+- **MANUAL**: точная частота 35–4400 МГц, LOCK-индикация, 4 уровня мощности
+- **SWEEP / HOP / CHIRP**: коридор (напр. 2400–2500 МГц) — линейный, псевдослучайный (seed), FMCW-рампа с шагом от 1 Гц
+- **GLIDE / FM**: плавный переход и ЧМ-паттерны (SIN/TRI/RAND)
+- **Транспорты**: USB-UART (Tauri desktop / Web Serial / CLI), WiFi (WebSocket :81 + lite-UI на :80), BLE (NUS)
+- **Автономность**: NVS — режим восстанавливается после reboot
+- **SELFTEST**: диагностика SPI модуля без приборов (перепутанные пины и пр.)
+- **PE43702** (опция): аттенюатор 0–31.75 дБ шаг 0.25 дБ
+- **OTA**: `curl -F "image=@firmware.bin" http://192.168.4.1/update`
+
+## Платы
+
+ESP32 classic / S3 / S2 / C3 / C6 / H2 (ограниченно) — см. [docs/architecture.md](docs/architecture.md).
 
 ## Правовая заметка
 
