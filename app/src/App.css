@@ -1,11 +1,12 @@
 /* ============================================================================
-   LEGION — дизайн-система (фаза 5). Neo-Prime HUD × Awwwards-2026.
-   Токены: src/design/tokens.css
+   LEGION — тема «Aurora Glass» (премиум). Матовое стекло, круговой дайл-герой,
+   сдержанное свечение. Токены: src/design/tokens.css
+   Имена классов совпадают с разметкой компонентов — правки только визуальные.
    ============================================================================ */
 
 .legion-root {
+  position: relative;
   min-height: 100vh;
-  background: var(--lg-graphite);
 }
 
 /* ============================== BOOT (S1) ================================= */
@@ -13,18 +14,19 @@
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: var(--lg-graphite);
+  background: radial-gradient(80% 80% at 50% 30%, rgba(10, 15, 28, 0.6), var(--lg-bg) 80%);
+  backdrop-filter: blur(4px);
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: 28px;
+  gap: 30px;
 }
 
 .boot-lines {
   font-family: var(--lg-font-mono);
   font-size: 12px;
-  color: var(--lg-olive-hi);
+  color: var(--lg-dim);
   letter-spacing: 0.12em;
   min-height: 180px;
   text-align: left;
@@ -44,22 +46,24 @@
   font-family: var(--lg-font-display);
   font-size: clamp(48px, 9vw, 120px);
   letter-spacing: 0.22em;
-  color: var(--lg-amber);
-  text-shadow: var(--lg-glow-amber);
+  color: var(--lg-text);
+  text-shadow: 0 0 26px rgba(45, 212, 191, 0.45);
   margin: 0;
 }
 
 .boot-bar-track {
   width: min(420px, 70vw);
-  height: 2px;
-  background: var(--lg-line);
+  height: 3px;
+  border-radius: 3px;
+  background: var(--lg-glass-2);
+  overflow: hidden;
 }
 
 .boot-bar {
   height: 100%;
-  background: var(--lg-amber);
+  background: linear-gradient(90deg, var(--lg-accent), var(--lg-accent-hi));
   transform-origin: left;
-  box-shadow: var(--lg-glow-amber);
+  box-shadow: var(--lg-glow-accent);
 }
 
 /* ============================== HERO ====================================== */
@@ -87,8 +91,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  padding: 28px 20px 40px;
-  pointer-events: none; /* клики — только по интерактивным элементам */
+  padding: 30px 22px 44px;
+  pointer-events: none;
 }
 
 .hero-overlay > * {
@@ -104,9 +108,10 @@
 
 .hero-logo {
   font-family: var(--lg-font-display);
-  font-size: 22px;
+  font-size: 24px;
   letter-spacing: 0.4em;
-  color: var(--lg-amber);
+  color: var(--lg-text);
+  text-shadow: 0 0 20px rgba(45, 212, 191, 0.35);
 }
 
 .hero-sub {
@@ -118,28 +123,86 @@
 .hero-corr {
   font-size: 11px;
   letter-spacing: 0.3em;
-  color: var(--lg-olive-hi);
-  border: 1px solid var(--lg-line);
-  padding: 6px 16px;
-  background: rgba(11, 13, 14, 0.55);
-  backdrop-filter: blur(4px);
+  color: var(--lg-accent-hi);
+  border: 1px solid var(--lg-border);
+  border-radius: 999px;
+  padding: 8px 20px;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
+  box-shadow: var(--lg-shadow-card);
 }
 
-/* ===================== LOCK-скобки (S5) =================================== */
+/* ===================== Круговой дайл + LOCK (S3/S5) ======================= */
 .lock-frame {
   position: relative;
-  padding: 34px 44px;
-  /* hero-overlay имеет pointer-events:none — возвращаем события дайлу */
+  display: grid;
+  place-items: center;
+  width: min(400px, 80vw);
+  height: min(400px, 80vw);
   pointer-events: auto;
 }
 
+/* Матовый стеклянный диск — «циферблат». Тёмная полупрозрачная база
+   гасит 3D-орб за диском, чтобы цифры частоты были читаемы. */
+.lock-frame::before {
+  content: "";
+  position: absolute;
+  inset: 6%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 32%, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03) 46%, transparent 68%),
+    rgba(6, 9, 17, 0.62);
+  border: 1px solid var(--lg-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 70px rgba(45, 212, 191, 0.08),
+    var(--lg-shadow);
+  backdrop-filter: saturate(150%) blur(26px);
+  -webkit-backdrop-filter: saturate(150%) blur(26px);
+}
+
+/* Тонкая светящаяся дуга — медленно вращается (премиум-акцент) */
+.lock-frame::after {
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  border-top-color: var(--lg-accent);
+  border-right-color: rgba(45, 212, 191, 0.4);
+  opacity: 0.75;
+  box-shadow: var(--lg-glow-accent);
+  animation: dial-spin 16s linear infinite;
+  transition: border-color 0.5s, box-shadow 0.5s, opacity 0.5s;
+}
+
+@keyframes dial-spin {
+  to { transform: rotate(360deg); }
+}
+
+.lock-frame.locked::after {
+  border-top-color: var(--lg-lock);
+  border-right-color: rgba(94, 242, 160, 0.4);
+  box-shadow: var(--lg-glow-green);
+  opacity: 1;
+}
+
+.lock-frame.lost::after {
+  border-top-color: var(--lg-alert);
+  border-right-color: rgba(255, 107, 115, 0.4);
+  box-shadow: 0 0 16px rgba(255, 107, 115, 0.3);
+}
+
+/* Угловые скобки — деликатные, сохраняют «прицельную» айдентику */
 .bracket {
   position: absolute;
   width: 26px;
   height: 26px;
-  border: 2px solid var(--lg-amber);
+  border: 2px solid var(--lg-accent);
+  border-radius: 4px;
   transition: all 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-  opacity: 0.75;
+  opacity: 0.35;
 }
 
 .bracket.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
@@ -148,47 +211,52 @@
 .bracket.br { bottom: 0; right: 0; border-left: none; border-top: none; }
 
 .lock-frame.locked .bracket {
-  border-color: var(--lg-phosphor);
+  border-color: var(--lg-lock);
   box-shadow: var(--lg-glow-green);
-  opacity: 1;
+  opacity: 0.9;
 }
 
-.lock-frame.locked .bracket.tl { transform: translate(6px, 6px); }
-.lock-frame.locked .bracket.tr { transform: translate(-6px, 6px); }
-.lock-frame.locked .bracket.bl { transform: translate(6px, -6px); }
-.lock-frame.locked .bracket.br { transform: translate(-6px, -6px); }
+.lock-frame.locked .bracket.tl { transform: translate(8px, 8px); }
+.lock-frame.locked .bracket.tr { transform: translate(-8px, 8px); }
+.lock-frame.locked .bracket.bl { transform: translate(8px, -8px); }
+.lock-frame.locked .bracket.br { transform: translate(-8px, -8px); }
 
 .lock-frame.lost .bracket {
   border-color: var(--lg-alert);
-  opacity: 0.9;
+  opacity: 0.75;
 }
 
 .lock-caption {
   position: absolute;
-  top: -10px;
+  top: 4%;
   left: 50%;
   transform: translateX(-50%);
   font-size: 10px;
   letter-spacing: 0.35em;
-  padding: 2px 12px;
-  background: var(--lg-graphite);
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: var(--lg-glass-2);
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
   color: var(--lg-dim);
-  border: 1px solid var(--lg-line);
+  border: 1px solid var(--lg-border);
   white-space: nowrap;
 }
 
 .lock-frame.locked .lock-caption {
-  color: var(--lg-phosphor);
-  border-color: var(--lg-phosphor);
+  color: var(--lg-lock);
+  border-color: rgba(94, 242, 160, 0.5);
 }
 
 .lock-frame.lost .lock-caption {
   color: var(--lg-alert);
-  border-color: var(--lg-alert);
+  border-color: rgba(255, 107, 115, 0.5);
 }
 
-/* ===================== Дайл-энкодер (S3) ================================== */
+/* Цифры частоты */
 .freq-dial {
+  position: relative;
+  z-index: 1; /* поверх стеклянного диска (.lock-frame::before) */
   cursor: ns-resize;
   user-select: none;
   text-align: center;
@@ -196,7 +264,7 @@
 }
 
 .freq-dial.disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -204,75 +272,84 @@
   display: flex;
   align-items: baseline;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 2px;
 }
 
 .freq-digit {
   font-family: var(--lg-font-mono);
-  font-weight: 700;
-  font-size: clamp(44px, 7vw, 92px);
-  color: var(--lg-amber-hi);
-  text-shadow: var(--lg-glow-amber);
+  font-weight: 500;
+  font-size: clamp(30px, 4.6vw, 58px);
+  color: var(--lg-text);
+  text-shadow: 0 0 16px rgba(45, 212, 191, 0.4);
   transition: transform 0.12s ease, color 0.2s;
   font-variant-numeric: tabular-nums;
 }
 
 .freq-digit.dot {
-  color: var(--lg-olive-hi);
+  color: var(--lg-accent);
+  text-shadow: none;
 }
 
 .freq-dial:hover .freq-digit {
-  color: var(--lg-amber);
+  color: var(--lg-accent-hi);
 }
 
 .freq-dial-unit {
-  font-size: clamp(14px, 2vw, 22px);
+  flex-basis: 100%;
+  text-align: center;
+  font-size: clamp(12px, 1.6vw, 18px);
   color: var(--lg-dim);
-  margin-left: 12px;
-  letter-spacing: 0.2em;
+  margin-top: 4px;
+  letter-spacing: 0.35em;
 }
 
 .freq-dial-hint {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 9px;
   letter-spacing: 0.3em;
-  color: var(--lg-olive-hi);
-  opacity: 0.7;
+  color: var(--lg-faint);
 }
 
 /* ===================== CONSOLE / панели =================================== */
 .console {
+  position: relative;
   max-width: 1080px;
   margin: 0 auto;
-  padding: 0 16px 60px;
+  padding: 0 16px 64px;
 }
 
 .panel {
   position: relative;
-  background: linear-gradient(180deg, var(--lg-panel) 0%, var(--lg-panel-2) 100%);
-  border: 1px solid var(--lg-line);
-  padding: 16px 18px;
+  background: var(--lg-glass);
+  border: 1px solid var(--lg-border);
+  border-radius: var(--lg-radius);
+  padding: 18px 20px;
   margin-bottom: 16px;
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
+  box-shadow: var(--lg-shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+/* Тонкая верхняя «глянцевая» кромка вместо HUD-уголка */
 .panel::before {
   content: "";
   position: absolute;
   top: 0;
-  left: 0;
-  width: 8px;
-  height: 8px;
-  border-top: 2px solid var(--lg-olive);
-  border-left: 2px solid var(--lg-olive);
+  left: 18px;
+  right: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.35), transparent);
 }
 
 .panel-title {
   display: flex;
   justify-content: space-between;
-  color: var(--lg-olive-hi);
+  align-items: center;
+  color: var(--lg-dim);
   font-size: 10px;
   letter-spacing: 0.35em;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .panel-grid {
@@ -290,72 +367,88 @@
 /* --- контролы --- */
 select,
 input {
-  background: var(--lg-graphite);
-  color: var(--lg-bone);
-  border: 1px solid var(--lg-line);
-  padding: 8px 10px;
+  background: rgba(5, 7, 13, 0.55);
+  color: var(--lg-text);
+  border: 1px solid var(--lg-border);
+  border-radius: 10px;
+  padding: 9px 12px;
   font-family: var(--lg-font-mono);
   font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 select:focus,
 input:focus {
   outline: none;
-  border-color: var(--lg-amber);
+  border-color: var(--lg-accent);
+  box-shadow: 0 0 0 3px var(--lg-accent-soft);
 }
 
 button {
   font-family: var(--lg-font-mono);
   font-size: 12px;
   letter-spacing: 0.12em;
-  padding: 9px 16px;
-  border: 1px solid var(--lg-line);
-  background: var(--lg-graphite);
-  color: var(--lg-bone);
+  padding: 10px 18px;
+  border: 1px solid var(--lg-border);
+  border-radius: 10px;
+  background: var(--lg-glass);
+  color: var(--lg-text);
   cursor: pointer;
-  transition: all 0.15s;
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
+  transition: all 0.18s;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--lg-border-hi);
+  background: var(--lg-glass-2);
 }
 
 button:disabled {
-  opacity: 0.3;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
 .btn-primary {
-  border-color: var(--lg-amber);
-  color: var(--lg-amber);
+  border-color: rgba(45, 212, 191, 0.55);
+  color: var(--lg-accent-hi);
+  background: var(--lg-accent-soft);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: rgba(212, 160, 23, 0.14);
-  box-shadow: var(--lg-glow-amber);
+  background: rgba(45, 212, 191, 0.22);
+  box-shadow: var(--lg-glow-accent);
 }
 
 .btn-danger {
-  border-color: var(--lg-alert);
+  border-color: rgba(255, 107, 115, 0.55);
   color: var(--lg-alert);
+  background: rgba(255, 107, 115, 0.1);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: rgba(255, 59, 48, 0.12);
+  background: rgba(255, 107, 115, 0.2);
 }
 
 .btn-ghost.active {
-  border-color: var(--lg-phosphor);
-  color: var(--lg-phosphor);
+  border-color: rgba(45, 212, 191, 0.55);
+  color: var(--lg-accent-hi);
+  background: var(--lg-accent-soft);
+  box-shadow: var(--lg-glow-accent);
 }
 
 .btn-mini {
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-size: 10px;
+  border-radius: 8px;
 }
 
-/* --- аттенюатор (фаза 8) --- */
+/* --- аттенюатор --- */
 .att-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .att-label {
@@ -366,14 +459,14 @@ button:disabled {
 
 .att-slider {
   flex: 1;
-  accent-color: var(--lg-amber);
+  accent-color: var(--lg-accent);
   background: transparent;
 }
 
 .att-value {
   min-width: 76px;
   text-align: right;
-  color: var(--lg-amber);
+  color: var(--lg-accent-hi);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -386,11 +479,16 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.connect-bar .panel-title {
+  margin-bottom: 0;
+  margin-right: 6px;
+}
+
 /* --- power / коридор --- */
 .power-row {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
   flex-wrap: wrap;
   align-items: center;
 }
@@ -398,13 +496,13 @@ button:disabled {
 .corr-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .corr-grid label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   font-size: 9px;
   color: var(--lg-dim);
   letter-spacing: 0.2em;
@@ -413,15 +511,19 @@ button:disabled {
 /* --- range gate (S4) --- */
 .range-gate {
   position: relative;
-  height: 26px;
-  margin-top: 16px;
-  border: 1px solid var(--lg-amber);
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(212, 160, 23, 0.09) 0 1px,
-    transparent 1px 10%
-  );
+  height: 28px;
+  margin-top: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--lg-border);
+  background: rgba(5, 7, 13, 0.5);
   overflow: visible;
+}
+
+.range-gate-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(45, 212, 191, 0.08), rgba(45, 212, 191, 0.22));
 }
 
 .range-marker {
@@ -430,14 +532,15 @@ button:disabled {
   bottom: -5px;
   width: 3px;
   margin-left: -1px;
-  background: var(--lg-phosphor);
+  border-radius: 3px;
+  background: var(--lg-lock);
   box-shadow: var(--lg-glow-green);
   transition: left 0.08s linear;
 }
 
 .range-marker.unlocked {
   background: var(--lg-alert);
-  box-shadow: 0 0 8px var(--lg-alert);
+  box-shadow: 0 0 10px var(--lg-alert);
 }
 
 .range-labels {
@@ -445,11 +548,11 @@ button:disabled {
   justify-content: space-between;
   font-size: 10px;
   color: var(--lg-dim);
-  margin-top: 5px;
+  margin-top: 6px;
 }
 
 .range-cur {
-  color: var(--lg-phosphor);
+  color: var(--lg-lock);
 }
 
 /* --- статусы --- */
@@ -457,38 +560,41 @@ button:disabled {
   margin-left: auto;
   font-size: 10px;
   letter-spacing: 0.25em;
-  padding: 4px 12px;
-  border: 1px solid var(--lg-line);
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--lg-border);
   color: var(--lg-dim);
 }
 
 .state-connected {
-  color: var(--lg-phosphor);
-  border-color: var(--lg-phosphor);
+  color: var(--lg-lock);
+  border-color: rgba(94, 242, 160, 0.5);
 }
 
 .state-error {
   color: var(--lg-alert);
-  border-color: var(--lg-alert);
+  border-color: rgba(255, 107, 115, 0.5);
 }
 
 .mock-badge {
   font-size: 10px;
   letter-spacing: 0.25em;
-  padding: 4px 12px;
-  border: 1px dashed var(--lg-amber);
-  color: var(--lg-amber);
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px dashed rgba(45, 212, 191, 0.5);
+  color: var(--lg-accent-hi);
 }
 
 .lock-badge {
-  padding: 4px 12px;
-  border: 1px solid var(--lg-line);
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--lg-border);
   letter-spacing: 0.2em;
   font-size: 12px;
 }
 
-.lock-yes { color: var(--lg-phosphor); border-color: var(--lg-phosphor); }
-.lock-no { color: var(--lg-alert); border-color: var(--lg-alert); }
+.lock-yes { color: var(--lg-lock); border-color: rgba(94, 242, 160, 0.5); }
+.lock-no { color: var(--lg-alert); border-color: rgba(255, 107, 115, 0.5); }
 .lock-unknown { color: var(--lg-dim); }
 
 .status-line {
@@ -513,7 +619,7 @@ button:disabled {
   font-size: 20px;
   width: 170px;
   text-align: right;
-  color: var(--lg-amber);
+  color: var(--lg-accent-hi);
 }
 
 .freq-unit {
@@ -541,7 +647,7 @@ button:disabled {
 .log-line {
   display: flex;
   gap: 10px;
-  padding: 1px 0;
+  padding: 2px 0;
   animation: log-in 0.12s ease-out;
 }
 
@@ -551,19 +657,24 @@ button:disabled {
 }
 
 .log-ts {
-  color: var(--lg-olive-hi);
+  color: var(--lg-faint);
   flex-shrink: 0;
 }
 
-.log-tx { color: var(--lg-amber); }
-.log-rx { color: var(--lg-bone); }
+.log-dir {
+  flex-shrink: 0;
+  color: var(--lg-dim);
+}
+
+.log-tx { color: var(--lg-accent-hi); }
+.log-rx { color: var(--lg-text); }
 .log-sys { color: var(--lg-dim); }
 
 .app-footer {
-  margin-top: 28px;
-  padding-top: 14px;
-  border-top: 1px solid var(--lg-line);
-  color: var(--lg-dim); /* контраст: olive-hi #6b7256 = 3.5:1 → dim #8a8f7a ≈ 5.6:1 (a11y) */
+  margin-top: 30px;
+  padding-top: 16px;
+  border-top: 1px solid var(--lg-border);
+  color: var(--lg-dim);
   font-size: 9px;
   letter-spacing: 0.25em;
   text-align: center;

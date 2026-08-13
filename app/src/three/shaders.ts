@@ -4,9 +4,9 @@
 // спектральное кольцо с дугой коридора и маркером частоты.
 // ============================================================================
 
-export const AMBER = [0.83, 0.63, 0.09];   // #d4a017
-export const PHOSPHOR = [0.49, 1.0, 0.42]; // #7cff6b
-export const OLIVE = [0.29, 0.32, 0.25];   // #4a5240
+export const ACCENT = [0.18, 0.83, 0.75];  // #2dd4bf — бирюза (акцент)
+export const PHOSPHOR = [0.37, 0.95, 0.63]; // #5ef2a0 — мятный LOCK
+export const OLIVE = [0.2, 0.35, 0.42];    // приглушённый сине-серый rim
 
 // --- Точечная сфера: лёгкое «дыхание» + затухание к полюсам -----------------
 export const pointsVert = /* glsl */ `
@@ -18,7 +18,7 @@ export const pointsVert = /* glsl */ `
     p += 0.012 * sin(uTime * 0.7 + position.y * 9.0 + position.x * 5.0)
          * normalize(position);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    gl_PointSize = aScale * 520.0 / -mv.z;
+    gl_PointSize = aScale * 230.0 / -mv.z;
     vFade = 0.55 + 0.45 * smoothstep(-1.0, 1.0, normalize(position).y);
     gl_Position = projectionMatrix * mv;
   }
@@ -32,7 +32,7 @@ export const pointsFrag = /* glsl */ `
   void main() {
     float d = length(gl_PointCoord - 0.5);
     if (d > 0.5) discard;
-    float a = smoothstep(0.5, 0.08, d) * vFade;
+    float a = smoothstep(0.5, 0.08, d) * vFade * 0.24;
     vec3 c = mix(uColor, uLockColor, uLock * 0.55);
     gl_FragColor = vec4(c, a);
   }
@@ -58,10 +58,10 @@ export const fresnelFrag = /* glsl */ `
   varying vec3 vNormal;
   varying vec3 vView;
   void main() {
-    float f = pow(1.0 - abs(dot(normalize(vNormal), normalize(vView))), 2.2);
+    float f = pow(1.0 - abs(dot(normalize(vNormal), normalize(vView))), 2.6);
     float pulse = uLock * (0.55 + 0.45 * sin(uTime * 4.0));
     vec3 c = mix(uColor, uLockColor, pulse);
-    gl_FragColor = vec4(c, f * (0.55 + 0.45 * uLock));
+    gl_FragColor = vec4(c, f * (0.22 + 0.2 * uLock));
   }
 `;
 
@@ -90,7 +90,7 @@ export const sweepFrag = /* glsl */ `
     float edge = smoothstep(1.0, 0.85, r);     // мягкий край диска
     float rings = 0.22 * (0.5 + 0.5 * sin(r * 40.0)); // концентрические круги
     float a = (trail * 0.9 + rings) * edge;
-    gl_FragColor = vec4(uColor, a * 0.75);
+    gl_FragColor = vec4(uColor, a * 0.5);
   }
 `;
 

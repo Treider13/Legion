@@ -75,13 +75,13 @@ function FxWithGuard() {
   return (
     <EffectComposer multisampling={0}>
       <Bloom
-        intensity={0.85}
-        luminanceThreshold={0.18}
-        luminanceSmoothing={0.75}
+        intensity={0.4}
+        luminanceThreshold={0.5}
+        luminanceSmoothing={0.9}
         mipmapBlur
       />
-      <Noise opacity={0.05} />
-      <Vignette eskil={false} offset={0.18} darkness={0.85} />
+      <Noise opacity={0.035} />
+      <Vignette eskil={false} offset={0.22} darkness={0.7} />
     </EffectComposer>
   );
 }
