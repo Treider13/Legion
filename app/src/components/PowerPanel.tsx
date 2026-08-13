@@ -22,6 +22,21 @@ export function PowerPanel() {
           </button>
         ))}
       </div>
+      {/* PE43702: аттенюатор 0–31.75 дБ (фаза 8) */}
+      <div className="att-row">
+        <span className="att-label">ATT</span>
+        <input
+          type="range"
+          min={0}
+          max={31.75}
+          step={0.25}
+          value={s.attDb}
+          disabled={!connected}
+          onChange={(e) => void s.setAtt(parseFloat(e.target.value))}
+          className="att-slider"
+        />
+        <span className="att-value">{s.attDb.toFixed(2)} dB</span>
+      </div>
       <div className="power-row">
         <button
           className={s.rfOn ? "btn-danger" : "btn-primary"}

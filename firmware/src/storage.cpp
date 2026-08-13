@@ -25,6 +25,7 @@ void storage_load(PersistedState& out) {
   out.corridor.dwell_ms = s_pref.getUInt("corr_dw", 10);
   out.corridor.seed = s_pref.getUInt("corr_sd", 1);
   out.corridor.fm_depth_hz = s_pref.getDouble("corr_fm", 100000.0);
+  out.att_db = s_pref.getFloat("att", 0.0f);
   out.wifi_mode = s_pref.getUChar("wifi_md", 0);
   strlcpy(out.wifi_ssid, s_pref.getString("wifi_ss", "").c_str(),
           sizeof(out.wifi_ssid));
@@ -36,6 +37,7 @@ void storage_save_freq(uint64_t hz) { s_pref.putULong64("freq", hz); }
 void storage_save_power(uint8_t code) { s_pref.putUChar("power", code); }
 void storage_save_rf(bool on) { s_pref.putBool("rf", on); }
 void storage_save_ppm(int32_t ppm) { s_pref.putInt("ppm", ppm); }
+void storage_save_att(float db) { s_pref.putFloat("att", db); }
 
 void storage_save_corridor(bool active, const CorridorConfig& cfg) {
   s_pref.putBool("corr_on", active);

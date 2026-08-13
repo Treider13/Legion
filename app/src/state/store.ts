@@ -39,6 +39,7 @@ interface LegionStore {
   lock: boolean | null;
   powerDbm: number;
   rfOn: boolean;
+  attDb: number;
   status: StatusJson | null;
   // коридор (фаза 3)
   corrF1: string;
@@ -65,6 +66,7 @@ interface LegionStore {
   send(cmd: string): Promise<void>;
   setFrequency(): Promise<void>;
   setPower(dbm: number): Promise<void>;
+  setAtt(db: number): Promise<void>;
   setRf(on: boolean): Promise<void>;
   pollStatus(): Promise<void>;
   runSelftest(): Promise<void>;
@@ -104,6 +106,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     lock: null,
     powerDbm: 5,
     rfOn: false,
+    attDb: 0,
     status: null,
     corrF1: "2400",
     corrF2: "2500",
@@ -229,6 +232,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("tx", `SET POWER ${dbm}`);
       const r = await gClient.setPower(dbm);
       if (r.ok) set({ powerDbm: dbm });
+    },
+
+    setAtt: async (db) => {
+      if (!gClient) return;
+      pushLog("tx", `SET ATT ${db.toFixed(2)}`);
+      const r = await gClient.setAtt(db);
+      if (r.ok) set({ attDb: db });
     },
 
     setRf: async (on) => {

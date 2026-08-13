@@ -72,6 +72,13 @@ export class MockTransport implements Transport {
       } else {
         this.reply("ERR RANGE power -4|-1|+2|+5");
       }
+    } else if (upper.startsWith("SET ATT")) {
+      const db = parseFloat(t.split(/\s+/)[2] ?? "NaN");
+      if (!Number.isFinite(db) || db < 0 || db > 31.75) {
+        this.reply("ERR RANGE att 0-31.75");
+      } else {
+        this.reply(`OK ATT=${(Math.round(db / 0.25) * 0.25).toFixed(2)} dB`);
+      }
     } else if (upper === "RF ON" || upper === "RF OFF") {
       this.rfOn = upper === "RF ON";
       this.reply(`OK RF ${this.rfOn ? "ON" : "OFF"}`);

@@ -110,6 +110,15 @@ class Emu:
                 return "ERR RANGE power -4|-1|+2|+5"
             self.power = p
             return f"OK POWER={p}"
+        if u.startswith("SET ATT"):
+            try:
+                db = float(parts[2])
+            except (IndexError, ValueError):
+                return "ERR SYNTAX bad att"
+            if not 0.0 <= db <= 31.75:
+                return "ERR RANGE att 0-31.75"
+            actual = round(db / 0.25) * 0.25
+            return f"OK ATT={actual:.2f} dB"
         if u == "RF ON":
             self.rf = True
             return "OK RF ON"

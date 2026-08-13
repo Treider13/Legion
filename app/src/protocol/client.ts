@@ -93,6 +93,7 @@ export class LegionClient {
   hello() { return this.cmd("HELLO"); }
   setFreq(mhz: number) { return this.cmd(`SET FREQ ${mhz.toFixed(6)}`); }
   setPower(dbm: number) { return this.cmd(`SET POWER ${dbm}`); }
+  setAtt(db: number) { return this.cmd(`SET ATT ${db.toFixed(2)}`); }
   rf(on: boolean) { return this.cmd(on ? "RF ON" : "RF OFF"); }
   status() { return this.cmd("STATUS?"); }
   regs() { return this.cmd("REGS?"); }

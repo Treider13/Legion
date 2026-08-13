@@ -5,6 +5,7 @@
 #include <Arduino.h>
 
 #include "adf4351.h"
+#include "attenuator.h"
 #include "ble_server.h"
 #include "board_config.h"
 #include "board_pins.h"
@@ -22,6 +23,7 @@
 #endif
 
 static legion::Adf4351Driver g_adf;
+static legion::Attenuator g_att;
 static legion::AppState g_state;
 static legion::CmdServer g_cmd;
 
@@ -33,7 +35,9 @@ void setup() {
 #endif
 
   g_adf.begin();  // CE=LOW: RF гашен до явной команды (compliance)
+  g_att.begin();  // PE43702: 0 дБ при старте
   g_state.drv = &g_adf;
+  g_state.att = &g_att;
   legion::synth_init(g_adf, g_state.cfg);
   legion::corridor_init(g_adf, g_state.cfg, Serial);
   g_cmd.begin(g_state, Serial);
@@ -45,6 +49,7 @@ void setup() {
   g_state.cfg.ref_ppm_milli = ps.ref_ppm_milli;
   g_state.cfg.output_power_code = ps.power_code;
   g_state.freq_hz = ps.freq_hz;
+  g_att.setDb(ps.att_db);
   {
     bool lock = false;
     legion::apply_frequency(g_state, ps.freq_hz, lock);  // частота с прошлого сеанса

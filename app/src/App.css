@@ -350,6 +350,34 @@ button:disabled {
   font-size: 10px;
 }
 
+/* --- аттенюатор (фаза 8) --- */
+.att-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.att-label {
+  color: var(--lg-dim);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+}
+
+.att-slider {
+  flex: 1;
+  accent-color: var(--lg-amber);
+  background: transparent;
+}
+
+.att-value {
+  min-width: 76px;
+  text-align: right;
+  color: var(--lg-amber);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- connect bar --- */
 .connect-bar {
   display: flex;

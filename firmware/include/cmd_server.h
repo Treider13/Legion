@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "adf4351.h"
+#include "attenuator.h"
 #include "freq_planner.h"
 #include "sweep_engine.h"
 
@@ -20,6 +21,7 @@ struct AppState {
   uint64_t freq_hz = 2475000000ULL;  // стартовая частота
   bool rf_on = false;                // RF выключен до явной команды (compliance)
   Adf4351Driver* drv = nullptr;
+  Attenuator* att = nullptr;         // PE43702 (фаза 8)
 };
 
 // Применить частоту: расчёт → запись R5→R0 → ожидание LOCK (debounce, F12).
@@ -43,6 +45,7 @@ class CmdServer {
   void cmdRegs(Print& out);
   void cmdCalRef(char* arg, Print& out);
   void cmdSelftest(Print& out);
+  void cmdSetAtt(char* arg, Print& out);
   void cmdCorridor(char* arg, CorridorMode mode, Print& out);
   void cmdGlide(char* arg, Print& out);
   void cmdFm(char* arg, Print& out);

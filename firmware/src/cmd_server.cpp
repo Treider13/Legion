@@ -91,6 +91,8 @@ void CmdServer::handleLine(char* line, Print& out) {
       cmdSetFreq(arg, out);
     } else if (sub && strcasecmp(sub, "POWER") == 0) {
       cmdSetPower(arg, out);
+    } else if (sub && strcasecmp(sub, "ATT") == 0) {
+      cmdSetAtt(arg, out);
     } else {
       out.println(F("ERR SYNTAX unknown SET"));
     }
@@ -406,6 +408,24 @@ void CmdServer::cmdCalRef(char* arg, Print& out) {
 }
 
 void CmdServer::cmdSelftest(Print& out) { selftest_run(*_s, out); }
+
+// SET ATT <dB> — PE43702, 0–31.75 дБ шаг 0.25 (фаза 8)
+void CmdServer::cmdSetAtt(char* arg, Print& out) {
+  if (!arg || !_s->att) {
+    out.println(F("ERR SYNTAX att required"));
+    return;
+  }
+  const float db = (float)strtod(arg, nullptr);
+  if (db < 0.0f || db > 31.75f) {
+    out.println(F("ERR RANGE att 0-31.75"));
+    return;
+  }
+  const float actual = _s->att->setDb(db);
+  storage_save_att(actual);
+  out.print(F("OK ATT="));
+  out.print(actual, 2);
+  out.println(F(" dB"));
+}
 
 void CmdServer::cmdWifi(char* arg, Print& out) { net_wifi_cmd(*_s, arg, out); }
 
