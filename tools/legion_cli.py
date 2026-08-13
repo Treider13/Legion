@@ -38,10 +38,16 @@ def send_command(port: str, cmd: str) -> int:
         deadline = time.monotonic() + RESP_TIMEOUT_S
         while time.monotonic() < deadline:
             line = ser.readline().decode("ascii", errors="replace").strip()
-            if line:
-                print(line)
-                if line.startswith(("OK", "ERR", "{")):
-                    return 0
+            if not line:
+                continue
+            # Телеметрия коридора (JSON с маркером "t") — не ответ на команду;
+            # печатаем, но продолжаем ждать ответ (найдено при ревизии).
+            if line.startswith("{") and '"t":' in line:
+                print(f"[telem] {line}")
+                continue
+            print(line)
+            if line.startswith(("OK", "ERR", "{")):
+                return 0 if not line.startswith("ERR") else 1
         print("ERR TIMEOUT", file=sys.stderr)
         return 1
 

@@ -32,6 +32,11 @@ void selftest_run(AppState& s, Print& out) {
     bool lock;
     apply_frequency(s, s.freq_hz, lock);  // побочный LOCK нам не нужен
   }
+  if (!s.plan_valid) {  // планирование не удалось — дальше нельзя
+    synth_release();
+    out.println(F("ERR PLAN selftest base freq"));
+    return;
+  }
   const uint32_t r2_base = s.plan.regs[2];
 
   // Шаг 1: MUXOUT=DGND → LOW
@@ -48,12 +53,17 @@ void selftest_run(AppState& s, Print& out) {
   s.drv->writeR2(r2_with_mux(r2_base, MUX_DLD));
   s.drv->writePlan(s.plan);
   delay(10);  // band select 20 мкс + settling ~0.3 мс — запас ×30 (F4/F5)
+  // Debounce как в synth: 3 подряд HIGH (F12: DLD может сработать до settle)
   bool lock = false;
-  for (int i = 0; i < 10; ++i) {  // debounce (F12)
+  uint8_t streak = 0;
+  for (int i = 0; i < 20; ++i) {
     if (s.drv->readLock()) {
-      lock = true;
+      if (++streak >= 3) {
+        lock = true;
+        break;
+      }
     } else {
-      lock = false;
+      streak = 0;
     }
     delay(1);
   }

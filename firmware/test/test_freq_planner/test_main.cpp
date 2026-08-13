@@ -185,6 +185,36 @@ void test_range_errors() {
                     plan_frequency(ADF_FREQ_MIN_HZ, cfg, p));  // ровно минимум
 }
 
+// --- Золотые вектора: ПОЛНЫЙ hex всех 6 регистров, вычисленный вручную ------
+// по картам даташита (Figure 23). Сильнейшая возможная проверка упаковки.
+
+void test_golden_2475_intn() {
+  SynthPlan p = plan_ok(2475000000ULL);
+  const uint32_t golden[6] = {0x00318000UL, 0x00008011UL, 0x18004FC2UL,
+                              0x00E0000BUL, 0x0083203CUL, 0x00580005UL};
+  for (int i = 0; i < 6; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(golden[i], p.regs[i]);
+  }
+}
+
+void test_golden_2475_01_fracn() {
+  SynthPlan p = plan_ok(2475010000ULL);  // INT=99, FRAC=1, MOD=2500
+  const uint32_t golden[6] = {0x00318008UL, 0x0000CE21UL, 0x18004E42UL,
+                              0x0080000BUL, 0x0083203CUL, 0x00580005UL};
+  for (int i = 0; i < 6; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(golden[i], p.regs[i]);
+  }
+}
+
+void test_golden_4400_prescaler89() {
+  SynthPlan p = plan_ok(4400000000ULL);  // INT=176, прескалер 8/9
+  const uint32_t golden[6] = {0x00580000UL, 0x08008011UL, 0x18004FC2UL,
+                              0x00E0000BUL, 0x0083203CUL, 0x00580005UL};
+  for (int i = 0; i < 6; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(golden[i], p.regs[i]);
+  }
+}
+
 // --- Калибровка опорника (CAL REF) ------------------------------------------
 
 void test_ppm_calibration() {
@@ -212,5 +242,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_grid_odd_frequencies);
   RUN_TEST(test_range_errors);
   RUN_TEST(test_ppm_calibration);
+  RUN_TEST(test_golden_2475_intn);
+  RUN_TEST(test_golden_2475_01_fracn);
+  RUN_TEST(test_golden_4400_prescaler89);
   return UNITY_END();
 }
