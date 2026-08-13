@@ -18,6 +18,13 @@ export function ConnectBar() {
     // В Tauri по умолчанию serial; в браузере — Web Serial если есть
     if (isTauriRuntime()) {
       s.setTransportKind("tauri-serial");
+      // Хук автоматизации: начальный порт из LEGION_PORT (см. src-tauri)
+      import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke<string | null>("legion_default_port"))
+        .then((p) => {
+          if (p) s.setSelectedPort(p);
+        })
+        .catch(() => {});
     } else if (isWebSerialSupported()) {
       s.setTransportKind("web-serial");
     }
@@ -50,18 +57,24 @@ export function ConnectBar() {
 
       {s.transportKind === "tauri-serial" && (
         <>
-          <select
+          {/* datalist: dropdown найденных портов + ручной ввод пути.
+              Факт: serialport.available_ports на Linux перечисляет только
+              udev-железо (ttyUSB/ttyACM); виртуальные PTY — ручным вводом. */}
+          <input
+            list="legion-ports"
+            placeholder="/dev/ttyUSB0"
             value={s.selectedPort}
             onChange={(e) => s.setSelectedPort(e.target.value)}
             disabled={connected}
-          >
-            {s.ports.length === 0 && <option value="">— нет портов —</option>}
+            spellCheck={false}
+          />
+          <datalist id="legion-ports">
             {s.ports.map((p) => (
               <option key={p.path} value={p.path}>
                 {p.label}
               </option>
             ))}
-          </select>
+          </datalist>
           <button onClick={() => void s.refreshPorts()} disabled={connected}>
             ⟳
           </button>

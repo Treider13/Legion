@@ -22,6 +22,7 @@ export class TauriSerialTransport implements Transport {
   private ev: TransportEvents | null = null;
   private lineBuf = "";
   private path: string;
+  private reading = false;
 
   constructor(path: string) {
     this.path = path;
@@ -45,17 +46,31 @@ export class TauriSerialTransport implements Transport {
 
   async connect(): Promise<void> {
     this.emitState("connecting");
-    this.port = new SerialPort({ path: this.path, baudRate: BAUD });
+    this.port = new SerialPort({ path: this.path, baudRate: BAUD, timeout: 100 });
     await this.port.open();
-    await this.port.watch(
-      {
-        onData: (data) => this.onChunk(data),
-        onDisconnect: (reason) => this.emitState("disconnected", reason),
-        onError: (message) => this.emitState("error", message),
-      },
-      { decode: true },
-    );
+    this.reading = true;
+    void this.readLoop();
     this.emitState("connected");
+  }
+
+  // Read-polling вместо watch(): на виртуальных PTY watch() v3.0.2 даёт
+  // мгновенный disconnect с пустой причиной (проверено экспериментально;
+  // нативный serialport при этом работает — см. tools/serial_test).
+  // Для командного протокола LEGION polling с timeout=100 мс достаточен.
+  private async readLoop(): Promise<void> {
+    while (this.reading && this.port) {
+      try {
+        const chunk = await this.port.read({ timeout: 100 });
+        if (chunk) this.onChunk(chunk);
+      } catch (e) {
+        // Таймаут чтения — штатно; прочее — ошибка транспорта
+        const msg = String(e);
+        if (!/timeout|timed out/i.test(msg)) {
+          this.emitState("error", msg);
+          break;
+        }
+      }
+    }
   }
 
   private onChunk(data: string | Uint8Array): void {
@@ -77,6 +92,7 @@ export class TauriSerialTransport implements Transport {
   }
 
   async disconnect(): Promise<void> {
+    this.reading = false;
     const p = this.port;
     this.port = null;
     if (p) {

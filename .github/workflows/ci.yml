@@ -62,6 +62,9 @@ jobs:
       - name: Build web
         working-directory: app
         run: npm ci && npm run build
+      - name: Protocol smoke test (mock transport)
+        working-directory: app
+        run: npx tsx scripts/smoke_mock.ts
 
   # ------------------------------------------------------------------
   # Tauri desktop: проверка сборки (факт T2: serialplugin + React 19)
