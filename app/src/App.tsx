@@ -49,7 +49,6 @@ function App() {
     return () => clearTimeout(t);
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
-  const telemFreq = useLegion((s) => s.telemFreq);
 
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
   useEffect(
@@ -108,15 +107,13 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">LEGION</span>
-            <span className="hero-sub">RF SYNTH CONTROL // ADF4351</span>
+            <span className="hero-sub">УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351</span>
           </header>
           <LockBrackets>
             <FrequencyDial />
           </LockBrackets>
           <div className="hero-corr">
-            {corridorRunning
-              ? `CORRIDOR ACTIVE · ${telemFreq !== null ? telemFreq.toFixed(3) + " MHz" : "…"}`
-              : "CORRIDOR STANDBY"}
+            {corridorRunning ? "ПОДАВЛЕНИЕ АКТИВНО" : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>
@@ -130,7 +127,7 @@ function App() {
         </div>
         <LogPanel />
         <footer className="app-footer">
-          LEGION v0.1 · ESP32→ADF4351 · 35–4400 MHz · COMPLIANCE: 50Ω LOAD ONLY
+          LEGION v0.1 · ESP32→ADF4351 · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
         </footer>
       </section>
     </div>

@@ -30,7 +30,7 @@ export function LockBrackets({ children }: { children: React.ReactNode }) {
       <span className="bracket bl" />
       <span className="bracket br" />
       <span className="lock-caption">
-        {lock === null ? "STANDBY" : lock ? "TARGET LOCKED" : "NO LOCK"}
+        {lock === null ? "ОЖИДАНИЕ" : lock ? "ЦЕЛЬ ЗАХВАЧЕНА" : "НЕТ ЗАХВАТА"}
       </span>
       {children}
     </div>

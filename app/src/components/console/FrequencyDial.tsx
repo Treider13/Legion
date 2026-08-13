@@ -98,7 +98,7 @@ export function FrequencyDial() {
         ))}
         <span className="freq-dial-unit">MHz</span>
       </div>
-      <div className="freq-dial-hint">DRAG / WHEEL · SHIFT=FINE</div>
+      <div className="freq-dial-hint">ТЯНИ / КОЛЕСО · SHIFT — ТОЧНО</div>
     </div>
   );
 }
