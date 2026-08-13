@@ -16,23 +16,23 @@ export function CorridorPanel() {
 
   return (
     <section className="panel">
-      <span className="panel-title">CORRIDOR // AUTO</span>
+      <span className="panel-title">КОРИДОР // АВТО</span>
       <div className="corr-grid">
         <label>
-          MODE
+          РЕЖИМ
           <select
             aria-label="Режим коридора"
             value={s.corrMode}
             onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
             disabled={!connected || s.corridorRunning}
           >
-            <option value="SWEEP">SWEEP</option>
-            <option value="HOP">HOP</option>
-            <option value="CHIRP">CHIRP (FMCW)</option>
+            <option value="SWEEP">ОБЗОР (SWEEP)</option>
+            <option value="HOP">СКАЧКИ (HOP)</option>
+            <option value="CHIRP">ЛЧМ (CHIRP)</option>
           </select>
         </label>
         <label>
-          F1 MHz
+          F1 МГц
           <input
             value={s.corrF1}
             onChange={(e) => s.setCorrField("corrF1", e.target.value)}
@@ -40,7 +40,7 @@ export function CorridorPanel() {
           />
         </label>
         <label>
-          F2 MHz
+          F2 МГц
           <input
             value={s.corrF2}
             onChange={(e) => s.setCorrField("corrF2", e.target.value)}
@@ -48,7 +48,7 @@ export function CorridorPanel() {
           />
         </label>
         <label>
-          {s.corrMode === "CHIRP" ? "STEP Hz" : "STEP kHz"}
+          {s.corrMode === "CHIRP" ? "ШАГ Гц" : "ШАГ кГц"}
           <input
             value={s.corrStepKhz}
             onChange={(e) => s.setCorrField("corrStepKhz", e.target.value)}
@@ -56,7 +56,7 @@ export function CorridorPanel() {
           />
         </label>
         <label>
-          {s.corrMode === "SWEEP" ? "DWELL ms" : "RATE ms"}
+          {s.corrMode === "SWEEP" ? "ВЫДЕРЖКА мс" : "ТЕМП мс"}
           <input
             value={s.corrDwellMs}
             onChange={(e) => s.setCorrField("corrDwellMs", e.target.value)}
@@ -65,7 +65,7 @@ export function CorridorPanel() {
         </label>
         {s.corrMode === "HOP" && (
           <label>
-            SEED
+            СИД
             <input
               value={s.corrSeed}
               onChange={(e) => s.setCorrField("corrSeed", e.target.value)}
@@ -88,7 +88,7 @@ export function CorridorPanel() {
       <div className="range-labels">
         <span>{s.corrF1}</span>
         <span className="range-cur">
-          {s.telemFreq !== null ? `${s.telemFreq.toFixed(3)} MHz` : "—"}
+          {s.telemFreq !== null ? `${s.telemFreq.toFixed(3)} МГц` : "—"}
         </span>
         <span>{s.corrF2}</span>
       </div>
@@ -96,7 +96,7 @@ export function CorridorPanel() {
       <div className="power-row">
         {s.corridorRunning ? (
           <button className="btn-danger" onClick={() => void s.corridorStop()}>
-            STOP
+            СТОП
           </button>
         ) : (
           <button
@@ -104,11 +104,11 @@ export function CorridorPanel() {
             disabled={!connected}
             onClick={() => void s.corridorStart()}
           >
-            START {s.corrMode}
+            ПОДАВИТЬ ЦЕЛЬ
           </button>
         )}
         {s.corridorRunning && (
-          <span className="state-badge state-connected">{s.corrMode} RUNNING</span>
+          <span className="state-badge state-connected">ПОДАВЛЕНИЕ АКТИВНО</span>
         )}
       </div>
     </section>

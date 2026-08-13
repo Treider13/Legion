@@ -13,15 +13,14 @@ import "./App.css";
 import { BootSequence } from "./components/boot/BootSequence";
 import { ConnectBar } from "./components/ConnectBar";
 import { CorridorPanel } from "./components/CorridorPanel";
-import { FrequencyDial } from "./components/console/FrequencyDial";
-import { LockBrackets } from "./components/console/LockBrackets";
+import { FrequencyPanel } from "./components/FrequencyPanel";
 import { LogPanel } from "./components/LogPanel";
 import { PowerPanel } from "./components/PowerPanel";
 import { useDeviceTier, prefersReducedMotion } from "./hooks/useDeviceTier";
 import { uiClick } from "./sound/sound";
 import { useLegion } from "./state/store";
 import { rfVisual } from "./three/rfVisual";
-import { LiteRadar } from "./three/LiteRadar";
+import { LiteEye } from "./three/LiteEye";
 
 // FULL: 3D-сцена грузится лениво отдельным чанком; LITE: Canvas2D-радар.
 // __LEGION_LITE__ — compile-time константа (vite define) → мёртвая ветка
@@ -49,21 +48,18 @@ function App() {
     return () => clearTimeout(t);
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
-  const telemFreq = useLegion((s) => s.telemFreq);
 
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
-  useEffect(
-    () =>
-      useLegion.subscribe((s) => {
+  useEffect(() => {
+    return useLegion.subscribe((s) => {
         rfVisual.freqMhz = parseFloat(s.freqMhz) || 2475;
         rfVisual.lock = s.lock ?? false;
         rfVisual.corridorActive = s.corridorRunning;
         rfVisual.corrF1 = parseFloat(s.corrF1) || 2400;
         rfVisual.corrF2 = parseFloat(s.corrF2) || 2500;
         rfVisual.telemFreqMhz = s.telemFreq;
-      }),
-    [],
-  );
+      });
+  }, []);
 
   // Lenis smooth scroll (стандарт 2026; отключён при reduced-motion)
   useEffect(() => {
@@ -98,9 +94,9 @@ function App() {
       <section className="hero">
         <div className="hero-canvas">
           {__LEGION_LITE__ || Scene === null || !mount3d ? (
-            <LiteRadar />
+            <LiteEye />
           ) : (
-            <Suspense fallback={<LiteRadar />}>
+            <Suspense fallback={<LiteEye />}>
               <Scene tier={tier} />
             </Suspense>
           )}
@@ -108,15 +104,10 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">LEGION</span>
-            <span className="hero-sub">RF SYNTH CONTROL // ADF4351</span>
+            <span className="hero-sub">УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351</span>
           </header>
-          <LockBrackets>
-            <FrequencyDial />
-          </LockBrackets>
-          <div className="hero-corr">
-            {corridorRunning
-              ? `CORRIDOR ACTIVE · ${telemFreq !== null ? telemFreq.toFixed(3) + " MHz" : "…"}`
-              : "CORRIDOR STANDBY"}
+          <div className={`hero-status ${corridorRunning ? "alert" : ""}`}>
+            {corridorRunning ? "ПОДАВЛЕНИЕ ЦЕЛИ" : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>
@@ -124,13 +115,14 @@ function App() {
       {/* CONSOLE */}
       <section className="console">
         <ConnectBar />
+        <FrequencyPanel />
         <div className="panel-grid">
           <PowerPanel />
           <CorridorPanel />
         </div>
         <LogPanel />
         <footer className="app-footer">
-          LEGION v0.1 · ESP32→ADF4351 · 35–4400 MHz · COMPLIANCE: 50Ω LOAD ONLY
+          LEGION v0.1 · ESP32→ADF4351 · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
         </footer>
       </section>
     </div>

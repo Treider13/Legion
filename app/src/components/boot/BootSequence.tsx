@@ -9,14 +9,14 @@ import gsap from "gsap";
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
 
 const BOOT_LINES = [
-  "LEGION OS // KERNEL 0.1.0",
-  "MEM ......... 327680 KB OK",
-  "SPI BUS ..... ADF4351 LINK OK",
-  "PLL CORE .... FRACTIONAL-N OK",
-  "RF STAGE .... ARMED",
-  "CORRIDOR .... 2400-2500 MHZ READY",
+  "LEGION OS // ЯДРО 0.1.0",
+  "ПАМЯТЬ ...... 327680 КБ OK",
+  "ШИНА SPI .... ADF4351 СВЯЗЬ OK",
+  "ФАПЧ ........ FRACTIONAL-N OK",
+  "РЧ-КАСКАД ... ГОТОВ",
+  "КОРИДОР ..... 2400-2500 МГц ГОТОВ",
   "",
-  "ALL SYSTEMS NOMINAL",
+  "ВСЕ СИСТЕМЫ В НОРМЕ",
 ];
 
 interface Props {

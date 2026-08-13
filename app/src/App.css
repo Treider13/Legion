@@ -120,17 +120,29 @@
   color: var(--lg-dim);
 }
 
-.hero-corr {
+.hero-status {
   font-size: 11px;
-  letter-spacing: 0.3em;
+  letter-spacing: 0.35em;
   color: var(--lg-accent-hi);
   border: 1px solid var(--lg-border);
   border-radius: 999px;
-  padding: 8px 20px;
+  padding: 9px 22px;
   background: var(--lg-glass);
   backdrop-filter: var(--lg-blur);
   -webkit-backdrop-filter: var(--lg-blur);
   box-shadow: var(--lg-shadow-card);
+  transition: color 0.4s, border-color 0.4s, box-shadow 0.4s;
+}
+
+.hero-status.alert {
+  color: #ff8a8f;
+  border-color: rgba(255, 90, 95, 0.6);
+  box-shadow: 0 0 18px rgba(255, 60, 65, 0.35);
+  animation: alert-blink 1.1s steps(1, end) infinite;
+}
+
+@keyframes alert-blink {
+  50% { opacity: 0.55; }
 }
 
 /* ===================== Круговой дайл + LOCK (S3/S5) ======================= */

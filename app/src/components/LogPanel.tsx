@@ -18,9 +18,9 @@ export function LogPanel() {
   return (
     <section className="panel log-panel">
       <span className="panel-title">
-        LOG
+        ЖУРНАЛ
         <button className="btn-ghost btn-mini" onClick={clearLog}>
-          CLEAR
+          ОЧИСТИТЬ
         </button>
       </span>
       <div className="log-scroll" ref={scrollRef}>

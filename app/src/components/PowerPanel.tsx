@@ -9,7 +9,7 @@ export function PowerPanel() {
 
   return (
     <section className="panel">
-      <span className="panel-title">RF OUTPUT</span>
+      <span className="panel-title">РЧ-ВЫХОД</span>
       <div className="power-row">
         {POWERS.map((p) => (
           <button
@@ -18,13 +18,13 @@ export function PowerPanel() {
             disabled={!connected}
             onClick={() => void s.setPower(p)}
           >
-            {p > 0 ? `+${p}` : p} dBm
+            {p > 0 ? `+${p}` : p} дБм
           </button>
         ))}
       </div>
       {/* PE43702: аттенюатор 0–31.75 дБ (фаза 8) */}
       <div className="att-row">
-        <span className="att-label">ATT</span>
+        <span className="att-label">АТТ</span>
         <input
           type="range"
           aria-label="Затухание PE43702, дБ"
@@ -36,7 +36,7 @@ export function PowerPanel() {
           onChange={(e) => void s.setAtt(parseFloat(e.target.value))}
           className="att-slider"
         />
-        <span className="att-value">{s.attDb.toFixed(2)} dB</span>
+        <span className="att-value">{s.attDb.toFixed(2)} дБ</span>
       </div>
       <div className="power-row">
         <button
@@ -44,21 +44,21 @@ export function PowerPanel() {
           disabled={!connected}
           onClick={() => void s.setRf(!s.rfOn)}
         >
-          {s.rfOn ? "RF OFF" : "RF ON"}
+          {s.rfOn ? "РЧ ВЫКЛ" : "РЧ ВКЛ"}
         </button>
         <button
           className="btn-ghost"
           disabled={!connected}
           onClick={() => void s.runSelftest()}
         >
-          SELFTEST
+          САМОТЕСТ
         </button>
         <button
           className="btn-ghost"
           disabled={!connected}
           onClick={() => void s.pollStatus()}
         >
-          STATUS?
+          СТАТУС?
         </button>
       </div>
     </section>

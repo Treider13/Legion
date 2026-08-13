@@ -8,8 +8,15 @@ const TRANSPORTS: Array<{ kind: TransportKind; label: string }> = [
   { kind: "tauri-serial", label: "USB (Tauri)" },
   { kind: "web-serial", label: "USB (Web Serial)" },
   { kind: "websocket", label: "WiFi (WebSocket)" },
-  { kind: "mock", label: "MOCK (без железа)" },
+  { kind: "mock", label: "Эмуляция (без железа)" },
 ];
+
+const STATE_LABELS: Record<string, string> = {
+  disconnected: "ОТКЛЮЧЕНО",
+  connecting: "ПОДКЛЮЧЕНИЕ",
+  connected: "ПОДКЛЮЧЕНО",
+  error: "ОШИБКА",
+};
 
 export function ConnectBar() {
   const s = useLegion();
@@ -42,7 +49,7 @@ export function ConnectBar() {
 
   return (
     <section className="panel connect-bar">
-      <span className="panel-title">LINK</span>
+      <span className="panel-title">СВЯЗЬ</span>
       <select
         aria-label="Транспорт подключения"
         value={s.transportKind}
@@ -95,18 +102,18 @@ export function ConnectBar() {
 
       {connected ? (
         <button className="btn-danger" onClick={() => void s.disconnect()}>
-          DISCONNECT
+          ОТКЛЮЧИТЬ
         </button>
       ) : (
         <button className="btn-primary" onClick={() => void s.connect()}>
-          CONNECT
+          ПОДКЛЮЧИТЬ
         </button>
       )}
 
       <span className={`state-badge state-${s.transportState}`}>
-        {s.transportState.toUpperCase()}
+        {STATE_LABELS[s.transportState] ?? s.transportState.toUpperCase()}
       </span>
-      {s.transportKind === "mock" && <span className="mock-badge">MOCK</span>}
+      {s.transportKind === "mock" && <span className="mock-badge">ЭМУЛЯЦИЯ</span>}
     </section>
   );
 }
