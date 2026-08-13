@@ -10,6 +10,7 @@
 
 #include <math.h>  // isfinite — защита от NaN/inf (ревизия п.8)
 
+#include "leveling.h"
 #include "net_server.h"
 #include "selftest.h"
 #include "serial_sync.h"
@@ -39,6 +40,7 @@ PlanStatus apply_frequency(AppState& s, uint64_t freq_hz, bool& lock) {
   s.plan = plan;
   s.plan_valid = true;
   s.freq_hz = freq_hz;
+  leveling_apply(freq_hz);      // выравнивание уровня (если включено)
   storage_save_freq(freq_hz);  // NVS-автономность (паттерн joseluu)
   return PlanStatus::OK;
 }
@@ -114,6 +116,8 @@ void CmdServer::handleLine(char* line, Print& out) {
       cmdSetPower(arg, out);
     } else if (sub && strcasecmp(sub, "ATT") == 0) {
       cmdSetAtt(arg, out);
+    } else if (sub && strcasecmp(sub, "LEVEL") == 0) {
+      cmdSetLevel(arg, out);
     } else {
       out.println(F("ERR SYNTAX unknown SET"));
     }
@@ -137,6 +141,8 @@ void CmdServer::handleLine(char* line, Print& out) {
     cmdWifi(rest, out);
   } else if (strcasecmp(tok, "STATUS?") == 0) {
     cmdStatus(out);
+  } else if (strcasecmp(tok, "LEVEL?") == 0) {
+    cmdLevelStatus(out);
   } else if (strcasecmp(tok, "REGS?") == 0) {
     cmdRegs(out);
   } else if (strcasecmp(tok, "REGS") == 0 && rest) {
@@ -153,8 +159,13 @@ void CmdServer::handleLine(char* line, Print& out) {
     char* save2 = nullptr;
     char* sub = strtok_r(rest, " ", &save2);
     char* arg = strtok_r(nullptr, "", &save2);
+    if (arg) {
+      while (*arg == ' ') ++arg;
+    }
     if (sub && strcasecmp(sub, "REF") == 0 && arg) {
       cmdCalRef(arg, out);
+    } else if (sub && strcasecmp(sub, "LEVEL") == 0) {
+      cmdCalLevel(arg, out);
     } else {
       out.println(F("ERR SYNTAX unknown CAL"));
     }
@@ -489,7 +500,9 @@ void CmdServer::cmdCalRef(char* arg, Print& out) {
 
 void CmdServer::cmdSelftest(Print& out) { selftest_run(*_s, out); }
 
-// SET ATT <dB> — PE43702, 0–31.75 дБ шаг 0.25 (фаза 8)
+// SET ATT <dB> — PE43702, 0–31.75 дБ шаг 0.25 (фаза 8).
+// Ручная установка затухания — это override: выключаем авто-выравнивание,
+// иначе следующий шаг коридора/частоты перезапишет затухание (фаза 10).
 void CmdServer::cmdSetAtt(char* arg, Print& out) {
   if (!arg || !_s->att) {
     out.println(F("ERR SYNTAX att required"));
@@ -505,11 +518,110 @@ void CmdServer::cmdSetAtt(char* arg, Print& out) {
     out.println(F("ERR RANGE att 0-31.75"));
     return;
   }
+  if (leveling_enabled()) {
+    leveling_disable();
+    persistLevel();
+  }
   const float actual = _s->att->setDb(db);
   storage_save_att(actual);
   out.print(F("OK ATT="));
   out.print(actual, 2);
   out.println(F(" dB"));
+}
+
+// SET LEVEL <dBm> | OFF — включить/выключить авто-выравнивание уровня.
+// Требует калибровки (CAL LEVEL ...). Цель обязана быть не выше минимума
+// измеренного по полосе — аттенюатор только ослабляет (leveling_math.h).
+void CmdServer::cmdSetLevel(char* arg, Print& out) {
+  if (!arg) {
+    out.println(F("ERR SYNTAX SET LEVEL <dBm>|OFF"));
+    return;
+  }
+  if (strcasecmp(arg, "OFF") == 0) {
+    leveling_disable();
+    persistLevel();
+    out.println(F("OK LEVEL OFF"));
+    return;
+  }
+  double dbm;
+  if (!parse_finite(arg, dbm)) {
+    out.println(F("ERR SYNTAX bad level dBm"));
+    return;
+  }
+  leveling_set_target(dbm);
+  persistLevel();
+  // Применить немедленно к текущей частоте (коридор — со следующего шага сам)
+  const uint64_t f = corridor_active() ? corridor_current_hz() : _s->freq_hz;
+  const double att = leveling_apply(f);
+  out.print(F("OK LEVEL="));
+  out.print(dbm, 2);
+  if (att >= 0.0) {
+    out.print(F(" ATT="));
+    out.print(att, 2);
+    out.println(F(" dB"));
+  } else {
+    out.println(F(" (no cal — add points via CAL LEVEL)"));
+  }
+}
+
+// CAL LEVEL <freqMHz> <dBm> — добавить/заменить точку калибровки.
+// CAL LEVEL CLEAR — очистить таблицу.
+void CmdServer::cmdCalLevel(char* arg, Print& out) {
+  if (!arg) {
+    out.println(F("ERR SYNTAX CAL LEVEL <freqMHz> <dBm>|CLEAR"));
+    return;
+  }
+  char* save = nullptr;
+  char* a = strtok_r(arg, " ", &save);
+  if (a && strcasecmp(a, "CLEAR") == 0) {
+    leveling_clear();
+    persistLevel();
+    out.println(F("OK CAL LEVEL CLEAR n=0"));
+    return;
+  }
+  char* b = strtok_r(nullptr, " ", &save);
+  double fmhz, dbm;
+  if (!a || !b || !parse_finite(a, fmhz) || !parse_finite(b, dbm) ||
+      fmhz <= 0.0) {
+    out.println(F("ERR SYNTAX CAL LEVEL <freqMHz> <dBm>|CLEAR"));
+    return;
+  }
+  if (!leveling_add_point(fmhz, dbm)) {
+    out.println(F("ERR RANGE level table full"));
+    return;
+  }
+  persistLevel();
+  out.print(F("OK CAL LEVEL "));
+  out.print(fmhz, 3);
+  out.print(' ');
+  out.print(dbm, 2);
+  out.print(F(" n="));
+  out.println(leveling_count());
+}
+
+// LEVEL? — JSON: {enabled, target, points:[[fMHz,dBm],...]}
+void CmdServer::cmdLevelStatus(Print& out) {
+  out.print(F("{\"enabled\":"));
+  out.print(leveling_enabled() ? 1 : 0);
+  out.print(F(",\"target\":"));
+  out.print(leveling_target(), 2);
+  out.print(F(",\"points\":["));
+  const LevelPoint* t = leveling_table();
+  const int n = leveling_count();
+  for (int i = 0; i < n; ++i) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "[%.3f,%.2f]", t[i].freq_mhz, t[i].dbm);
+    out.print(buf);
+    if (i < n - 1) {
+      out.print(',');
+    }
+  }
+  out.println(F("]}"));
+}
+
+void CmdServer::persistLevel() {
+  storage_save_level(leveling_table(), leveling_count(), leveling_enabled(),
+                     leveling_target());
 }
 
 void CmdServer::cmdWifi(char* arg, Print& out) { net_wifi_cmd(*_s, arg, out); }

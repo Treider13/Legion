@@ -8,6 +8,8 @@
 
 #include <hal/gpio_ll.h>
 
+#include "reg_delta.h"
+
 namespace legion {
 
 // Все наши пины < 32 на всех платах (board_pins.h).
@@ -56,6 +58,16 @@ void Adf4351Driver::writePlan(const SynthPlan& plan) {
   // и R0 триггерит VCO band select (факт F3, даташит Program Modes).
   for (int i = 5; i >= 0; --i) {
     writeRegister(plan.regs[i]);
+  }
+}
+
+void Adf4351Driver::writePlanDelta(const SynthPlan& prev, const SynthPlan& cur) {
+  // Пишем только изменившиеся R5..R1 (в порядке убывания) + R0 всегда
+  // последним. Выбор индексов — чистая функция reg_delta.h (host-тест).
+  int order[6];
+  const int n = plan_delta_regs(prev.regs, cur.regs, order);
+  for (int i = 0; i < n; ++i) {
+    writeRegister(cur.regs[order[i]]);
   }
 }
 

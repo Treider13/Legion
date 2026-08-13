@@ -69,6 +69,10 @@ void selftest_run(AppState& s, Print& out) {
   }
 
   const bool pass = gnd_ok && dvdd_ok && lock;
+  // SELFTEST писал R2/план напрямую через драйвер мимо synth → кэш delta-записи
+  // мог разойтись с чипом. Инвалидируем: следующий fast-путь сделает полную
+  // запись (иначе delta пропустит реально изменённый регистр).
+  synth_invalidate_cache();
   synth_release();  // отпускаем мьютекс синтезатора (взят в начале)
   out.print(F("{\"selftest\":{\"mux_gnd\":"));
   out.print(gnd_ok ? 1 : 0);

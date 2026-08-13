@@ -6,6 +6,7 @@
 
 #include "engine_math.h"
 #include "ble_server.h"
+#include "leveling.h"
 #include "net_server.h"
 #include "serial_sync.h"
 #include "synth.h"
@@ -38,9 +39,13 @@ void corridor_init(Adf4351Driver& drv, PlannerConfig& planner_cfg,
 }
 
 PlanStatus corridor_apply_fast(uint64_t freq_hz) {
-  bool lock_unused;
-  const PlanStatus st = synth_apply(freq_hz, false, lock_unused);
+  SynthPlan plan;
+  // Delta-запись относительно кэша реального состояния чипа (synth); физику
+  // ФАПЧ не обходит (F5) — срезает лишь время SPI-записи.
+  const PlanStatus st = synth_apply_fast(freq_hz, plan);
   if (st == PlanStatus::OK) {
+    // Выравнивание уровня по калибровке (если включено) — PE43702 (F: dd1us).
+    leveling_apply(freq_hz);
     xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
     s_cur_hz = freq_hz;
     xSemaphoreGive(s_cfg_mtx);
@@ -220,6 +225,9 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
   s_cfg = cfg;
   s_active = true;
   xSemaphoreGive(s_cfg_mtx);
+  // Новая сессия коридора → первый шаг пишет полный план R5→R0 (гарантированно
+  // корректное состояние всех 6 регистров, даташит Register Initialization).
+  synth_invalidate_cache();
   // MTLD в коридоре: гасим выход до захвата на каждом шаге (факт F9)
   s_planner->mute_till_lock = true;
   return true;

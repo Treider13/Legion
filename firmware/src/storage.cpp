@@ -26,6 +26,19 @@ void storage_load(PersistedState& out) {
   out.corridor.seed = s_pref.getUInt("corr_sd", 1);
   out.corridor.fm_depth_hz = s_pref.getDouble("corr_fm", 100000.0);
   out.att_db = s_pref.getFloat("att", 0.0f);
+  // Выравнивание уровня (фаза 10): таблица — blob точек
+  out.level_enabled = s_pref.getBool("lvl_on", false);
+  out.level_target = s_pref.getDouble("lvl_tg", 0.0);
+  {
+    LevelPoint pts[LVL_MAX_POINTS];
+    const size_t got =
+        s_pref.getBytes("lvl_pts", pts, sizeof(pts));
+    int n = (int)(got / sizeof(LevelPoint));
+    if (n < 0) n = 0;
+    if (n > LVL_MAX_POINTS) n = LVL_MAX_POINTS;
+    out.level_n = (uint8_t)n;
+    for (int i = 0; i < n; ++i) out.level_pts[i] = pts[i];
+  }
   out.wifi_mode = s_pref.getUChar("wifi_md", 0);
   strlcpy(out.wifi_ssid, s_pref.getString("wifi_ss", "").c_str(),
           sizeof(out.wifi_ssid));
@@ -38,6 +51,15 @@ void storage_save_power(uint8_t code) { s_pref.putUChar("power", code); }
 void storage_save_rf(bool on) { s_pref.putBool("rf", on); }
 void storage_save_ppm(int32_t ppm) { s_pref.putInt("ppm", ppm); }
 void storage_save_att(float db) { s_pref.putFloat("att", db); }
+
+void storage_save_level(const LevelPoint* pts, int n, bool enabled,
+                        double target) {
+  if (n < 0) n = 0;
+  if (n > LVL_MAX_POINTS) n = LVL_MAX_POINTS;
+  s_pref.putBool("lvl_on", enabled);
+  s_pref.putDouble("lvl_tg", target);
+  s_pref.putBytes("lvl_pts", pts, (size_t)n * sizeof(LevelPoint));
+}
 
 void storage_save_corridor(bool active, const CorridorConfig& cfg) {
   s_pref.putBool("corr_on", active);

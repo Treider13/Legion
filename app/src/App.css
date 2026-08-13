@@ -621,30 +621,6 @@ button:disabled {
   gap: 12px;
 }
 
-.freq-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.freq-input {
-  font-size: 20px;
-  width: 170px;
-  text-align: right;
-  color: var(--lg-accent-hi);
-}
-
-.freq-unit {
-  color: var(--lg-dim);
-}
-
-.preset-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-
 /* --- журнал-телетайп (S7) --- */
 .log-panel {
   min-height: 200px;

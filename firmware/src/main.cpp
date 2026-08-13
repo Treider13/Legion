@@ -13,6 +13,7 @@
 #include "board_config.h"
 #include "board_pins.h"
 #include "cmd_server.h"
+#include "leveling.h"
 #include "net_server.h"
 #include "serial_sync.h"
 #include "storage.h"
@@ -43,6 +44,7 @@ void setup() {
   g_att.begin();  // PE43702: 0 дБ при старте
   g_state.drv = &g_adf;
   g_state.att = &g_att;
+  legion::leveling_init(g_att);  // выравнивание уровня через PE43702 (фаза 10)
   legion::synth_init(g_adf, g_state.cfg);
   legion::corridor_init(g_adf, g_state.cfg, Serial);
   g_cmd.begin(g_state, Serial);
@@ -55,6 +57,9 @@ void setup() {
   g_state.cfg.output_power_code = ps.power_code;
   g_state.freq_hz = ps.freq_hz;
   g_att.setDb(ps.att_db);
+  // Восстановление калибровки/выравнивания уровня (фаза 10)
+  legion::leveling_restore(ps.level_pts, ps.level_n, ps.level_enabled,
+                           ps.level_target);
   {
     bool lock = false;
     legion::apply_frequency(g_state, ps.freq_hz, lock);  // частота с прошлого сеанса
