@@ -148,7 +148,21 @@ class Emu:
         if u == "SELFTEST":
             return '{"selftest":{"mux_gnd":1,"mux_dvdd":1,"lock":1,"pass":1}}'
         if u.startswith("CAL REF"):
+            if len(parts) < 3:
+                return "ERR SYNTAX cal ppm required"
+            try:
+                float(parts[2])
+            except ValueError:
+                return "ERR SYNTAX bad ppm"
             return f"OK CAL REF {parts[2]} ppm"
+        if u.startswith("WIFI"):
+            if u == "WIFI STATUS?":
+                return '{"wifi":{"mode":"AP","ip":"192.168.4.1","ssid":"LEGION"}}'
+            if u.startswith("WIFI AP"):
+                return "OK WIFI AP ip=192.168.4.1"
+            if u.startswith("WIFI STA"):
+                return "OK WIFI STA connecting"
+            return "ERR SYNTAX WIFI AP|STA|STATUS?"
         return f"ERR SYNTAX unknown command: {parts[0] if parts else ''}"
 
     def _corridor_cmd(self, parts: list, mode: str) -> str:
@@ -177,13 +191,16 @@ class Emu:
         kv = parts[4:]
         for i in range(0, len(kv) - 1, 2):
             key, val = kv[i].upper(), kv[i + 1]
-            if key == "STEP":
-                # CHIRP: val в Гц → кГц; SWEEP/HOP: val уже в кГц
-                c.step_khz = float(val) / 1000.0 if mode == "CHIRP" else float(val)
-            elif key in ("DWELL", "RATE"):
-                c.dwell_ms = float(val)
-            elif key == "SEED":
-                c.seed = int(val)
+            try:  # фаззинг-устойчивость: битые значения игнорируем
+                if key == "STEP":
+                    # CHIRP: val в Гц → кГц; SWEEP/HOP: val уже в кГц
+                    c.step_khz = float(val) / 1000.0 if mode == "CHIRP" else float(val)
+                elif key in ("DWELL", "RATE"):
+                    c.dwell_ms = float(val)
+                elif key == "SEED":
+                    c.seed = int(val)
+            except (ValueError, OverflowError):
+                continue
         if c.dwell_ms < 1:
             return "ERR DWELL min 1 ms"
         c.cur = f1
@@ -225,12 +242,15 @@ class Emu:
         kv = parts[3:]
         for i in range(0, len(kv) - 1, 2):
             key, val = kv[i].upper(), kv[i + 1]
-            if key == "CENTER":
-                c.f1 = float(val)
-            elif key == "DEPTH":
-                c.fm_depth_khz = float(val)
-            elif key == "RATE":
-                c.dwell_ms = float(val)
+            try:  # фаззинг-устойчивость
+                if key == "CENTER":
+                    c.f1 = float(val)
+                elif key == "DEPTH":
+                    c.fm_depth_khz = float(val)
+                elif key == "RATE":
+                    c.dwell_ms = float(val)
+            except (ValueError, OverflowError):
+                continue
         c.active = True
         return f"OK FM RUNNING {shape}"
 

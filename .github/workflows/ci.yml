@@ -48,6 +48,9 @@ jobs:
       - name: Run host unit tests
         working-directory: firmware
         run: pio test -e native
+      - name: Fuzz production parser (10k cases)
+        working-directory: firmware
+        run: pio test -e native_fuzz
 
   # ------------------------------------------------------------------
   # Web-фронтенд: сборка Vite
