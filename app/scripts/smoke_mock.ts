@@ -114,6 +114,18 @@ async function main(): Promise<void> {
   }
   check("LEVEL? JSON (enabled, 2 точки)", r.ok && lvlOk, r.statusLine);
 
+  // SET ATT — ручной override — должен отключить авто-выравнивание
+  await client.setLevel(-1);
+  await client.setAtt(10);
+  r = await client.levelStatus();
+  let lvlOff = false;
+  try {
+    lvlOff = JSON.parse(r.statusLine).enabled === 0;
+  } catch {
+    /* noop */
+  }
+  check("SET ATT отключает авто-выравнивание", lvlOff, r.statusLine);
+
   // Выключение
   r = await client.levelOff();
   check("SET LEVEL OFF", r.ok && r.statusLine === "OK LEVEL OFF", r.statusLine);

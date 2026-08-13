@@ -81,6 +81,7 @@ export class MockTransport implements Transport {
       if (!Number.isFinite(db) || db < 0 || db > 31.75) {
         this.reply("ERR RANGE att 0-31.75");
       } else {
+        this.levelOn = false;  // ручной override отключает авто-выравнивание (как прошивка)
         this.reply(`OK ATT=${(Math.round(db / 0.25) * 0.25).toFixed(2)} dB`);
       }
     } else if (upper.startsWith("SET LEVEL")) {
