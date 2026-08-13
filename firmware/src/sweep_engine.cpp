@@ -5,6 +5,7 @@
 #include "sweep_engine.h"
 
 #include "engine_math.h"
+#include "ble_server.h"
 #include "net_server.h"
 #include "synth.h"
 
@@ -141,6 +142,7 @@ static void telem_task(void*) {
                synth_driver().readLock() ? 1 : 0, mode_name(s_cfg.mode));
       s_telem->println(line);   // UART
       net_broadcast(line);      // WS-клиенты (на H2 — no-op)
+      ble_broadcast(line);      // BLE notify (на S2 — no-op)
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }

@@ -5,6 +5,7 @@
 #include <Arduino.h>
 
 #include "adf4351.h"
+#include "ble_server.h"
 #include "board_config.h"
 #include "board_pins.h"
 #include "cmd_server.h"
@@ -65,6 +66,9 @@ void setup() {
 
   // --- WiFi + WebSocket + HTTP (нет на H2) ---
   legion::net_init(g_state, g_cmd);
+
+  // --- BLE NUS (нет на S2) ---
+  legion::ble_init(g_state, g_cmd);
 
   Serial.println();
   Serial.println(F("=============================================="));
