@@ -1,0 +1,116 @@
+// LEGION — панель коридора: SWEEP/HOP, range gate, live-маркер (фаза 3)
+import { useLegion } from "../state/store";
+
+export function CorridorPanel() {
+  const s = useLegion();
+  const connected = s.transportState === "connected";
+
+  const f1 = parseFloat(s.corrF1) || 2400;
+  const f2 = parseFloat(s.corrF2) || 2500;
+  const span = Math.max(f2 - f1, 1e-6);
+  // Позиция live-маркера телеметрии внутри коридора, %
+  const markerPct =
+    s.telemFreq !== null
+      ? Math.min(100, Math.max(0, ((s.telemFreq - f1) / span) * 100))
+      : null;
+
+  return (
+    <section className="panel">
+      <span className="panel-title">CORRIDOR // AUTO</span>
+      <div className="corr-grid">
+        <label>
+          MODE
+          <select
+            aria-label="Режим коридора"
+            value={s.corrMode}
+            onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
+            disabled={!connected || s.corridorRunning}
+          >
+            <option value="SWEEP">SWEEP</option>
+            <option value="HOP">HOP</option>
+            <option value="CHIRP">CHIRP (FMCW)</option>
+          </select>
+        </label>
+        <label>
+          F1 MHz
+          <input
+            value={s.corrF1}
+            onChange={(e) => s.setCorrField("corrF1", e.target.value)}
+            disabled={!connected || s.corridorRunning}
+          />
+        </label>
+        <label>
+          F2 MHz
+          <input
+            value={s.corrF2}
+            onChange={(e) => s.setCorrField("corrF2", e.target.value)}
+            disabled={!connected || s.corridorRunning}
+          />
+        </label>
+        <label>
+          {s.corrMode === "CHIRP" ? "STEP Hz" : "STEP kHz"}
+          <input
+            value={s.corrStepKhz}
+            onChange={(e) => s.setCorrField("corrStepKhz", e.target.value)}
+            disabled={!connected || s.corridorRunning}
+          />
+        </label>
+        <label>
+          {s.corrMode === "SWEEP" ? "DWELL ms" : "RATE ms"}
+          <input
+            value={s.corrDwellMs}
+            onChange={(e) => s.setCorrField("corrDwellMs", e.target.value)}
+            disabled={!connected || s.corridorRunning}
+          />
+        </label>
+        {s.corrMode === "HOP" && (
+          <label>
+            SEED
+            <input
+              value={s.corrSeed}
+              onChange={(e) => s.setCorrField("corrSeed", e.target.value)}
+              disabled={!connected || s.corridorRunning}
+            />
+          </label>
+        )}
+      </div>
+
+      {/* Range gate: полоса коридора с live-маркером телеметрии */}
+      <div className="range-gate">
+        <div className="range-gate-fill" />
+        {markerPct !== null && (
+          <div
+            className={`range-marker ${s.telemLock ? "locked" : "unlocked"}`}
+            style={{ left: `${markerPct}%` }}
+          />
+        )}
+      </div>
+      <div className="range-labels">
+        <span>{s.corrF1}</span>
+        <span className="range-cur">
+          {s.telemFreq !== null ? `${s.telemFreq.toFixed(3)} MHz` : "—"}
+        </span>
+        <span>{s.corrF2}</span>
+      </div>
+
+      <div className="power-row">
+        {s.corridorRunning ? (
+          <button className="btn-danger" onClick={() => void s.corridorStop()}>
+            STOP
+          </button>
+        ) : (
+          <button
+            className="btn-primary"
+            disabled={!connected}
+            onClick={() => void s.corridorStart()}
+          >
+            START {s.corrMode}
+          </button>
+        )}
+        {s.corridorRunning && (
+          <span className="state-badge state-connected">{s.corrMode} RUNNING</span>
+        )}
+      </div>
+    </section>
+  );
+}

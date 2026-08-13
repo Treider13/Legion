@@ -1,0 +1,570 @@
+/* ============================================================================
+   LEGION — дизайн-система (фаза 5). Neo-Prime HUD × Awwwards-2026.
+   Токены: src/design/tokens.css
+   ============================================================================ */
+
+.legion-root {
+  min-height: 100vh;
+  background: var(--lg-graphite);
+}
+
+/* ============================== BOOT (S1) ================================= */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--lg-graphite);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 28px;
+}
+
+.boot-lines {
+  font-family: var(--lg-font-mono);
+  font-size: 12px;
+  color: var(--lg-olive-hi);
+  letter-spacing: 0.12em;
+  min-height: 180px;
+  text-align: left;
+}
+
+.boot-line {
+  opacity: 0;
+  animation: boot-line-in 0.18s forwards;
+}
+
+@keyframes boot-line-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.boot-logo {
+  font-family: var(--lg-font-display);
+  font-size: clamp(48px, 9vw, 120px);
+  letter-spacing: 0.22em;
+  color: var(--lg-amber);
+  text-shadow: var(--lg-glow-amber);
+  margin: 0;
+}
+
+.boot-bar-track {
+  width: min(420px, 70vw);
+  height: 2px;
+  background: var(--lg-line);
+}
+
+.boot-bar {
+  height: 100%;
+  background: var(--lg-amber);
+  transform-origin: left;
+  box-shadow: var(--lg-glow-amber);
+}
+
+/* ============================== HERO ====================================== */
+.hero {
+  position: relative;
+  height: 100vh;
+  min-height: 560px;
+  overflow: hidden;
+}
+
+.hero-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.lite-radar {
+  width: 100%;
+  height: 100%;
+}
+
+.hero-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28px 20px 40px;
+  pointer-events: none; /* клики — только по интерактивным элементам */
+}
+
+.hero-overlay > * {
+  pointer-events: auto;
+}
+
+.hero-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.hero-logo {
+  font-family: var(--lg-font-display);
+  font-size: 22px;
+  letter-spacing: 0.4em;
+  color: var(--lg-amber);
+}
+
+.hero-sub {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--lg-dim);
+}
+
+.hero-corr {
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: var(--lg-olive-hi);
+  border: 1px solid var(--lg-line);
+  padding: 6px 16px;
+  background: rgba(11, 13, 14, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+/* ===================== LOCK-скобки (S5) =================================== */
+.lock-frame {
+  position: relative;
+  padding: 34px 44px;
+  /* hero-overlay имеет pointer-events:none — возвращаем события дайлу */
+  pointer-events: auto;
+}
+
+.bracket {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--lg-amber);
+  transition: all 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  opacity: 0.75;
+}
+
+.bracket.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
+.bracket.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
+.bracket.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
+.bracket.br { bottom: 0; right: 0; border-left: none; border-top: none; }
+
+.lock-frame.locked .bracket {
+  border-color: var(--lg-phosphor);
+  box-shadow: var(--lg-glow-green);
+  opacity: 1;
+}
+
+.lock-frame.locked .bracket.tl { transform: translate(6px, 6px); }
+.lock-frame.locked .bracket.tr { transform: translate(-6px, 6px); }
+.lock-frame.locked .bracket.bl { transform: translate(6px, -6px); }
+.lock-frame.locked .bracket.br { transform: translate(-6px, -6px); }
+
+.lock-frame.lost .bracket {
+  border-color: var(--lg-alert);
+  opacity: 0.9;
+}
+
+.lock-caption {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 0.35em;
+  padding: 2px 12px;
+  background: var(--lg-graphite);
+  color: var(--lg-dim);
+  border: 1px solid var(--lg-line);
+  white-space: nowrap;
+}
+
+.lock-frame.locked .lock-caption {
+  color: var(--lg-phosphor);
+  border-color: var(--lg-phosphor);
+}
+
+.lock-frame.lost .lock-caption {
+  color: var(--lg-alert);
+  border-color: var(--lg-alert);
+}
+
+/* ===================== Дайл-энкодер (S3) ================================== */
+.freq-dial {
+  cursor: ns-resize;
+  user-select: none;
+  text-align: center;
+  touch-action: none;
+}
+
+.freq-dial.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.freq-dial-digits {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px;
+}
+
+.freq-digit {
+  font-family: var(--lg-font-mono);
+  font-weight: 700;
+  font-size: clamp(44px, 7vw, 92px);
+  color: var(--lg-amber-hi);
+  text-shadow: var(--lg-glow-amber);
+  transition: transform 0.12s ease, color 0.2s;
+  font-variant-numeric: tabular-nums;
+}
+
+.freq-digit.dot {
+  color: var(--lg-olive-hi);
+}
+
+.freq-dial:hover .freq-digit {
+  color: var(--lg-amber);
+}
+
+.freq-dial-unit {
+  font-size: clamp(14px, 2vw, 22px);
+  color: var(--lg-dim);
+  margin-left: 12px;
+  letter-spacing: 0.2em;
+}
+
+.freq-dial-hint {
+  margin-top: 6px;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: var(--lg-olive-hi);
+  opacity: 0.7;
+}
+
+/* ===================== CONSOLE / панели =================================== */
+.console {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 16px 60px;
+}
+
+.panel {
+  position: relative;
+  background: linear-gradient(180deg, var(--lg-panel) 0%, var(--lg-panel-2) 100%);
+  border: 1px solid var(--lg-line);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid var(--lg-olive);
+  border-left: 2px solid var(--lg-olive);
+}
+
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  color: var(--lg-olive-hi);
+  font-size: 10px;
+  letter-spacing: 0.35em;
+  margin-bottom: 12px;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 16px;
+}
+
+@media (max-width: 820px) {
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- контролы --- */
+select,
+input {
+  background: var(--lg-graphite);
+  color: var(--lg-bone);
+  border: 1px solid var(--lg-line);
+  padding: 8px 10px;
+  font-family: var(--lg-font-mono);
+  font-size: 13px;
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-color: var(--lg-amber);
+}
+
+button {
+  font-family: var(--lg-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  padding: 9px 16px;
+  border: 1px solid var(--lg-line);
+  background: var(--lg-graphite);
+  color: var(--lg-bone);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  border-color: var(--lg-amber);
+  color: var(--lg-amber);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: rgba(212, 160, 23, 0.14);
+  box-shadow: var(--lg-glow-amber);
+}
+
+.btn-danger {
+  border-color: var(--lg-alert);
+  color: var(--lg-alert);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 59, 48, 0.12);
+}
+
+.btn-ghost.active {
+  border-color: var(--lg-phosphor);
+  color: var(--lg-phosphor);
+}
+
+.btn-mini {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+/* --- аттенюатор (фаза 8) --- */
+.att-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.att-label {
+  color: var(--lg-dim);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+}
+
+.att-slider {
+  flex: 1;
+  accent-color: var(--lg-amber);
+  background: transparent;
+}
+
+.att-value {
+  min-width: 76px;
+  text-align: right;
+  color: var(--lg-amber);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- connect bar --- */
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* --- power / коридор --- */
+.power-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.corr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 10px;
+}
+
+.corr-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 9px;
+  color: var(--lg-dim);
+  letter-spacing: 0.2em;
+}
+
+/* --- range gate (S4) --- */
+.range-gate {
+  position: relative;
+  height: 26px;
+  margin-top: 16px;
+  border: 1px solid var(--lg-amber);
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(212, 160, 23, 0.09) 0 1px,
+    transparent 1px 10%
+  );
+  overflow: visible;
+}
+
+.range-marker {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--lg-phosphor);
+  box-shadow: var(--lg-glow-green);
+  transition: left 0.08s linear;
+}
+
+.range-marker.unlocked {
+  background: var(--lg-alert);
+  box-shadow: 0 0 8px var(--lg-alert);
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--lg-dim);
+  margin-top: 5px;
+}
+
+.range-cur {
+  color: var(--lg-phosphor);
+}
+
+/* --- статусы --- */
+.state-badge {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  padding: 4px 12px;
+  border: 1px solid var(--lg-line);
+  color: var(--lg-dim);
+}
+
+.state-connected {
+  color: var(--lg-phosphor);
+  border-color: var(--lg-phosphor);
+}
+
+.state-error {
+  color: var(--lg-alert);
+  border-color: var(--lg-alert);
+}
+
+.mock-badge {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  padding: 4px 12px;
+  border: 1px dashed var(--lg-amber);
+  color: var(--lg-amber);
+}
+
+.lock-badge {
+  padding: 4px 12px;
+  border: 1px solid var(--lg-line);
+  letter-spacing: 0.2em;
+  font-size: 12px;
+}
+
+.lock-yes { color: var(--lg-phosphor); border-color: var(--lg-phosphor); }
+.lock-no { color: var(--lg-alert); border-color: var(--lg-alert); }
+.lock-unknown { color: var(--lg-dim); }
+
+.status-line {
+  color: var(--lg-dim);
+  font-size: 11px;
+}
+
+.lock-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.freq-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.freq-input {
+  font-size: 20px;
+  width: 170px;
+  text-align: right;
+  color: var(--lg-amber);
+}
+
+.freq-unit {
+  color: var(--lg-dim);
+}
+
+.preset-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* --- журнал-телетайп (S7) --- */
+.log-panel {
+  min-height: 200px;
+}
+
+.log-scroll {
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  padding: 1px 0;
+  animation: log-in 0.12s ease-out;
+}
+
+@keyframes log-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.log-ts {
+  color: var(--lg-olive-hi);
+  flex-shrink: 0;
+}
+
+.log-tx { color: var(--lg-amber); }
+.log-rx { color: var(--lg-bone); }
+.log-sys { color: var(--lg-dim); }
+
+.app-footer {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--lg-line);
+  color: var(--lg-dim); /* контраст: olive-hi #6b7256 = 3.5:1 → dim #8a8f7a ≈ 5.6:1 (a11y) */
+  font-size: 9px;
+  letter-spacing: 0.25em;
+  text-align: center;
+}

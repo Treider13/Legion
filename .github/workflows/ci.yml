@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [cursor/**]
+  pull_request:
+
+jobs:
+  # ------------------------------------------------------------------
+  # Прошивка: сборка под ВСЕ поддерживаемые платы (факт T5)
+  # ------------------------------------------------------------------
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, esp32-s3, esp32-s2, esp32-c3, esp32-c6, esp32-h2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build firmware (${{ matrix.env }})
+        working-directory: firmware
+        # Retry: скачки сети при загрузке toolchain дают transient ConnectionError
+        # (случалось 3 подряд на одном раннере — увеличено до 5 с backoff)
+        run: |
+          for attempt in 1 2 3 4 5; do
+            pio run -e ${{ matrix.env }} && exit 0
+            echo "::warning::pio run failed (attempt $attempt), retrying..."
+            sleep $((attempt * 15))
+          done
+          exit 1
+
+  # ------------------------------------------------------------------
+  # Хостовые юнит-тесты freq_planner (эталонные вектора pyadf435x/даташит)
+  # ------------------------------------------------------------------
+  firmware-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Run host unit tests
+        working-directory: firmware
+        run: pio test -e native
+      - name: Fuzz production parser (10k cases)
+        working-directory: firmware
+        run: pio test -e native_fuzz
+
+  # ------------------------------------------------------------------
+  # Web-фронтенд: сборка Vite
+  # ------------------------------------------------------------------
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build web
+        working-directory: app
+        run: npm ci && npm run build
+      - name: Protocol smoke test (mock transport)
+        working-directory: app
+        run: npx tsx scripts/smoke_mock.ts
+      - name: WebSocket transport smoke test
+        working-directory: app
+        run: npx tsx scripts/smoke_ws.ts
+
+  # ------------------------------------------------------------------
+  # Tauri desktop: проверка сборки (факт T2: serialplugin + React 19)
+  # ------------------------------------------------------------------
+  tauri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          # libudev-dev — требуется крейтом serialport (проверено локальной сборкой)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Build frontend + Tauri
+        working-directory: app
+        run: npm ci && npm run tauri build -- --no-bundle
+
+  # ------------------------------------------------------------------
+  # Релиз: Tauri-бандлы (win/mac/linux) по тегу v* (фаза 9)
+  # ------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Build frontend
+        working-directory: app
+        run: npm ci && npm run build
+      - name: Tauri build + upload artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          args: --verbose
+
+  # ------------------------------------------------------------------
+  # CLI: синтаксис и базовая проверка
+  # ------------------------------------------------------------------
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyserial && python3 -m py_compile tools/legion_cli.py && python3 tools/legion_cli.py --list

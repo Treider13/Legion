@@ -1,0 +1,26 @@
+# --- PlatformIO / firmware ---
+.pio/
+.pioenvs/
+.piolibdeps/
+firmware/.pio/
+# lite-UI собирается скриптом tools/build_lite_ui.sh (генерируемый артефакт)
+firmware/data/
+
+# --- Node / app ---
+node_modules/
+app/node_modules/
+app/dist/
+dist/
+
+# --- Tauri / Rust ---
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+
+# --- Misc ---
+.DS_Store
+*.log

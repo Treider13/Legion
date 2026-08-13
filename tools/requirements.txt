@@ -1,0 +1,2 @@
+# LEGION tools — зависимости Python (CLI, эмулятор, фаззер)
+pyserial>=3.5
