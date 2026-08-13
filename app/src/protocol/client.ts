@@ -39,10 +39,7 @@ export class LegionClient {
   constructor(transport: Transport) {
     this.transport = transport;
     transport.setEvents({
-      onLine: (line) => {
-        this.onRawLine?.(line);
-        this.dispatch(line);
-      },
+      onLine: (line) => this.dispatch(line),
       onState: (st, detail) => this.onStateChange?.(st, detail),
     });
   }
@@ -59,8 +56,10 @@ export class LegionClient {
     | null = null;
 
   private dispatch(line: string): void {
-    this.onRawLine?.(line);
-    // Телеметрия/события: JSON с маркером "t" — не ответ на команду
+    // Телеметрия/события: JSON с маркером "t" — не ответ на команду.
+    // В журнал НЕ пишем: при dwell 10 мс это флуд, который пересобирает
+    // 500-строчный лог десятки раз в секунду и подвешивает UI
+    // (для телеметрии есть live-маркер коридора).
     if (line.startsWith("{") && line.includes("\"t\":")) {
       try {
         const j = JSON.parse(line);
@@ -74,6 +73,7 @@ export class LegionClient {
       }
       return;
     }
+    this.onRawLine?.(line);
     const w = this.waiters[0];
     if (!w) return;
     w.lines.push(line);
