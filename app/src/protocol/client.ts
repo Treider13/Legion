@@ -99,12 +99,21 @@ export class LegionClient {
   selftest() { return this.cmd("SELFTEST", 5000); }
   calRef(ppm: number) { return this.cmd(`CAL REF ${ppm}`); }
 
-  /** Коридор (фаза 3) */
+  /** Коридор (фаза 3) + CHIRP/GLIDE/FM (фаза 6) */
   sweepStart(f1: number, f2: number, stepKhz: number, dwellMs: number) {
     return this.cmd(`SWEEP START ${f1} ${f2} STEP ${stepKhz} DWELL ${dwellMs}`);
   }
   hopStart(f1: number, f2: number, rateMs: number, seed: number, stepKhz: number) {
     return this.cmd(`HOP START ${f1} ${f2} RATE ${rateMs} SEED ${seed} STEP ${stepKhz}`);
+  }
+  chirpStart(f1: number, f2: number, stepHz: number, dwellMs: number) {
+    return this.cmd(`CHIRP START ${f1} ${f2} STEP ${stepHz} DWELL ${dwellMs}`);
+  }
+  glide(targetMhz: number, durationMs: number) {
+    return this.cmd(`GLIDE ${targetMhz} ${durationMs}`);
+  }
+  fmStart(shape: "SIN" | "TRI" | "RAND", centerMhz: number, depthKhz: number, rateMs: number) {
+    return this.cmd(`FM START ${shape} CENTER ${centerMhz} DEPTH ${depthKhz} RATE ${rateMs}`);
   }
   stop() { return this.cmd("STOP"); }
 }

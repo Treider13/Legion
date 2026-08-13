@@ -44,6 +44,8 @@ class CmdServer {
   void cmdCalRef(char* arg, Print& out);
   void cmdSelftest(Print& out);
   void cmdCorridor(char* arg, CorridorMode mode, Print& out);
+  void cmdGlide(char* arg, Print& out);
+  void cmdFm(char* arg, Print& out);
   void cmdWifi(char* arg, Print& out);
 
   AppState* _s = nullptr;

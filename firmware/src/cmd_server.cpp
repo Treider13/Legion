@@ -100,6 +100,12 @@ void CmdServer::handleLine(char* line, Print& out) {
     cmdCorridor(rest, CorridorMode::SWEEP, out);
   } else if (strcasecmp(tok, "HOP") == 0 && rest) {
     cmdCorridor(rest, CorridorMode::HOP, out);
+  } else if (strcasecmp(tok, "CHIRP") == 0 && rest) {
+    cmdCorridor(rest, CorridorMode::CHIRP, out);
+  } else if (strcasecmp(tok, "GLIDE") == 0 && rest) {
+    cmdGlide(rest, out);
+  } else if (strcasecmp(tok, "FM") == 0 && rest) {
+    cmdFm(rest, out);
   } else if (strcasecmp(tok, "STOP") == 0) {
     corridor_stop();
     storage_save_corridor(false, corridor_config());
@@ -203,6 +209,7 @@ void CmdServer::cmdRf(char* arg, Print& out) {
 
 // SWEEP START <f1> <f2> STEP <kHz> DWELL <ms> | SWEEP STOP
 // HOP   START <f1> <f2> RATE <ms> [SEED <n>] [STEP <kHz>] | HOP STOP
+// CHIRP START <f1> <f2> STEP <Hz> DWELL <ms> | CHIRP STOP  (шаг в Гц!)
 void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
   char* save = nullptr;
   char* sub = strtok_r(arg, " ", &save);
@@ -234,8 +241,9 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
   }
   cfg.f1_hz = (uint64_t)(strtod(f1s, nullptr) * 1e6 + 0.5);
   cfg.f2_hz = (uint64_t)(strtod(f2s, nullptr) * 1e6 + 0.5);
-  cfg.dwell_ms = 10;    // дефолт (практика joseluu: 10 мс стабильно, E4)
-  cfg.step_khz = 1000;  // дефолт 1 МГц
+  cfg.dwell_ms = 10;  // дефолт (практика joseluu: 10 мс стабильно, E4)
+  // Шаг: SWEEP/HOP — в кГц (обратная совместимость), CHIRP — в Гц
+  cfg.step_hz = (mode == CorridorMode::CHIRP) ? 100000 : 1000000;
   cfg.seed = 1;
 
   char* kv = nullptr;
@@ -245,7 +253,8 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
       break;
     }
     if (strcasecmp(kv, "STEP") == 0) {
-      cfg.step_khz = (uint32_t)strtoul(val, nullptr, 10);
+      const uint32_t v = (uint32_t)strtoul(val, nullptr, 10);
+      cfg.step_hz = (mode == CorridorMode::CHIRP) ? v : v * 1000UL;
     } else if (strcasecmp(kv, "DWELL") == 0 || strcasecmp(kv, "RATE") == 0) {
       cfg.dwell_ms = (uint32_t)strtoul(val, nullptr, 10);
     } else if (strcasecmp(kv, "SEED") == 0) {
@@ -260,8 +269,95 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
   }
   storage_save_corridor(true, cfg);  // автономный рестарт (паттерн joseluu)
   out.print(F("OK "));
-  out.print(mode == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+  out.print(mode == CorridorMode::SWEEP
+                ? F("SWEEP")
+                : mode == CorridorMode::HOP ? F("HOP") : F("CHIRP"));
   out.println(F(" RUNNING"));
+}
+
+// GLIDE <targetMHz> <durationMs> — плавный одноразовый переход (Electro-resonance)
+void CmdServer::cmdGlide(char* arg, Print& out) {
+  char* save = nullptr;
+  char* tg = strtok_r(arg, " ", &save);
+  char* du = strtok_r(nullptr, " ", &save);
+  if (!tg || !du) {
+    out.println(F("ERR SYNTAX GLIDE <targetMHz> <durationMs>"));
+    return;
+  }
+  CorridorConfig cfg;
+  cfg.mode = CorridorMode::GLIDE;
+  cfg.f1_hz = corridor_active() ? corridor_current_hz() : _s->freq_hz;
+  cfg.f2_hz = (uint64_t)(strtod(tg, nullptr) * 1e6 + 0.5);
+  cfg.dwell_ms = (uint32_t)strtoul(du, nullptr, 10);
+
+  char err[64];
+  if (!corridor_start(cfg, err, sizeof(err))) {
+    out.println(err);
+    return;
+  }
+  out.print(F("OK GLIDE RUNNING "));
+  out.print(cfg.f1_hz / 1e6, 6);
+  out.print(F(" -> "));
+  out.println(cfg.f2_hz / 1e6, 6);
+}
+
+// FM START <SIN|TRI|RAND> CENTER <MHz> DEPTH <kHz> RATE <ms> | FM STOP
+void CmdServer::cmdFm(char* arg, Print& out) {
+  char* save = nullptr;
+  char* sub = strtok_r(arg, " ", &save);
+  if (!sub) {
+    out.println(F("ERR SYNTAX FM START|STOP"));
+    return;
+  }
+  if (strcasecmp(sub, "STOP") == 0) {
+    corridor_stop();
+    storage_save_corridor(false, corridor_config());
+    out.println(F("OK IDLE"));
+    return;
+  }
+  if (strcasecmp(sub, "START") != 0) {
+    out.println(F("ERR SYNTAX FM START|STOP"));
+    return;
+  }
+  char* shape = strtok_r(nullptr, " ", &save);
+  CorridorMode mode = CorridorMode::FM_SIN;
+  if (shape && strcasecmp(shape, "TRI") == 0) {
+    mode = CorridorMode::FM_TRI;
+  } else if (shape && strcasecmp(shape, "RAND") == 0) {
+    mode = CorridorMode::FM_RAND;
+  }
+
+  CorridorConfig cfg;
+  cfg.mode = mode;
+  cfg.f1_hz = _s->freq_hz;  // центр = текущая частота по умолчанию
+  cfg.fm_depth_hz = 100000.0;  // 100 кГц
+  cfg.dwell_ms = 100;          // период LFO 100 мс
+  cfg.seed = 1;
+
+  char* kv = nullptr;
+  while ((kv = strtok_r(nullptr, " ", &save)) != nullptr) {
+    char* val = strtok_r(nullptr, " ", &save);
+    if (!val) {
+      break;
+    }
+    if (strcasecmp(kv, "CENTER") == 0) {
+      cfg.f1_hz = (uint64_t)(strtod(val, nullptr) * 1e6 + 0.5);
+    } else if (strcasecmp(kv, "DEPTH") == 0) {
+      cfg.fm_depth_hz = strtod(val, nullptr) * 1000.0;  // кГц → Гц
+    } else if (strcasecmp(kv, "RATE") == 0) {
+      cfg.dwell_ms = (uint32_t)strtoul(val, nullptr, 10);
+    } else if (strcasecmp(kv, "SEED") == 0) {
+      cfg.seed = (uint32_t)strtoul(val, nullptr, 10);
+    }
+  }
+
+  char err[64];
+  if (!corridor_start(cfg, err, sizeof(err))) {
+    out.println(err);
+    return;
+  }
+  out.print(F("OK FM RUNNING "));
+  out.println(shape ? shape : "SIN");
 }
 
 void CmdServer::cmdStatus(Print& out) {

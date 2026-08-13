@@ -22,11 +22,12 @@ export function CorridorPanel() {
           MODE
           <select
             value={s.corrMode}
-            onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP")}
+            onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
             disabled={!connected || s.corridorRunning}
           >
             <option value="SWEEP">SWEEP</option>
             <option value="HOP">HOP</option>
+            <option value="CHIRP">CHIRP (FMCW)</option>
           </select>
         </label>
         <label>
@@ -46,7 +47,7 @@ export function CorridorPanel() {
           />
         </label>
         <label>
-          STEP kHz
+          {s.corrMode === "CHIRP" ? "STEP Hz" : "STEP kHz"}
           <input
             value={s.corrStepKhz}
             onChange={(e) => s.setCorrField("corrStepKhz", e.target.value)}

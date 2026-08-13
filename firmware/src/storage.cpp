@@ -21,9 +21,10 @@ void storage_load(PersistedState& out) {
   out.corridor.mode = (CorridorMode)s_pref.getUChar("corr_md", 0);
   out.corridor.f1_hz = s_pref.getULong64("corr_f1", 2400000000ULL);
   out.corridor.f2_hz = s_pref.getULong64("corr_f2", 2500000000ULL);
-  out.corridor.step_khz = s_pref.getUInt("corr_st", 1000);
+  out.corridor.step_hz = s_pref.getUInt("corr_st", 1000000);
   out.corridor.dwell_ms = s_pref.getUInt("corr_dw", 10);
   out.corridor.seed = s_pref.getUInt("corr_sd", 1);
+  out.corridor.fm_depth_hz = s_pref.getDouble("corr_fm", 100000.0);
   out.wifi_mode = s_pref.getUChar("wifi_md", 0);
   strlcpy(out.wifi_ssid, s_pref.getString("wifi_ss", "").c_str(),
           sizeof(out.wifi_ssid));
@@ -41,9 +42,10 @@ void storage_save_corridor(bool active, const CorridorConfig& cfg) {
   s_pref.putUChar("corr_md", (uint8_t)cfg.mode);
   s_pref.putULong64("corr_f1", cfg.f1_hz);
   s_pref.putULong64("corr_f2", cfg.f2_hz);
-  s_pref.putUInt("corr_st", cfg.step_khz);
+  s_pref.putUInt("corr_st", cfg.step_hz);
   s_pref.putUInt("corr_dw", cfg.dwell_ms);
   s_pref.putUInt("corr_sd", cfg.seed);
+  s_pref.putDouble("corr_fm", cfg.fm_depth_hz);
 }
 
 void storage_save_wifi(uint8_t mode, const char* ssid, const char* pass) {

@@ -20,7 +20,7 @@ export class MockTransport implements Transport {
   private ppm = 0;
   // Коридор (фаза 3)
   private corrActive = false;
-  private corrMode: "SWEEP" | "HOP" = "SWEEP";
+  private corrMode: "SWEEP" | "HOP" | "CHIRP" = "SWEEP";
   private corrF1 = 2400;
   private corrF2 = 2500;
   private corrStepKhz = 1000;
@@ -104,8 +104,27 @@ export class MockTransport implements Transport {
           ],
         }),
       );
-    } else if (upper.startsWith("SWEEP") || upper.startsWith("HOP")) {
-      this.handleCorridor(t, upper.startsWith("SWEEP"));
+    } else if (upper.startsWith("SWEEP") || upper.startsWith("HOP") || upper.startsWith("CHIRP")) {
+      const mode = upper.startsWith("SWEEP") ? "SWEEP" : upper.startsWith("HOP") ? "HOP" : "CHIRP";
+      this.handleCorridor(t, mode);
+    } else if (upper.startsWith("GLIDE")) {
+      const parts = t.split(/\s+/);
+      const target = parseFloat(parts[1] ?? "NaN");
+      const dur = parseInt(parts[2] ?? "0", 10);
+      if (!Number.isFinite(target) || !dur) {
+        this.reply("ERR SYNTAX GLIDE <targetMHz> <durationMs>");
+      } else {
+        this.reply(`OK GLIDE RUNNING ${this.freqMhz.toFixed(6)} -> ${target.toFixed(6)}`);
+        this.freqMhz = target;
+      }
+    } else if (upper.startsWith("FM")) {
+      const parts = t.split(/\s+/);
+      if ((parts[1] ?? "").toUpperCase() === "STOP") {
+        this.stopCorridor();
+        this.reply("OK IDLE");
+      } else {
+        this.reply(`OK FM RUNNING ${(parts[2] ?? "SIN").toUpperCase()}`);
+      }
     } else if (upper === "STOP") {
       this.stopCorridor();
       this.reply("OK IDLE");
@@ -129,7 +148,7 @@ export class MockTransport implements Transport {
 
   // --- Коридор (фаза 3) ---------------------------------------------------
 
-  private handleCorridor(line: string, isSweep: boolean): void {
+  private handleCorridor(line: string, mode: "SWEEP" | "HOP" | "CHIRP"): void {
     const parts = line.split(/\s+/);
     const sub = (parts[1] ?? "").toUpperCase();
     if (sub === "STOP") {
@@ -147,7 +166,8 @@ export class MockTransport implements Transport {
       this.reply("ERR RANGE corridor");
       return;
     }
-    let step = 1000;
+    // SWEEP/HOP: STEP в кГц; CHIRP: STEP в Гц (как прошивка)
+    let step = mode === "CHIRP" ? 100000 : 1000;
     let dwell = 10;
     let seed = 1;
     for (let i = 4; i + 1 < parts.length; i += 2) {
@@ -161,10 +181,10 @@ export class MockTransport implements Transport {
       this.reply("ERR DWELL min 1 ms");
       return;
     }
-    this.corrMode = isSweep ? "SWEEP" : "HOP";
+    this.corrMode = mode;
     this.corrF1 = f1;
     this.corrF2 = f2;
-    this.corrStepKhz = step;
+    this.corrStepKhz = mode === "CHIRP" ? step / 1000 : step;  // CHIRP: Гц → кГц
     this.corrCur = f1;
     this.hopState = seed || 0x9e3779b9;
     this.corrActive = true;

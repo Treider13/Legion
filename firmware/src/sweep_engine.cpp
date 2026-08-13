@@ -1,12 +1,10 @@
 // ============================================================================
-// LEGION — sweep_engine: реализация.
-// Задачи FreeRTOS:
-//   sweepTask — тики vTaskDelayUntil (tick = 1 кГц на Arduino-ESP32),
-//               SWEEP: линейный перебор f1→f2 с шагом; HOP: xorshift32 по сетке.
-//   telemTask — 10 Гц JSON-телеметрия в UART, пока коридор активен.
+// LEGION — sweep_engine: реализация (SWEEP/HOP/CHIRP/GLIDE/FM).
+// Вся математика режимов — в engine_math (чистая, host-тестируемая).
 // ============================================================================
 #include "sweep_engine.h"
 
+#include "engine_math.h"
 #include "net_server.h"
 #include "synth.h"
 
@@ -18,7 +16,7 @@ static Stream* s_telem = nullptr;
 static CorridorConfig s_cfg;
 static volatile bool s_active = false;
 static uint64_t s_cur_hz = 0;
-static uint32_t s_hop_state = 1;
+static uint32_t s_rand_state = 1;
 
 static void sweep_task(void*);
 static void telem_task(void*);
@@ -41,17 +39,24 @@ PlanStatus corridor_apply_fast(uint64_t freq_hz) {
   return st;
 }
 
-// xorshift32 — детерминированный PRNG с seed (воспроизводимый хоппинг)
-static uint32_t xorshift32(uint32_t& state) {
-  state ^= state << 13;
-  state ^= state >> 17;
-  state ^= state << 5;
-  return state;
+static const char* mode_name(CorridorMode m) {
+  switch (m) {
+    case CorridorMode::SWEEP: return "SWEEP";
+    case CorridorMode::HOP: return "HOP";
+    case CorridorMode::CHIRP: return "CHIRP";
+    case CorridorMode::GLIDE: return "GLIDE";
+    case CorridorMode::FM_SIN: return "FM_SIN";
+    case CorridorMode::FM_TRI: return "FM_TRI";
+    case CorridorMode::FM_RAND: return "FM_RAND";
+    default: return "NONE";
+  }
 }
 
 static void sweep_task(void*) {
   TickType_t last = xTaskGetTickCount();
   uint64_t f = 0;
+  uint32_t glide_step = 0;
+  uint32_t fm_t = 0;
   bool was_active = false;
 
   for (;;) {
@@ -62,27 +67,65 @@ static void sweep_task(void*) {
     }
     if (!was_active) {  // старт цикла
       f = s_cfg.f1_hz;
-      s_hop_state = s_cfg.seed ? s_cfg.seed : 0x9E3779B9UL;
+      s_rand_state = s_cfg.seed ? s_cfg.seed : 0x9E3779B9UL;
+      glide_step = 0;
+      fm_t = 0;
       last = xTaskGetTickCount();
       was_active = true;
     }
 
     corridor_apply_fast(f);
 
-    // Точный темп: vTaskDelayUntil от прошлого тика (без дрейфа)
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(s_cfg.dwell_ms));
+    // Темп: FM — обновление каждый 1 мс (плавная модуляция), остальные — dwell
+    const uint32_t tick_ms =
+        (s_cfg.mode >= CorridorMode::FM_SIN) ? 1 : s_cfg.dwell_ms;
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(tick_ms));
 
-    if (s_cfg.mode == CorridorMode::SWEEP) {
-      f += (uint64_t)s_cfg.step_khz * 1000ULL;
-      if (f > s_cfg.f2_hz) {
-        f = s_cfg.f1_hz;  // бесконечный цикл (ТЗ)
+    switch (s_cfg.mode) {
+      case CorridorMode::SWEEP:
+      case CorridorMode::CHIRP:
+        f = engine_sweep_next(f, s_cfg.f1_hz, s_cfg.f2_hz, s_cfg.step_hz);
+        break;
+
+      case CorridorMode::HOP:
+        f = engine_hop_next(s_rand_state, s_cfg.f1_hz, s_cfg.f2_hz,
+                            s_cfg.step_hz);
+        break;
+
+      case CorridorMode::GLIDE: {
+        // Одноразовый переход за dwell_ms с шагом 1 мс
+        const uint32_t total = s_cfg.dwell_ms;
+        ++glide_step;
+        if (glide_step >= total) {
+          corridor_apply_fast(s_cfg.f2_hz);
+          s_active = false;  // авто-стоп в конце глайда
+          s_telem->println(F("{\"t\":0,\"event\":\"GLIDE DONE\"}"));
+          break;
+        }
+        f = engine_glide_at(s_cfg.f1_hz, s_cfg.f2_hz, glide_step, total);
+        break;
       }
-    } else {  // HOP: псевдослучайная точка сетки
-      const uint64_t span_steps =
-          (s_cfg.f2_hz - s_cfg.f1_hz) / ((uint64_t)s_cfg.step_khz * 1000ULL);
-      const uint32_t r = xorshift32(s_hop_state);
-      f = s_cfg.f1_hz + (uint64_t)(r % (uint32_t)(span_steps + 1)) *
-                            (uint64_t)s_cfg.step_khz * 1000ULL;
+
+      case CorridorMode::FM_SIN:
+      case CorridorMode::FM_TRI:
+      case CorridorMode::FM_RAND: {
+        fm_t += 1;
+        const int m = s_cfg.mode == CorridorMode::FM_SIN
+                          ? 0
+                          : s_cfg.mode == CorridorMode::FM_TRI ? 1 : 2;
+        const double dev =
+            engine_fm_deviation(m, fm_t, s_cfg.dwell_ms,
+                                s_cfg.fm_depth_hz, s_rand_state);
+        int64_t nf = (int64_t)s_cfg.f1_hz + (int64_t)dev;
+        if (nf < (int64_t)ADF_FREQ_MIN_HZ) nf = (int64_t)ADF_FREQ_MIN_HZ;
+        if (nf > (int64_t)ADF_FREQ_MAX_HZ) nf = (int64_t)ADF_FREQ_MAX_HZ;
+        f = (uint64_t)nf;
+        break;
+      }
+
+      default:
+        s_active = false;
+        break;
     }
   }
 }
@@ -94,25 +137,32 @@ static void telem_task(void*) {
       char line[96];
       snprintf(line, sizeof(line),
                "{\"t\":%lu,\"freq\":%.6f,\"lock\":%d,\"mode\":\"%s\"}",
-                   (unsigned long)millis(), s_cur_hz / 1e6,
-                   synth_driver().readLock() ? 1 : 0,
-                   s_cfg.mode == CorridorMode::SWEEP ? "SWEEP" : "HOP");
+               (unsigned long)millis(), s_cur_hz / 1e6,
+               synth_driver().readLock() ? 1 : 0, mode_name(s_cfg.mode));
       s_telem->println(line);   // UART
-      net_broadcast(line);      // WS-клиенты (фаза 4; на H2 — no-op)
+      net_broadcast(line);      // WS-клиенты (на H2 — no-op)
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
 bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
-  // Валидация (порядок — от дешёвых проверок к дорогим)
-  if (cfg.f1_hz < ADF_FREQ_MIN_HZ || cfg.f2_hz > ADF_FREQ_MAX_HZ ||
-      cfg.f1_hz >= cfg.f2_hz) {
-    snprintf(err, err_len, "ERR RANGE corridor");
+  // Валидация по режимам
+  const bool is_fm = (cfg.mode >= CorridorMode::FM_SIN);
+  const bool is_glide = (cfg.mode == CorridorMode::GLIDE);
+
+  if (cfg.f1_hz < ADF_FREQ_MIN_HZ || cfg.f1_hz > ADF_FREQ_MAX_HZ) {
+    snprintf(err, err_len, "ERR RANGE f1");
     return false;
   }
-  if (cfg.step_khz < 1) {
-    snprintf(err, err_len, "ERR RANGE step >= 1 kHz");
+  if (!is_fm) {
+    if (cfg.f2_hz > ADF_FREQ_MAX_HZ || cfg.f1_hz >= cfg.f2_hz) {
+      snprintf(err, err_len, "ERR RANGE corridor");
+      return false;
+    }
+  }
+  if (cfg.step_hz < CHIRP_MIN_STEP_HZ && !is_glide && !is_fm) {
+    snprintf(err, err_len, "ERR RANGE step >= 1 Hz");
     return false;
   }
   if (cfg.dwell_ms < CORRIDOR_MIN_DWELL_MS) {
@@ -120,11 +170,24 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
              (unsigned long)CORRIDOR_MIN_DWELL_MS);
     return false;
   }
+  if (is_fm) {
+    // FM: центр ± глубина обязаны оставаться в диапазоне
+    if (cfg.fm_depth_hz <= 0.0 ||
+        cfg.f1_hz - (uint64_t)cfg.fm_depth_hz < ADF_FREQ_MIN_HZ ||
+        cfg.f1_hz + (uint64_t)cfg.fm_depth_hz > ADF_FREQ_MAX_HZ) {
+      snprintf(err, err_len, "ERR RANGE fm depth");
+      return false;
+    }
+  }
+
   // Проверка достижимости крайних точек
   SynthPlan probe;
-  if (plan_frequency(cfg.f1_hz, *s_planner, probe) != PlanStatus::OK ||
-      plan_frequency(cfg.f2_hz, *s_planner, probe) != PlanStatus::OK) {
-    snprintf(err, err_len, "ERR PLAN corridor edge");
+  if (plan_frequency(cfg.f1_hz, *s_planner, probe) != PlanStatus::OK) {
+    snprintf(err, err_len, "ERR PLAN f1");
+    return false;
+  }
+  if (!is_fm && plan_frequency(cfg.f2_hz, *s_planner, probe) != PlanStatus::OK) {
+    snprintf(err, err_len, "ERR PLAN f2");
     return false;
   }
 

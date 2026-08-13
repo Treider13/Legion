@@ -33,6 +33,9 @@ class Corridor:
         self.seed = 1
         self.cur = self.f1
         self._hop = 1
+        self.fm_depth_khz = 100.0
+        self._glide_start = 0.0
+        self._fm_t = 0.0
         self.lock = threading.Lock()
 
     def hop_next(self) -> None:
@@ -45,13 +48,33 @@ class Corridor:
         self.cur = self.f1 + (self._hop % (steps + 1)) * self.step_khz / 1000.0
 
     def tick(self) -> None:
+        import math
+        import random
         with self.lock:
-            if self.mode == "SWEEP":
+            if self.mode in ("SWEEP", "CHIRP"):
                 self.cur += self.step_khz / 1000.0
                 if self.cur > self.f2:
                     self.cur = self.f1
-            else:
+            elif self.mode == "HOP":
                 self.hop_next()
+            elif self.mode == "GLIDE":
+                # линейная интерполяция за dwell_ms, авто-стоп в конце
+                elapsed = time.monotonic() - self._glide_start
+                k = min(1.0, elapsed * 1000.0 / self.dwell_ms)
+                self.cur = self.f1 + (self.f2 - self.f1) * k
+                if k >= 1.0:
+                    self.active = False
+            elif self.mode.startswith("FM_"):
+                self._fm_t += self.dwell_ms / 100.0
+                period = max(self.dwell_ms, 1.0)
+                phase = (self._fm_t % period) / period
+                if self.mode == "FM_SIN":
+                    dev = math.sin(2 * math.pi * phase)
+                elif self.mode == "FM_TRI":
+                    dev = phase * 4 - 1 if phase < 0.5 else 3 - phase * 4
+                else:
+                    dev = random.uniform(-1, 1)
+                self.cur = self.f1 + dev * self.fm_depth_khz / 1000.0
 
 
 class Emu:
@@ -93,8 +116,13 @@ class Emu:
         if u == "RF OFF":
             self.rf = False
             return "OK RF OFF"
-        if u.startswith(("SWEEP", "HOP")):
-            return self._corridor_cmd(parts, u.startswith("SWEEP"))
+        if u.startswith(("SWEEP", "HOP", "CHIRP")):
+            mode = "SWEEP" if u.startswith("SWEEP") else ("HOP" if u.startswith("HOP") else "CHIRP")
+            return self._corridor_cmd(parts, mode)
+        if u.startswith("GLIDE"):
+            return self._glide_cmd(parts)
+        if u.startswith("FM"):
+            return self._fm_cmd(parts)
         if u == "STOP":
             self.corridor.active = False
             return "OK IDLE"
@@ -114,7 +142,7 @@ class Emu:
             return f"OK CAL REF {parts[2]} ppm"
         return f"ERR SYNTAX unknown command: {parts[0] if parts else ''}"
 
-    def _corridor_cmd(self, parts: list, is_sweep: bool) -> str:
+    def _corridor_cmd(self, parts: list, mode: str) -> str:
         if len(parts) < 2:
             return "ERR SYNTAX START|STOP expected"
         if parts[1].upper() == "STOP":
@@ -131,17 +159,18 @@ class Emu:
             return "ERR RANGE corridor"
 
         c = self.corridor
-        c.mode = "SWEEP" if is_sweep else "HOP"
+        c.mode = mode
         c.f1, c.f2 = f1, f2
-        c.step_khz = 1000.0
+        # SWEEP/HOP: STEP в кГц; CHIRP: STEP в Гц (как прошивка)
+        c.step_khz = 100.0 if mode == "CHIRP" else 1000.0
         c.dwell_ms = 10.0
         c.seed = 1
-        # именованные параметры STEP/DWELL/RATE/SEED
         kv = parts[4:]
         for i in range(0, len(kv) - 1, 2):
             key, val = kv[i].upper(), kv[i + 1]
             if key == "STEP":
-                c.step_khz = float(val)
+                # CHIRP: val в Гц → кГц; SWEEP/HOP: val уже в кГц
+                c.step_khz = float(val) / 1000.0 if mode == "CHIRP" else float(val)
             elif key in ("DWELL", "RATE"):
                 c.dwell_ms = float(val)
             elif key == "SEED":
@@ -152,6 +181,49 @@ class Emu:
         c._hop = c.seed or 0x9E3779B9
         c.active = True
         return f"OK {c.mode} RUNNING"
+
+    def _glide_cmd(self, parts: list) -> str:
+        try:
+            target = float(parts[1])
+            duration = float(parts[2])
+        except (IndexError, ValueError):
+            return "ERR SYNTAX GLIDE <targetMHz> <durationMs>"
+        if not 34.375 <= target <= 4400:
+            return "ERR RANGE f2"
+        c = self.corridor
+        c.mode = "GLIDE"
+        c.f1 = c.cur if c.active else self.freq
+        c.f2 = target
+        c.dwell_ms = max(1.0, duration)
+        c._glide_start = time.monotonic()
+        c.active = True
+        return f"OK GLIDE RUNNING {c.f1:.6f} -> {target:.6f}"
+
+    def _fm_cmd(self, parts: list) -> str:
+        if len(parts) >= 2 and parts[1].upper() == "STOP":
+            self.corridor.active = False
+            return "OK IDLE"
+        if len(parts) < 3 or parts[1].upper() != "START":
+            return "ERR SYNTAX FM START|STOP"
+        shape = parts[2].upper()
+        if shape not in ("SIN", "TRI", "RAND"):
+            shape = "SIN"
+        c = self.corridor
+        c.mode = f"FM_{shape}"
+        c.f1 = self.freq
+        c.fm_depth_khz = 100.0
+        c.dwell_ms = 100.0
+        kv = parts[3:]
+        for i in range(0, len(kv) - 1, 2):
+            key, val = kv[i].upper(), kv[i + 1]
+            if key == "CENTER":
+                c.f1 = float(val)
+            elif key == "DEPTH":
+                c.fm_depth_khz = float(val)
+            elif key == "RATE":
+                c.dwell_ms = float(val)
+        c.active = True
+        return f"OK FM RUNNING {shape}"
 
 
 def telemetry_loop(emu: Emu, master: int) -> None:

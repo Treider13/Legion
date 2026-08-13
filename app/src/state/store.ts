@@ -46,7 +46,7 @@ interface LegionStore {
   corrStepKhz: string;
   corrDwellMs: string;
   corrSeed: string;
-  corrMode: "SWEEP" | "HOP";
+  corrMode: "SWEEP" | "HOP" | "CHIRP";
   corridorRunning: boolean;
   telemFreq: number | null;
   telemLock: boolean | null;
@@ -58,7 +58,7 @@ interface LegionStore {
   setWsUrl(u: string): void;
   setFreqMhz(f: string): void;
   setCorrField(field: "corrF1" | "corrF2" | "corrStepKhz" | "corrDwellMs" | "corrSeed", v: string): void;
-  setCorrMode(m: "SWEEP" | "HOP"): void;
+  setCorrMode(m: "SWEEP" | "HOP" | "CHIRP"): void;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -280,12 +280,16 @@ export const useLegion = create<LegionStore>((set, get) => {
       const cmd =
         s.corrMode === "SWEEP"
           ? `SWEEP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
-          : `HOP START ${f1} ${f2} RATE ${dwell} SEED ${seed} STEP ${step}`;
+          : s.corrMode === "CHIRP"
+            ? `CHIRP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
+            : `HOP START ${f1} ${f2} RATE ${dwell} SEED ${seed} STEP ${step}`;
       pushLog("tx", cmd);
       const r =
         s.corrMode === "SWEEP"
           ? await gClient.sweepStart(f1, f2, step, dwell)
-          : await gClient.hopStart(f1, f2, dwell, seed, step);
+          : s.corrMode === "CHIRP"
+            ? await gClient.chirpStart(f1, f2, step, dwell)  // CHIRP: шаг в Гц
+            : await gClient.hopStart(f1, f2, dwell, seed, step);
       if (r.ok) {
         set({ corridorRunning: true });
       } else {
