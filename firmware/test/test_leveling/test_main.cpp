@@ -144,6 +144,37 @@ void test_degenerate_equal_freq_points() {
   TEST_ASSERT(v == 4.0 || v == 1.0);  // конечное значение, без NaN/inf
 }
 
+void test_interp_bounded_no_nan() {
+  // Свойство: интерполяция всегда в пределах [min,max] значений таблицы и
+  // конечна (без NaN/inf) для любых частот, включая за краями.
+  const double lo = -4.0, hi = 4.0;  // из g_cal
+  for (double f = -100.0; f <= 6000.0; f += 37.0) {
+    const double v = lvl_interp_dbm(g_cal, g_cal_n, f);
+    TEST_ASSERT(std::isfinite(v));
+    TEST_ASSERT(v >= lo - 1e-9 && v <= hi + 1e-9);
+  }
+}
+
+void test_upsert_keeps_sorted_random() {
+  static const int CAP = 16;
+  LevelPoint t[CAP];
+  int n = 0;
+  uint32_t st = 0xABCDEF01u;
+  for (int i = 0; i < 300; ++i) {
+    st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+    const double f = 35.0 + (double)(st % 4365000) / 1000.0;  // 35..4400 МГц
+    st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+    const double d = -10.0 + (double)(st % 2000) / 100.0;
+    const int r = lvl_upsert(t, n, CAP, f, d);
+    if (r >= 0) n = r;
+    // Инвариант: строго возрастающая по частоте (upsert заменяет дубликаты)
+    for (int k = 1; k < n; ++k) {
+      TEST_ASSERT(t[k].freq_mhz > t[k - 1].freq_mhz);
+    }
+    TEST_ASSERT(n <= CAP);
+  }
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -162,5 +193,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_single_point_flat);
   RUN_TEST(test_atten_monotonic_in_measured);
   RUN_TEST(test_degenerate_equal_freq_points);
+  RUN_TEST(test_interp_bounded_no_nan);
+  RUN_TEST(test_upsert_keeps_sorted_random);
   return UNITY_END();
 }

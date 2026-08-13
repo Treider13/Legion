@@ -116,6 +116,24 @@ void test_delta_last_write_is_r0_always() {
   }
 }
 
+void test_delta_count_correct() {
+  // Число записей = (изменившиеся среди R1..R5) + 1 (R0 всегда).
+  uint32_t st = 0x5A5A5A5Au;
+  for (int iter = 0; iter < 2000; ++iter) {
+    uint32_t prev[6], cur[6];
+    int expected_changed_hi = 0;  // среди R1..R5
+    for (int i = 0; i < 6; ++i) {
+      st ^= st << 13; st ^= st >> 17; st ^= st << 5; prev[i] = st;
+      st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+      cur[i] = (st % 3 == 0) ? prev[i] : st;
+      if (i >= 1 && cur[i] != prev[i]) expected_changed_hi++;
+    }
+    int out[6];
+    const int n = plan_delta_regs(prev, cur, out);
+    TEST_ASSERT_EQUAL_INT(expected_changed_hi + 1, n);  // +1 за R0
+  }
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -127,5 +145,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_nothing_changes_still_writes_r0);
   RUN_TEST(test_delta_converges_to_target);
   RUN_TEST(test_delta_last_write_is_r0_always);
+  RUN_TEST(test_delta_count_correct);
   return UNITY_END();
 }
