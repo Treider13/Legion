@@ -1,5 +1,7 @@
 /* ============================================================================
-   LEGION — дизайн-токены (Neo-Prime × Awwwards 2026, см. план §2.5)
+   LEGION — дизайн-токены. Тема «Aurora Glass» (премиум-стекло):
+   тёмный полуночный фон с мягким северным сиянием, матовое стекло панелей,
+   сдержанный бирюзовый акцент, деликатное свечение (без слепящих засветок).
    ============================================================================ */
 
 @import "tailwindcss";
@@ -9,27 +11,58 @@
 @import "@fontsource/jetbrains-mono/700.css";
 
 :root {
-  /* Палитра */
-  --lg-graphite: #0b0d0e;
-  --lg-panel: #101314;
-  --lg-panel-2: #14181a;
-  --lg-line: #23282b;
-  --lg-olive: #4a5240;
-  --lg-olive-hi: #6b7256;
-  --lg-amber: #d4a017;
-  --lg-amber-hi: #ffb000;
-  --lg-phosphor: #7cff6b;
-  --lg-alert: #ff3b30;
-  --lg-bone: #e8e6e3;
-  --lg-dim: #8a8f7a;
+  /* --- База / фон --- */
+  --lg-bg: #060911;          /* полуночный графит-синий */
+  --lg-bg-2: #0a0f1c;
+  --lg-ink: #05070d;         /* самый тёмный (тени, инпуты) */
 
-  /* Типографика */
+  /* --- Текст --- */
+  --lg-text: #e9eef7;        /* кость */
+  --lg-dim: #93a0b8;         /* приглушённый сине-серый */
+  --lg-faint: #5c6780;
+
+  /* --- Акцент: бирюза (спокойная, не кислотная) --- */
+  --lg-accent: #2dd4bf;
+  --lg-accent-hi: #6ff0e0;
+  --lg-accent-soft: rgba(45, 212, 191, 0.14);
+
+  /* --- Состояния --- */
+  --lg-lock: #5ef2a0;        /* LOCK — мятно-зелёный, отличается от акцента */
+  --lg-alert: #ff6b73;       /* смягчённый красный */
+  --lg-aurora-violet: #7c6cf0;
+
+  /* --- Стекло --- */
+  --lg-glass: rgba(255, 255, 255, 0.045);
+  --lg-glass-2: rgba(255, 255, 255, 0.07);
+  --lg-glass-strong: rgba(255, 255, 255, 0.1);
+  --lg-border: rgba(255, 255, 255, 0.1);
+  --lg-border-hi: rgba(255, 255, 255, 0.2);
+  --lg-blur: saturate(150%) blur(18px);
+  --lg-radius: 18px;
+  --lg-radius-sm: 12px;
+
+  /* --- Совместимость со старыми именами (используются в компонентах/шейдерах) --- */
+  --lg-graphite: var(--lg-bg);
+  --lg-panel: var(--lg-glass);
+  --lg-panel-2: var(--lg-glass-2);
+  --lg-line: var(--lg-border);
+  --lg-olive: var(--lg-faint);
+  --lg-olive-hi: var(--lg-dim);
+  --lg-amber: var(--lg-accent);
+  --lg-amber-hi: var(--lg-accent-hi);
+  --lg-phosphor: var(--lg-lock);
+  --lg-bone: var(--lg-text);
+
+  /* --- Эффекты (деликатные) --- */
+  --lg-glow-amber: 0 0 16px rgba(45, 212, 191, 0.3);
+  --lg-glow-accent: 0 0 16px rgba(45, 212, 191, 0.3);
+  --lg-glow-green: 0 0 16px rgba(94, 242, 160, 0.32);
+  --lg-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  --lg-shadow-card: 0 8px 30px rgba(0, 0, 0, 0.38);
+
+  /* --- Типографика --- */
   --lg-font-display: "Saira Stencil One", "JetBrains Mono", monospace;
   --lg-font-mono: "JetBrains Mono", ui-monospace, monospace;
-
-  /* Эффекты */
-  --lg-glow-amber: 0 0 12px rgba(212, 160, 23, 0.45);
-  --lg-glow-green: 0 0 12px rgba(124, 255, 107, 0.45);
 
   color-scheme: dark;
 }
@@ -40,27 +73,39 @@ body,
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  background: var(--lg-graphite);
-  color: var(--lg-bone);
+  background: var(--lg-bg);
+  color: var(--lg-text);
   font-family: var(--lg-font-mono);
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Сканлайн-оверлей (лёгкий CRT-оттенок) */
+/* Мягкое северное сияние на фоне всей страницы (fixed — не скроллится).
+   Несколько радиальных пятен низкой яркости → «премиум-глубина». */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 50% at 18% 12%, rgba(45, 212, 191, 0.16), transparent 70%),
+    radial-gradient(55% 45% at 85% 8%, rgba(124, 108, 240, 0.16), transparent 70%),
+    radial-gradient(70% 60% at 70% 95%, rgba(45, 130, 212, 0.14), transparent 72%),
+    radial-gradient(40% 40% at 30% 88%, rgba(94, 242, 160, 0.08), transparent 70%),
+    linear-gradient(180deg, var(--lg-bg) 0%, var(--lg-bg-2) 100%);
+}
+
+/* Очень деликатная зернистость/виньетка вместо жёстких CRT-сканлайнов. */
 .legion-scanlines::after {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 90;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.11) 0 1px,
-    transparent 1px 3px
-  );
-  mix-blend-mode: multiply;
+  background: radial-gradient(120% 120% at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
 }
 
-/* Accessibility: prefers-reduced-motion (SOTD 2026 — accessibility-first) */
+/* Accessibility: prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
