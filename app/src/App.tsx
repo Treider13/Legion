@@ -13,7 +13,6 @@ import "./App.css";
 import { BootSequence } from "./components/boot/BootSequence";
 import { ConnectBar } from "./components/ConnectBar";
 import { CorridorPanel } from "./components/CorridorPanel";
-import { FrequencyPanel } from "./components/FrequencyPanel";
 import { LogPanel } from "./components/LogPanel";
 import { PowerPanel } from "./components/PowerPanel";
 import { useDeviceTier, prefersReducedMotion } from "./hooks/useDeviceTier";
@@ -93,13 +92,15 @@ function App() {
       {/* HERO: RF-СФЕРА + дайл в скобках LOCK */}
       <section className="hero">
         <div className="hero-canvas">
-          {__LEGION_LITE__ || Scene === null || !mount3d ? (
+          {/* LITE-сборка — Canvas2D-глаз. FULL — сразу 3D CyborgEye без
+              промежуточного LiteEye: раньше он мелькал ~1–2 с при отложенном
+              монтаже/загрузке чанка и подменялся новым глазом. Пустой fallback
+              (null) убирает это мелькание — до готовности 3D просто фон hero. */}
+          {__LEGION_LITE__ ? (
             <LiteEye />
-          ) : (
-            <Suspense fallback={<LiteEye />}>
-              <Scene tier={tier} />
-            </Suspense>
-          )}
+          ) : Scene ? (
+            <Suspense fallback={null}>{mount3d && <Scene tier={tier} />}</Suspense>
+          ) : null}
         </div>
         <div className="hero-overlay">
           <header className="hero-header">
@@ -115,7 +116,6 @@ function App() {
       {/* CONSOLE */}
       <section className="console">
         <ConnectBar />
-        <FrequencyPanel />
         <div className="panel-grid">
           <PowerPanel />
           <CorridorPanel />

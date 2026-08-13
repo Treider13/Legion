@@ -47,25 +47,14 @@ async function main(): Promise<void> {
   await page.click("section.connect-bar button.btn-primary");
   await waitFor(page, `!!document.querySelector(".state-connected")`);
 
-  // Puppeteer click авто-скроллит к кнопке (console ниже hero) — наверх к дайлу
+  // Panel-частота удалена — тест работает с коридором напрямую.
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await new Promise((r) => setTimeout(r, 400));
 
-  // Wheel на дайле → перестройка → коммит через ~300 мс
-  const dial = await page.$(".freq-dial");
-  const box = await dial!.boundingBox();
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-  await page.mouse.wheel({ deltaY: -120 }); // +0.1 MHz
-  await new Promise((r) => setTimeout(r, 900));
-
-  // LOCK-скобки: TARGET LOCKED
-  await waitFor(page, `!!document.querySelector(".lock-frame.locked")`);
-  await page.screenshot({ path: `${SHOTS}/11_design_locked.png` });
-
-  // Коридор: START SWEEP
+  // Коридор: старт (кнопка «ПОДАВИТЬ ЦЕЛЬ»)
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll("button"));
-    (btns.find((b) => b.textContent?.includes("START")) as HTMLButtonElement)?.click();
+    (btns.find((b) => b.textContent?.includes("ПОДАВИТЬ")) as HTMLButtonElement)?.click();
   });
   await waitFor(page, `!!document.querySelector(".range-marker")`);
   const marker1 = await page.$eval(".range-marker", (el) => (el as HTMLElement).style.left);
@@ -76,25 +65,27 @@ async function main(): Promise<void> {
   const marker2 = await page.$eval(".range-marker", (el) => (el as HTMLElement).style.left);
   await page.screenshot({ path: `${SHOTS}/12_design_corridor.png` });
 
+  // Hero-статус должен показать активное подавление
+  const heroStatus = await page.$eval(".hero-status", (el) => el.textContent ?? "");
+  // Live-показание коридора (телеметрия парсится в UI, в журнал не пишется —
+  // это отдельный live-маркер, см. фикс подвисания). Частота в коридоре.
+  const rangeCur = await page.$eval(".range-cur", (el) => el.textContent ?? "");
+  const curNum = parseFloat(rangeCur);
+
   // STOP
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll("button"));
-    (btns.find((b) => b.textContent === "STOP") as HTMLButtonElement)?.click();
+    (btns.find((b) => b.textContent === "СТОП") as HTMLButtonElement)?.click();
   });
 
   // Проверки
-  const lockCaption = await page.$eval(".lock-caption", (el) => el.textContent);
   const logText = await page.$eval(".log-scroll", (el) => el.textContent ?? "");
-  const heroCorr = await page.$eval(".hero-corr", (el) => el.textContent ?? "");
 
   const checks: Array<[string, boolean]> = [
-    ["lock caption = TARGET LOCKED", lockCaption === "TARGET LOCKED"],
-    ["log has SET FREQ (wheel→commit)", /SET FREQ 2475\.1/.test(logText)],
-    ["log has LOCK=1", logText.includes("LOCK=1")],
     ["log has SWEEP RUNNING", logText.includes("OK SWEEP RUNNING")],
-    ["telemetry flows", logText.includes("\"mode\":\"SWEEP\"")],
+    ["telemetry flows (live readout)", rangeCur.includes("МГц") && curNum >= 2400 && curNum <= 2500],
     ["маркер движется", marker1 !== marker2],
-    ["hero corr показывал активность", heroCorr.includes("CORRIDOR")],
+    ["hero-статус = ПОДАВЛЕНИЕ ЦЕЛИ", heroStatus.includes("ПОДАВЛЕНИЕ")],
   ];
 
   let failed = 0;
