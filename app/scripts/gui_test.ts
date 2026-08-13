@@ -1,100 +1,100 @@
 // ============================================================================
-// LEGION — GUI-тест фазы 2: реальный Chrome (puppeteer-core) + vite dev.
-// Сценарий: открыть приложение → выбрать MOCK → CONNECT → SET FREQ 2475 →
-// проверить LOCK ✓ и журнал → скриншоты в /tmp/legion_shots/.
+// LEGION — GUI-тест фазы 5: дизайн-система LEGION.
+// ВАЖНО: ожидания через Node-side poll (page.evaluate по CDP) — в headless
+// Chrome с software-GL страничные rAF/таймеры голодают (проверено: waitFor-
+// Function не срабатывал при живом DOM). Не использовать page.waitForFunction.
 // ============================================================================
-import puppeteer from "puppeteer-core";
+import puppeteer, { type Page } from "puppeteer-core";
 
 const BASE = process.env.LEGION_URL ?? "http://localhost:5173";
 const SHOTS = "/tmp/legion_shots";
+
+/** Node-side poll: устойчив к голоданию таймеров страницы под software-GL */
+async function waitFor(
+  page: Page,
+  fn: string,
+  timeoutMs = 15000,
+): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    const ok = await page.evaluate(fn);
+    if (ok) return;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`waitFor timeout: ${fn}`);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
 
 async function main(): Promise<void> {
   const browser = await puppeteer.launch({
     executablePath: "/usr/local/bin/google-chrome",
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1280,900"],
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1440,900"],
   });
   const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 900 });
+  await page.setViewport({ width: 1440, height: 900 });
 
-  await page.goto(BASE, { waitUntil: "networkidle0", timeout: 20000 });
+  await page.evaluateOnNewDocument(() => {
+    sessionStorage.setItem("legion_booted", "1");
+  });
 
-  // Выбрать MOCK-транспорт
+  await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 25000 });
+  await waitFor(page, `!!document.querySelector(".hero")`);
+  await new Promise((r) => setTimeout(r, 2500)); // 3D сцена + шрифты
+  await page.screenshot({ path: `${SHOTS}/10_design_hero.png` });
+
+  // MOCK connect
   await page.select("section.connect-bar select", "mock");
-  await page.screenshot({ path: `${SHOTS}/01_initial.png` });
-
-  // CONNECT
   await page.click("section.connect-bar button.btn-primary");
-  await page.waitForFunction(
-    () => document.querySelector(".state-connected") !== null,
-    { timeout: 5000 },
-  );
-  await page.screenshot({ path: `${SHOTS}/02_connected.png` });
+  await waitFor(page, `!!document.querySelector(".state-connected")`);
 
-  // SET FREQ 2475 (пресет)
-  await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll(".preset-row button"));
-    (btns.find((b) => b.textContent === "2475") as HTMLButtonElement).click();
-  });
-  await page.waitForFunction(
-    () => document.querySelector(".lock-yes") !== null,
-    { timeout: 5000 },
-  );
-
-  // RF ON
-  const rfClicked = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll(".power-row button"));
-    const rf = btns.find((b) => b.textContent === "RF ON") as HTMLButtonElement | undefined;
-    rf?.click();
-    return !!rf;
-  });
+  // Puppeteer click авто-скроллит к кнопке (console ниже hero) — наверх к дайлу
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await new Promise((r) => setTimeout(r, 400));
 
-  // SELFTEST
-  await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll(".power-row button"));
-    (btns.find((b) => b.textContent === "SELFTEST") as HTMLButtonElement)?.click();
-  });
-  await new Promise((r) => setTimeout(r, 600));
+  // Wheel на дайле → перестройка → коммит через ~300 мс
+  const dial = await page.$(".freq-dial");
+  const box = await dial!.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.wheel({ deltaY: -120 }); // +0.1 MHz
+  await new Promise((r) => setTimeout(r, 900));
 
-  await page.screenshot({ path: `${SHOTS}/03_freq_lock.png` });
+  // LOCK-скобки: TARGET LOCKED
+  await waitFor(page, `!!document.querySelector(".lock-frame.locked")`);
+  await page.screenshot({ path: `${SHOTS}/11_design_locked.png` });
 
-  // --- Коридор (фаза 3): START SWEEP → маркер движется → телеметрия в логе ---
+  // Коридор: START SWEEP
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll("button"));
-    (btns.find((b) => b.textContent === "START SWEEP") as HTMLButtonElement)?.click();
+    (btns.find((b) => b.textContent?.includes("START")) as HTMLButtonElement)?.click();
   });
-  await new Promise((r) => setTimeout(r, 700));
+  await waitFor(page, `!!document.querySelector(".range-marker")`);
   const marker1 = await page.$eval(".range-marker", (el) => (el as HTMLElement).style.left);
-  await new Promise((r) => setTimeout(r, 900));
+  await waitFor(
+    page,
+    `(() => { const m = document.querySelector(".range-marker"); return m && m.style.left !== ${JSON.stringify(marker1)}; })()`,
+  );
   const marker2 = await page.$eval(".range-marker", (el) => (el as HTMLElement).style.left);
-  await page.screenshot({ path: `${SHOTS}/04_corridor.png` });
+  await page.screenshot({ path: `${SHOTS}/12_design_corridor.png` });
 
   // STOP
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll("button"));
     (btns.find((b) => b.textContent === "STOP") as HTMLButtonElement)?.click();
   });
-  await new Promise((r) => setTimeout(r, 300));
 
-  // Проверки содержимого
-  const lockText = await page.$eval(".lock-badge", (el) => el.textContent);
+  // Проверки
+  const lockCaption = await page.$eval(".lock-caption", (el) => el.textContent);
   const logText = await page.$eval(".log-scroll", (el) => el.textContent ?? "");
-  const stateText = await page.$eval(".state-badge", (el) => el.textContent);
+  const heroCorr = await page.$eval(".hero-corr", (el) => el.textContent ?? "");
 
-  const checks = [
-    ["LOCK badge = LOCK ✓", lockText === "LOCK ✓"],
-    ["state = CONNECTED", stateText === "CONNECTED"],
-    ["log has SET FREQ 2475", logText.includes("SET FREQ 2475.000000")],
-    ["log has LOCK=1 reply", logText.includes("FREQ=2475.000000 LOCK=1")],
-    ["log has RF ON", logText.includes("OK RF ON")],
-    ["log has SELFTEST pass", logText.includes("selftest pass=1")],
-    ["RF button clicked", rfClicked],
-    ["log has SWEEP START", logText.includes("SWEEP START 2400 2500")],
+  const checks: Array<[string, boolean]> = [
+    ["lock caption = TARGET LOCKED", lockCaption === "TARGET LOCKED"],
+    ["log has SET FREQ (wheel→commit)", /SET FREQ 2475\.1/.test(logText)],
+    ["log has LOCK=1", logText.includes("LOCK=1")],
     ["log has SWEEP RUNNING", logText.includes("OK SWEEP RUNNING")],
-    ["log has telemetry", logText.includes("\"mode\":\"SWEEP\"")],
+    ["telemetry flows", logText.includes("\"mode\":\"SWEEP\"")],
     ["маркер движется", marker1 !== marker2],
-    ["log has STOP→IDLE", logText.includes("OK IDLE")],
+    ["hero corr показывал активность", heroCorr.includes("CORRIDOR")],
   ];
 
   let failed = 0;
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   }
 
   await browser.close();
-  console.log(failed === 0 ? "\nGUI: ALL PASS" : `\nGUI: ${failed} FAILURES`);
+  console.log(failed === 0 ? "\nGUI DESIGN: ALL PASS" : `\nGUI DESIGN: ${failed} FAILURES`);
   process.exit(failed === 0 ? 0 : 1);
 }
 

@@ -21,11 +21,14 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
-        // DEV: авто-открытие DevTools для отладки транспорта
-        if let Some(w) = app.get_webview_window("main") {
-          w.open_devtools();
-        }
       }
+      // DEV: авто-открытие DevTools (только debug-сборки; cfg-gated, т.к.
+      // get_webview_window требует трейт Manager — импорт тоже cfg-gated)
+      #[cfg(debug_assertions)]
+      if let Some(w) = app.get_webview_window("main") {
+        w.open_devtools();
+      }
+      let _ = app;
       Ok(())
     })
     .run(tauri::generate_context!())

@@ -1,13 +1,2 @@
-/* LEGION — глобальная база (фаза 0). Токены дизайн-системы — фаза 5. */
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
-  background: #0b0d0e;
-}
+/* LEGION — входная точка стилей */
+@import "./design/tokens.css";

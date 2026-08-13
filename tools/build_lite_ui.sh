@@ -7,8 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== build web =="
-(cd app && npm run build)
+echo "== build web (LEGION_LITE=1 — без three.js, Canvas2D-радар) =="
+(cd app && LEGION_LITE=1 npm run build)
 
 echo "== copy + gzip to firmware/data =="
 rm -rf firmware/data

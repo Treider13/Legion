@@ -6,10 +6,13 @@ import { useLegion } from "../state/store";
 export function LogPanel() {
   const log = useLegion((s) => s.log);
   const clearLog = useLegion((s) => s.clearLog);
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+    // Скроллим ТОЛЬКО контейнер лога, не страницу (scrollIntoView тянул
+    // всю страницу вниз на 381px при маунте — найдено пробником)
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [log.length]);
 
   return (
@@ -20,7 +23,7 @@ export function LogPanel() {
           CLEAR
         </button>
       </span>
-      <div className="log-scroll">
+      <div className="log-scroll" ref={scrollRef}>
         {log.map((e, i) => (
           <div key={i} className={`log-line log-${e.dir}`}>
             <span className="log-ts">
@@ -30,7 +33,6 @@ export function LogPanel() {
             <span className="log-text">{e.text}</span>
           </div>
         ))}
-        <div ref={endRef} />
       </div>
     </section>
   );
