@@ -139,6 +139,14 @@ void CmdServer::handleLine(char* line, Print& out) {
     cmdStatus(out);
   } else if (strcasecmp(tok, "REGS?") == 0) {
     cmdRegs(out);
+  } else if (strcasecmp(tok, "REGS") == 0 && rest) {
+    char* save2 = nullptr;
+    char* sub = strtok_r(rest, " ", &save2);
+    if (sub && strcasecmp(sub, "DIFF") == 0) {
+      cmdRegsDiff(strtok_r(nullptr, "", &save2), out);
+    } else {
+      out.println(F("ERR SYNTAX REGS DIFF <r0..r5 hex>"));
+    }
   } else if (strcasecmp(tok, "SELFTEST") == 0) {
     cmdSelftest(out);
   } else if (strcasecmp(tok, "CAL") == 0 && rest) {
@@ -431,6 +439,39 @@ void CmdServer::cmdRegs(Print& out) {
     }
   }
   out.println(F("}"));
+}
+
+// REGS DIFF <r0> <r1> <r2> <r3> <r4> <r5> (hex) — сравнение с текущим планом.
+// Идея Wei1234c/Signal_Generators: diff регистров — главный инструмент отладки
+// драйвера (несовпадающие поля видны мгновенно).
+void CmdServer::cmdRegsDiff(char* arg, Print& out) {
+  if (!arg) {
+    out.println(F("ERR SYNTAX regs diff needs 6 hex words"));
+    return;
+  }
+  uint32_t theirs[6];
+  char* save = nullptr;
+  for (int i = 0; i < 6; ++i) {
+    char* w = strtok_r(nullptr, " ", &save);
+    if (!w) {
+      out.println(F("ERR SYNTAX regs diff needs 6 hex words"));
+      return;
+    }
+    theirs[i] = (uint32_t)strtoul(w, nullptr, 16);
+  }
+  out.print(F("{\"diff\":["));
+  for (int i = 0; i < 6; ++i) {
+    const uint32_t mine = _s->plan_valid ? _s->plan.regs[i] : 0;
+    const uint32_t d = mine ^ theirs[i];
+    char hex[16];
+    snprintf(hex, sizeof(hex), "{\"r\":%d,\"xor\":\"0x%08lX\"}", i,
+             (unsigned long)d);
+    out.print(hex);
+    if (i < 5) {
+      out.print(',');
+    }
+  }
+  out.println(F("]}"));
 }
 
 void CmdServer::cmdCalRef(char* arg, Print& out) {

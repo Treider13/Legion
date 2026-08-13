@@ -43,6 +43,7 @@ class CmdServer {
   void cmdRf(char* arg, Print& out);
   void cmdStatus(Print& out);
   void cmdRegs(Print& out);
+  void cmdRegsDiff(char* arg, Print& out);
   void cmdCalRef(char* arg, Print& out);
   void cmdSelftest(Print& out);
   void cmdSetAtt(char* arg, Print& out);
