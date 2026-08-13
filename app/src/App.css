@@ -1,40 +1,244 @@
-/* LEGION — Фаза 0: минимальная тёмная тема-заглушка (полная дизайн-система — фаза 5) */
+/* LEGION — фаза 2: функциональная тёмная тема (полная дизайн-система — фаза 5) */
 :root {
-  color-scheme: dark;
-  background: #0b0d0e;
-  color: #e8e6e3;
-  font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --bg: #0b0d0e;
+  --panel: #121517;
+  --border: #23282b;
+  --text: #e8e6e3;
+  --dim: #6b7256;
+  --amber: #d4a017;
+  --green: #7cff6b;
+  --red: #ff3b30;
 }
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: #0b0d0e;
-}
-
-.legion-boot {
-  text-align: center;
-}
-
-.legion-banner {
-  color: #d4a017;
-  font-size: clamp(6px, 1.6vw, 14px);
-  line-height: 1.15;
+.legion-app {
+  max-width: 960px;
   margin: 0 auto;
-  display: inline-block;
-  text-align: left;
+  padding: 24px 16px 48px;
+  color: var(--text);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
-.legion-sub {
-  color: #6b7256;
-  letter-spacing: 0.35em;
-  margin-top: 1.5rem;
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
 }
 
-.legion-status {
-  color: #7cff6b;
-  letter-spacing: 0.15em;
-  font-size: 0.8rem;
+.app-title {
+  font-size: 28px;
+  letter-spacing: 0.4em;
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.app-subtitle {
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  margin-bottom: 10px;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 720px) {
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+select,
+input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: rgba(212, 160, 23, 0.12);
+}
+
+.btn-danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.btn-ghost.active {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.btn-mini {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+.freq-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.freq-input {
+  font-size: 22px;
+  width: 180px;
+  text-align: right;
+  color: var(--amber);
+}
+
+.freq-unit {
+  color: var(--dim);
+}
+
+.preset-row,
+.power-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.lock-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lock-badge {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  letter-spacing: 0.2em;
+  font-size: 12px;
+}
+
+.lock-yes {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.lock-no {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.lock-unknown {
+  color: var(--dim);
+}
+
+.status-line {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.state-badge {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  color: var(--dim);
+}
+
+.state-connected {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.state-error {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.mock-badge {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  padding: 3px 10px;
+  border: 1px dashed var(--amber);
+  color: var(--amber);
+}
+
+.log-panel {
+  min-height: 220px;
+}
+
+.log-scroll {
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  padding: 1px 0;
+}
+
+.log-ts {
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+.log-tx {
+  color: var(--amber);
+}
+
+.log-rx {
+  color: var(--text);
+}
+
+.log-sys {
+  color: var(--dim);
 }

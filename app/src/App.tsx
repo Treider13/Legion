@@ -1,21 +1,25 @@
-// LEGION — Фаза 0: скаффолд-заглушка.
-// Полноценный Transport-слой (Tauri Serial / Web Serial / WebSocket) — фаза 2.
-// Дизайн-система LEGION — фаза 5.
+// LEGION — Фаза 2: функциональный интерфейс управления.
+// Полная дизайн-система LEGION (boot, RF-СФЕРА, дайл, range gate) — фаза 5.
 import "./App.css";
+
+import { ConnectBar } from "./components/ConnectBar";
+import { FrequencyPanel } from "./components/FrequencyPanel";
+import { LogPanel } from "./components/LogPanel";
+import { PowerPanel } from "./components/PowerPanel";
 
 function App() {
   return (
-    <main className="legion-boot">
-      <pre className="legion-banner">{`
-██╗     ███████╗ ██████╗ ██╗ ██████╗ ███╗   ██╗
-██║     ██╔════╝██╔════╝ ██║██╔═══██╗████╗  ██║
-██║     █████╗  ██║  ███╗██║██║   ██║██╔██╗ ██║
-██║     ██╔══╝  ██║   ██║██║██║   ██║██║╚██╗██║
-███████╗███████╗╚██████╔╝██║╚██████╔╝██║ ╚████║
-╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-      `}</pre>
-      <p className="legion-sub">RF SYNTH CONTROL // ADF4351 via ESP32</p>
-      <p className="legion-status">SYSTEM SCAFFOLD OK — AWAITING PHASE 2</p>
+    <main className="legion-app">
+      <header className="app-header">
+        <span className="app-title">LEGION</span>
+        <span className="app-subtitle">RF SYNTH CONTROL // ADF4351</span>
+      </header>
+      <ConnectBar />
+      <div className="panel-grid">
+        <FrequencyPanel />
+        <PowerPanel />
+      </div>
+      <LogPanel />
     </main>
   );
 }
