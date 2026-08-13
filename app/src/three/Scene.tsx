@@ -75,8 +75,8 @@ function FxWithGuard() {
   return (
     <EffectComposer multisampling={0}>
       <Bloom
-        intensity={0.55}
-        luminanceThreshold={0.7}
+        intensity={0.6}
+        luminanceThreshold={0.62}
         luminanceSmoothing={0.9}
         mipmapBlur
       />

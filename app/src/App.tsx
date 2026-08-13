@@ -34,7 +34,21 @@ const Scene = __LEGION_LITE__
 function App() {
   const [booted, setBooted] = useState(false);
   const [mount3d, setMount3d] = useState(false);
+  const [biomechUrl, setBiomechUrl] = useState("");
   const tier = useDeviceTier();
+
+  // Фон-«оправа» глаза грузится только в PC-сборке (в lite/ESP32 — исключается
+  // из бандла тем же приёмом, что и three.js: мёртвая ветка при LEGION_LITE).
+  useEffect(() => {
+    if (__LEGION_LITE__) return;
+    let alive = true;
+    void import("./assets/eye_biomech.png").then((m) => {
+      if (alive) setBiomechUrl(m.default);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Отложенный монтаж 3D: сначала красим текстовый UI (FCP/LCP), затем WebGL
   // (Lighthouse: LCP 3.8с → цель <2.5с; тяжёлая сцена не блокирует первый кадр)
@@ -92,6 +106,13 @@ function App() {
 
       {/* HERO: RF-СФЕРА + дайл в скобках LOCK */}
       <section className="hero">
+        {!__LEGION_LITE__ && biomechUrl && (
+          <div
+            className="hero-biomech"
+            aria-hidden
+            style={{ backgroundImage: `url(${biomechUrl})` }}
+          />
+        )}
         <div className="hero-canvas">
           {__LEGION_LITE__ || Scene === null || !mount3d ? (
             <LiteEye />
