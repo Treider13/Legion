@@ -23,7 +23,10 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 | Регистры diff | `REGS DIFF <r0> <r1> ... <r5>` | JSON расхождений | идея Wei1234c |
 | Самотест | `SELFTEST` | JSON по шагам F13 | диагностика SPI |
 | Калибровка | `CAL REF <ppm>` | `OK` | учёт в freq_planner |
-| Аттенюатор (фаза 8) | `SET ATT <dB>` | `OK` | 0–31.75 шаг 0.25 |
+| Аттенюатор (фаза 8) | `SET ATT <dB>` | `OK` | 0–31.75 шаг 0.25; отключает авто-выравнивание |
+| Калибровка уровня (фаза 10) | `CAL LEVEL <freqMHz> <dBm>` / `CAL LEVEL CLEAR` | `OK CAL LEVEL ... n=<k>` | точка «частота → измеренный выход» |
+| Выравнивание уровня (фаза 10) | `SET LEVEL <dBm>` / `SET LEVEL OFF` | `OK LEVEL=<dBm> ATT=<dB>` | плоский уровень через PE43702 по калибровке |
+| Статус уровня (фаза 10) | `LEVEL?` | JSON `{enabled,target,points}` | таблица калибровки |
 
 ## Телеметрия (WebSocket push, 10 Гц в режиме коридора)
 

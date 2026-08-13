@@ -14,6 +14,9 @@ static inline void attWrite(uint8_t pin, uint8_t level) {
 }
 
 void Attenuator::begin() {
+  if (_mtx == nullptr) {
+    _mtx = (void*)xSemaphoreCreateMutex();
+  }
   pinMode(PIN_ATT_CLK, OUTPUT);
   pinMode(PIN_ATT_DATA, OUTPUT);
   pinMode(PIN_ATT_LE, OUTPUT);
@@ -27,8 +30,9 @@ float Attenuator::setDb(float db) {
   if (db < 0.0f) db = 0.0f;
   if (db > 31.75f) db = 31.75f;
   const uint8_t code = (uint8_t)(db / 0.25f + 0.5f);  // квантование 0.25 дБ
-  _db = code * 0.25f;
 
+  if (_mtx) xSemaphoreTake((SemaphoreHandle_t)_mtx, portMAX_DELAY);
+  _db = code * 0.25f;
   attWrite(PIN_ATT_LE, 0);
   for (int i = 7; i >= 0; --i) {  // MSB first
     attWrite(PIN_ATT_DATA, (code >> i) & 1U);
@@ -38,6 +42,7 @@ float Attenuator::setDb(float db) {
   attWrite(PIN_ATT_LE, 1);  // защёлка
   ets_delay_us(1);
   attWrite(PIN_ATT_LE, 0);
+  if (_mtx) xSemaphoreGive((SemaphoreHandle_t)_mtx);
   return _db;
 }
 

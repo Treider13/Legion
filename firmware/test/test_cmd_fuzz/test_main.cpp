@@ -12,6 +12,7 @@
 
 // --- Реальный тестируемый код ---
 #include "cmd_server.h"
+#include "leveling.h"  // LevelPoint, LVL_MAX_POINTS, объявления leveling_*
 
 // ============================================================================
 // Тестовые двойники зависимостей (парсер — под тестом, железо — нет)
@@ -30,6 +31,30 @@ void Adf4351Driver::setChipEnable(bool) {}
 static float g_att_db = 0.0f;
 void Attenuator::begin() {}
 float Attenuator::setDb(float db) { g_att_db = db; return db; }
+
+// --- Выравнивание уровня (leveling.cpp не в fuzz-сборке — двойники) ---
+static LevelPoint g_lvl_pts[LVL_MAX_POINTS];
+static int g_lvl_n = 0;
+static bool g_lvl_on = false;
+static double g_lvl_target = 0.0;
+void leveling_init(Attenuator&) {}
+bool leveling_add_point(double f, double d) {
+  const int r = lvl_upsert(g_lvl_pts, g_lvl_n, LVL_MAX_POINTS, f, d);
+  if (r < 0) return false;
+  g_lvl_n = r;
+  return true;
+}
+void leveling_clear() { g_lvl_n = 0; }
+int leveling_count() { return g_lvl_n; }
+const LevelPoint* leveling_table() { return g_lvl_pts; }
+void leveling_set_target(double d) { g_lvl_target = d; g_lvl_on = true; }
+void leveling_disable() { g_lvl_on = false; }
+bool leveling_enabled() { return g_lvl_on; }
+double leveling_target() { return g_lvl_target; }
+double leveling_apply(uint64_t) {
+  return (g_lvl_on && g_lvl_n > 0) ? 0.0 : -1.0;
+}
+void leveling_restore(const LevelPoint*, int, bool, double) {}
 
 // --- synth ---
 static Adf4351Driver g_drv;
@@ -88,6 +113,7 @@ void storage_save_power(uint8_t) {}
 void storage_save_rf(bool) {}
 void storage_save_ppm(int32_t) {}
 void storage_save_att(float) {}
+void storage_save_level(const LevelPoint*, int, bool, double) {}
 void storage_save_corridor(bool, const CorridorConfig&) {}
 
 // --- net / selftest / serial_sync ---
@@ -123,7 +149,8 @@ static const char* TOKENS[] = {
     "SET FREQ", "SET POWER", "SET ATT", "RF ON", "RF OFF", "STATUS?",
     "REGS?", "SELFTEST", "HELLO", "STOP", "SWEEP START", "HOP START",
     "CHIRP START", "GLIDE", "FM START", "CAL REF", "WIFI STATUS?",
-    "SWEEP STOP", "HOP STOP", "FM STOP",
+    "SWEEP STOP", "HOP STOP", "FM STOP", "SET LEVEL", "CAL LEVEL",
+    "LEVEL?", "SET LEVEL OFF", "CAL LEVEL CLEAR",
 };
 
 static std::string fuzz_case() {
