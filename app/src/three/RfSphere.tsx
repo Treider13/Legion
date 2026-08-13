@@ -9,7 +9,7 @@ import * as THREE from "three";
 
 import { freqTo01, rfVisual } from "./rfVisual";
 import {
-  AMBER,
+  ACCENT,
   OLIVE,
   PHOSPHOR,
   fresnelFrag,
@@ -56,7 +56,7 @@ export function RfSphere({ tier }: Props) {
     () => ({
       points: {
         uTime: { value: 0 },
-        uColor: { value: new THREE.Vector3(...AMBER) },
+        uColor: { value: new THREE.Vector3(...ACCENT) },
         uLock: { value: 0 },
         uLockColor: { value: new THREE.Vector3(...PHOSPHOR) },
       },
@@ -68,12 +68,12 @@ export function RfSphere({ tier }: Props) {
       },
       sweep: {
         uTime: { value: 0 },
-        uColor: { value: new THREE.Vector3(...AMBER) },
+        uColor: { value: new THREE.Vector3(...ACCENT) },
         uActive: { value: 0 },
       },
       ring: {
         uTime: { value: 0 },
-        uColor: { value: new THREE.Vector3(...AMBER) },
+        uColor: { value: new THREE.Vector3(...ACCENT) },
         uLockColor: { value: new THREE.Vector3(...PHOSPHOR) },
         uLock: { value: 0 },
         uCorrA: { value: 0 },
@@ -133,7 +133,7 @@ export function RfSphere({ tier }: Props) {
   });
 
   return (
-    <group rotation={[0.35, 0, 0]}>
+    <group rotation={[0.35, 0, 0]} scale={0.82}>
       {/* Базовая сфера с fresnel-обводкой */}
       <mesh ref={rimRef}>
         <sphereGeometry args={[1.0, 48, 48]} />
