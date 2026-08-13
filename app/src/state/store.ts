@@ -172,6 +172,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       gClient.onTelemetry = (t) => {
         set({ telemFreq: t.freq, telemLock: t.lock === 1, corridorRunning: true });
       };
+      gClient.onEngineEvent = (e) => {
+        pushLog("sys", `engine event: ${e.event}`);
+        if (e.event === "GLIDE DONE") {
+          // GLIDE — одноразовый: по завершении движок сам останавливается
+          set({ corridorRunning: false, telemFreq: null });
+        }
+      };
       gClient.onStateChange = (st, detail) => {
         set({ transportState: st, transportDetail: detail });
         pushLog("sys", `transport: ${st}${detail ? ` (${detail})` : ""}`);

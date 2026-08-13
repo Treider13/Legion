@@ -30,7 +30,6 @@ static WebServer s_http(80);
 static HTTPUpdateServer s_ota;  // OTA: POST /update (firmware.bin) — фаза 9
 static WebsocketsServer s_ws;
 static CmdServer* s_cmd = nullptr;
-static AppState* s_state = nullptr;
 
 // --- Print-адаптер: ответы команд в WS-клиента ------------------------------
 class WSPrint : public Print {
@@ -95,7 +94,7 @@ static void startWifi() {
 }
 
 void net_init(AppState& state, CmdServer& cmd) {
-  s_state = &state;
+  (void)state;  // зарезервировано под будущие команды; сейчас не используется
   s_cmd = &cmd;
 
   startWifi();

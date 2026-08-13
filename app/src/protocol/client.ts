@@ -5,12 +5,18 @@
 // ============================================================================
 import type { Transport } from "../transport/types";
 
-/** Телеметрия коридора (прошивка шлёт 10 Гц в режиме SWEEP/HOP) */
+/** Телеметрия коридора (прошивка шлёт 10 Гц в режиме SWEEP/HOP/...) */
 export interface TelemetryLine {
   t: number;
   freq: number;
   lock: number;
-  mode: "SWEEP" | "HOP";
+  mode: "SWEEP" | "HOP" | "CHIRP" | "GLIDE" | "FM_SIN" | "FM_TRI" | "FM_RAND";
+}
+
+/** Событие движка (напр. завершение GLIDE) — без поля freq */
+export interface EngineEvent {
+  t: number;
+  event: string;  // напр. "GLIDE DONE"
 }
 
 export interface CmdResult {
@@ -45,6 +51,8 @@ export class LegionClient {
   onRawLine: ((line: string) => void) | null = null;
   /** Телеметрия коридора (JSON с полем "t") — приходит незапрошенной */
   onTelemetry: ((t: TelemetryLine) => void) | null = null;
+  /** События движка (GLIDE DONE и пр.) */
+  onEngineEvent: ((e: EngineEvent) => void) | null = null;
   /** Состояние транспорта */
   onStateChange:
     | ((state: import("../transport/types").TransportState, detail?: string) => void)
@@ -52,10 +60,15 @@ export class LegionClient {
 
   private dispatch(line: string): void {
     this.onRawLine?.(line);
-    // Телеметрия: JSON с маркером "t" — не является ответом на команду
+    // Телеметрия/события: JSON с маркером "t" — не ответ на команду
     if (line.startsWith("{") && line.includes("\"t\":")) {
       try {
-        this.onTelemetry?.(JSON.parse(line) as TelemetryLine);
+        const j = JSON.parse(line);
+        if (typeof j.freq === "number") {
+          this.onTelemetry?.(j as TelemetryLine);
+        } else if (typeof j.event === "string") {
+          this.onEngineEvent?.(j as EngineEvent);  // напр. GLIDE DONE
+        }
       } catch {
         /* повреждённая телеметрия — пропускаем */
       }

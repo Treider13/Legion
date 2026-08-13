@@ -1,6 +1,9 @@
 // ============================================================================
-// LEGION — ESP32 → ADF4351 RF synthesizer controller
-// Фаза 1: драйвер ADF4351 + freq_planner + UART-протокол + SELFTEST.
+// LEGION — ESP32 → ADF4351 RF synthesizer controller (финальная сборка).
+// Подсистемы: драйвер ADF4351 (R5→R0, SFR bit-bang), freq_planner, synth
+// (recursive mutex), sweep_engine (SWEEP/HOP/CHIRP/GLIDE/FM), cmd_server
+// (UART+WS+BLE), storage (NVS), net_server (WiFi/WS/HTTP/OTA), ble_server,
+// attenuator (PE43702), selftest. Платы: classic/S3/S2/C3/C6/H2.
 // ============================================================================
 #include <Arduino.h>
 
