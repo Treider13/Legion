@@ -110,8 +110,10 @@ static void sweep_task(void*) {
         ++glide_step;
         if (glide_step >= total) {
           corridor_apply_fast(cfg.f2_hz);
-          s_active = false;  // авто-стоп в конце глайда
+          serial_lock();
           s_telem->println(F("{\"t\":0,\"event\":\"GLIDE DONE\"}"));
+          serial_unlock();
+          corridor_stop();  // полный стоп: флаг + MTLD off (не просто флаг)
           break;
         }
         f = engine_glide_at(cfg.f1_hz, cfg.f2_hz, glide_step, total);
@@ -145,13 +147,20 @@ static void sweep_task(void*) {
 static void telem_task(void*) {
   for (;;) {
     if (s_active && s_telem) {
+      // Чтение 64-битной частоты и режима под мьютексом (анти-torn-read)
+      xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
+      const uint64_t cur = s_cur_hz;
+      const CorridorMode mode = s_cfg.mode;
+      xSemaphoreGive(s_cfg_mtx);
       // JSON-телеметрия 10 Гц (поле "t" — маркер телеметрии для клиента)
       char line[96];
       snprintf(line, sizeof(line),
                "{\"t\":%lu,\"freq\":%.6f,\"lock\":%d,\"mode\":\"%s\"}",
-               (unsigned long)millis(), s_cur_hz / 1e6,
-               synth_driver().readLock() ? 1 : 0, mode_name(s_cfg.mode));
-      s_telem->println(line);   // UART
+               (unsigned long)millis(), cur / 1e6,
+               synth_driver().readLock() ? 1 : 0, mode_name(mode));
+      serial_lock();            // UART под мьютексом: нет перемешивания с ответами
+      s_telem->println(line);
+      serial_unlock();
       net_broadcast(line);      // WS-клиенты (на H2 — no-op)
       ble_broadcast(line);      // BLE notify (на S2 — no-op)
     }
