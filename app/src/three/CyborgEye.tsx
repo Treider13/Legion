@@ -8,7 +8,7 @@
 // свечения и глитчей — до «СТОП».
 // ============================================================================
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import { rfVisual } from "./rfVisual";
@@ -471,6 +471,7 @@ function disposeTree(root: THREE.Object3D) {
 export function CyborgEye({ tier }: Props) {
   const parts = useMemo(() => buildEye(tier), [tier]);
   useEffect(() => () => disposeTree(parts.root), [parts]);
+  const gl = useThree((s) => s.gl);
 
   const st = useRef({
     gaze: { yaw: 0, pitch: 0, tYaw: 0, tPitch: 0, next: 1.5 },
@@ -478,6 +479,23 @@ export function CyborgEye({ tier }: Props) {
     glitch: { level: 0, next: 2.5, until: 0 },
     scan: { t: -1, next: 3.5 },
   });
+
+  // Курсор в координатах canvas (слушаем window: глаз следит за мышью,
+  // даже когда она над панелями консоли ниже hero)
+  const cursor = useRef({ x: 0, y: 0, has: false });
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const r = gl.domElement.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      const nx = ((e.clientX - r.left) / r.width) * 2 - 1;
+      const ny = -(((e.clientY - r.top) / r.height) * 2 - 1);
+      cursor.current.x = THREE.MathUtils.clamp(nx, -1.3, 1.3);
+      cursor.current.y = THREE.MathUtils.clamp(ny, -1.6, 1.2);
+      cursor.current.has = true;
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => window.removeEventListener("pointermove", onMove);
+  }, [gl]);
 
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime;
@@ -490,15 +508,25 @@ export function CyborgEye({ tier }: Props) {
     // пульс: в бою — учащённый «сердечный ритм»
     const pulse = 0.5 + 0.5 * Math.sin(t * (alert ? 5.2 : 2.1)) * (0.7 + 0.3 * Math.sin(t * 0.37));
 
-    // вращение вокруг зрительной оси + саккады (в бою — резче и шире)
+    // вращение вокруг зрительной оси + взгляд:
+    // покой — следит за курсором мыши; бой — резкие случайные саккады
     P.spin.rotation.z = t * (alert ? 0.35 : 0.12);
-    if (t > s.gaze.next) {
-      const range = alert ? 0.42 : 0.3;
-      s.gaze.tYaw = (Math.random() * 2 - 1) * range;
-      s.gaze.tPitch = (Math.random() * 2 - 1) * range * 0.6;
-      s.gaze.next = t + (alert ? 0.22 + Math.random() * 0.35 : 1.8 + Math.random() * 2.6);
+    if (alert) {
+      if (t > s.gaze.next) {
+        s.gaze.tYaw = (Math.random() * 2 - 1) * 0.42;
+        s.gaze.tPitch = (Math.random() * 2 - 1) * 0.25;
+        s.gaze.next = t + 0.22 + Math.random() * 0.35;
+      }
+    } else if (cursor.current.has) {
+      s.gaze.tYaw = cursor.current.x * 0.5;
+      s.gaze.tPitch = cursor.current.y * 0.36;
+      s.gaze.next = t; // после боя сразу возвращаемся к слежению
+    } else if (t > s.gaze.next) {
+      s.gaze.tYaw = (Math.random() * 2 - 1) * 0.3;
+      s.gaze.tPitch = (Math.random() * 2 - 1) * 0.18;
+      s.gaze.next = t + 1.8 + Math.random() * 2.6;
     }
-    const gk = k(alert ? 26 : 3.2);
+    const gk = k(alert ? 26 : cursor.current.has ? 7 : 3.2);
     s.gaze.yaw += (s.gaze.tYaw - s.gaze.yaw) * gk;
     s.gaze.pitch += (s.gaze.tPitch - s.gaze.pitch) * gk;
     const tremor = alert ? 0.02 : 0.01;

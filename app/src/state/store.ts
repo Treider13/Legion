@@ -84,6 +84,10 @@ export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
 
+  // Троттлинг телеметрии: прошивка шлёт до ~100 строк/с, а каждый set()
+  // перерисовывает панели — коалесцируем до ~15 Гц (глазу и маркеру хватает).
+  let telemLastMs = 0;
+
   const parseLockFrom = (line: string): boolean | null => {
     const m = /LOCK=(\d)/.exec(line);
     return m ? m[1] === "1" : null;
@@ -170,7 +174,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (lock !== null) set({ lock });
       };
       gClient.onTelemetry = (t) => {
-        set({ telemFreq: t.freq, telemLock: t.lock === 1, corridorRunning: true });
+        const now = performance.now();
+        if (now - telemLastMs < 66) return;
+        telemLastMs = now;
+        if (get().corridorRunning) {
+          set({ telemFreq: t.freq, telemLock: t.lock === 1 });
+        } else {
+          set({ telemFreq: t.freq, telemLock: t.lock === 1, corridorRunning: true });
+        }
       };
       gClient.onEngineEvent = (e) => {
         pushLog("sys", `engine event: ${e.event}`);
