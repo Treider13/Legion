@@ -50,6 +50,7 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len);
 void corridor_stop();
 bool corridor_active();
 CorridorMode corridor_mode();
+const char* corridor_mode_name(CorridorMode m);  // для STATUS?/телеметрии
 uint64_t corridor_current_hz();
 const CorridorConfig& corridor_config();
 

@@ -48,7 +48,8 @@ PlanStatus corridor_apply_fast(uint64_t freq_hz) {
   return st;
 }
 
-static const char* mode_name(CorridorMode m) {
+const char* corridor_mode_name(CorridorMode m) {  // публичная (cmdStatus)
+
   switch (m) {
     case CorridorMode::SWEEP: return "SWEEP";
     case CorridorMode::HOP: return "HOP";
@@ -157,7 +158,7 @@ static void telem_task(void*) {
       snprintf(line, sizeof(line),
                "{\"t\":%lu,\"freq\":%.6f,\"lock\":%d,\"mode\":\"%s\"}",
                (unsigned long)millis(), cur / 1e6,
-               synth_driver().readLock() ? 1 : 0, mode_name(mode));
+                   synth_driver().readLock() ? 1 : 0, corridor_mode_name(mode));
       serial_lock();            // UART под мьютексом: нет перемешивания с ответами
       s_telem->println(line);
       serial_unlock();

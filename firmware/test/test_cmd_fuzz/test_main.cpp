@@ -67,6 +67,18 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t n) {
 void corridor_stop() { g_corr_active = false; }
 bool corridor_active() { return g_corr_active; }
 CorridorMode corridor_mode() { return g_corr_cfg.mode; }
+const char* corridor_mode_name(CorridorMode m) {
+  switch (m) {
+    case CorridorMode::SWEEP: return "SWEEP";
+    case CorridorMode::HOP: return "HOP";
+    case CorridorMode::CHIRP: return "CHIRP";
+    case CorridorMode::GLIDE: return "GLIDE";
+    case CorridorMode::FM_SIN: return "FM_SIN";
+    case CorridorMode::FM_TRI: return "FM_TRI";
+    case CorridorMode::FM_RAND: return "FM_RAND";
+    default: return "NONE";
+  }
+}
 uint64_t corridor_current_hz() { return 2400000000ULL; }
 const CorridorConfig& corridor_config() { return g_corr_cfg; }
 

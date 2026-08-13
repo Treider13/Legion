@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <math.h>  // isfinite — защита от NaN/inf (ревизия п.8)
+
 #include "net_server.h"
 #include "selftest.h"
 #include "serial_sync.h"
@@ -16,6 +18,13 @@
 #include "synth.h"
 
 namespace legion {
+
+// strtod("NaN")/("inf") проходят молча → NaN пробивает все сравнения.
+// Единая проверка конечности для всех числовых аргументов (ревизия п.8).
+static bool parse_finite(const char* s, double& out) {
+  out = strtod(s, nullptr);
+  return isfinite(out) != 0;
+}
 
 PlanStatus apply_frequency(AppState& s, uint64_t freq_hz, bool& lock) {
   // Ручная установка во время коридора = остановка коридора (политика)
@@ -152,8 +161,8 @@ void CmdServer::cmdSetFreq(char* arg, Print& out) {
     out.println(F("ERR SYNTAX freq required"));
     return;
   }
-  const double mhz = strtod(arg, nullptr);
-  if (mhz <= 0.0) {
+  double mhz;
+  if (!parse_finite(arg, mhz) || mhz <= 0.0) {  // NaN/inf отсекаем
     out.println(F("ERR SYNTAX bad freq"));
     return;
   }
@@ -253,8 +262,13 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
     out.println(F("ERR SYNTAX f1 f2 required"));
     return;
   }
-  cfg.f1_hz = (uint64_t)(strtod(f1s, nullptr) * 1e6 + 0.5);
-  cfg.f2_hz = (uint64_t)(strtod(f2s, nullptr) * 1e6 + 0.5);
+  double f1d, f2d;
+  if (!parse_finite(f1s, f1d) || !parse_finite(f2s, f2d)) {
+    out.println(F("ERR SYNTAX bad f1/f2"));
+    return;
+  }
+  cfg.f1_hz = (uint64_t)(f1d * 1e6 + 0.5);
+  cfg.f2_hz = (uint64_t)(f2d * 1e6 + 0.5);
   cfg.dwell_ms = 10;  // дефолт (практика joseluu: 10 мс стабильно, E4)
   // Шаг: SWEEP/HOP — в кГц (обратная совместимость), CHIRP — в Гц
   cfg.step_hz = (mode == CorridorMode::CHIRP) ? 100000 : 1000000;
@@ -298,10 +312,15 @@ void CmdServer::cmdGlide(char* arg, Print& out) {
     out.println(F("ERR SYNTAX GLIDE <targetMHz> <durationMs>"));
     return;
   }
+  double tgd;
+  if (!parse_finite(tg, tgd)) {
+    out.println(F("ERR SYNTAX bad target"));
+    return;
+  }
   CorridorConfig cfg;
   cfg.mode = CorridorMode::GLIDE;
   cfg.f1_hz = corridor_active() ? corridor_current_hz() : _s->freq_hz;
-  cfg.f2_hz = (uint64_t)(strtod(tg, nullptr) * 1e6 + 0.5);
+  cfg.f2_hz = (uint64_t)(tgd * 1e6 + 0.5);
   cfg.dwell_ms = (uint32_t)strtoul(du, nullptr, 10);
 
   char err[64];
@@ -355,9 +374,11 @@ void CmdServer::cmdFm(char* arg, Print& out) {
       break;
     }
     if (strcasecmp(kv, "CENTER") == 0) {
-      cfg.f1_hz = (uint64_t)(strtod(val, nullptr) * 1e6 + 0.5);
+      double v;
+      if (parse_finite(val, v)) cfg.f1_hz = (uint64_t)(v * 1e6 + 0.5);
     } else if (strcasecmp(kv, "DEPTH") == 0) {
-      cfg.fm_depth_hz = strtod(val, nullptr) * 1000.0;  // кГц → Гц
+      double v;
+      if (parse_finite(val, v)) cfg.fm_depth_hz = v * 1000.0;  // кГц → Гц
     } else if (strcasecmp(kv, "RATE") == 0) {
       cfg.dwell_ms = (uint32_t)strtoul(val, nullptr, 10);
     } else if (strcasecmp(kv, "SEED") == 0) {
@@ -379,7 +400,9 @@ void CmdServer::cmdStatus(Print& out) {
   out.print(_s->freq_hz / 1e6, 6);
   out.print(F(",\"mode\":\""));
   if (corridor_active()) {
-    out.print(corridor_mode() == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+    // Все режимы по имени (было: только SWEEP/HOP — CHIRP/GLIDE/FM
+    // ошибочно показывались как HOP; найдено при ревизии, п.8)
+    out.print(corridor_mode_name(corridor_mode()));
   } else {
     out.print(F("MANUAL"));
   }
@@ -411,7 +434,11 @@ void CmdServer::cmdRegs(Print& out) {
 }
 
 void CmdServer::cmdCalRef(char* arg, Print& out) {
-  const double ppm = strtod(arg, nullptr);
+  double ppm;
+  if (!parse_finite(arg, ppm)) {
+    out.println(F("ERR SYNTAX bad ppm"));
+    return;
+  }
   _s->cfg.ref_ppm_milli = (int32_t)(ppm * 1000.0);
   storage_save_ppm(_s->cfg.ref_ppm_milli);
   out.print(F("OK CAL REF "));
@@ -427,7 +454,12 @@ void CmdServer::cmdSetAtt(char* arg, Print& out) {
     out.println(F("ERR SYNTAX att required"));
     return;
   }
-  const float db = (float)strtod(arg, nullptr);
+  double dbd;
+  if (!parse_finite(arg, dbd)) {
+    out.println(F("ERR SYNTAX bad att"));
+    return;
+  }
+  const float db = (float)dbd;
   if (db < 0.0f || db > 31.75f) {
     out.println(F("ERR RANGE att 0-31.75"));
     return;
