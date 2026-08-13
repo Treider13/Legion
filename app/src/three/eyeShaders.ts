@@ -1,13 +1,13 @@
 // ============================================================================
-// LEGION — GLSL «живого» биомеханического глаза (hero, фаза «глаз киборга»).
-// Сфера-глазное яблоко: склера с сосудами, радужка (крипты/волокна),
-// зрачок, роговичный блик (влажность), лимбальное кибер-кольцо, веки (моргание).
-// uAlert 0→1: покой (бирюза) → боевой (красный, злой). uBlink: моргание.
+// LEGION — GLSL «живого» биомеханического глаза (hero). Цель — фотореализм,
+// близкий к концепту: радужка со светящимися схемо-дорожками (PCB), зрачок —
+// механическая диафрагма, сосуды на белке, влажные роговичные блики.
+// uAlert 0→1: покой (бирюза) → боевой (красный). uBlink — моргание.
 // ============================================================================
 
-export const EYE_IRIS = [0.16, 0.72, 0.7]; // бирюза (покой)
-export const EYE_ALERT = [0.95, 0.12, 0.08]; // красный (боевой)
-export const EYE_SCLERA = [0.74, 0.75, 0.78]; // приглушённый белок (ниже порога Bloom)
+export const EYE_IRIS = [0.1, 0.6, 0.56]; // бирюза (покой)
+export const EYE_ALERT = [0.85, 0.1, 0.07]; // красный (боевой)
+export const EYE_SCLERA = [0.72, 0.73, 0.76];
 
 export const eyeVert = /* glsl */ `
   varying vec3 vLocal;
@@ -24,6 +24,7 @@ export const eyeVert = /* glsl */ `
 
 export const eyeFrag = /* glsl */ `
   precision highp float;
+  #define PI 3.141592653589793
   uniform float uTime;
   uniform float uAlert;
   uniform float uBlink;
@@ -45,8 +46,14 @@ export const eyeFrag = /* glsl */ `
   }
   float fbm(vec2 p){
     float v = 0.0, a = 0.5;
-    for (int i = 0; i < 4; i++){ v += a * vnoise(p); p *= 2.0; a *= 0.5; }
+    for (int i = 0; i < 5; i++){ v += a * vnoise(p); p *= 2.0; a *= 0.5; }
     return v;
+  }
+  // Сегментированное кольцо (пунктир) — элемент «печатной платы»
+  float ringLine(float r, float R, float a01, float seg){
+    float band = smoothstep(0.014, 0.0, abs(r - R));
+    float dash = step(0.4, fract(a01 * seg));
+    return band * dash;
   }
 
   void main(){
@@ -54,66 +61,94 @@ export const eyeFrag = /* glsl */ `
     vec3 V = normalize(-vView);
     float ndv = max(dot(N, V), 0.0);
 
-    float polar = acos(clamp(vLocal.z, -1.0, 1.0)); // 0 в центре передней части
+    float polar = acos(clamp(vLocal.z, -1.0, 1.0));
     float ang = atan(vLocal.y, vLocal.x);
-    float irisEdge = 0.60;
-    float r = polar / irisEdge; // 0..1 внутри радужки
+    float a01 = (ang + PI) / (2.0 * PI);
+    float irisEdge = 0.62;
+    float r = polar / irisEdge;
 
-    vec3 irisBase = mix(uIris, uAlertCol, uAlert);
+    vec3 accent = mix(uIris, uAlertCol, uAlert);
+    vec3 circuitCol = mix(vec3(0.3, 1.0, 0.9), vec3(1.0, 0.25, 0.18), uAlert);
 
-    // --- склера + сосуды ---
+    // ---------------- СКЛЕРА (белок) + сосуды ----------------
     vec3 sclera = uSclera;
-    float veinN = fbm(vec2(ang * 2.5, polar * 5.0) + 7.0);
-    float veinMask = smoothstep(0.62, 0.95, veinN) * smoothstep(irisEdge * 1.02, 1.4, polar);
-    sclera = mix(sclera, vec3(0.6, 0.11, 0.09), veinMask * (0.5 + 0.4 * uAlert));
-    sclera *= 0.72 + 0.28 * ndv;
+    float vein = smoothstep(0.58, 0.96, fbm(vec2(ang * 3.0, polar * 7.0) + 3.0));
+    vein *= smoothstep(irisEdge * 1.03, 1.5, polar);
+    sclera = mix(sclera, vec3(0.6, 0.12, 0.1), vein * (0.55 + 0.4 * uAlert));
+    sclera *= 0.68 + 0.32 * ndv;
+    // мягкое затемнение к краям белка (посадка в веки/оправу)
+    sclera *= 1.0 - 0.5 * smoothstep(1.1, 1.7, polar);
 
     vec3 col;
     if (r >= 1.0) {
       col = sclera;
     } else {
-      // радужка: крипты + радиальные волокна
-      float crypt = fbm(vLocal.xy * 40.0 + uTime * 0.02);
-      float streak = 0.5 + 0.5 * sin(ang * 70.0 + fbm(vLocal.xy * 10.0) * 8.0);
-      float tex = mix(0.72, 1.12, crypt) * mix(0.78, 1.08, streak);
-      vec3 iris = irisBase * tex;
-      iris *= mix(1.25, 0.42, smoothstep(0.15, 1.0, r));       // ярче в середине
-      iris = mix(iris, iris * 0.14, smoothstep(0.86, 1.0, r)); // тёмное лимбальное кольцо
-      float glow = smoothstep(uPupil + 0.12, uPupil, r);       // внутреннее свечение у зрачка
-      iris += irisBase * glow * (0.4 + 1.3 * uAlert);
-      float pin = smoothstep(uPupil, uPupil - 0.015, r);       // зрачок
-      col = mix(iris, vec3(0.015), pin);
-      col *= 0.75 + 0.25 * ndv;
-      col = mix(col, sclera, smoothstep(0.97, 1.03, r));       // плавный лимб
+      // базовая радужка: тёмный лимб → яркая середина, волокна
+      float fib = fbm(vLocal.xy * 60.0);
+      float fibStreak = 0.5 + 0.5 * sin(ang * 90.0 + fbm(vLocal.xy * 12.0) * 10.0);
+      vec3 iris = mix(accent * 1.15, accent * 0.2, smoothstep(0.12, 1.0, r));
+      iris *= mix(0.72, 1.2, fib) * mix(0.82, 1.06, fibStreak);
+      // collarette (воротничок радужки)
+      iris += accent * 0.4 * smoothstep(0.05, 0.0, abs(r - 0.42));
+      // тёмное лимбальное кольцо
+      iris = mix(iris, iris * 0.1, smoothstep(0.85, 1.0, r));
+
+      // ---------- СХЕМО-ДОРОЖКИ (PCB) ----------
+      float circuit = 0.0;
+      circuit += ringLine(r, 0.30, a01, 24.0);
+      circuit += ringLine(r, 0.50, a01, 40.0);
+      circuit += ringLine(r, 0.66, a01, 52.0);
+      circuit += ringLine(r, 0.80, a01, 64.0);
+      // радиальные трассы в средней зоне
+      float sect = abs(fract(a01 * 30.0) - 0.5);
+      float radial = smoothstep(0.05, 0.0, sect) * step(0.28, r) * step(r, 0.84);
+      circuit += radial * 0.9;
+      // узлы (светящиеся точки на пересечениях)
+      float nodeR = smoothstep(0.03, 0.0, abs(r - 0.50));
+      float nodeA = step(0.9, fract(a01 * 20.0));
+      circuit += nodeR * nodeA * 1.4;
+      // «течение энергии» по дорожкам
+      float flow = 0.55 + 0.45 * sin(uTime * 3.0 - r * 22.0 + ang * 2.0);
+      iris += circuitCol * circuit * (0.7 + 0.5 * flow) * 1.5;
+
+      // ---------- ЗРАЧОК-ДИАФРАГМА (механическая) ----------
+      float hexR = uPupil * (0.9 + 0.1 * cos(6.0 * ang));
+      float pupilMask = smoothstep(hexR, hexR - 0.02, r);       // 1 внутри
+      float rimGlow = smoothstep(0.045, 0.0, abs(r - hexR));    // кольцо по краю
+      float spokes = smoothstep(0.028, 0.0, abs(fract(ang / (PI / 3.0)) - 0.5))
+                     * step(hexR, r) * step(r, hexR * 1.6);     // лепестки диафрагмы
+      vec3 metal = vec3(0.32, 0.37, 0.4);
+      col = mix(iris, vec3(0.01), pupilMask);
+      col = mix(col, metal, clamp(rimGlow * 0.5 + spokes * 0.45, 0.0, 1.0));
+      col += circuitCol * rimGlow * 0.7;
+
+      col *= 0.8 + 0.2 * ndv;
+      col = mix(col, sclera, smoothstep(0.98, 1.04, r)); // плавный лимб
     }
 
-    // --- кибер-кольцо на лимбе + насечки ---
-    float ring = smoothstep(0.03, 0.0, abs(r - 0.92)) * step(r, 1.06);
-    float ticks = 0.55 + 0.45 * sin(ang * 48.0);
-    col += irisBase * ring * (0.55 + 1.1 * uAlert) * (0.6 + 0.4 * ticks);
+    // внешнее кибер-кольцо (металл оправы у лимба)
+    float lring = smoothstep(0.02, 0.0, abs(r - 0.99)) * step(r, 1.06);
+    col += circuitCol * lring * 0.5;
 
-    // --- роговичный блик (влажность) ---
-    float corneaMask = smoothstep(0.95, 0.15, polar);
-    vec3 L = normalize(vec3(0.35, 0.55, 0.85));
-    float spec = pow(max(dot(N, normalize(L + V)), 0.0), 90.0);
-    col += vec3(1.0) * spec * corneaMask * 0.95;
-    vec3 L2 = normalize(vec3(-0.3, -0.18, 0.9));
-    float spec2 = pow(max(dot(N, normalize(L2 + V)), 0.0), 140.0);
-    col += vec3(0.85, 0.95, 1.0) * spec2 * corneaMask * 0.5;
+    // ---------------- РОГОВИЦА: лёгкий подсвет (основной блик даёт 3D-купол) ----
+    float corneaMask = smoothstep(1.05, 0.12, polar);
+    vec3 Lk = normalize(vec3(0.45, 0.6, 0.85));
+    float s1 = pow(max(dot(N, normalize(Lk + V)), 0.0), 220.0);
+    col += vec3(1.0) * s1 * corneaMask * 0.4;
+    float s2 = pow(max(dot(N, normalize(Lk + V)), 0.0), 10.0);
+    col += vec3(0.55, 0.72, 0.8) * s2 * corneaMask * 0.1;
 
-    // --- fresnel-обводка ---
+    // fresnel-обводка
     float fres = pow(1.0 - ndv, 3.0);
-    col += irisBase * fres * (0.12 + 0.5 * uAlert);
+    col += accent * fres * (0.1 + 0.5 * uAlert);
 
-    // --- «злой» пульс в боевом режиме ---
-    col *= mix(1.0, 0.9 + 0.14 * sin(uTime * 12.0), uAlert);
-    col = mix(col, col * vec3(1.15, 0.82, 0.82), uAlert * 0.3);
+    // «злой» пульс в боевом режиме
+    col *= mix(1.0, 0.9 + 0.12 * sin(uTime * 11.0), uAlert);
 
-    // --- моргание: веки в экранном (view) пространстве ---
+    // моргание: веки в экранном пространстве
     float dy = abs(vView.y - uEyeCenterView.y);
-    float open = mix(1.35, 0.0, uBlink);
-    float covered = smoothstep(open, open + 0.04, dy);
-    col = mix(col, vec3(0.02, 0.02, 0.025), covered);
+    float open = mix(1.4, 0.0, uBlink);
+    col = mix(col, vec3(0.02, 0.02, 0.025), smoothstep(open, open + 0.04, dy));
 
     gl_FragColor = vec4(col, 1.0);
   }
