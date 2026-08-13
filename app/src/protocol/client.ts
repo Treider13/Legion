@@ -107,6 +107,14 @@ export class LegionClient {
   setFreq(mhz: number) { return this.cmd(`SET FREQ ${mhz.toFixed(6)}`); }
   setPower(dbm: number) { return this.cmd(`SET POWER ${dbm}`); }
   setAtt(db: number) { return this.cmd(`SET ATT ${db.toFixed(2)}`); }
+  // Выравнивание уровня через PE43702 (фаза 10)
+  setLevel(dbm: number) { return this.cmd(`SET LEVEL ${dbm.toFixed(2)}`); }
+  levelOff() { return this.cmd("SET LEVEL OFF"); }
+  calLevel(freqMhz: number, dbm: number) {
+    return this.cmd(`CAL LEVEL ${freqMhz.toFixed(3)} ${dbm.toFixed(2)}`);
+  }
+  calLevelClear() { return this.cmd("CAL LEVEL CLEAR"); }
+  levelStatus() { return this.cmd("LEVEL?"); }
   rf(on: boolean) { return this.cmd(on ? "RF ON" : "RF OFF"); }
   status() { return this.cmd("STATUS?"); }
   regs() { return this.cmd("REGS?"); }

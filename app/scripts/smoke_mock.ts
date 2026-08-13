@@ -91,6 +91,37 @@ async function main(): Promise<void> {
   r = await client.calRef(-1.5);
   check("CAL REF -1.5", r.ok && r.statusLine.includes("-1.500"), r.statusLine);
 
+  // --- Выравнивание уровня PE43702 (фаза 10) ---
+  // Калибровка: две точки (2400→+4 дБм, 4400→−1 дБм)
+  r = await client.calLevel(2400, 4);
+  check("CAL LEVEL 2400 +4", r.ok && r.statusLine.includes("n=1"), r.statusLine);
+  r = await client.calLevel(4400, -1);
+  check("CAL LEVEL 4400 -1", r.ok && r.statusLine.includes("n=2"), r.statusLine);
+
+  // Включаем выравнивание на цель −1 дБм → на 2475 МГц (≈+4) ослабление ~5 дБ
+  await client.setFreq(2475);
+  r = await client.setLevel(-1);
+  check("SET LEVEL -1 → ATT применён", r.ok && r.statusLine.includes("ATT="), r.statusLine);
+
+  // LEVEL? → JSON с включённым выравниванием и двумя точками
+  r = await client.levelStatus();
+  let lvlOk = false;
+  try {
+    const j = JSON.parse(r.statusLine);
+    lvlOk = j.enabled === 1 && Array.isArray(j.points) && j.points.length === 2;
+  } catch {
+    /* noop */
+  }
+  check("LEVEL? JSON (enabled, 2 точки)", r.ok && lvlOk, r.statusLine);
+
+  // Выключение
+  r = await client.levelOff();
+  check("SET LEVEL OFF", r.ok && r.statusLine === "OK LEVEL OFF", r.statusLine);
+
+  // Очистка таблицы
+  r = await client.calLevelClear();
+  check("CAL LEVEL CLEAR", r.ok && r.statusLine.includes("n=0"), r.statusLine);
+
   // Неизвестная команда → ERR SYNTAX
   r = await client.cmd("FOOBAR");
   check("unknown → ERR SYNTAX", !r.ok && r.statusLine.startsWith("ERR SYNTAX"), r.statusLine);

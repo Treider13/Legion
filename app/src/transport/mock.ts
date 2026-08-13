@@ -18,6 +18,10 @@ export class MockTransport implements Transport {
   private power = 5;
   private rfOn = false;
   private ppm = 0;
+  // Выравнивание уровня (фаза 10): калибровочная таблица + цель
+  private levelPts: Array<{ f: number; dbm: number }> = [];
+  private levelOn = false;
+  private levelTarget = 0;
   // Коридор (фаза 3)
   private corrActive = false;
   private corrMode: "SWEEP" | "HOP" | "CHIRP" = "SWEEP";
@@ -79,6 +83,52 @@ export class MockTransport implements Transport {
       } else {
         this.reply(`OK ATT=${(Math.round(db / 0.25) * 0.25).toFixed(2)} dB`);
       }
+    } else if (upper.startsWith("SET LEVEL")) {
+      const a = t.split(/\s+/)[2] ?? "";
+      if (a.toUpperCase() === "OFF") {
+        this.levelOn = false;
+        this.reply("OK LEVEL OFF");
+      } else {
+        const dbm = parseFloat(a);
+        if (!Number.isFinite(dbm)) {
+          this.reply("ERR SYNTAX bad level dBm");
+        } else {
+          this.levelOn = true;
+          this.levelTarget = dbm;
+          if (this.levelPts.length > 0) {
+            const att = this.levelAtten(this.freqMhz);
+            this.reply(`OK LEVEL=${dbm.toFixed(2)} ATT=${att.toFixed(2)} dB`);
+          } else {
+            this.reply(`OK LEVEL=${dbm.toFixed(2)} (no cal — add points via CAL LEVEL)`);
+          }
+        }
+      }
+    } else if (upper.startsWith("CAL LEVEL")) {
+      const parts = t.split(/\s+/);
+      if ((parts[2] ?? "").toUpperCase() === "CLEAR") {
+        this.levelPts = [];
+        this.reply("OK CAL LEVEL CLEAR n=0");
+      } else {
+        const f = parseFloat(parts[2] ?? "NaN");
+        const dbm = parseFloat(parts[3] ?? "NaN");
+        if (!Number.isFinite(f) || !Number.isFinite(dbm) || f <= 0) {
+          this.reply("ERR SYNTAX CAL LEVEL <freqMHz> <dBm>|CLEAR");
+        } else {
+          const i = this.levelPts.findIndex((p) => Math.abs(p.f - f) < 1e-6);
+          if (i >= 0) this.levelPts[i].dbm = dbm;
+          else this.levelPts.push({ f, dbm });
+          this.levelPts.sort((a, b) => a.f - b.f);
+          this.reply(`OK CAL LEVEL ${f.toFixed(3)} ${dbm.toFixed(2)} n=${this.levelPts.length}`);
+        }
+      }
+    } else if (upper === "LEVEL?") {
+      this.reply(
+        JSON.stringify({
+          enabled: this.levelOn ? 1 : 0,
+          target: this.levelTarget,
+          points: this.levelPts.map((p) => [p.f, p.dbm]),
+        }),
+      );
     } else if (upper === "RF ON" || upper === "RF OFF") {
       this.rfOn = upper === "RF ON";
       this.reply(`OK RF ${this.rfOn ? "ON" : "OFF"}`);
@@ -221,6 +271,30 @@ export class MockTransport implements Transport {
         }),
       );
     }, dwellClamped);
+  }
+
+  // Выравнивание уровня: интерполяция измеренного + требуемое затухание
+  // (зеркало leveling_math.h; PE43702 только ослабляет, квант 0.25 дБ).
+  private levelAtten(freqMhz: number): number {
+    const pts = this.levelPts;
+    if (pts.length === 0) return 0;
+    let measured: number;
+    if (freqMhz <= pts[0].f) measured = pts[0].dbm;
+    else if (freqMhz >= pts[pts.length - 1].f) measured = pts[pts.length - 1].dbm;
+    else {
+      measured = pts[pts.length - 1].dbm;
+      for (let i = 1; i < pts.length; i++) {
+        if (freqMhz <= pts[i].f) {
+          const t = (freqMhz - pts[i - 1].f) / (pts[i].f - pts[i - 1].f);
+          measured = pts[i - 1].dbm + t * (pts[i].dbm - pts[i - 1].dbm);
+          break;
+        }
+      }
+    }
+    let db = measured - this.levelTarget;
+    if (db < 0) db = 0;
+    if (db > 31.75) db = 31.75;
+    return Math.round(db / 0.25) * 0.25;
   }
 
   private stopCorridor(): void {
