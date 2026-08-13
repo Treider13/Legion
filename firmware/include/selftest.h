@@ -13,6 +13,6 @@
 
 namespace legion {
 
-void selftest_run(AppState& s, Stream& out);
+void selftest_run(AppState& s, Print& out);
 
 }  // namespace legion

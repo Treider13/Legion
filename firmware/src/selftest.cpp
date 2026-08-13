@@ -15,7 +15,7 @@ static uint32_t r2_with_mux(uint32_t r2, uint32_t mux) {
   return (r2 & ~(0x7UL << 26)) | (mux << 26);
 }
 
-void selftest_run(AppState& s, Stream& out) {
+void selftest_run(AppState& s, Print& out) {
   // Базовый R2: из текущего плана, либо свежерассчитанный на 2475 МГц
   if (!s.plan_valid) {
     bool lock;

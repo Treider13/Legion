@@ -29,18 +29,22 @@ PlanStatus apply_frequency(AppState& s, uint64_t freq_hz, bool& lock);
 class CmdServer {
  public:
   void begin(AppState& state, Stream& port);
-  void poll();  // вызывать из loop(); неблокирующий
+  void poll();  // вызывать из loop(); неблокирующий (UART)
+  // Обработка одной строки команды с выводом в произвольный канал
+  // (используется и WS-сервером — фаза 4; один парсер на все транспорты).
+  void processLine(char* line, Print& out);
 
  private:
-  void handleLine(char* line);
-  void cmdSetFreq(char* arg);
-  void cmdSetPower(char* arg);
-  void cmdRf(char* arg);
-  void cmdStatus();
-  void cmdRegs();
-  void cmdCalRef(char* arg);
-  void cmdSelftest();
-  void cmdCorridor(char* arg, CorridorMode mode);
+  void handleLine(char* line, Print& out);
+  void cmdSetFreq(char* arg, Print& out);
+  void cmdSetPower(char* arg, Print& out);
+  void cmdRf(char* arg, Print& out);
+  void cmdStatus(Print& out);
+  void cmdRegs(Print& out);
+  void cmdCalRef(char* arg, Print& out);
+  void cmdSelftest(Print& out);
+  void cmdCorridor(char* arg, CorridorMode mode, Print& out);
+  void cmdWifi(char* arg, Print& out);
 
   AppState* _s = nullptr;
   Stream* _port = nullptr;

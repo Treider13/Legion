@@ -3,6 +3,8 @@
 .pioenvs/
 .piolibdeps/
 firmware/.pio/
+# lite-UI собирается скриптом tools/build_lite_ui.sh (генерируемый артефакт)
+firmware/data/
 
 # --- Node / app ---
 node_modules/

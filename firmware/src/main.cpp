@@ -8,6 +8,8 @@
 #include "board_config.h"
 #include "board_pins.h"
 #include "cmd_server.h"
+#include "net_server.h"
+#include "storage.h"
 #include "sweep_engine.h"
 #include "synth.h"
 
@@ -35,6 +37,35 @@ void setup() {
   legion::corridor_init(g_adf, g_state.cfg, Serial);
   g_cmd.begin(g_state, Serial);
 
+  // --- NVS: восстановление состояния (автономность, паттерн joseluu) ---
+  legion::storage_init();
+  legion::PersistedState ps;
+  legion::storage_load(ps);
+  g_state.cfg.ref_ppm_milli = ps.ref_ppm_milli;
+  g_state.cfg.output_power_code = ps.power_code;
+  g_state.freq_hz = ps.freq_hz;
+  {
+    bool lock = false;
+    legion::apply_frequency(g_state, ps.freq_hz, lock);  // частота с прошлого сеанса
+    Serial.print(F("NVS restore freq="));
+    Serial.print(ps.freq_hz / 1e6, 6);
+    Serial.print(F(" LOCK="));
+    Serial.println(lock ? 1 : 0);
+  }
+  // RF on/off НЕ восстанавливаем в ON — compliance: излучение только по команде.
+  // Коридор — восстанавливаем (это и есть сценарий автономного коридора):
+  if (ps.corridor_active) {
+    char err[64];
+    if (legion::corridor_start(ps.corridor, err, sizeof(err))) {
+      Serial.println(F("NVS restore: corridor RUNNING"));
+    } else {
+      Serial.println(err);
+    }
+  }
+
+  // --- WiFi + WebSocket + HTTP (нет на H2) ---
+  legion::net_init(g_state, g_cmd);
+
   Serial.println();
   Serial.println(F("=============================================="));
   Serial.println(F(" LEGION // RF SYNTH CONTROL"));
@@ -58,4 +89,5 @@ void setup() {
 
 void loop() {
   g_cmd.poll();
+  legion::net_loop();
 }

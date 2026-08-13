@@ -7,6 +7,7 @@
 // ============================================================================
 #include "sweep_engine.h"
 
+#include "net_server.h"
 #include "synth.h"
 
 namespace legion {
@@ -90,15 +91,14 @@ static void telem_task(void*) {
   for (;;) {
     if (s_active && s_telem) {
       // JSON-телеметрия 10 Гц (поле "t" — маркер телеметрии для клиента)
-      s_telem->print(F("{\"t\":"));
-      s_telem->print(millis());
-      s_telem->print(F(",\"freq\":"));
-      s_telem->print(s_cur_hz / 1e6, 6);
-      s_telem->print(F(",\"lock\":"));
-      s_telem->print(synth_driver().readLock() ? 1 : 0);
-      s_telem->print(F(",\"mode\":\""));
-      s_telem->print(s_cfg.mode == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
-      s_telem->println(F("\"}"));
+      char line[96];
+      snprintf(line, sizeof(line),
+               "{\"t\":%lu,\"freq\":%.6f,\"lock\":%d,\"mode\":\"%s\"}",
+                   (unsigned long)millis(), s_cur_hz / 1e6,
+                   synth_driver().readLock() ? 1 : 0,
+                   s_cfg.mode == CorridorMode::SWEEP ? "SWEEP" : "HOP");
+      s_telem->println(line);   // UART
+      net_broadcast(line);      // WS-клиенты (фаза 4; на H2 — no-op)
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }

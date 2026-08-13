@@ -1,13 +1,16 @@
 // ============================================================================
-// LEGION — cmd_server: реализация. Неблокирующий посимвольный приём,
-// команды завершаются '\n'. Ответы: OK ... / ERR <code> ... / JSON.
+// LEGION — cmd_server: реализация. Неблокирующий посимвольный приём из UART
+// (poll) + канал-независимая обработка строк (processLine — для WS, фаза 4).
+// Ответы: OK ... / ERR <code> ... / JSON. Протокол: docs/protocol.md.
 // ============================================================================
 #include "cmd_server.h"
 
 #include <stdlib.h>
 #include <string.h>
 
+#include "net_server.h"
 #include "selftest.h"
+#include "storage.h"
 #include "sweep_engine.h"
 #include "synth.h"
 
@@ -26,6 +29,7 @@ PlanStatus apply_frequency(AppState& s, uint64_t freq_hz, bool& lock) {
   s.plan = plan;
   s.plan_valid = true;
   s.freq_hz = freq_hz;
+  storage_save_freq(freq_hz);  // NVS-автономность (паттерн joseluu)
   return PlanStatus::OK;
 }
 
@@ -44,7 +48,7 @@ void CmdServer::poll() {
     if (c == '\n') {
       _buf[_len] = '\0';
       if (_len > 0) {
-        handleLine(_buf);
+        processLine(_buf, *_port);
       }
       _len = 0;
       continue;
@@ -58,8 +62,9 @@ void CmdServer::poll() {
   }
 }
 
-void CmdServer::handleLine(char* line) {
-  // Разбор: COMMAND [ARGS...]
+void CmdServer::processLine(char* line, Print& out) { handleLine(line, out); }
+
+void CmdServer::handleLine(char* line, Print& out) {
   char* save = nullptr;
   char* tok = strtok_r(line, " ", &save);
   if (!tok) {
@@ -71,10 +76,10 @@ void CmdServer::handleLine(char* line) {
   }
 
   if (strcasecmp(tok, "HELLO") == 0) {
-    _port->print(F("OK LEGION "));
-    _port->print(LEGION_VERSION);
-    _port->print(' ');
-    _port->println(LEGION_BUILD_BOARD);
+    out.print(F("OK LEGION "));
+    out.print(LEGION_VERSION);
+    out.print(' ');
+    out.println(LEGION_BUILD_BOARD);
   } else if (strcasecmp(tok, "SET") == 0 && rest) {
     char* save2 = nullptr;
     char* sub = strtok_r(rest, " ", &save2);
@@ -83,75 +88,78 @@ void CmdServer::handleLine(char* line) {
       while (*arg == ' ') ++arg;
     }
     if (sub && strcasecmp(sub, "FREQ") == 0) {
-      cmdSetFreq(arg);
+      cmdSetFreq(arg, out);
     } else if (sub && strcasecmp(sub, "POWER") == 0) {
-      cmdSetPower(arg);
+      cmdSetPower(arg, out);
     } else {
-      _port->println(F("ERR SYNTAX unknown SET"));
+      out.println(F("ERR SYNTAX unknown SET"));
     }
   } else if (strcasecmp(tok, "RF") == 0 && rest) {
-    cmdRf(rest);
+    cmdRf(rest, out);
   } else if (strcasecmp(tok, "SWEEP") == 0 && rest) {
-    cmdCorridor(rest, CorridorMode::SWEEP);
+    cmdCorridor(rest, CorridorMode::SWEEP, out);
   } else if (strcasecmp(tok, "HOP") == 0 && rest) {
-    cmdCorridor(rest, CorridorMode::HOP);
+    cmdCorridor(rest, CorridorMode::HOP, out);
   } else if (strcasecmp(tok, "STOP") == 0) {
     corridor_stop();
-    _port->println(F("OK IDLE"));
+    storage_save_corridor(false, corridor_config());
+    out.println(F("OK IDLE"));
+  } else if (strcasecmp(tok, "WIFI") == 0 && rest) {
+    cmdWifi(rest, out);
   } else if (strcasecmp(tok, "STATUS?") == 0) {
-    cmdStatus();
+    cmdStatus(out);
   } else if (strcasecmp(tok, "REGS?") == 0) {
-    cmdRegs();
+    cmdRegs(out);
   } else if (strcasecmp(tok, "SELFTEST") == 0) {
-    cmdSelftest();
+    cmdSelftest(out);
   } else if (strcasecmp(tok, "CAL") == 0 && rest) {
     char* save2 = nullptr;
     char* sub = strtok_r(rest, " ", &save2);
     char* arg = strtok_r(nullptr, "", &save2);
     if (sub && strcasecmp(sub, "REF") == 0 && arg) {
-      cmdCalRef(arg);
+      cmdCalRef(arg, out);
     } else {
-      _port->println(F("ERR SYNTAX unknown CAL"));
+      out.println(F("ERR SYNTAX unknown CAL"));
     }
   } else {
-    _port->print(F("ERR SYNTAX unknown command: "));
-    _port->println(tok);
+    out.print(F("ERR SYNTAX unknown command: "));
+    out.println(tok);
   }
 }
 
-void CmdServer::cmdSetFreq(char* arg) {
+void CmdServer::cmdSetFreq(char* arg, Print& out) {
   if (!arg) {
-    _port->println(F("ERR SYNTAX freq required"));
+    out.println(F("ERR SYNTAX freq required"));
     return;
   }
   const double mhz = strtod(arg, nullptr);
   if (mhz <= 0.0) {
-    _port->println(F("ERR SYNTAX bad freq"));
+    out.println(F("ERR SYNTAX bad freq"));
     return;
   }
   const uint64_t hz = (uint64_t)(mhz * 1e6 + 0.5);
   bool lock = false;
   const PlanStatus st = apply_frequency(*_s, hz, lock);
   if (st == PlanStatus::ERR_RANGE) {
-    _port->println(F("ERR RANGE 35-4400 MHz"));
+    out.println(F("ERR RANGE 35-4400 MHz"));
     return;
   }
   if (st != PlanStatus::OK) {
-    _port->print(F("ERR PLAN "));
-    _port->println((int)st);
+    out.print(F("ERR PLAN "));
+    out.println((int)st);
     return;
   }
-  _port->print(F("OK FREQ="));
-  _port->print(mhz, 6);
-  _port->print(F(" LOCK="));
-  _port->print(lock ? 1 : 0);
-  _port->print(F(" ERR_HZ="));
-  _port->println(_s->plan.error_hz, 1);
+  out.print(F("OK FREQ="));
+  out.print(mhz, 6);
+  out.print(F(" LOCK="));
+  out.print(lock ? 1 : 0);
+  out.print(F(" ERR_HZ="));
+  out.println(_s->plan.error_hz, 1);
 }
 
-void CmdServer::cmdSetPower(char* arg) {
+void CmdServer::cmdSetPower(char* arg, Print& out) {
   if (!arg) {
-    _port->println(F("ERR SYNTAX power required"));
+    out.println(F("ERR SYNTAX power required"));
     return;
   }
   const int dbm = atoi(arg);
@@ -162,51 +170,54 @@ void CmdServer::cmdSetPower(char* arg) {
     case 2: code = 2; break;
     case 5: code = 3; break;
     default:
-      _port->println(F("ERR RANGE power -4|-1|+2|+5"));
+      out.println(F("ERR RANGE power -4|-1|+2|+5"));
       return;
   }
   _s->cfg.output_power_code = code;
+  storage_save_power(code);
   if (_s->plan_valid) {  // переписать план с новой мощностью
     bool lock;
-    apply_frequency(*_s, _s->freq_hz, lock);
+    synth_apply(_s->freq_hz, true, lock, &_s->plan);
   }
-  _port->print(F("OK POWER="));
-  _port->println(dbm);
+  out.print(F("OK POWER="));
+  out.println(dbm);
 }
 
-void CmdServer::cmdRf(char* arg) {
+void CmdServer::cmdRf(char* arg, Print& out) {
   const bool on = (strcasecmp(arg, "ON") == 0);
   if (!on && strcasecmp(arg, "OFF") != 0) {
-    _port->println(F("ERR SYNTAX RF ON|OFF"));
+    out.println(F("ERR SYNTAX RF ON|OFF"));
     return;
   }
   _s->rf_on = on;
   _s->cfg.rf_output_enable = on;
   _s->drv->setChipEnable(on);
+  storage_save_rf(on);
   if (_s->plan_valid) {
     bool lock;
-    apply_frequency(*_s, _s->freq_hz, lock);
+    synth_apply(_s->freq_hz, true, lock, &_s->plan);
   }
-  _port->print(F("OK RF "));
-  _port->println(on ? F("ON") : F("OFF"));
+  out.print(F("OK RF "));
+  out.println(on ? F("ON") : F("OFF"));
 }
 
 // SWEEP START <f1> <f2> STEP <kHz> DWELL <ms> | SWEEP STOP
 // HOP   START <f1> <f2> RATE <ms> [SEED <n>] [STEP <kHz>] | HOP STOP
-void CmdServer::cmdCorridor(char* arg, CorridorMode mode) {
+void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
   char* save = nullptr;
   char* sub = strtok_r(arg, " ", &save);
   if (!sub) {
-    _port->println(F("ERR SYNTAX START|STOP expected"));
+    out.println(F("ERR SYNTAX START|STOP expected"));
     return;
   }
   if (strcasecmp(sub, "STOP") == 0) {
     corridor_stop();
-    _port->println(F("OK IDLE"));
+    storage_save_corridor(false, corridor_config());
+    out.println(F("OK IDLE"));
     return;
   }
   if (strcasecmp(sub, "START") != 0) {
-    _port->println(F("ERR SYNTAX START|STOP expected"));
+    out.println(F("ERR SYNTAX START|STOP expected"));
     return;
   }
 
@@ -215,11 +226,10 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode) {
   cfg.f1_hz = 0;
   cfg.f2_hz = 0;
 
-  // Позиционные: f1 f2 (МГц), затем именованные STEP/DWELL/RATE/SEED
   char* f1s = strtok_r(nullptr, " ", &save);
   char* f2s = strtok_r(nullptr, " ", &save);
   if (!f1s || !f2s) {
-    _port->println(F("ERR SYNTAX f1 f2 required"));
+    out.println(F("ERR SYNTAX f1 f2 required"));
     return;
   }
   cfg.f1_hz = (uint64_t)(strtod(f1s, nullptr) * 1e6 + 0.5);
@@ -245,58 +255,62 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode) {
 
   char err[64];
   if (!corridor_start(cfg, err, sizeof(err))) {
-    _port->println(err);
+    out.println(err);
     return;
   }
-  _port->print(F("OK "));
-  _port->print(mode == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
-  _port->println(F(" RUNNING"));
+  storage_save_corridor(true, cfg);  // автономный рестарт (паттерн joseluu)
+  out.print(F("OK "));
+  out.print(mode == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+  out.println(F(" RUNNING"));
 }
 
-void CmdServer::cmdStatus() {
-  _port->print(F("{\"freq\":"));
-  _port->print(_s->freq_hz / 1e6, 6);
-  _port->print(F(",\"mode\":\""));
+void CmdServer::cmdStatus(Print& out) {
+  out.print(F("{\"freq\":"));
+  out.print(_s->freq_hz / 1e6, 6);
+  out.print(F(",\"mode\":\""));
   if (corridor_active()) {
-    _port->print(corridor_mode() == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
+    out.print(corridor_mode() == CorridorMode::SWEEP ? F("SWEEP") : F("HOP"));
   } else {
-    _port->print(F("MANUAL"));
+    out.print(F("MANUAL"));
   }
-  _port->print(F("\",\"lock\":"));
-  _port->print(_s->drv->readLock() ? 1 : 0);
-  _port->print(F(",\"rf\":"));
-  _port->print(_s->rf_on ? 1 : 0);
-  _port->print(F(",\"power\":"));
-  _port->print((int)_s->cfg.output_power_code);
-  _port->print(F(",\"version\":\""));
-  _port->print(LEGION_VERSION);
-  _port->print(F("\",\"board\":\""));
-  _port->print(LEGION_BUILD_BOARD);
-  _port->println(F("\"}"));
+  out.print(F("\",\"lock\":"));
+  out.print(_s->drv->readLock() ? 1 : 0);
+  out.print(F(",\"rf\":"));
+  out.print(_s->rf_on ? 1 : 0);
+  out.print(F(",\"power\":"));
+  out.print((int)_s->cfg.output_power_code);
+  out.print(F(",\"version\":\""));
+  out.print(LEGION_VERSION);
+  out.print(F("\",\"board\":\""));
+  out.print(LEGION_BUILD_BOARD);
+  out.println(F("\"}"));
 }
 
-void CmdServer::cmdRegs() {
-  _port->print(F("{\"regs\":["));
+void CmdServer::cmdRegs(Print& out) {
+  out.print(F("{\"regs\":["));
   for (int i = 0; i < 6; ++i) {
     char hex[12];
     snprintf(hex, sizeof(hex), "\"0x%08lX\"",
              (unsigned long)(_s->plan_valid ? _s->plan.regs[i] : 0));
-    _port->print(hex);
+    out.print(hex);
     if (i < 5) {
-      _port->print(',');
+      out.print(',');
     }
   }
-  _port->println(F("}"));
+  out.println(F("}"));
 }
 
-void CmdServer::cmdCalRef(char* arg) {
+void CmdServer::cmdCalRef(char* arg, Print& out) {
   const double ppm = strtod(arg, nullptr);
   _s->cfg.ref_ppm_milli = (int32_t)(ppm * 1000.0);
-  _port->print(F("OK CAL REF "));
-  _port->print(ppm, 3);
-  _port->println(F(" ppm"));
+  storage_save_ppm(_s->cfg.ref_ppm_milli);
+  out.print(F("OK CAL REF "));
+  out.print(ppm, 3);
+  out.println(F(" ppm"));
 }
 
-void CmdServer::cmdSelftest() { selftest_run(*_s, *_port); }
+void CmdServer::cmdSelftest(Print& out) { selftest_run(*_s, out); }
+
+void CmdServer::cmdWifi(char* arg, Print& out) { net_wifi_cmd(*_s, arg, out); }
 
 }  // namespace legion

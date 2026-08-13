@@ -93,7 +93,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     transportDetail: undefined,
     ports: [],
     selectedPort: "",
-    wsUrl: "ws://192.168.4.1/ws",
+    // Если UI открыт с самого ESP32 (LittleFS) — WS на тот же хост, порт 81.
+    // Иначе — дефолт AP-режима прошивки.
+    wsUrl:
+      typeof window !== "undefined" &&
+      !["localhost", "127.0.0.1", ""].includes(window.location.hostname)
+        ? `ws://${window.location.hostname}:81/ws`
+        : "ws://192.168.4.1:81/ws",
     freqMhz: "2475.000",
     lock: null,
     powerDbm: 5,
