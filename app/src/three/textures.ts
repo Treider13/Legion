@@ -1,49 +1,98 @@
 // ============================================================================
-// LEGION — процедурные текстуры для реалистичного глаза (кожа век/оправы).
-// Генерируются на canvas в рантайме (без внешних ассетов).
+// LEGION — процедурные текстуры кибер-глаза (canvas, без внешних ассетов):
+// «цифровые» дорожки-схемы (emissive/bump) и карта шероховатости металла.
 // ============================================================================
 import * as THREE from "three";
 
-/** Bump-карта кожи: поры + мелкие морщинки. Возвращает tiled CanvasTexture. */
-export function makeSkinBump(size = 512): THREE.CanvasTexture {
+/** Дорожки-схемы: ломаные под 90° с контактными площадками + панельные швы.
+ *  Используется как emissiveMap (светится) и bumpMap (гравировка). */
+export function makeCircuitTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#808080";
-  ctx.fillRect(0, 0, size, size);
+  c.width = 2048;
+  c.height = 1024;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, c.width, c.height);
 
-  // поры — множество мелких светлых/тёмных точек
-  const pores = Math.floor(size * size * 0.05);
-  for (let i = 0; i < pores; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const r = Math.random() * 1.7 + 0.4;
-    const light = Math.random() < 0.5;
-    ctx.globalAlpha = 0.06 + Math.random() * 0.12;
-    ctx.fillStyle = light ? "#ffffff" : "#000000";
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+  // панельные швы — слабые линии
+  g.strokeStyle = "rgba(255,255,255,0.16)";
+  g.lineWidth = 3;
+  for (let i = 0; i < 7; i++) {
+    const y = ((i + 0.5) * c.height) / 7 + (Math.random() - 0.5) * 40;
+    g.beginPath();
+    g.moveTo(0, y);
+    g.lineTo(c.width, y);
+    g.stroke();
+  }
+  for (let i = 0; i < 12; i++) {
+    const x = Math.random() * c.width;
+    g.beginPath();
+    g.moveTo(x, Math.random() * c.height * 0.4);
+    g.lineTo(x, Math.random() * c.height * 0.6 + c.height * 0.4);
+    g.stroke();
   }
 
-  // тонкие морщинки-штрихи
-  ctx.globalAlpha = 0.08;
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = 1;
-  for (let i = 0; i < size * 0.4; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const len = 6 + Math.random() * 26;
-    const a = Math.random() * Math.PI;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
-    ctx.stroke();
+  // дорожки
+  for (let t = 0; t < 90; t++) {
+    let x = Math.random() * c.width;
+    let y = Math.random() * c.height;
+    const bright = Math.random() < 0.45;
+    g.strokeStyle = bright ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.4)";
+    g.lineWidth = bright ? 3 : 2;
+    g.beginPath();
+    g.moveTo(x, y);
+    const steps = 3 + Math.floor(Math.random() * 5);
+    for (let s = 0; s < steps; s++) {
+      const len = 20 + Math.random() * 90;
+      if (s % 2 === 0) x += (Math.random() < 0.5 ? -1 : 1) * len;
+      else y += (Math.random() < 0.5 ? -1 : 1) * len;
+      g.lineTo(x, y);
+    }
+    g.stroke();
+    if (bright) {
+      g.fillStyle = "rgba(255,255,255,0.95)";
+      g.fillRect(x - 4, y - 4, 8, 8);
+    }
   }
-  ctx.globalAlpha = 1;
 
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 3);
+  tex.repeat.set(2, 1);
   return tex;
+}
+
+/** Пятнистая карта шероховатости металла (микро-вариации бликов). */
+export function makeMetalRoughness(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 512;
+  c.height = 256;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#5a5a5a";
+  g.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < 2600; i++) {
+    const v = Math.floor(60 + Math.random() * 120);
+    g.fillStyle = `rgba(${v},${v},${v},0.25)`;
+    const r = 1 + Math.random() * 14;
+    g.beginPath();
+    g.arc(Math.random() * c.width, Math.random() * c.height, r, 0, 7);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  return tex;
+}
+
+/** Круглый спрайт для частиц (иначе Points рисуются квадратами). */
+export function makeDotSprite(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.5, "rgba(255,255,255,0.6)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
 }

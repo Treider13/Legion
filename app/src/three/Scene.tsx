@@ -8,7 +8,7 @@ import { Environment, Lightformer } from "@react-three/drei";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
 
-import { RealisticEye } from "./RealisticEye";
+import { CyborgEye } from "./CyborgEye";
 
 interface SceneProps {
   tier: "low" | "high";
@@ -57,7 +57,7 @@ export function Scene({ tier }: SceneProps) {
           <Lightformer form="rect" intensity={0.6} position={[0, -3, 1]} scale={[6, 2, 1]} color="#5a6a7a" />
         </Environment>
       </Suspense>
-      <RealisticEye tier={tier} />
+      <CyborgEye tier={tier} />
       {tier === "high" && <FxWithGuard />}
     </Canvas>
   );
