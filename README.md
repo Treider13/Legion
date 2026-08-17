@@ -50,6 +50,7 @@ ESP32 принимает её и физически настраивает чи�
 ## Быстрый старт (реальное железо)
 
 Нужно: ESP32 (любая из 6 плат), модуль ADF4351, кабель micro-USB/USB-C.
+Полный список (минимум / стенд / приборы / апгрейд) — [docs/hardware.md](docs/hardware.md).
 
 1. **Собрать по [docs/wiring.md](docs/wiring.md)** (5 проводов, логика 3.3 В —
    напрямую, без делителей).
@@ -99,9 +100,10 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 ## Документация
 
 [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-[wiring](docs/wiring.md) · [module-quirks](docs/module-quirks.md) ·
-[compliance](docs/compliance.md) · [REFERENCES](docs/REFERENCES.md) ·
-[datasheet-facts](docs/datasheet-facts.md) · [analysis-upgrade](docs/analysis-upgrade.md)
+[wiring](docs/wiring.md) · [hardware](docs/hardware.md) ·
+[module-quirks](docs/module-quirks.md) · [compliance](docs/compliance.md) ·
+[REFERENCES](docs/REFERENCES.md) · [datasheet-facts](docs/datasheet-facts.md) ·
+[analysis-upgrade](docs/analysis-upgrade.md)
 
 ## Правовая заметка
 
