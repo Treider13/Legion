@@ -5,7 +5,8 @@ import { useLegion } from "../state/store";
 import { isTauriRuntime, isWebSerialSupported, type TransportKind } from "../transport/types";
 
 const TRANSPORTS: Array<{ kind: TransportKind; label: string }> = [
-  { kind: "tauri-serial", label: "USB (Tauri)" },
+  { kind: "tauri-serial", label: "USB ESP32 (ADF4351)" },
+  { kind: "htool-sl22", label: "USB HTOOL SL22" },
   { kind: "web-serial", label: "USB (Web Serial)" },
   { kind: "websocket", label: "WiFi (WebSocket)" },
   { kind: "mock", label: "Эмуляция (без железа)" },
@@ -39,7 +40,10 @@ export function ConnectBar() {
   }, []);
 
   useEffect(() => {
-    if (s.transportKind === "tauri-serial" && s.transportState === "disconnected") {
+    if (
+      (s.transportKind === "tauri-serial" || s.transportKind === "htool-sl22") &&
+      s.transportState === "disconnected"
+    ) {
       void s.refreshPorts();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,7 +67,7 @@ export function ConnectBar() {
         ))}
       </select>
 
-      {s.transportKind === "tauri-serial" && (
+      {(s.transportKind === "tauri-serial" || s.transportKind === "htool-sl22") && (
         <>
           {/* datalist: dropdown найденных портов + ручной ввод пути.
               Факт: serialport.available_ports на Linux перечисляет только
@@ -114,6 +118,7 @@ export function ConnectBar() {
         {STATE_LABELS[s.transportState] ?? s.transportState.toUpperCase()}
       </span>
       {s.transportKind === "mock" && <span className="mock-badge">ЭМУЛЯЦИЯ</span>}
+      {s.transportKind === "htool-sl22" && <span className="mock-badge">SL22 SCPI</span>}
     </section>
   );
 }

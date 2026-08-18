@@ -5,6 +5,7 @@ import { create } from "zustand";
 
 import { LegionClient } from "../protocol/client";
 import { MockTransport } from "../transport/mock";
+import { Sl22Transport } from "../sl22/transport";
 import { TauriSerialTransport } from "../transport/tauriSerial";
 import type { SerialPortDescriptor, Transport, TransportKind, TransportState } from "../transport/types";
 import { WebSerialTransport } from "../transport/webSerial";
@@ -132,7 +133,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     clearLog: () => set({ log: [] }),
 
     refreshPorts: async () => {
-      if (get().transportKind !== "tauri-serial") return;
+      const kind = get().transportKind;
+      if (kind !== "tauri-serial" && kind !== "htool-sl22") return;
       try {
         const ports = await TauriSerialTransport.listPorts();
         set({ ports });
@@ -155,6 +157,14 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
           gTransport = new TauriSerialTransport(selectedPort);
+          break;
+        case "htool-sl22":
+          if (!selectedPort) {
+            pushLog("sys", "no serial port selected");
+            return;
+          }
+          gTransport = new Sl22Transport(selectedPort);
+          pushLog("sys", "HTOOL SL22: SCPI bridge (no ESP32/ADF4351)");
           break;
         case "web-serial":
           gTransport = new WebSerialTransport();
