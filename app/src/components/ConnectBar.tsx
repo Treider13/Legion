@@ -4,9 +4,9 @@ import { useEffect } from "react";
 import { useLegion } from "../state/store";
 import { isTauriRuntime, isWebSerialSupported, type TransportKind } from "../transport/types";
 
-const TRANSPORTS: Array<{ kind: TransportKind; label: string }> = [
-  { kind: "tauri-serial", label: "USB ESP32 (ADF4351)" },
-  { kind: "htool-sl22", label: "USB HTOOL SL22" },
+const TRANSPORTS: Array<{ kind: TransportKind; label: string; tauriOnly?: boolean }> = [
+  { kind: "tauri-serial", label: "USB ESP32 (ADF4351)", tauriOnly: true },
+  { kind: "htool-sl22", label: "USB HTOOL SL22", tauriOnly: true },
   { kind: "web-serial", label: "USB (Web Serial)" },
   { kind: "websocket", label: "WiFi (WebSocket)" },
   { kind: "mock", label: "Эмуляция (без железа)" },
@@ -50,6 +50,8 @@ export function ConnectBar() {
   }, [s.transportKind]);
 
   const connected = s.transportState === "connected";
+  const tauri = isTauriRuntime();
+  const transports = TRANSPORTS.filter((t) => !t.tauriOnly || tauri);
 
   return (
     <section className="panel connect-bar">
@@ -60,7 +62,7 @@ export function ConnectBar() {
         onChange={(e) => s.setTransportKind(e.target.value as TransportKind)}
         disabled={connected}
       >
-        {TRANSPORTS.map((t) => (
+        {transports.map((t) => (
           <option key={t.kind} value={t.kind}>
             {t.label}
           </option>

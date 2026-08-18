@@ -1,4 +1,5 @@
 // LEGION — панель мощности и RF on/off + SELFTEST (фаза 2)
+import { POWER_DBM_TO_LOPW } from "../sl22/map";
 import { useLegion } from "../state/store";
 
 const POWERS = [-4, -1, 2, 5];
@@ -6,6 +7,7 @@ const POWERS = [-4, -1, 2, 5];
 export function PowerPanel() {
   const s = useLegion();
   const connected = s.transportState === "connected";
+  const sl22 = s.transportKind === "htool-sl22";
 
   return (
     <section className="panel">
@@ -18,11 +20,11 @@ export function PowerPanel() {
             disabled={!connected}
             onClick={() => void s.setPower(p)}
           >
-            {p > 0 ? `+${p}` : p} дБм
+            {sl22 ? `P${POWER_DBM_TO_LOPW[p]}` : `${p > 0 ? `+${p}` : p} дБм`}
           </button>
         ))}
       </div>
-      {/* PE43702: аттенюатор 0–31.75 дБ (фаза 8) */}
+      {!sl22 && (
       <div className="att-row">
         <span className="att-label">АТТ</span>
         <input
@@ -38,6 +40,7 @@ export function PowerPanel() {
         />
         <span className="att-value">{s.attDb.toFixed(2)} дБ</span>
       </div>
+      )}
       <div className="power-row">
         <button
           className={s.rfOn ? "btn-danger" : "btn-primary"}
@@ -46,6 +49,7 @@ export function PowerPanel() {
         >
           {s.rfOn ? "РЧ ВЫКЛ" : "РЧ ВКЛ"}
         </button>
+        {!sl22 && (
         <button
           className="btn-ghost"
           disabled={!connected}
@@ -53,6 +57,7 @@ export function PowerPanel() {
         >
           САМОТЕСТ
         </button>
+        )}
         <button
           className="btn-ghost"
           disabled={!connected}

@@ -19,7 +19,7 @@ export function CorridorPanel() {
       <span className="panel-title">КОРИДОР // АВТО</span>
       {s.transportKind === "htool-sl22" && (
         <p className="range-cur" style={{ margin: "0 0 8px" }}>
-          SL22: только ОБЗОР. Шаг в кГц (1000 = 1 МГц на приборе).
+          SL22: только ОБЗОР. Шаг в кГц (1000 = 1 МГц). Хост шлёт POINt, не CYCLe.
         </p>
       )}
       <div className="corr-grid">
@@ -27,13 +27,17 @@ export function CorridorPanel() {
           РЕЖИМ
           <select
             aria-label="Режим коридора"
-            value={s.corrMode}
+            value={s.transportKind === "htool-sl22" ? "SWEEP" : s.corrMode}
             onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
             disabled={!connected || s.corridorRunning}
           >
             <option value="SWEEP">ОБЗОР (SWEEP)</option>
-            <option value="HOP">СКАЧКИ (HOP)</option>
-            <option value="CHIRP">ЛЧМ (CHIRP)</option>
+            {s.transportKind !== "htool-sl22" && (
+              <>
+                <option value="HOP">СКАЧКИ (HOP)</option>
+                <option value="CHIRP">ЛЧМ (CHIRP)</option>
+              </>
+            )}
           </select>
         </label>
         <label>

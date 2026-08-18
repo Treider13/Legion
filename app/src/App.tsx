@@ -47,6 +47,8 @@ function App() {
     return () => clearTimeout(t);
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
+  const transportKind = useLegion((s) => s.transportKind);
+  const sl22 = transportKind === "htool-sl22";
 
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
   useEffect(() => {
@@ -105,7 +107,11 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">LEGION</span>
-            <span className="hero-sub">УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351</span>
+            <span className="hero-sub">
+              {sl22
+                ? "УПРАВЛЕНИЕ ГЕНЕРАТОРОМ РЧ // HTOOL SL22"
+                : "УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351"}
+            </span>
           </header>
           <div className={`hero-status ${corridorRunning ? "alert" : ""}`}>
             {corridorRunning ? "ПОДАВЛЕНИЕ ЦЕЛИ" : "ОЖИДАНИЕ"}
@@ -122,7 +128,9 @@ function App() {
         </div>
         <LogPanel />
         <footer className="app-footer">
-          LEGION v0.1 · ESP32→ADF4351 · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
+          {sl22
+            ? "LEGION v0.1 · USB HTOOL SL22 · 45–22600 МГц · ТОЛЬКО НАГРУЗКА 50Ω"
+            : "LEGION v0.1 · ESP32→ADF4351 · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω"}
         </footer>
       </section>
     </div>

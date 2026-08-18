@@ -2,9 +2,13 @@
 
 ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семантика.
 
-Отдельный мост **HTOOL SL22** (не ESP32): те же команды UI, на провод — SCPI.
-См. [sl22.md](sl22.md). HOP/CHIRP/GLIDE/FM/PE43702 на SL22 не переводятся.
-Команды завершаются `\n`. Ответы: `OK ...` / `ERR <code> <message>` / JSON для запросов состояния.
+Отдельный мост **HTOOL SL22** (не ESP32): те же кнопки UI, на Type-C — SCPI
+из [sl22.md](sl22.md) (`*IDN?`, `POINt`, `STATus`, `LOPW`). Коридор на SL22
+крутит хост через `POINt`; `CYCLe`/`SINGle` мост не шлёт. HOP/CHIRP/GLIDE/FM/
+PE43702 на SL22 не переводятся.
+
+Таблица ниже — протокол **ESP32+ADF4351**. Команды завершаются `\n`.
+Ответы: `OK ...` / `ERR <code> <message>` / JSON для запросов состояния.
 
 ## Команды
 

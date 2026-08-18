@@ -1,45 +1,59 @@
 // ============================================================================
-// LEGION ↔ HTOOL SL22: чистый переводчик протокола (без serial).
-//
-// Источник команд: разбор SCPI живого прибора (гайд 2026 + Python-класс):
-//   *IDN?  → вход в SCPI, дальше строки с \r\n
+// LEGION ↔ HTOOL SL22 — только команды из разбора SCPI (Python-класс / гайд).
+// На проводе проверены строками:
+//   *IDN?
 //   GENErator:POINt <MHz>
 //   GENErator:STATus ON|OFF
 //   FREQuency:LOPW 0..7
-//   GENErator:SINGle start,stop,step,t_ms     (шаг в МГц)
-//   GENErator:CYCLe  start,stop,step,t_ms     (4 поля: в гайде у CYCLe шаг
-//                                              забыт — шлём как у SINGle,
-//                                              иначе коридор 1 МГц потеряется)
+//   GENErator:SINGle start,stop,step,t_ms
+//   GENErator:CYCLe start,stop,t_ms     ← шага в сериализованной строке нет
 //
-// Диапазон прибора в тех же текстах: 45 … 22600 МГц (заголовок «22 МГц»
-// противоречит командам и даташиту LMX2820 — берём 45).
-// LOCK у SL22 нет — отвечаем LOCK=1 после принятой команды.
+// Коридор LEGION (бесконечный + шаг из UI) через CYCLe не воспроизвести
+// без домыслов: в коде гайда step у CYCLe принимается и не отправляется.
+// Поэтому SWEEP в мосте = план для хоста: только POINt + STATus (они в списке).
+// SINGle/CYCLe с провода мост не шлёт.
+//
+// Полоса 45–22600 МГц — из тех же текстов и из даташита LMX2820, не «22 МГц».
+// LOCK в SCPI нет — в ответах LOCK не пишем.
+// P0 ниже P7 (гайд). Четыре кнопки UI → LOPW 0,1,2,3 (не дБм).
 // ============================================================================
 
 export const SL22_FMIN_MHZ = 45;
 export const SL22_FMAX_MHZ = 22600;
 
-/** ADF4351 дБм → ближайшая ступень P0…P7 (не калиброванные дБм). */
+/** Кнопки −4/−1/+2/+5 → младшие ступени P0…P3. Не дБм прибора. */
 export const POWER_DBM_TO_LOPW: Record<number, number> = {
   [-4]: 0,
-  [-1]: 2,
-  [2]: 4,
-  [5]: 6,
+  [-1]: 1,
+  [2]: 2,
+  [5]: 3,
 };
 
+export interface Sl22SweepPlan {
+  f1: number;
+  f2: number;
+  stepMhz: number;
+  dwellMs: number;
+}
+
 export interface Sl22Mapped {
-  /** Команды на провод (без \r\n). Пусто — только синтетический ответ. */
   scpi: string[];
   reply: string;
+  sweep?: Sl22SweepPlan;
 }
 
 function inBand(mhz: number): boolean {
   return Number.isFinite(mhz) && mhz >= SL22_FMIN_MHZ && mhz <= SL22_FMAX_MHZ;
 }
 
-/** LEGION STEP в кГц → МГц для SL22. 1000 кГц = 1.000 МГц. */
 export function stepKhzToMhz(stepKhz: number): number {
   return stepKhz / 1000;
+}
+
+/** Как firmware `engine_sweep_next`: cur += step; если cur > f2 → f1. */
+export function sweepNextMhz(cur: number, f1: number, f2: number, stepMhz: number): number {
+  const next = cur + stepMhz;
+  return next > f2 ? f1 : next;
 }
 
 export function mapLegionToSl22(line: string): Sl22Mapped {
@@ -60,16 +74,15 @@ export function mapLegionToSl22(line: string): Sl22Mapped {
     }
     return {
       scpi: [`GENErator:POINt ${mhz.toFixed(3)}`],
-      reply: `OK FREQ=${mhz.toFixed(6)} LOCK=1 ERR_HZ=0.0`,
+      reply: `OK FREQ=${mhz.toFixed(6)}`,
     };
   }
 
   if (u.startsWith("SET POWER")) {
-    const raw = t.split(/\s+/)[2] ?? "";
-    const dbm = parseInt(raw, 10);
+    const dbm = parseInt(t.split(/\s+/)[2] ?? "", 10);
     const lopw = POWER_DBM_TO_LOPW[dbm];
     if (lopw === undefined) {
-      return { scpi: [], reply: "ERR RANGE power -4|-1|+2|+5 (→ LOPW 0/2/4/6)" };
+      return { scpi: [], reply: "ERR RANGE power -4|-1|+2|+5 (LOPW 0..3)" };
     }
     return { scpi: [`FREQuency:LOPW ${lopw}`], reply: `OK POWER=${dbm} LOPW=${lopw}` };
   }
@@ -87,7 +100,6 @@ export function mapLegionToSl22(line: string): Sl22Mapped {
   }
 
   if (u.startsWith("SWEEP START")) {
-    // SWEEP START <f1> <f2> STEP <kHz> DWELL <ms>
     const m = /SWEEP START\s+(\S+)\s+(\S+)\s+STEP\s+(\S+)\s+DWELL\s+(\S+)/i.exec(t);
     if (!m) return { scpi: [], reply: "ERR SYNTAX SWEEP" };
     const f1 = parseFloat(m[1]);
@@ -101,24 +113,37 @@ export function mapLegionToSl22(line: string): Sl22Mapped {
     if (!inBand(f1) || !inBand(f2)) {
       return { scpi: [], reply: `ERR RANGE ${SL22_FMIN_MHZ}-${SL22_FMAX_MHZ} MHz` };
     }
-    if (f1 === f2) return { scpi: [], reply: "ERR RANGE f1=f2" };
-    if (stepKhz <= 0) return { scpi: [], reply: "ERR RANGE STEP" };
-    const stepMhz = stepKhzToMhz(stepKhz);
-    const ms = Math.round(dwell);
-    // CYCLe = бесконечный коридор LEGION. 4 поля — шаг не теряем.
-    const scpi = `GENErator:CYCLe ${f1.toFixed(3)},${f2.toFixed(3)},${stepMhz.toFixed(3)},${ms}`;
-    return { scpi: [scpi, "GENErator:STATus ON"], reply: "OK SWEEP RUNNING" };
+    // Как прошивка LEGION: f1 < f2, иначе ERR RANGE.
+    if (f1 >= f2) return { scpi: [], reply: "ERR RANGE f1>=f2" };
+    if (stepKhz < 1) return { scpi: [], reply: "ERR RANGE STEP min 1 kHz" };
+    return {
+      scpi: ["GENErator:STATus ON"],
+      reply: "OK SWEEP RUNNING",
+      sweep: {
+        f1,
+        f2,
+        stepMhz: stepKhzToMhz(stepKhz),
+        dwellMs: Math.round(dwell),
+      },
+    };
   }
 
   if (u.startsWith("HOP START") || u.startsWith("CHIRP START") || u.startsWith("GLIDE") || u.startsWith("FM START")) {
-    return { scpi: [], reply: "ERR STATE SL22: only SWEEP (no HOP/CHIRP/GLIDE/FM)" };
+    return { scpi: [], reply: "ERR STATE SL22: only SWEEP" };
   }
 
   if (u === "STATUS?") {
     return { scpi: [], reply: "__STATUS__" };
   }
 
-  if (u === "REGS?" || u === "SELFTEST" || u.startsWith("CAL ") || u.startsWith("SET ATT") || u.startsWith("SET LEVEL") || u.startsWith("LEVEL?")) {
+  if (
+    u === "REGS?" ||
+    u === "SELFTEST" ||
+    u.startsWith("CAL ") ||
+    u.startsWith("SET ATT") ||
+    u.startsWith("SET LEVEL") ||
+    u.startsWith("LEVEL?")
+  ) {
     return { scpi: [], reply: "ERR STATE SL22: ADF4351-only command" };
   }
 
@@ -134,7 +159,7 @@ export function sl22StatusJson(st: {
   return JSON.stringify({
     freq: st.freqMhz,
     mode: st.mode,
-    lock: 1,
+    lock: 0,
     rf: st.rfOn ? 1 : 0,
     power: st.powerDbm,
     version: "sl22",

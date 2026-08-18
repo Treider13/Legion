@@ -1,7 +1,6 @@
 // ============================================================================
-// LEGION — Sl22Transport: COM SL22 + переводчик map.ts.
-// На проводе — SCPI \r\n; в LegionClient — те же OK/ERR, что у ESP32.
-// Ответы прибора на шину клиента не пускаем (ломают waiter: нет префикса OK).
+// SL22 USB: SCPI \r\n. LegionClient видит только синтетические OK/ERR.
+// Коридор: таймер на ПК, на провод только GENErator:POINt (есть в гайде).
 // ============================================================================
 import { SerialPort } from "tauri-plugin-serialplugin-api";
 
@@ -12,7 +11,7 @@ import type {
   TransportKind,
   TransportState,
 } from "../transport/types";
-import { mapLegionToSl22, sl22StatusJson } from "./map";
+import { mapLegionToSl22, sl22StatusJson, sweepNextMhz, type Sl22SweepPlan } from "./map";
 
 const BAUD = 115200;
 
@@ -28,6 +27,9 @@ export class Sl22Transport implements Transport {
   private powerDbm = 5;
   private mode = "IDLE";
   private idn = "htool-sl22";
+  private sweep: Sl22SweepPlan | null = null;
+  private sweepGen = 0;
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(path: string) {
     this.path = path;
@@ -49,13 +51,61 @@ export class Sl22Transport implements Transport {
     setTimeout(() => this.ev?.onLine(line), delayMs);
   }
 
+  private stopSweep(): void {
+    this.sweepGen += 1;
+    this.sweep = null;
+  }
+
+  private enqueueScpi(cmd: string): Promise<void> {
+    const run = this.writeChain.then(() => this.writeScpi(cmd));
+    this.writeChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async point(mhz: number): Promise<void> {
+    this.freqMhz = mhz;
+    await this.enqueueScpi(`GENErator:POINt ${mhz.toFixed(3)}`);
+    this.ev?.onLine(
+      JSON.stringify({ t: Date.now(), freq: mhz, lock: 0, mode: "SWEEP" as const }),
+    );
+  }
+
+  private startSweep(plan: Sl22SweepPlan): void {
+    this.stopSweep();
+    this.sweep = plan;
+    this.mode = "SWEEP";
+    this.rfOn = true;
+    this.freqMhz = plan.f1;
+    const gen = this.sweepGen;
+    void this.runSweep(gen);
+  }
+
+  private async runSweep(gen: number): Promise<void> {
+    if (!this.sweep || gen !== this.sweepGen) return;
+    try {
+      await this.point(this.sweep.f1);
+    } catch {
+      return;
+    }
+    while (this.sweep && this.port && gen === this.sweepGen) {
+      const dwell = this.sweep.dwellMs;
+      await new Promise((r) => setTimeout(r, dwell));
+      if (!this.sweep || !this.port || gen !== this.sweepGen) return;
+      const next = sweepNextMhz(this.freqMhz, this.sweep.f1, this.sweep.f2, this.sweep.stepMhz);
+      try {
+        await this.point(next);
+      } catch {
+        return;
+      }
+    }
+  }
+
   async connect(): Promise<void> {
     this.emitState("connecting");
     this.port = new SerialPort({ path: this.path, baudRate: BAUD, timeout: 100 });
     await this.port.open();
     this.reading = true;
     void this.readLoop();
-    // Обязательный вход в SCPI (гайд: первая команда *IDN?).
     await this.writeScpi("*IDN?");
     this.emitState("connected", "SL22 SCPI");
   }
@@ -83,10 +133,7 @@ export class Sl22Transport implements Transport {
       const line = this.lineBuf.slice(0, idx).replace(/\r$/, "");
       this.lineBuf = this.lineBuf.slice(idx + 1);
       if (line.length === 0) continue;
-      if (line.includes("HTOOL") || line.includes("SL22") || line.startsWith("HTOOL")) {
-        this.idn = line.slice(0, 80);
-      }
-      // не forward в LegionClient
+      if (/HTOOL|SL22/i.test(line)) this.idn = line.slice(0, 80);
     }
   }
 
@@ -97,27 +144,32 @@ export class Sl22Transport implements Transport {
 
   async writeLine(line: string): Promise<void> {
     const mapped = mapLegionToSl22(line);
-    for (const scpi of mapped.scpi) {
-      await this.writeScpi(scpi);
+    const u = line.trim().toUpperCase();
+
+    if (u.startsWith("SET FREQ") || u === "STOP" || u === "RF OFF") {
+      this.stopSweep();
+      if (u === "STOP") this.mode = "IDLE";
     }
 
-    const u = line.trim().toUpperCase();
+    for (const scpi of mapped.scpi) {
+      await this.enqueueScpi(scpi);
+    }
+
     if (u.startsWith("SET FREQ")) {
       const mhz = parseFloat(line.trim().split(/\s+/)[2] ?? "");
-      if (Number.isFinite(mhz)) {
+      if (Number.isFinite(mhz) && mapped.reply.startsWith("OK")) {
         this.freqMhz = mhz;
         this.mode = "MANUAL";
       }
     } else if (u === "RF ON") this.rfOn = true;
-    else if (u === "RF OFF" || u === "STOP") {
-      this.rfOn = false;
-      if (u === "STOP") this.mode = "IDLE";
-    } else if (u.startsWith("SET POWER")) {
+    else if (u === "RF OFF" || u === "STOP") this.rfOn = false;
+    else if (u.startsWith("SET POWER")) {
       const p = parseInt(line.trim().split(/\s+/)[2] ?? "", 10);
       if (Number.isFinite(p)) this.powerDbm = p;
-    } else if (u.startsWith("SWEEP START") && mapped.reply.startsWith("OK")) {
-      this.mode = "SWEEP";
-      this.rfOn = true;
+    }
+
+    if (mapped.sweep && mapped.reply.startsWith("OK")) {
+      this.startSweep(mapped.sweep);
     }
 
     if (mapped.reply === "__STATUS__") {
@@ -141,8 +193,9 @@ export class Sl22Transport implements Transport {
   }
 
   async disconnect(): Promise<void> {
+    this.stopSweep();
     try {
-      if (this.port) await this.writeScpi("GENErator:STATus OFF");
+      if (this.port) await this.enqueueScpi("GENErator:STATus OFF");
     } catch {
       /* ignore */
     }
