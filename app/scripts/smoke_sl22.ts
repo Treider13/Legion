@@ -52,7 +52,8 @@ function main(): void {
 
   m = mapLegionToSl22("SWEEP START 2300 2500 STEP 1000 DWELL 10");
   check("SWEEP не шлёт выдуманный CYCLe с 4 полями", !m.scpi.some((s) => s.includes("CYCLe")));
-  check("SWEEP включает RF", m.scpi.includes("GENErator:STATus ON"));
+  check("SWEEP сначала POINt f1 (гайд: частота, потом RF)", m.scpi[0] === "GENErator:POINt 2300.000", m.scpi.join(" | "));
+  check("SWEEP затем STATus ON", m.scpi[1] === "GENErator:STATus ON");
   check(
     "план коридора 1 МГц / 10 мс",
     m.sweep?.f1 === 2300 && m.sweep?.f2 === 2500 && m.sweep?.stepMhz === 1 && m.sweep?.dwellMs === 10,

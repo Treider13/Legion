@@ -30,6 +30,7 @@ export class Sl22Transport implements Transport {
   private sweep: Sl22SweepPlan | null = null;
   private sweepGen = 0;
   private writeChain: Promise<void> = Promise.resolve();
+  private firstLineWait: ((line: string) => void) | null = null;
 
   constructor(path: string) {
     this.path = path;
@@ -77,16 +78,14 @@ export class Sl22Transport implements Transport {
     this.rfOn = true;
     this.freqMhz = plan.f1;
     const gen = this.sweepGen;
+    // f1 и STATus ON уже ушли в mapped.scpi (порядок как в гайде).
+    this.ev?.onLine(
+      JSON.stringify({ t: Date.now(), freq: plan.f1, lock: 0, mode: "SWEEP" as const }),
+    );
     void this.runSweep(gen);
   }
 
   private async runSweep(gen: number): Promise<void> {
-    if (!this.sweep || gen !== this.sweepGen) return;
-    try {
-      await this.point(this.sweep.f1);
-    } catch {
-      return;
-    }
     while (this.sweep && this.port && gen === this.sweepGen) {
       const dwell = this.sweep.dwellMs;
       await new Promise((r) => setTimeout(r, dwell));
@@ -100,14 +99,46 @@ export class Sl22Transport implements Transport {
     }
   }
 
+  private waitFirstLine(ms: number): Promise<string | null> {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this.firstLineWait = null;
+        resolve(null);
+      }, ms);
+      this.firstLineWait = (line) => {
+        clearTimeout(t);
+        this.firstLineWait = null;
+        resolve(line);
+      };
+    });
+  }
+
   async connect(): Promise<void> {
     this.emitState("connecting");
     this.port = new SerialPort({ path: this.path, baudRate: BAUD, timeout: 100 });
     await this.port.open();
     this.reading = true;
     void this.readLoop();
+    // Гайд: первая команда обязана быть *IDN?\r\n, иначе SCPI не включается.
+    const pending = this.waitFirstLine(500);
     await this.writeScpi("*IDN?");
+    const first = await pending;
+    if (first?.startsWith("ERR")) {
+      await this.hardClose();
+      const msg = `not SL22 SCPI: port replied "${first.slice(0, 60)}" (ESP32/LEGION ASCII on this COM?)`;
+      this.emitState("error", msg);
+      throw new Error(msg);
+    }
+    if (first) this.idn = first.slice(0, 80);
     this.emitState("connected", "SL22 SCPI");
+  }
+
+  private async hardClose(): Promise<void> {
+    this.stopSweep();
+    this.reading = false;
+    const p = this.port;
+    this.port = null;
+    if (p) await p.close();
   }
 
   private async readLoop(): Promise<void> {
@@ -133,6 +164,7 @@ export class Sl22Transport implements Transport {
       const line = this.lineBuf.slice(0, idx).replace(/\r$/, "");
       this.lineBuf = this.lineBuf.slice(idx + 1);
       if (line.length === 0) continue;
+      if (this.firstLineWait) this.firstLineWait(line);
       if (/HTOOL|SL22/i.test(line)) this.idn = line.slice(0, 80);
     }
   }

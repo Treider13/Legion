@@ -1,5 +1,6 @@
 // ============================================================================
-// LEGION ↔ HTOOL SL22 — только команды из разбора SCPI (Python-класс / гайд).
+// LEGION ↔ HTOOL SL22 — только команды из Python-класса гайда
+// http://www.l189.com/news/2267959 (не PDF htool.net.cn; GitHub пуст).
 // На проводе проверены строками:
 //   *IDN?
 //   GENErator:POINt <MHz>
@@ -116,8 +117,9 @@ export function mapLegionToSl22(line: string): Sl22Mapped {
     // Как прошивка LEGION: f1 < f2, иначе ERR RANGE.
     if (f1 >= f2) return { scpi: [], reply: "ERR RANGE f1>=f2" };
     if (stepKhz < 1) return { scpi: [], reply: "ERR RANGE STEP min 1 kHz" };
+    // Гайд (l189): сначала частота, потом RF ON. Не STATus ON на старой частоте.
     return {
-      scpi: ["GENErator:STATus ON"],
+      scpi: [`GENErator:POINt ${f1.toFixed(3)}`, "GENErator:STATus ON"],
       reply: "OK SWEEP RUNNING",
       sweep: {
         f1,
