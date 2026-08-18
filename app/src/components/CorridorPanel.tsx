@@ -17,6 +17,11 @@ export function CorridorPanel() {
   return (
     <section className="panel">
       <span className="panel-title">КОРИДОР // АВТО</span>
+      {s.transportKind === "htool-sl22" && (
+        <p className="range-cur" style={{ margin: "0 0 8px" }}>
+          SL22: только ОБЗОР. Шаг в кГц (1000 = 1 МГц на приборе).
+        </p>
+      )}
       <div className="corr-grid">
         <label>
           РЕЖИМ
