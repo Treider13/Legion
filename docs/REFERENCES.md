@@ -43,6 +43,10 @@ BATC, Hackaday, IEEE).
 | IEEE RTEICT 2017 «Design of frequency synthesizer…» (ADF4351+PIC32) | верификация подхода МК+ADF4351 |
 | SoapySDR + SoapyRemote (pothosware) | единый API SDR и LAN-шлюз USB-устройств |
 | Nuand libbladeRF / bladeRF-cli | прошивка FX3/FPGA xA4; USB 3.0, не Ethernet |
+| [Nuand/bladeRF](https://github.com/Nuand/bladeRF) + [nuand.com/fpga](https://www.nuand.com/fpga_images/) / [fx3](https://www.nuand.com/fx3_images/) | Официальные `hostedxA4.rbf`, `bladeRF_fw_latest.img`. Не свой jam-HDL. |
+| [analogdevicesinc/plutosdr-fw](https://github.com/analogdevicesinc/plutosdr-fw) | `pluto.frm` — сеть после официальной прошивки ADI. |
+| [EttusResearch/uhd](https://github.com/EttusResearch/uhd) | N210: `uhd_images_downloader`, RJ45 в плату, 192.168.10.2. |
+| [pothosware/SoapyRemote](https://github.com/pothosware/SoapyRemote) | Ethernet-шлюз USB-SDR, порт 55132, `SoapySDRServer --bind`. |
 | xmikos/soapy_power, osmocom rtl_power | обзор спектра по полосе (RX, не TX-свип) |
 | IEEE/MDPI spectrum sensing surveys (energy detection) | SCAN RX: порог над шумом, без знания сигнала |
 | [ice9-bluetooth-sniffer](https://github.com/alphafox02/ice9-bluetooth-sniffer) / [blue-dragon](https://github.com/alphafox02/blue-dragon) | Только архитектура: wideband + детект в процессе радио, hop не нужен если полоса ≤ analog BW. Не протокол BT и не payload. |

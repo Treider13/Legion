@@ -2,11 +2,11 @@
 import { useLegion, type WorkspaceId } from "../state/store";
 
 const TABS: Array<{ id: WorkspaceId; title: string; hint: string }> = [
-  { id: "synth", title: "СИНТЕЗАТОР", hint: "ADF4351 · частота · мощность" },
-  { id: "corridor", title: "КОРИДОР TX", hint: "передача по сетке, не приём" },
-  { id: "sdr", title: "SDR", hint: "BladeRF и другие · прошивка" },
-  { id: "scan", title: "СКАН RX", hint: "антенна · полоса · ПЕРЕДАТЬ" },
-  { id: "pa", title: "УСИЛИТЕЛЬ", hint: "нагрузка 50Ω · ток · наведение" },
+  { id: "synth", title: "СИНТЕЗАТОР", hint: "режим ESP32 · без SDR" },
+  { id: "corridor", title: "КОРИДОР TX", hint: "ESP32 сетка, не приём" },
+  { id: "sdr", title: "SDR", hint: "режим SDR · Ethernet · офиц. FPGA" },
+  { id: "scan", title: "СКАН RX", hint: "антенна SDR · полоса · ПЕРЕДАТЬ" },
+  { id: "pa", title: "УСИЛИТЕЛЬ", hint: "ESP32 ток · нагрузка 50Ω" },
 ];
 
 export function WorkspaceNav() {

@@ -74,6 +74,9 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   SCAN RX только по allowlist (energy detection), CUE на синтезатор,
   команда тока PA и интерлок LOAD. I/Q не идёт в ESP32. LAN для xA4 —
   шлюз USB3 + SoapyRemote, не кабель в BladeRF (факт Nuand: USB 3.0).
+  N210: RJ45 в сам USRP (`driver=uhd,type=usrp2,addr=`). Официальные образы —
+  манифест `app/src/sdr/official.ts` и [sdr-firmware.md](sdr-firmware.md).
+  Режим ESP32 (синтезатор) и режим SDR не смешивают прошивки.
 - **Быстрый путь detect→TX (перепроверка)**: детект и TX LO живут в процессе
   SDR, не в React. Hop = аналоговая BW устройства (bladeRF ≤56 МГц, Nuand),
   а не 20 МГц из UI — идея ice9/blue-dragon (стоять в окне, пока полоса

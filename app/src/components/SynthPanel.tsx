@@ -11,7 +11,8 @@ export function SynthPanel() {
       <section className="panel">
         <span className="panel-title">СИНТЕЗАТОР // ADF4351</span>
         <p className="panel-note">
-          Только генератор. Приём и обнаружение — вкладка СКАН RX. Прошивка BladeRF — вкладка SDR.
+          Режим ESP32: генератор ADF4351. SDR и Ethernet здесь не участвуют.
+          Приём — СКАН RX. Официальная FPGA SDR — вкладка SDR.
         </p>
         <div className="corr-grid">
           <label>

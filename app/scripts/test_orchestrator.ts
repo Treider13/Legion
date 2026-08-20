@@ -6,6 +6,7 @@ import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../s
 import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
+import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   decideCue,
@@ -47,9 +48,32 @@ function main(): void {
     soapyRemoteArgs("10.0.0.5") === "driver=remote,remote=tcp://10.0.0.5:55132",
   );
   check("пустой шлюз → пустая строка", soapyRemoteArgs("  ") === "");
+  check(
+    "xA4 Ethernet = SoapyRemote на шлюз",
+    sdrOpenArgs("bladerf-micro-xa4", "10.0.0.5") === "driver=remote,remote=tcp://10.0.0.5:55132",
+  );
+  check(
+    "N210 Ethernet = UHD в плату",
+    sdrOpenArgs("usrp-n210", "192.168.10.2") === "driver=uhd,type=usrp2,addr=192.168.10.2",
+  );
+  check(
+    "Pluto Ethernet = hostname ADI",
+    sdrOpenArgs("plutosdr", "192.168.2.1") === "driver=plutosdr,hostname=192.168.2.1",
+  );
+  check("пустой host xA4 → локальный USB", sdrOpenArgs("bladerf-micro-xa4", "") === "");
+  check("кабель xA4 = шлюз", planEthernet("bladerf-micro-xa4", "1.2.3.4").cable === "gateway-rj45");
+  check("кабель N210 = RJ45 в SDR", planEthernet("usrp-n210", "").cable === "sdr-rj45");
+  check("кабель Pluto = usb-gadget", planEthernet("plutosdr", "").cable === "usb-gadget");
+  check("дефолт N210 192.168.10.2", defaultEthHost("usrp-n210") === "192.168.10.2");
+  check("дефолт образ xA4 hosted", defaultFlashName("bladerf-micro-xa4") === "hostedxA4.rbf");
+  check("LimeNET в каталоге", SDR_CATALOG.some((e) => e.id === "limenet-micro" && e.nativeEthernet));
 
   check("hostedxA4.rbf → fpga-a4", classifyFirmware("hostedxA4.rbf") === "fpga-a4");
+  check("hostedxA4-latest.rbf → fpga-a4", classifyFirmware("hostedxA4-latest.rbf") === "fpga-a4");
   check("bladeRF.img → fx3", classifyFirmware("bladeRF.img") === "fx3");
+  check("bladeRF_fw_latest.img → fx3", classifyFirmware("bladeRF_fw_latest.img") === "fx3");
+  check("pluto.frm → pluto-frm", classifyFirmware("pluto.frm") === "pluto-frm");
+  check("usrp_n210_r4_fpga.bin", classifyFirmware("usrp_n210_r4_fpga.bin") === "uhd-n210-fpga");
   check(
     "A9-образ на xA4 отклонён",
     validateFlashJob({
@@ -92,6 +116,42 @@ function main(): void {
       deviceId: "rtl-sdr",
       filename: "hostedxA4.rbf",
       byteLength: 10,
+      action: "load-fpga",
+    }).ok === false,
+  );
+  check(
+    "pluto.frm на Pluto принят",
+    validateFlashJob({
+      deviceId: "plutosdr",
+      filename: "pluto.frm",
+      byteLength: 100,
+      action: "flash-fpga",
+    }).ok === true,
+  );
+  check(
+    "pluto.frm на xA4 отклонён",
+    validateFlashJob({
+      deviceId: "bladerf-micro-xa4",
+      filename: "pluto.frm",
+      byteLength: 100,
+      action: "flash-fpga",
+    }).ok === false,
+  );
+  check(
+    "N210 FPGA принят",
+    validateFlashJob({
+      deviceId: "usrp-n210",
+      filename: "usrp_n210_r4_fpga.bin",
+      byteLength: 100,
+      action: "flash-fpga",
+    }).ok === true,
+  );
+  check(
+    "B210 ручная прошивка отклонена (UHD autoload)",
+    validateFlashJob({
+      deviceId: "usrp-b210",
+      filename: "hostedxA4.rbf",
+      byteLength: 100,
       action: "load-fpga",
     }).ok === false,
   );

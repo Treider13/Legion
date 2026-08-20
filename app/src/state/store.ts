@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
-import { soapyRemoteArgs } from "../sdr/catalog";
+import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import type { Detection, FlashResult, SdrDeviceInfo } from "../sdr/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
@@ -272,7 +272,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastForwardMhz: null,
     sdrDevices: gSdr.probe(),
     sdrId: "bladerf-micro-xa4",
-    sdrGateway: "",
+    sdrGateway: "192.168.1.20",
     sdrOpened: null,
     sdrRemote: "",
     sdrFlashName: "hostedxA4.rbf",
@@ -295,7 +295,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     setAllowField: (field, v) => set({ [field]: v }),
     setPaMa: (ma) => set({ paMa: ma }),
     setAutoCue: (v) => set({ autoCue: v }),
-    setSdrId: (id) => set({ sdrId: id }),
+    setSdrId: (id) =>
+      set({
+        sdrId: id,
+        sdrFlashName: defaultFlashName(id) || get().sdrFlashName,
+        sdrGateway: defaultEthHost(id),
+      }),
     setSdrGateway: (v) => set({ sdrGateway: v }),
     setSdrFlashName: (v) => set({ sdrFlashName: v }),
     setScanThreshold: (db) => set({ scanThresholdDb: db }),
@@ -604,10 +609,12 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: () => {
       const s = get();
-      const remote = s.sdrGateway.trim() ? soapyRemoteArgs(s.sdrGateway) : "";
+      const remote = sdrOpenArgs(s.sdrId, s.sdrGateway);
+      const plan = planEthernet(s.sdrId, s.sdrGateway);
       const r = gSdr.open(s.sdrId, remote);
       set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
       pushLog("sys", r.reason);
+      pushLog("sys", plan.cableText);
     },
 
     closeSdr: () => {
@@ -640,7 +647,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     startScan: () => {
       const s = get();
       if (!gSdr.opened()) {
-        const opened = gSdr.open(s.sdrId, s.sdrGateway.trim() ? soapyRemoteArgs(s.sdrGateway) : "");
+        const opened = gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
         set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
         pushLog("sys", opened.reason);
         if (!opened.ok) return;

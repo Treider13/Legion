@@ -46,7 +46,15 @@ export type FirmwareKind =
   | "fpga-a9"
   | "fpga-x40"
   | "fpga-x115"
+  | "pluto-frm"
+  | "uhd-n210-fpga"
+  | "uhd-n210-fw"
+  | "hackrf-fw"
+  | "lime-img"
   | "unknown";
+
+/** Куда втыкается Ethernet-кабель (не путать с USB3 у xA4). */
+export type EthCable = "sdr-rj45" | "gateway-rj45" | "usb-gadget";
 
 export interface FlashJob {
   deviceId: string;
