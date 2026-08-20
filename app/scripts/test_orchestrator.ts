@@ -6,7 +6,10 @@ import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../s
 import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
+import { planFlashCli } from "../src/sdr/flashcli";
+import { flashFileRequired, hostOpenAllowed } from "../src/sdr/host";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
+import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
 import {
@@ -179,7 +182,13 @@ function main(): void {
     byteLength: 2048,
     action: "flash-fpga",
   });
-  check("flash mock A4", flash.ok);
+  check("flash mock A4 не врёт про запись", flash.ok === false && flash.written === false);
+  check("validate того же образа ок", validateFlashJob({
+    deviceId: "bladerf-micro-xa4",
+    filename: "hostedxA4.rbf",
+    byteLength: 2048,
+    action: "flash-fpga",
+  }).ok === true);
 
   sdr.injectTone(2442, -35);
   const bins = sdr.scanWindow(2442, 20, 64);
@@ -320,6 +329,57 @@ function main(): void {
   const t1 = loop.tick(1);
   const t2 = loop.tick(2);
   check("loop не останавливается", t1.done === false && t2.done === false && t2.centerMhz > 0);
+  check("тик отдаёт бины спектра", t1.bins.length > 0);
+
+  check("hosted A4 закрывает задачу RX+TX", firmwareDoesTask("fpga-a4", "bladerf-micro-xa4").ok);
+  check("FX3 задачу не закрывает", firmwareDoesTask("fx3", "bladerf-micro-xa4").ok === false);
+  check("RTL не TX", firmwareDoesTask("unknown", "rtl-sdr").tx === false);
+  check("RF-Clown имя отклонено", rejectAlienFirmware("RF-Clown.bin") !== null);
+  check("BlueJammer имя отклонено", rejectAlienFirmware("ESP32-BlueJammer.bin") !== null);
+  check("nRF24 имя отклонено", firmwareFileDoesTask("nrf24_jam.rbf", "bladerf-micro-xa4").ok === false);
+  check(
+    "BlueJammer на xA4 не validate",
+    validateFlashJob({
+      deviceId: "bladerf-micro-xa4",
+      filename: "bluejammer.bin",
+      byteLength: 100,
+      action: "load-fpga",
+    }).ok === false,
+  );
+  check(
+    "Nuand RAM CLI",
+    planFlashCli({
+      deviceId: "bladerf-micro-xa4",
+      filename: "hostedxA4.rbf",
+      byteLength: 10,
+      action: "load-fpga",
+    }).argv.join(" ") === "bladeRF-cli -l hostedxA4.rbf",
+  );
+  check(
+    "Nuand autoload CLI",
+    planFlashCli({
+      deviceId: "bladerf-micro-xa4",
+      filename: "hostedxA4.rbf",
+      byteLength: 10,
+      action: "flash-fpga",
+    }).argv.includes("-L"),
+  );
+  check("без файла образа нельзя", flashFileRequired(0).ok === false);
+  check("с файлом размер ок", flashFileRequired(2048).ok);
+  check("без эмуляции и без CLI открытие запрещено", hostOpenAllowed({
+    emulation: false,
+    hasSoapyOrCli: false,
+    imageBytes: 0,
+  }).ok === false);
+  check("эмуляция открытие честно", hostOpenAllowed({
+    emulation: true,
+    hasSoapyOrCli: false,
+    imageBytes: 0,
+  }).ok);
+
+  const dry = new MockSdrBackend({ emulation: false });
+  check("мок без эмуляции не present", dry.probe().every((d) => d.present === false));
+  check("мок без эмуляции не open", dry.open("bladerf-micro-xa4").ok === false);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

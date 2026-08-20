@@ -36,7 +36,7 @@ export function LiteEye() {
       const cx = w / 2;
       const cy = h / 2;
       const R = Math.min(w, h) * 0.32;
-      const alert = rfVisual.corridorActive;
+      const alert = rfVisual.corridorActive || rfVisual.sdrTransmit;
 
       // выбор новой цели взгляда
       if (t > s.next) {

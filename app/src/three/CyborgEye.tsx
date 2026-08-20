@@ -501,7 +501,7 @@ export function CyborgEye({ tier }: Props) {
     const t = state.clock.elapsedTime;
     const dt = Math.min(delta, 0.05);
     const k = (rate: number) => 1 - Math.exp(-dt * rate);
-    const alert = rfVisual.corridorActive;
+    const alert = rfVisual.corridorActive || rfVisual.sdrTransmit;
     const s = st.current;
     const P = parts;
 

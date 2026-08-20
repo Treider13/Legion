@@ -38,3 +38,22 @@ SoapySDRServer --bind
 Официальный **hosted** bitstream даёт RX+TX через libbladeRF/Soapy — скан полосы и перестройка TX LO. Свой HDL «detect за микросекунды» в репозиторий не кладём: xA4 49 kLE тесен, это не hosted-образ.
 
 Не ставим чужие jam-FPGA и не шьём ESP32 этими файлами.
+
+## Замысел образа (режим SDR)
+
+Нужен официальный **hosted** bitstream: RX (energy detect по allowlist) +
+TX LO на RF out → усилитель. FX3 `.img` без FPGA задачу не закрывает.
+Имена вроде RF-Clown / BlueJammer / nRF24 отклоняются на хосте.
+
+Запись в железо — только вендорский CLI (`bladeRF-cli -l/-L/-f`,
+`uhd_image_loader`, `hackrf_spiflash`) и только если выбран реальный файл
+(размер > 0). Проверка имени ≠ запись. Без CLI LEGION пишет «не записано».
+
+## Это не RF-Clown и не BlueJammer
+
+| | LEGION режим 1 | LEGION режим 2 | RF-Clown / BlueJammer |
+|---|---|---|---|
+| Радио | SDR (bladeRF/USRP/…) | ADF4351 | nRF24L01 (+ ESP32) |
+| Кабель к ПК | Ethernet | USB-UART | USB только для прошивки |
+| Задача | скан + тон на усилитель | коридор/частота | шум 2.4 ГГц (jam) |
+| Образ | hosted Nuand/ADI/Ettus | PlatformIO LEGION | чужой `.bin` |

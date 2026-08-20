@@ -47,27 +47,40 @@ export class MockSdrBackend implements SdrBackend {
   private remote = "";
   private tones: Array<{ f: number; p: number }> = [];
   private txMhz: number | null = null;
+  /** false: не притворяемся, что кабель и FPGA живые. */
+  emulation: boolean;
+
+  constructor(opts: { emulation?: boolean } = {}) {
+    this.emulation = opts.emulation !== false;
+  }
+
+  setEmulation(v: boolean): void {
+    this.emulation = v;
+    if (!v) this.close();
+  }
 
   probe(): SdrDeviceInfo[] {
     return SDR_CATALOG.map((e, i) => ({
       ...e,
-      serial: `MOCK-${e.id}-${i + 1}`,
-      present: true,
+      serial: this.emulation ? `MOCK-${e.id}-${i + 1}` : "",
+      present: this.emulation,
     }));
   }
 
   open(id: string, remoteArgs = ""): { ok: boolean; reason: string } {
+    if (!this.emulation) {
+      return {
+        ok: false,
+        reason: "нет эмуляции и нет Soapy/bladeRF в этом процессе — это не эфир",
+      };
+    }
     const row = this.probe().find((d) => d.id === id);
     if (!row) return { ok: false, reason: "устройство не в каталоге" };
     this.device = row;
     this.remote = remoteArgs;
     return {
       ok: true,
-      reason: row.nativeEthernet
-        ? `открыт ${row.name} (нативный Ethernet)`
-        : remoteArgs
-          ? `открыт ${row.name} через шлюз ${remoteArgs}`
-          : `открыт ${row.name} (локальный USB-мок)`,
+      reason: `ЭМУЛЯЦИЯ ${row.name} — IQ/TX модель хоста, не кабель` + (remoteArgs ? ` · args ${remoteArgs}` : ""),
     };
   }
 
@@ -98,8 +111,15 @@ export class MockSdrBackend implements SdrBackend {
   }
 
   flash(job: FlashJob): FlashResult {
-    if (!this.device) return { ok: false, kind: "unknown", reason: "SDR не открыт" };
-    return validateFlashJob({ ...job, deviceId: this.device.id });
+    if (!this.device) return { ok: false, kind: "unknown", reason: "SDR не открыт", written: false };
+    const v = validateFlashJob({ ...job, deviceId: this.device.id });
+    if (!v.ok) return { ...v, written: false };
+    return {
+      ...v,
+      ok: false,
+      written: false,
+      reason: `${v.reason} · в железо не записано (нет bladeRF-cli / uhd_image_loader в процессе)`,
+    };
   }
 
   injectTone(freqMhz: number, powerDbm: number): void {

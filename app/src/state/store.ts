@@ -7,9 +7,10 @@ import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
 import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
-import type { Detection, FlashResult, SdrDeviceInfo } from "../sdr/types";
+import { flashFileRequired, hostOpenAllowed } from "../sdr/host";
+import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { modeConflict } from "../sense/modes";
+import { modeConflict, modeOf } from "../sense/modes";
 import {
   markForwarded,
   mergeDetections,
@@ -89,11 +90,15 @@ interface LegionStore {
   sdrRemote: string;
   sdrFlashName: string;
   lastFlash: FlashResult | null;
+  sdrEmulation: boolean;
+  sdrImageBytes: number;
   // SCAN RX
   scanRunning: boolean;
   scanThresholdDb: number;
   scanCenterMhz: number | null;
+  scanBins: ScanBin[];
   detections: Detection[];
+  lastInterceptMhz: number | null;
   lastCueReason: string;
   lastSdrTxUs: number | null;
   // журнал
@@ -116,6 +121,8 @@ interface LegionStore {
   setSdrId(id: string): void;
   setSdrGateway(v: string): void;
   setSdrFlashName(v: string): void;
+  setSdrEmulation(v: boolean): void;
+  setSdrImageFile(name: string, byteLength: number): void;
   setScanThreshold(db: number): void;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
@@ -256,10 +263,14 @@ export const useLegion = create<LegionStore>((set, get) => {
     sdrRemote: "",
     sdrFlashName: "hostedxA4.rbf",
     lastFlash: null,
+    sdrEmulation: true,
+    sdrImageBytes: 0,
     scanRunning: false,
     scanThresholdDb: 12,
     scanCenterMhz: null,
+    scanBins: [],
     detections: [],
+    lastInterceptMhz: null,
     lastCueReason: "",
     lastSdrTxUs: null,
     log: [],
@@ -270,7 +281,19 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFreqMhz: (f) => set({ freqMhz: f }),
     setCorrField: (field, v) => set({ [field]: v }),
     setCorrMode: (m) => set({ corrMode: m }),
-    setWorkspace: (w) => set({ workspace: w }),
+    setWorkspace: (w) => {
+      const prev = modeOf(get().workspace);
+      const next = modeOf(w);
+      if (prev !== next) {
+        if (next === "esp32") {
+          get().stopScan();
+          void get().stopTransmit();
+        } else if (get().corridorRunning) {
+          void get().corridorStop();
+        }
+      }
+      set({ workspace: w });
+    },
     setAllowField: (field, v) => set({ [field]: v }),
     setSdrAllowField: (field, v) => set({ [field]: v }),
     setPaMa: (ma) => set({ paMa: ma }),
@@ -283,6 +306,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       }),
     setSdrGateway: (v) => set({ sdrGateway: v }),
     setSdrFlashName: (v) => set({ sdrFlashName: v }),
+    setSdrEmulation: (v) => {
+      gSdr.setEmulation(v);
+      set({ sdrEmulation: v, sdrDevices: gSdr.probe(), sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+      pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+    },
+    setSdrImageFile: (name, byteLength) => set({ sdrFlashName: name, sdrImageBytes: byteLength }),
     setScanThreshold: (db) => set({ scanThresholdDb: db }),
     clearLog: () => set({ log: [] }),
 
@@ -395,6 +424,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setFrequency: async () => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       const mhz = parseFloat(get().freqMhz);
       if (!Number.isFinite(mhz)) {
@@ -425,6 +459,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setRf: async (on) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", on ? "RF ON" : "RF OFF");
       const r = await gClient.rf(on);
@@ -624,6 +663,16 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: () => {
       const s = get();
+      const pre = hostOpenAllowed({
+        emulation: s.sdrEmulation,
+        hasSoapyOrCli: false,
+        imageBytes: s.sdrImageBytes,
+      });
+      if (!pre.ok) {
+        pushLog("sys", pre.reason);
+        return;
+      }
+      gSdr.setEmulation(s.sdrEmulation);
       const remote = sdrOpenArgs(s.sdrId, s.sdrGateway);
       const plan = planEthernet(s.sdrId, s.sdrGateway);
       const r = gSdr.open(s.sdrId, remote);
@@ -642,14 +691,29 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     flashSdr: (action) => {
       const s = get();
+      const file = flashFileRequired(s.sdrImageBytes);
+      if (!file.ok) {
+        const r: FlashResult = { ok: false, kind: "unknown", reason: file.reason, written: false };
+        set({ lastFlash: r });
+        pushLog("sys", r.reason);
+        return;
+      }
+      if (!gSdr.opened()) {
+        const opened = gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
+        set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+        if (!opened.ok) {
+          pushLog("sys", opened.reason);
+          return;
+        }
+      }
       const r = gSdr.flash({
         deviceId: s.sdrOpened?.id ?? s.sdrId,
         filename: s.sdrFlashName,
-        byteLength: 1024,
+        byteLength: s.sdrImageBytes,
         action,
       });
       set({ lastFlash: r });
-      pushLog("sys", r.ok ? `прошивка: ${r.reason}` : `прошивка отклонена: ${r.reason}`);
+      pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason}`);
     },
 
     injectDemoTone: () => {
@@ -661,6 +725,15 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startScan: () => {
       const s = get();
+      const pre = hostOpenAllowed({
+        emulation: s.sdrEmulation,
+        hasSoapyOrCli: false,
+        imageBytes: s.sdrImageBytes,
+      });
+      if (!pre.ok) {
+        pushLog("sys", pre.reason);
+        return;
+      }
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
@@ -702,8 +775,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         const tick = gScan.tick();
         if (tick.centerMhz) set({ scanCenterMhz: tick.centerMhz });
         if (tick.detections.length > 0) {
-          set({ detections: mergeDetections(get().detections, tick.detections) });
+          const dets = mergeDetections(get().detections, tick.detections);
+          const hit = pickStrongest(tick.detections);
+          set({
+            detections: dets,
+            lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
+          });
         }
+        if (tick.bins.length > 0) set({ scanBins: tick.bins });
         const st = get();
         if (!st.transmitArmed) return;
         const best = pickStrongest(tick.detections);

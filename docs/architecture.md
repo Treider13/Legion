@@ -76,6 +76,11 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   Одновременно коридор и SDR TX запрещены (`modeConflict`).
   I/Q на ESP32 не идёт. LAN xA4 = шлюз USB3 + SoapyRemote (RJ45 не в bladeRF).
   N210: RJ45 в сам USRP. Образы: `app/src/sdr/official.ts`.
+  **Не RF-Clown / не ESP32-BlueJammer:** те проекты — ESP32 + nRF24L01, шум
+  по каналам BT/BLE/WiFi 2.4 ГГц, часто закрытый `.bin`, старт при подаче
+  питания. Это третий тракт. В LEGION их прошивки и таблицы каналов
+  не принимаются (`rejectAlienFirmware`). Режим 2 — ADF4351 по USB,
+  не nRF24. Режим 1 — hosted FPGA SDR, не jam-FPGA.
 - **Быстрый путь detect→TX (только режим SDR)**: детект и TX LO живут в
   процессе SDR, не в React и не на ESP32. Hop = аналоговая BW устройства
   (bladeRF ≤56 МГц, Nuand), а не узкое окно из UI — идея ice9/blue-dragon

@@ -67,6 +67,8 @@ export interface FlashResult {
   ok: boolean;
   kind: FirmwareKind;
   reason: string;
+  /** true только если CLI реально записал образ. Валидация имени — не запись. */
+  written: boolean;
 }
 
 export interface ScanBin {
@@ -80,7 +82,7 @@ export interface Detection {
   noiseDbm: number;
   snrDb: number;
   ts: number;
-  /** Уже ушло на синтезатор+PA (в нагрузку). UI красит красным. */
+  /** Уже ушло на TX LO этого SDR → усилитель. Не ESP32. UI красит красным. */
   forwarded: boolean;
 }
 

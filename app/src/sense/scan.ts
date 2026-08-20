@@ -4,7 +4,7 @@
 // ============================================================================
 import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
-import type { Detection } from "../sdr/types";
+import type { Detection, ScanBin } from "../sdr/types";
 
 export interface ScanConfig {
   bands: readonly AllowBand[];
@@ -18,6 +18,7 @@ export interface ScanConfig {
 export interface ScanTick {
   centerMhz: number;
   detections: Detection[];
+  bins: ScanBin[];
   done: boolean;
 }
 
@@ -43,11 +44,11 @@ export class AllowlistScanner {
 
   tick(now = Date.now()): ScanTick {
     if (this.centers.length === 0) {
-      return { centerMhz: 0, detections: [], done: true };
+      return { centerMhz: 0, detections: [], bins: [], done: true };
     }
     if (this.idx >= this.centers.length) {
       if (this.cfg.loop) this.idx = 0;
-      else return { centerMhz: 0, detections: [], done: true };
+      else return { centerMhz: 0, detections: [], bins: [], done: true };
     }
     const centerMhz = this.centers[this.idx++];
     const bins = this.backend.scanWindow(centerMhz, this.cfg.bwMhz, this.cfg.bins);
@@ -64,6 +65,7 @@ export class AllowlistScanner {
     return {
       centerMhz,
       detections,
+      bins,
       done: wrapped && !this.cfg.loop,
     };
   }

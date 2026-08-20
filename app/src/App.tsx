@@ -59,12 +59,19 @@ function App() {
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
   useEffect(() => {
     return useLegion.subscribe((s) => {
-        rfVisual.freqMhz = parseFloat(s.freqMhz) || 2475;
+        rfVisual.freqMhz =
+          s.lastForwardMhz ??
+          s.lastInterceptMhz ??
+          s.scanCenterMhz ??
+          (parseFloat(s.freqMhz) || 2475);
         rfVisual.lock = s.lock ?? false;
         rfVisual.corridorActive = s.corridorRunning;
         rfVisual.corrF1 = parseFloat(s.corrF1) || 2400;
         rfVisual.corrF2 = parseFloat(s.corrF2) || 2500;
         rfVisual.telemFreqMhz = s.telemFreq;
+        rfVisual.sdrTransmit = s.transmitArmed;
+        rfVisual.sdrHitMhz = s.lastInterceptMhz;
+        rfVisual.sdrTxMhz = s.lastForwardMhz;
       });
   }, []);
 

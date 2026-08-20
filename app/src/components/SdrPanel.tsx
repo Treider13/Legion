@@ -13,8 +13,8 @@ export function SdrPanel() {
       <span className="panel-title">SDR // ETHERNET · ОФИЦ. FPGA</span>
       <p className="panel-note">
         Отдельный режим от синтезатора ESP32. Сюда не шьётся прошивка ESP32.
-        Ethernet-кабель — по схеме ниже. На SDR — только официальный образ вендора
-        (Nuand / ADI / Ettus / GSG), чтобы RX+TX LO работали. Свой jam-FPGA не ставим.
+        Ethernet-кабель — по схеме ниже. На SDR — только официальный hosted-образ
+        вендора (RX-скан + TX LO). RF-Clown / BlueJammer / nRF24 сюда не шьём.
       </p>
       <div className="corr-grid">
         <label>
@@ -62,6 +62,30 @@ export function SdrPanel() {
           </div>
         )}
       </div>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={s.sdrEmulation}
+          onChange={(e) => s.setSdrEmulation(e.target.checked)}
+        />
+        Эмуляция SDR (IQ/TX — модель хоста, не кабель). Снимите, если есть Soapy/CLI.
+      </label>
+      <label className="file-row">
+        Офиц. файл образа
+        <input
+          type="file"
+          aria-label="Файл прошивки SDR с сайта вендора"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) s.setSdrImageFile(f.name, f.size);
+          }}
+        />
+        <span className="panel-note">
+          {s.sdrImageBytes > 0
+            ? `${s.sdrFlashName} · ${s.sdrImageBytes} байт`
+            : "не выбран — запись в железо без файла запрещена"}
+        </span>
+      </label>
       <div className="power-row">
         <button className="btn-ghost" onClick={() => s.probeSdr()}>
           PROBE
@@ -77,7 +101,7 @@ export function SdrPanel() {
         )}
         <button
           className="btn-ghost"
-          disabled={!opened}
+          disabled={s.sdrImageBytes <= 0}
           onClick={() => {
             if (!s.sdrFlashName) s.setSdrFlashName(defaultFlashName(s.sdrId));
             s.flashSdr("load-fpga");
@@ -85,10 +109,10 @@ export function SdrPanel() {
         >
           FPGA В RAM
         </button>
-        <button className="btn-ghost" disabled={!opened} onClick={() => s.flashSdr("flash-fpga")}>
+        <button className="btn-ghost" disabled={s.sdrImageBytes <= 0} onClick={() => s.flashSdr("flash-fpga")}>
           FPGA В FLASH
         </button>
-        <button className="btn-ghost" disabled={!opened} onClick={() => s.flashSdr("flash-fx3")}>
+        <button className="btn-ghost" disabled={s.sdrImageBytes <= 0} onClick={() => s.flashSdr("flash-fx3")}>
           FX3 / MCU
         </button>
       </div>
@@ -109,7 +133,10 @@ export function SdrPanel() {
         </div>
       )}
       {s.lastFlash && (
-        <p className={s.lastFlash.ok ? "status-line" : "panel-warn"}>{s.lastFlash.reason}</p>
+        <p className={s.lastFlash.written ? "status-line" : "panel-warn"}>
+          {s.lastFlash.written ? "записано: " : "не записано: "}
+          {s.lastFlash.reason}
+        </p>
       )}
     </section>
   );
