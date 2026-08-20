@@ -2,7 +2,7 @@
 // LEGION — SCAN RX: обход только allowlist, energy detection.
 // Не излучает. Не ходит в ADF4351. Хост + SDR backend.
 // ============================================================================
-import type { AllowBand } from "../policy/allowlist";
+import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
 import type { Detection } from "../sdr/types";
 
@@ -51,11 +51,14 @@ export class AllowlistScanner {
     }
     const centerMhz = this.centers[this.idx++];
     const bins = this.backend.scanWindow(centerMhz, this.cfg.bwMhz, this.cfg.bins);
-    const detections = detectFromBins(bins, this.cfg.thresholdDb).map((d) => ({
-      ...d,
-      ts: now,
-      forwarded: false,
-    }));
+    const detections = clipToAllowlist(
+      detectFromBins(bins, this.cfg.thresholdDb).map((d) => ({
+        ...d,
+        ts: now,
+        forwarded: false,
+      })),
+      this.cfg.bands,
+    );
     const wrapped = this.idx >= this.centers.length;
     if (wrapped && this.cfg.loop) this.idx = 0;
     return {
@@ -83,4 +86,23 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
     }
   }
   return out;
+}
+
+/** Край окна FFT может вылезти за полосу — в UI и CUE такие бины не идут. */
+export function clipToAllowlist(
+  dets: readonly Detection[],
+  bands: readonly AllowBand[],
+): Detection[] {
+  return dets.filter((d) => cueFreqAllowed(d.freqMhz, bands));
+}
+
+/** Hop = аналоговая BW устройства, не захардкоженные 20 МГц. */
+export function scanHopMhz(analogBwMhz: number): number {
+  if (!Number.isFinite(analogBwMhz) || analogBwMhz <= 0) return 20;
+  return analogBwMhz;
+}
+
+/** Parked (одна стоянка) — чаще; hop — реже, чтобы не молотить USB LO. */
+export function scanTickMs(centerCount: number): number {
+  return centerCount <= 1 ? 16 : 40;
 }

@@ -74,3 +74,12 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   SCAN RX только по allowlist (energy detection), CUE на синтезатор,
   команда тока PA и интерлок LOAD. I/Q не идёт в ESP32. LAN для xA4 —
   шлюз USB3 + SoapyRemote, не кабель в BladeRF (факт Nuand: USB 3.0).
+- **Быстрый путь detect→TX (перепроверка)**: детект и TX LO живут в процессе
+  SDR, не в React. Hop = аналоговая BW устройства (bladeRF ≤56 МГц, Nuand),
+  а не 20 МГц из UI — идея ice9/blue-dragon (стоять в окне, пока полоса
+  влезает). ПЕРЕДАТЬ взводит PA один раз; каждый улов = SDR TX + `CUE`
+  (без повторных `PA SET I` / `PA ON`). `CUE` на ESP32 идёт через
+  `synth_apply_fast` (delta SPI, без NVS и без ожидания LOCK до 50 мс).
+  **Честный бюджет:** host USB3 retune — сотни µs…мс; UART 115200 — мс;
+  SPI ADF4351 — 7–40 µs + settle 0.15–0.5 мс. Микросекунды detect→TX
+  только на FPGA HDL (xA9; xA4 49 kLE тесен). Не реализовано и не рисуем.

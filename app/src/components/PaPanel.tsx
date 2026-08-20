@@ -9,8 +9,9 @@ export function PaPanel() {
     <section className="panel">
       <span className="panel-title">УСИЛИТЕЛЬ // НАГРУЗКА 50Ω</span>
       <p className="panel-note">
-        Конвейер «уловил → в нагрузку» запускается кнопкой ПЕРЕДАТЬ на вкладке СКАН RX.
-        Здесь ручной ток и интерлок. Bias-tee BladeRF — только on/off, не мА.
+        ПЕРЕДАТЬ на вкладке СКАН RX взводит ток и PA. Дальше улов идёт в SDR TX сразу,
+        CUE только меняет частоту синтезатора. Этот чекбокс — только наведение без RF.
+        Bias-tee BladeRF — on/off, не мА.
       </p>
       <label className="check-row">
         <input

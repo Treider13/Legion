@@ -71,6 +71,10 @@ export function SdrPanel() {
           <div>Открыт: {opened.name} · {opened.serial}</div>
           <div>Интерфейс: {opened.iface}{opened.nativeEthernet ? " · нативный Ethernet" : " · Ethernet только через шлюз"}</div>
           <div>FPGA: {opened.fpga}</div>
+          <div>
+            Аналог. BW: {opened.analogBwMhz} МГц ·{" "}
+            {opened.fullDuplex ? "full-duplex RX+TX" : "half-duplex / только RX"}
+          </div>
           <div>{opened.flash.notes}</div>
           <div>{opened.lanHint}</div>
           <div>{opened.paHint}</div>

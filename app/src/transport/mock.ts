@@ -1,8 +1,7 @@
 // ============================================================================
 // LEGION — MockTransport: эмулятор связки ESP32+ADF4351 для разработки и
 // e2e-тестов без железа. Отвечает на фаза-1 протокол (docs/protocol.md).
-// LOCK эмулируется с задержкой ~30 мс (реалистично: band select 20 мкс +
-// settling ~0.3 мс, факты F4/F5 — mock намеренно медленнее железа).
+// SET FREQ: LOCK ~30 мс (ручной путь). CUE: ~2 мс (UART, без ожидания LOCK).
 // ============================================================================
 import type {
   Transport,
@@ -441,7 +440,8 @@ export class MockTransport implements Transport {
     }
     this.freqMhz = mhz;
     this.corrActive = false;
-    this.reply(`OK CUE FREQ=${mhz.toFixed(6)} LOCK=1`, 30);
+    // CUE не ждёт LOCK (как прошивка: synth_apply_fast). 2 мс ≈ UART RTT.
+    this.reply(`OK CUE FREQ=${mhz.toFixed(6)} LOCK=1`, 2);
   }
 
   private stopCorridor(): void {

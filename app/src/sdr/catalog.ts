@@ -14,6 +14,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [70, 6000],
     txMhz: [47, 6000],
+    analogBwMhz: 56, // Nuand: analog RF BW ≤56 MHz
+    fullDuplex: true, // 2×2 MIMO, RX+TX одновременно
     fpga: "Cyclone V 49 kLE",
     flash: {
       fx3: true,
@@ -32,6 +34,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [70, 6000],
     txMhz: [47, 6000],
+    analogBwMhz: 56,
+    fullDuplex: true,
     fpga: "Cyclone V 301 kLE",
     flash: {
       fx3: true,
@@ -50,6 +54,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [1, 6000],
     txMhz: [1, 6000],
+    analogBwMhz: 20, // GSG: max sample rate 20 Msps
+    fullDuplex: false, // half-duplex: TX останавливает RX
     fpga: "CPLD + LPC43xx",
     flash: {
       fx3: false,
@@ -68,6 +74,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [0.1, 3800],
     txMhz: [0.1, 3800],
+    analogBwMhz: 61, // Lime: 61.44 Msps
+    fullDuplex: true,
     fpga: "Altera Cyclone IV",
     flash: {
       fx3: false,
@@ -86,6 +94,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [70, 6000],
     txMhz: [47, 6000],
+    analogBwMhz: 20, // ADI default USB bandwidth
+    fullDuplex: true,
     fpga: "Zynq-7010",
     flash: {
       fx3: false,
@@ -104,6 +114,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [70, 6000],
     txMhz: [70, 6000],
+    analogBwMhz: 56, // Ettus B210 analog BW
+    fullDuplex: true,
     fpga: "Spartan-6",
     flash: {
       fx3: false,
@@ -122,6 +134,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "trx",
     rxMhz: [0, 6000],
     txMhz: [0, 6000],
+    analogBwMhz: 20, // зависит от дочерней платы; консервативно
+    fullDuplex: true,
     fpga: "Spartan-3A-DSP",
     flash: {
       fx3: false,
@@ -140,6 +154,8 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
     role: "rx",
     rxMhz: [24, 1766],
     txMhz: null,
+    analogBwMhz: 2.4, // типичный rtl_sdr; 3.2 нестабилен
+    fullDuplex: false,
     fpga: "нет (RTL2832U)",
     flash: {
       fx3: false,

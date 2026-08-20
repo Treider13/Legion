@@ -819,8 +819,16 @@ void CmdServer::cmdCue(char* arg, Print& out) {
     out.println(F("ERR ALLOW cue requires allowlist hit"));
     return;
   }
-  bool lock = false;
-  const PlanStatus st = apply_frequency(*_s, hz, lock);
+  // Live-путь: как коридор. SET FREQ намеренно ждёт LOCK и пишет NVS
+  // (автономность). CUE при живом скане не должен:
+  //   — ждать LOCK до 50 мс (delay(1) в synth_apply);
+  //   — жечь NVS на каждый улов (putULong64 ≈ миллисекунды).
+  // RF не включаем (контракт CUE). SPI+delta 7–40 мкс; settle ФАПЧ сам.
+  if (corridor_active()) {
+    corridor_stop();
+  }
+  SynthPlan plan;
+  const PlanStatus st = synth_apply_fast(hz, plan);
   if (st == PlanStatus::ERR_RANGE) {
     out.println(F("ERR RANGE 35-4400 MHz"));
     return;
@@ -830,6 +838,11 @@ void CmdServer::cmdCue(char* arg, Print& out) {
     out.println((int)st);
     return;
   }
+  _s->plan = plan;
+  _s->plan_valid = true;
+  _s->freq_hz = hz;
+  leveling_apply(hz);
+  const bool lock = _s->drv && _s->drv->readLock();
   out.print(F("OK CUE FREQ="));
   out.print(mhz, 6);
   out.print(F(" LOCK="));

@@ -17,6 +17,10 @@ export interface SdrCatalogEntry {
   role: SdrRole;
   rxMhz: [number, number] | null;
   txMhz: [number, number] | null;
+  /** Аналоговая RF BW, МГц (офиц. спецификация, не hop UI). */
+  analogBwMhz: number;
+  /** Полный дуплекс: RX может продолжаться при TX на том же устройстве. */
+  fullDuplex: boolean;
   fpga: string;
   /** Как официально прошивается (не ESP32 OTA). */
   flash: {
@@ -70,4 +74,14 @@ export interface Detection {
   ts: number;
   /** Уже ушло на синтезатор+PA (в нагрузку). UI красит красным. */
   forwarded: boolean;
+}
+
+/** Результат перестройки TX LO внутри SDR (тот же процесс, не React). */
+export interface TxCueResult {
+  ok: boolean;
+  reason: string;
+  freqMhz: number;
+  /** Модель host-retune, не FPGA HDL. Не выдаём за микросекунды FPGA. */
+  latencyUs: number;
+  path: "sdr-tx" | "none";
 }

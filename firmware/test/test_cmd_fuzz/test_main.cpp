@@ -23,6 +23,7 @@ namespace legion {
 static bool g_lock_state = true;
 void Adf4351Driver::begin() {}
 void Adf4351Driver::writePlan(const SynthPlan&) {}
+void Adf4351Driver::writePlanDelta(const SynthPlan&, const SynthPlan&) {}
 void Adf4351Driver::writeRegister(uint32_t) {}
 bool Adf4351Driver::readLock() { return g_lock_state; }
 void Adf4351Driver::setChipEnable(bool) {}
@@ -68,6 +69,10 @@ PlanStatus synth_apply(uint64_t freq_hz, bool, bool& lock, SynthPlan* out) {
   PlannerConfig cfg;
   SynthPlan tmp;
   return plan_frequency(freq_hz, cfg, tmp);
+}
+PlanStatus synth_apply_fast(uint64_t freq_hz, SynthPlan& out) {
+  PlannerConfig cfg;
+  return plan_frequency(freq_hz, cfg, out);
 }
 Adf4351Driver& synth_driver() { return g_drv; }
 

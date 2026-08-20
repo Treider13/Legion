@@ -5,7 +5,17 @@
 // ============================================================================
 import { SDR_CATALOG } from "./catalog";
 import { validateFlashJob } from "./firmware";
-import type { Detection, FlashJob, FlashResult, SdrDeviceInfo, ScanBin } from "./types";
+import type {
+  Detection,
+  FlashJob,
+  FlashResult,
+  SdrDeviceInfo,
+  ScanBin,
+  TxCueResult,
+} from "./types";
+
+/** Модель host-retune (USB/Soapy), не FPGA schedule_retune. */
+export const SDR_TX_US = { usb3: 200, usb2: 1000, ethernet: 500 } as const;
 
 export interface SdrBackend {
   probe(): SdrDeviceInfo[];
@@ -13,10 +23,17 @@ export interface SdrBackend {
   close(): void;
   opened(): SdrDeviceInfo | null;
   remoteArgs(): string;
+  analogBwMhz(): number;
+  canTx(): boolean;
+  fullDuplex(): boolean;
   flash(job: FlashJob): FlashResult;
   injectTone(freqMhz: number, powerDbm: number): void;
   clearTones(): void;
   scanWindow(centerMhz: number, bwMhz: number, bins: number): ScanBin[];
+  /** Перестройка TX LO в том же процессе, что и RX. Не включает PA/RF ESP32. */
+  txCue(freqMhz: number): TxCueResult;
+  txOff(): void;
+  lastTxMhz(): number | null;
 }
 
 function noiseAt(freqMhz: number): number {
@@ -29,6 +46,7 @@ export class MockSdrBackend implements SdrBackend {
   private device: SdrDeviceInfo | null = null;
   private remote = "";
   private tones: Array<{ f: number; p: number }> = [];
+  private txMhz: number | null = null;
 
   probe(): SdrDeviceInfo[] {
     return SDR_CATALOG.map((e, i) => ({
@@ -56,6 +74,19 @@ export class MockSdrBackend implements SdrBackend {
   close(): void {
     this.device = null;
     this.remote = "";
+    this.txMhz = null;
+  }
+
+  analogBwMhz(): number {
+    return this.device?.analogBwMhz ?? 20;
+  }
+
+  canTx(): boolean {
+    return this.device?.role === "trx" && this.device.txMhz !== null;
+  }
+
+  fullDuplex(): boolean {
+    return this.device?.fullDuplex === true;
   }
 
   opened(): SdrDeviceInfo | null {
@@ -78,6 +109,43 @@ export class MockSdrBackend implements SdrBackend {
 
   clearTones(): void {
     this.tones = [];
+  }
+
+  txCue(freqMhz: number): TxCueResult {
+    if (!this.device) {
+      return { ok: false, reason: "SDR не открыт", freqMhz, latencyUs: 0, path: "none" };
+    }
+    if (!this.canTx()) {
+      return {
+        ok: false,
+        reason: "нет TX на этом SDR — только ADF4351",
+        freqMhz,
+        latencyUs: 0,
+        path: "none",
+      };
+    }
+    const range = this.device.txMhz;
+    if (!range || freqMhz < range[0] || freqMhz > range[1]) {
+      return { ok: false, reason: "TX вне диапазона SDR", freqMhz, latencyUs: 0, path: "none" };
+    }
+    this.txMhz = freqMhz;
+    const latencyUs = SDR_TX_US[this.device.iface];
+    const half = this.fullDuplex() ? "" : " (half-duplex: RX на этом устройстве паузится)";
+    return {
+      ok: true,
+      reason: `SDR TX LO ${freqMhz.toFixed(6)} МГц · модель host ${latencyUs} µs${half}`,
+      freqMhz,
+      latencyUs,
+      path: "sdr-tx",
+    };
+  }
+
+  txOff(): void {
+    this.txMhz = null;
+  }
+
+  lastTxMhz(): number | null {
+    return this.txMhz;
   }
 
   scanWindow(centerMhz: number, bwMhz: number, bins: number): ScanBin[] {

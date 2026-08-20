@@ -45,6 +45,9 @@ BATC, Hackaday, IEEE).
 | Nuand libbladeRF / bladeRF-cli | прошивка FX3/FPGA xA4; USB 3.0, не Ethernet |
 | xmikos/soapy_power, osmocom rtl_power | обзор спектра по полосе (RX, не TX-свип) |
 | IEEE/MDPI spectrum sensing surveys (energy detection) | SCAN RX: порог над шумом, без знания сигнала |
+| [ice9-bluetooth-sniffer](https://github.com/alphafox02/ice9-bluetooth-sniffer) / [blue-dragon](https://github.com/alphafox02/blue-dragon) | Только архитектура: wideband + детект в процессе радио, hop не нужен если полоса ≤ analog BW. Не протокол BT и не payload. |
+| Nuand libbladeRF `bladerf_schedule_retune` / Triggers | Host USB ≠ µs; sample-accurate retune — FPGA/NIOS. xA4 49 kLE тесен для своего FFT. |
+| [BlueJammer-V2](https://github.com/EmenstaNougat/BlueJammer-V2) | Только разделение UI↔радио (BW16 vs ESP32) и UART с ACK. **Не** копируем NRF24 hop / jam. |
 | ICIE 2017 (STM32F103 + ADF4351 + OLED) | референс-архитектура |
 
 ## Дизайн (фаза 5)

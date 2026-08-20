@@ -11,10 +11,11 @@ export function ScanPanel() {
     <section className="panel">
       <span className="panel-title">СКАН RX // ОДНА АНТЕННА</span>
       <p className="panel-note">
-        Антенна на SDR только слушает указанную полосу. Сначала задайте частоты и
-        нажмите СКАНИРОВАТЬ — увидите уловленное. Затем ПЕРЕДАТЬ: без дальнейшего
-        участия хост ставит частоту на синтезатор и ток на усилитель в нагрузку 50 Ом.
-        Переданное красится красным.
+        Одна антенна на SDR слушает только заданную полосу. СКАНИРОВАТЬ показывает
+        улов. ПЕРЕДАТЬ взводит PA: дальше без участия — детект в том же процессе, что
+        и SDR, сразу ставит TX LO (full-duplex не рвёт скан), затем CUE на ADF4351 и
+        ток в нагрузку 50 Ом. Улов в нагрузке — красный. UART — миллисекунды; микросекунды
+        на FPGA не обещаем (xA4 тесен, нужен свой HDL).
       </p>
       <div className="corr-grid">
         <label>
@@ -109,7 +110,11 @@ export function ScanPanel() {
         <span>{f1}</span>
         <span className="range-cur">
           {s.scanCenterMhz !== null ? `${s.scanCenterMhz.toFixed(3)} МГц` : "—"}
-          {s.transmitArmed ? " · передача в нагрузку" : s.scanRunning ? " · слушает" : ""}
+          {s.transmitArmed
+            ? ` · в нагрузку${s.lastSdrTxUs != null ? ` · SDR TX ${s.lastSdrTxUs} µs` : ""}`
+            : s.scanRunning
+              ? " · слушает"
+              : ""}
         </span>
         <span>{f2}</span>
       </div>
