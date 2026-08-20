@@ -8,9 +8,11 @@ import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
+import { modeConflict, modeOf } from "../src/sense/modes";
 import {
   decideCue,
   decideForward,
+  decideSdrTx,
   markForwarded,
   mergeDetections,
   pickStrongest,
@@ -234,83 +236,67 @@ function main(): void {
   rtl.open("rtl-sdr");
   check("RTL txCue отказ", rtl.txCue(100).ok === false && rtl.canTx() === false);
 
+  check("вкладка scan = режим SDR", modeOf("scan") === "sdr");
+  check("вкладка corridor = режим ESP32", modeOf("corridor") === "esp32");
+  check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
+  check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
+  check("нет конфликта", modeConflict("sdr", false, false) === null);
+
   const det = { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false };
+  check("SDR TX без тока ESP32 разрешён", decideSdrTx(det, ism, true, true).ok === true);
   const live = planHandoff({
     det,
     bands: ism,
     loadOk: true,
     transmitArmed: true,
-    autoCue: true,
-    paMa: 250,
-    paPrearmed: true,
-    rfOn: true,
     lastCuedMhz: null,
     inflight: false,
     sdrCanTx: true,
   });
   check(
-    "после взвода только SDR TX + CUE",
-    live.skip === false && live.sdrTx && live.cue && !live.paSetI && !live.paOn && !live.rfOn,
+    "режим SDR: только sdrTx, без CUE/PA/RF ESP32",
+    live.skip === false && live.sdrTx && !live.cue && !live.paSetI && !live.paOn && !live.rfOn,
   );
-  const firstRf = planHandoff({
-    det,
-    bands: ism,
-    loadOk: true,
-    transmitArmed: true,
-    autoCue: true,
-    paMa: 250,
-    paPrearmed: true,
-    rfOn: false,
-    lastCuedMhz: null,
-    inflight: false,
-    sdrCanTx: true,
-  });
-  check("первый улов включает RF один раз", firstRf.rfOn && !firstRf.paSetI);
-  const onlyCue = planHandoff({
+  const noArm = planHandoff({
     det,
     bands: ism,
     loadOk: true,
     transmitArmed: false,
-    autoCue: true,
-    paMa: 0,
-    paPrearmed: false,
-    rfOn: false,
     lastCuedMhz: null,
     inflight: false,
     sdrCanTx: true,
   });
-  check(
-    "autoCue без ПЕРЕДАТЬ не включает RF/SDR TX",
-    onlyCue.cue && !onlyCue.sdrTx && !onlyCue.rfOn && !onlyCue.paOn,
-  );
+  check("без ПЕРЕДАТЬ SDR не излучает", noArm.skip && !noArm.sdrTx && !noArm.cue);
   const same = planHandoff({
     det,
     bands: ism,
     loadOk: true,
     transmitArmed: true,
-    autoCue: true,
-    paMa: 250,
-    paPrearmed: true,
-    rfOn: true,
     lastCuedMhz: 2442.05,
     inflight: false,
     sdrCanTx: true,
   });
-  check("тот же бин не шлёт повторный CUE", same.skip);
+  check("тот же бин не шлёт повторный SDR TX", same.skip);
   const busy = planHandoff({
     det,
     bands: ism,
     loadOk: true,
     transmitArmed: true,
-    autoCue: true,
-    paMa: 250,
-    paPrearmed: true,
-    rfOn: true,
     lastCuedMhz: 2410,
     inflight: true,
     sdrCanTx: true,
   });
-  check("inflight не плодит UART", busy.skip);
+  check("inflight не плодит второй TX", busy.skip);
+  const noTx = planHandoff({
+    det,
+    bands: ism,
+    loadOk: true,
+    transmitArmed: true,
+    lastCuedMhz: null,
+    inflight: false,
+    sdrCanTx: false,
+  });
+  check("RTL без TX не идёт в усилитель", noTx.skip);
   const gate = new HandoffGate();
   gate.reserve(2442);
   check("queueIfBusy на другом бине", gate.queueIfBusy(2480) === true && gate.queuedMhz === 2480);

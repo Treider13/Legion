@@ -1,7 +1,6 @@
 // ============================================================================
-// LEGION — оркестратор: DETECT → решение «передать в нагрузку».
-// ПЕРЕДАТЬ — разовое согласие оператора. Дальше хост сам: CUE → RF → PA.
-// Только allowlist + LOAD OK. В эфир без заглушки не ходим.
+// LEGION — решения режима SDR (detect → TX на SDR) и утилит списка улова.
+// ESP32 CUE/PA — другой режим, сюда не вызывается.
 // ============================================================================
 import {
   actuatorEnableAllowed,
@@ -53,13 +52,32 @@ export function decideForward(
     };
   }
   if (!(paMa > 0)) {
-    return { ok: false, reason: "ток PA не задан", freqMhz: det.freqMhz };
+    return { ok: false, reason: "ток PA не задан (только режим ESP32)", freqMhz: det.freqMhz };
   }
   return {
     ok: true,
-    reason: "в нагрузку (allowlist + заглушка + ПЕРЕДАТЬ)",
+    reason: "ESP32: allowlist + заглушка + ток",
     freqMhz: det.freqMhz,
   };
+}
+
+/** Режим SDR: ток ESP32 не нужен — усилитель на RF out SDR. */
+export function decideSdrTx(
+  det: Detection,
+  bands: readonly AllowBand[],
+  loadOk: boolean,
+  armed: boolean,
+): CueDecision {
+  if (!cueFreqAllowed(det.freqMhz, bands)) {
+    return { ok: false, reason: "частота вне allowlist", freqMhz: det.freqMhz };
+  }
+  if (!actuatorEnableAllowed(loadOk)) {
+    return { ok: false, reason: "нет подтверждённой нагрузки 50 Ом", freqMhz: det.freqMhz };
+  }
+  if (!armed) {
+    return { ok: false, reason: "ожидание кнопки ПЕРЕДАТЬ", freqMhz: det.freqMhz };
+  }
+  return { ok: true, reason: "SDR TX → усилитель", freqMhz: det.freqMhz };
 }
 
 export function pickStrongest(dets: readonly Detection[]): Detection | null {

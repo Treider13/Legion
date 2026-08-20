@@ -68,15 +68,14 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
 - **Fast-scan**: delta-запись только изменившихся регистров ADF4351 (R0
   последним) относительно единого кэша реального состояния чипа в `synth`;
   срезает время SPI-записи, физику ФАПЧ не обходит. (фаза 10)
-- **Оркестратор SDR + политика (фаза 11)**: ESP32 по-прежнему единственный
-  владелец ADF4351. На ПК: каталог SDR (bladeRF xA4/xA9, HackRF, Lime, Pluto,
-  USRP B210/N210, RTL-SDR), проверка официальных имён образов FPGA/FX3,
-  SCAN RX только по allowlist (energy detection), CUE на синтезатор,
-  команда тока PA и интерлок LOAD. I/Q не идёт в ESP32. LAN для xA4 —
-  шлюз USB3 + SoapyRemote, не кабель в BladeRF (факт Nuand: USB 3.0).
-  N210: RJ45 в сам USRP (`driver=uhd,type=usrp2,addr=`). Официальные образы —
-  манифест `app/src/sdr/official.ts` и [sdr-firmware.md](sdr-firmware.md).
-  Режим ESP32 (синтезатор) и режим SDR не смешивают прошивки.
+- **Два режима (не смешивать):**
+  1. **SDR:** ПК --Ethernet--> SDR; антенна на RX, усилитель на RF out.
+     Старт/стоп и события эфира по Ethernet. ESP32 не вызывается.
+  2. **ESP32:** ПК --USB--> ESP32 --SPI--> ADF4351 --> усилитель.
+     Коридор/скорость. Нет SDR и нет антенны скана.
+  Одновременно коридор и SDR TX запрещены (`modeConflict`).
+  I/Q на ESP32 не идёт. LAN xA4 = шлюз USB3 + SoapyRemote (RJ45 не в bladeRF).
+  N210: RJ45 в сам USRP. Образы: `app/src/sdr/official.ts`.
 - **Быстрый путь detect→TX (перепроверка)**: детект и TX LO живут в процессе
   SDR, не в React. Hop = аналоговая BW устройства (bladeRF ≤56 МГц, Nuand),
   а не 20 МГц из UI — идея ice9/blue-dragon (стоять в окне, пока полоса

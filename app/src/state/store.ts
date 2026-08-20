@@ -9,10 +9,10 @@ import { MockSdrBackend } from "../sdr/backend";
 import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import type { Detection, FlashResult, SdrDeviceInfo } from "../sdr/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
+import { modeConflict } from "../sense/modes";
 import {
   markForwarded,
   mergeDetections,
-  PA_ARM_DEFAULT_MA,
   pickStrongest,
 } from "../sense/orchestrator";
 import { AllowlistScanner, planCenters, scanHopMhz, scanTickMs } from "../sense/scan";
@@ -148,7 +148,6 @@ const gSdr = new MockSdrBackend();
 let gScan: AllowlistScanner | null = null;
 let gScanTimer: ReturnType<typeof setInterval> | null = null;
 const gGate = new HandoffGate();
-let gPaPrearmed = false;
 
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
@@ -163,54 +162,23 @@ export const useLegion = create<LegionStore>((set, get) => {
     return m ? m[1] === "1" : null;
   };
 
-  const executeHandoff = async (plan: HandoffPlan, sdrUs: number): Promise<void> => {
-    if (plan.cue) {
-      await get().cueTo(plan.freqMhz);
-    }
-    if (gClient) {
-      if (plan.paSetI) {
-        pushLog("tx", `PA SET I ${Math.round(get().paMa)}`);
-        await gClient.paSetI(get().paMa);
-      }
-      if (plan.paOn) {
-        pushLog("tx", "PA ON");
-        const pa = await gClient.paOn();
-        if (pa.ok) {
-          set({ paOn: true });
-          gPaPrearmed = true;
-        } else pushLog("sys", pa.statusLine);
-      }
-      if (plan.rfOn) {
-        pushLog("tx", "RF ON");
-        const rf = await gClient.rf(true);
-        if (rf.ok) set({ rfOn: true });
-        else pushLog("sys", rf.statusLine);
-      }
-    } else if (plan.rfOn || plan.paOn) {
-      pushLog("sys", "актуатор не подключён — частота помечена в UI");
-    }
-    const armed = get().transmitArmed;
+  const executeHandoff = (plan: HandoffPlan, sdrUs: number): void => {
+    // Режим SDR: никаких CUE / PA / RF на ESP32.
     set({
-      detections: armed ? markForwarded(get().detections, plan.freqMhz) : get().detections,
-      lastForwardMhz: armed ? plan.freqMhz : get().lastForwardMhz,
+      detections: markForwarded(get().detections, plan.freqMhz),
+      lastForwardMhz: plan.freqMhz,
       lastSdrTxUs: sdrUs || get().lastSdrTxUs,
-      lastCueReason: armed
-        ? `SDR TX ${sdrUs} µs → CUE ${plan.freqMhz.toFixed(3)} МГц → PA (нагрузка)`
-        : `CUE ${plan.freqMhz.toFixed(3)} МГц (без RF)`,
+      lastCueReason: `SDR TX ${plan.freqMhz.toFixed(3)} МГц → усилитель · ${sdrUs} µs host`,
     });
   };
 
-  const runHandoff = async (mhz: number): Promise<void> => {
+  const runHandoff = (mhz: number): void => {
     const st = get();
     const plan = planHandoff({
       det: mhzAsDet(mhz),
       bands: st.allowBands,
       loadOk: st.loadOk,
       transmitArmed: st.transmitArmed,
-      autoCue: st.autoCue,
-      paMa: st.paMa,
-      paPrearmed: gPaPrearmed,
-      rfOn: st.rfOn,
       lastCuedMhz: gGate.lastCuedMhz,
       inflight: gGate.inflight,
       sdrCanTx: gSdr.canTx(),
@@ -221,14 +189,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     if (plan.sdrTx) {
       const tx = gSdr.txCue(plan.freqMhz);
       sdrUs = tx.latencyUs;
-      if (tx.ok) pushLog("sys", tx.reason);
-      else pushLog("sys", tx.reason);
+      pushLog("sys", tx.reason);
     }
     try {
-      await executeHandoff(plan, sdrUs);
+      executeHandoff(plan, sdrUs);
     } finally {
       const queued = gGate.release();
-      if (queued !== null) void runHandoff(queued);
+      if (queued !== null) runHandoff(queued);
     }
   };
 
@@ -390,8 +357,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     disconnect: async () => {
-      get().stopScan();
-      if (get().transmitArmed) await get().stopTransmit();
+      // Отключение ESP32 не трогает режим SDR (скан / TX на Ethernet).
+      if (get().corridorRunning && gClient) {
+        await gClient.stop();
+        set({ corridorRunning: false, telemFreq: null, telemLock: null });
+      }
       if (gTransport) {
         try {
           await gTransport.disconnect();
@@ -477,6 +447,11 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     corridorStart: async () => {
       if (!gClient) return;
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const s = get();
       const f1 = parseFloat(s.corrF1);
       const f2 = parseFloat(s.corrF2);
@@ -488,7 +463,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       if (s.allowBands.length > 0 && !s.allowBands.some((b) => f1 >= b.f1Mhz && f2 <= b.f2Mhz)) {
-        pushLog("sys", "коридор TX вне allowlist — добавьте полосу во вкладке СКАН RX");
+        pushLog("sys", "коридор TX вне allowlist — полоса задаётся в режиме ESP32 / СКАН не нужен");
         return;
       }
       const cmd =
@@ -646,6 +621,11 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startScan: () => {
       const s = get();
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gSdr.opened()) {
         const opened = gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
         set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
@@ -674,8 +654,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ scanRunning: true, scanCenterMhz: null });
       pushLog(
         "sys",
-        `SCAN RX: BW ${hop} МГц · ${centers.length} стоек · тик ${tickMs} мс` +
-          (gSdr.fullDuplex() ? " · full-duplex RX||TX" : " · RX (TX на ADF4351)"),
+        `SDR SCAN: BW ${hop} МГц · ${centers.length} стоек · тик ${tickMs} мс` +
+          (gSdr.fullDuplex() ? " · RX||TX на SDR" : " · half-duplex SDR"),
       );
       gScanTimer = setInterval(() => {
         if (!gScan) return;
@@ -685,11 +665,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           set({ detections: mergeDetections(get().detections, tick.detections) });
         }
         const st = get();
-        if (!(st.transmitArmed || st.autoCue)) return;
+        if (!st.transmitArmed) return;
         const best = pickStrongest(tick.detections);
         if (!best) return;
         if (gGate.queueIfBusy(best.freqMhz)) return;
-        void runHandoff(best.freqMhz);
+        runHandoff(best.freqMhz);
       }, tickMs);
     },
 
@@ -704,63 +684,45 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startTransmit: async () => {
       const s = get();
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (s.allowBands.length === 0) {
         pushLog("sys", "ПЕРЕДАТЬ: нет allowlist");
         return;
       }
       if (!s.loadOk) {
-        pushLog("sys", "ПЕРЕДАТЬ: подтвердите нагрузку 50 Ом");
+        pushLog("sys", "ПЕРЕДАТЬ: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
       }
-      let paMa = s.paMa;
-      if (paMa <= 0) {
-        paMa = PA_ARM_DEFAULT_MA;
-        set({ paMa });
-        pushLog("sys", `ПЕРЕДАТЬ: ток PA по умолчанию ${paMa} мА`);
+      if (!gSdr.opened()) {
+        const opened = gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
+        set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+        pushLog("sys", opened.reason);
+        if (!opened.ok) return;
       }
-      if (gClient) {
-        pushLog("tx", "ALLOW CLEAR");
-        await gClient.allowClear();
-        for (const b of get().allowBands) {
-          pushLog("tx", `ALLOW ADD ${b.f1Mhz} ${b.f2Mhz}`);
-          await gClient.allowAdd(b.f1Mhz, b.f2Mhz);
-        }
-        pushLog("tx", "LOAD OK");
-        await gClient.loadOk();
-        pushLog("tx", `PA SET I ${paMa}`);
-        await gClient.paSetI(paMa);
-        pushLog("tx", "PA ON");
-        const pa = await gClient.paOn();
-        if (pa.ok) set({ paOn: true });
-        else {
-          pushLog("sys", pa.statusLine);
-          return;
-        }
+      if (!gSdr.canTx()) {
+        pushLog("sys", "ПЕРЕДАТЬ: у этого SDR нет TX — усилитель подключать некуда");
+        return;
       }
-      gPaPrearmed = true;
-      set({ transmitArmed: true, autoCue: true });
+      set({ transmitArmed: true });
       pushLog(
         "sys",
-        "ПЕРЕДАТЬ: PA взведён. Улов → TX LO внутри SDR сразу, затем CUE на синтезатор (RF ON один раз). Скан не останавливается.",
+        "SDR: ПЕРЕДАТЬ — улов остаётся на SDR, TX LO → RF out → усилитель. ESP32 не вызывается.",
       );
       if (!get().scanRunning) get().startScan();
       const pending = pickStrongest(get().detections.filter((d) => !d.forwarded));
-      if (pending) void runHandoff(pending.freqMhz);
+      if (pending) runHandoff(pending.freqMhz);
     },
 
     stopTransmit: async () => {
-      set({ transmitArmed: false, autoCue: false });
-      gPaPrearmed = false;
+      set({ transmitArmed: false });
       gGate.reset();
       gSdr.txOff();
-      if (gClient) {
-        pushLog("tx", "PA OFF");
-        await gClient.paOff();
-        pushLog("tx", "RF OFF");
-        await gClient.rf(false);
-      }
-      set({ paOn: false, rfOn: false, lastSdrTxUs: null });
-      pushLog("sys", "передача в нагрузку остановлена");
+      set({ lastSdrTxUs: null });
+      pushLog("sys", "SDR TX остановлен (ESP32 не тронут)");
     },
   };
 });

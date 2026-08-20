@@ -18,7 +18,8 @@ export function CorridorPanel() {
     <section className="panel">
       <span className="panel-title">КОРИДОР TX // ГЕНЕРАТОР</span>
       <p className="panel-note">
-        Передача синтезатора по сетке. Это не скан эфира. Поиск сигнала — вкладка СКАН RX.
+        Режим ESP32: USB → ESP32 → ADF4351 → усилитель. Нет SDR и нет антенны скана.
+        Полоса/скорость задаются здесь. Скан Ethernet — другой режим.
       </p>
       <div className="corr-grid">
         <label>

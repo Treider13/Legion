@@ -9,9 +9,8 @@ export function PaPanel() {
     <section className="panel">
       <span className="panel-title">УСИЛИТЕЛЬ // НАГРУЗКА 50Ω</span>
       <p className="panel-note">
-        ПЕРЕДАТЬ на вкладке СКАН RX взводит ток и PA. Дальше улов идёт в SDR TX сразу,
-        CUE только меняет частоту синтезатора. Этот чекбокс — только наведение без RF.
-        Bias-tee BladeRF — on/off, не мА.
+        Режим ESP32: ток задатчика на усилитель после ADF4351. Это не усилитель на
+        RF out SDR. Скан и ПЕРЕДАТЬ на вкладке SDR сюда не ходят.
       </p>
       <label className="check-row">
         <input
@@ -20,14 +19,6 @@ export function PaPanel() {
           onChange={(e) => void s.setLoad(e.target.checked)}
         />
         Подтверждаю эквивалент антенны / экран (LOAD OK)
-      </label>
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={s.autoCue}
-          onChange={(e) => s.setAutoCue(e.target.checked)}
-        />
-        Авто-наведение синтезатора после обнаружения (только в нагрузку, без RF ON)
       </label>
       <div className="att-row">
         <span className="att-label">ТОК</span>
@@ -56,7 +47,7 @@ export function PaPanel() {
           {s.paOn ? "PA ВЫКЛ" : "PA ВКЛ"}
         </button>
       </div>
-      <p className="status-line">{s.lastCueReason || "CUE не выполнялся"}</p>
+      <p className="status-line">{s.paOn ? `PA ON ${s.paMa} мА` : "PA выключен (режим ESP32)"}</p>
     </section>
   );
 }

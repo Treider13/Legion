@@ -49,7 +49,7 @@ export function ConnectBar() {
 
   return (
     <section className="panel connect-bar">
-      <span className="panel-title">СВЯЗЬ</span>
+      <span className="panel-title">СВЯЗЬ ESP32 // USB-UART — НЕ SDR</span>
       <select
         aria-label="Транспорт подключения"
         value={s.transportKind}

@@ -112,10 +112,16 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">LEGION</span>
-            <span className="hero-sub">СТЕНД // ADF4351 + SDR</span>
+            <span className="hero-sub">ДВА РЕЖИМА // ESP32 или SDR</span>
           </header>
           <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning ? "alert" : ""}`}>
-            {transmitArmed ? "ПЕРЕДАЧА В НАГРУЗКУ" : scanRunning ? "СКАН RX" : corridorRunning ? "КОРИДОР TX" : "ОЖИДАНИЕ"}
+            {transmitArmed
+              ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"
+              : scanRunning
+                ? "РЕЖИМ SDR · СКАН"
+                : corridorRunning
+                  ? "РЕЖИМ ESP32 · КОРИДОР"
+                  : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>
@@ -133,7 +139,7 @@ function App() {
         </div>
         <LogPanel />
         <footer className="app-footer">
-          LEGION v0.1 · актуатор ESP32→ADF4351 · SDR на хосте · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
+          LEGION v0.1 · режим ESP32: USB→синтезатор · режим SDR: Ethernet→SDR→усилитель · 50Ω
         </footer>
       </section>
     </div>
