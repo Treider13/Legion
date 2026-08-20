@@ -41,6 +41,10 @@ BATC, Hackaday, IEEE).
 |---|---|
 | IEEE Access 2019, Weyer et al. «Design Considerations for Integrated Radar Chirp Synthesizers» | CHIRP-режим: полоса петли vs stepping rate; мелкий FRAC-шаг (фаза 6) |
 | IEEE RTEICT 2017 «Design of frequency synthesizer…» (ADF4351+PIC32) | верификация подхода МК+ADF4351 |
+| SoapySDR + SoapyRemote (pothosware) | единый API SDR и LAN-шлюз USB-устройств |
+| Nuand libbladeRF / bladeRF-cli | прошивка FX3/FPGA xA4; USB 3.0, не Ethernet |
+| xmikos/soapy_power, osmocom rtl_power | обзор спектра по полосе (RX, не TX-свип) |
+| IEEE/MDPI spectrum sensing surveys (energy detection) | SCAN RX: порог над шумом, без знания сигнала |
 | ICIE 2017 (STM32F103 + ADF4351 + OLED) | референс-архитектура |
 
 ## Дизайн (фаза 5)

@@ -83,6 +83,10 @@ class Emu:
         self.power = 5
         self.rf = False
         self.corridor = Corridor()
+        self.allow: list[tuple[float, float]] = []
+        self.load_ok = True
+        self.pa_ma = 0
+        self.pa_on = False
 
     def handle(self, line: str) -> str:
         t = line.strip()
@@ -120,6 +124,10 @@ class Emu:
             actual = round(db / 0.25) * 0.25
             return f"OK ATT={actual:.2f} dB"
         if u == "RF ON":
+            if not self.load_ok:
+                return "ERR LOAD dummy load required"
+            if self.allow and not any(a <= self.freq <= b for a, b in self.allow):
+                return "ERR ALLOW frequency not in allowlist"
             self.rf = True
             return "OK RF ON"
         if u == "RF OFF":
@@ -142,6 +150,10 @@ class Emu:
                 "mode": mode, "lock": 1,
                 "rf": 1 if self.rf else 0, "power": self.power,
                 "version": VERSION, "board": BOARD,
+                "load": 1 if self.load_ok else 0,
+                "pa": 1 if self.pa_on else 0,
+                "pa_ma": self.pa_ma,
+                "allow_n": len(self.allow),
             })
         if u == "REGS?":
             return '{"regs":["0x00318000","0x00008011","0x18004fc2","0x00e0000b","0x0083203c","0x00580005"]}'
@@ -163,6 +175,14 @@ class Emu:
             if u.startswith("WIFI STA"):
                 return "OK WIFI STA connecting"
             return "ERR SYNTAX WIFI AP|STA|STATUS?"
+        if u.startswith("ALLOW") or u == "ALLOW?":
+            return self._allow_cmd(parts, u)
+        if u.startswith("LOAD") or u == "LOAD?":
+            return self._load_cmd(u)
+        if u.startswith("PA") or u == "PA?":
+            return self._pa_cmd(parts, u)
+        if u.startswith("CUE"):
+            return self._cue_cmd(parts)
         return f"ERR SYNTAX unknown command: {parts[0] if parts else ''}"
 
     def _corridor_cmd(self, parts: list, mode: str) -> str:
@@ -180,6 +200,8 @@ class Emu:
             return "ERR SYNTAX f1 f2 required"
         if not (34.375 <= f1 < f2 <= 4400):
             return "ERR RANGE corridor"
+        if self.allow and not any(a <= f1 and f2 <= b for a, b in self.allow):
+            return "ERR ALLOW corridor outside allowlist"
 
         c = self.corridor
         c.mode = mode
@@ -253,6 +275,79 @@ class Emu:
                 continue
         c.active = True
         return f"OK FM RUNNING {shape}"
+
+    def _allow_cmd(self, parts: list, u: str) -> str:
+        sub = (parts[1].upper() if len(parts) > 1 else "?") if u != "ALLOW?" else "?"
+        if u == "ALLOW?" or sub == "?":
+            return json.dumps({"n": len(self.allow), "allow": [list(x) for x in self.allow]})
+        if sub == "CLEAR":
+            self.allow = []
+            return "OK ALLOW n=0"
+        if sub != "ADD" or len(parts) < 4:
+            return "ERR SYNTAX ALLOW ADD|CLEAR|?"
+        try:
+            f1, f2 = float(parts[2]), float(parts[3])
+        except ValueError:
+            return "ERR SYNTAX ALLOW ADD <f1MHz> <f2MHz>"
+        if not (34.375 <= f1 <= f2 <= 4400):
+            return "ERR RANGE allow 35-4400 MHz"
+        if len(self.allow) >= 8:
+            return "ERR RANGE allow table full"
+        self.allow.append((f1, f2))
+        return f"OK ALLOW n={len(self.allow)}"
+
+    def _load_cmd(self, u: str) -> str:
+        if u == "LOAD?" or u.endswith(" ?"):
+            return json.dumps({"load": 1 if self.load_ok else 0})
+        if u == "LOAD OK":
+            self.load_ok = True
+            return "OK LOAD OK"
+        if u == "LOAD FAULT":
+            self.load_ok = False
+            self.pa_on = False
+            self.rf = False
+            return "OK LOAD FAULT"
+        return "ERR SYNTAX LOAD OK|FAULT|?"
+
+    def _pa_cmd(self, parts: list, u: str) -> str:
+        sub = (parts[1].upper() if len(parts) > 1 else "?") if u != "PA?" else "?"
+        if u == "PA?" or sub == "?":
+            return json.dumps({"pa": 1 if self.pa_on else 0, "ma": self.pa_ma})
+        if sub == "ON":
+            if not self.load_ok:
+                return "ERR LOAD dummy load required"
+            if self.pa_ma == 0:
+                return "ERR RANGE PA current"
+            self.pa_on = True
+            return f"OK PA ON I={self.pa_ma}"
+        if sub == "OFF":
+            self.pa_on = False
+            return "OK PA OFF"
+        if sub == "SET" and len(parts) >= 4 and parts[2].upper() == "I":
+            try:
+                ma = int(parts[3])
+            except ValueError:
+                return "ERR SYNTAX PA SET I <mA>"
+            if not 0 <= ma <= 1500:
+                return "ERR RANGE PA current 0-1500 mA"
+            self.pa_ma = ma
+            if ma == 0:
+                self.pa_on = False
+            return f"OK PA I={ma}"
+        return "ERR SYNTAX PA SET|ON|OFF|?"
+
+    def _cue_cmd(self, parts: list) -> str:
+        try:
+            mhz = float(parts[1])
+        except (IndexError, ValueError):
+            return "ERR SYNTAX bad freq"
+        if not self.allow or not any(a <= mhz <= b for a, b in self.allow):
+            return "ERR ALLOW cue requires allowlist hit"
+        if not 34.375 <= mhz <= 4400:
+            return "ERR RANGE 35-4400 MHz"
+        self.corridor.active = False
+        self.freq = mhz
+        return f"OK CUE FREQ={mhz:.6f} LOCK=1"
 
 
 def telemetry_loop(emu: Emu, master: int) -> None:

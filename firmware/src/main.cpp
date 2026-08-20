@@ -15,6 +15,7 @@
 #include "cmd_server.h"
 #include "leveling.h"
 #include "net_server.h"
+#include "policy.h"
 #include "serial_sync.h"
 #include "storage.h"
 #include "sweep_engine.h"
@@ -45,6 +46,7 @@ void setup() {
   g_state.drv = &g_adf;
   g_state.att = &g_att;
   legion::leveling_init(g_att);  // выравнивание уровня через PE43702 (фаза 10)
+  legion::policy_init();         // allowlist / LOAD / PA — RAM, не NVS
   legion::synth_init(g_adf, g_state.cfg);
   legion::corridor_init(g_adf, g_state.cfg, Serial);
   g_cmd.begin(g_state, Serial);

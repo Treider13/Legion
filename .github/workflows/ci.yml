@@ -69,6 +69,9 @@ jobs:
       - name: Protocol smoke test (mock transport)
         working-directory: app
         run: npx tsx scripts/smoke_mock.ts
+      - name: Orchestrator / SDR / allowlist tests
+        working-directory: app
+        run: npx tsx scripts/test_orchestrator.ts
       - name: WebSocket transport smoke test
         working-directory: app
         run: npx tsx scripts/smoke_ws.ts

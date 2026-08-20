@@ -138,4 +138,18 @@ export class LegionClient {
     return this.cmd(`FM START ${shape} CENTER ${centerMhz} DEPTH ${depthKhz} RATE ${rateMs}`);
   }
   stop() { return this.cmd("STOP"); }
+
+  allowAdd(f1Mhz: number, f2Mhz: number) {
+    return this.cmd(`ALLOW ADD ${f1Mhz} ${f2Mhz}`);
+  }
+  allowClear() { return this.cmd("ALLOW CLEAR"); }
+  allowStatus() { return this.cmd("ALLOW?"); }
+  loadOk() { return this.cmd("LOAD OK"); }
+  loadFault() { return this.cmd("LOAD FAULT"); }
+  loadStatus() { return this.cmd("LOAD?"); }
+  paSetI(ma: number) { return this.cmd(`PA SET I ${Math.round(ma)}`); }
+  paOn() { return this.cmd("PA ON"); }
+  paOff() { return this.cmd("PA OFF"); }
+  paStatus() { return this.cmd("PA?"); }
+  cue(mhz: number) { return this.cmd(`CUE ${mhz.toFixed(6)}`); }
 }

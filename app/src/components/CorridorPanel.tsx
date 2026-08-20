@@ -16,7 +16,10 @@ export function CorridorPanel() {
 
   return (
     <section className="panel">
-      <span className="panel-title">КОРИДОР // АВТО</span>
+      <span className="panel-title">КОРИДОР TX // ГЕНЕРАТОР</span>
+      <p className="panel-note">
+        Передача синтезатора по сетке. Это не скан эфира. Поиск сигнала — вкладка СКАН RX.
+      </p>
       <div className="corr-grid">
         <label>
           РЕЖИМ
@@ -26,7 +29,7 @@ export function CorridorPanel() {
             onChange={(e) => s.setCorrMode(e.target.value as "SWEEP" | "HOP" | "CHIRP")}
             disabled={!connected || s.corridorRunning}
           >
-            <option value="SWEEP">ОБЗОР (SWEEP)</option>
+            <option value="SWEEP">СВИП TX (SWEEP)</option>
             <option value="HOP">СКАЧКИ (HOP)</option>
             <option value="CHIRP">ЛЧМ (CHIRP)</option>
           </select>
@@ -104,11 +107,11 @@ export function CorridorPanel() {
             disabled={!connected}
             onClick={() => void s.corridorStart()}
           >
-            ПОДАВИТЬ ЦЕЛЬ
+            ЗАПУСТИТЬ КОРИДОР
           </button>
         )}
         {s.corridorRunning && (
-          <span className="state-badge state-connected">ПОДАВЛЕНИЕ АКТИВНО</span>
+          <span className="state-badge state-connected">КОРИДОР TX</span>
         )}
       </div>
     </section>

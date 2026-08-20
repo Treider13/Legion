@@ -27,6 +27,15 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 | Калибровка уровня (фаза 10) | `CAL LEVEL <freqMHz> <dBm>` / `CAL LEVEL CLEAR` | `OK CAL LEVEL ... n=<k>` | точка «частота → измеренный выход» |
 | Выравнивание уровня (фаза 10) | `SET LEVEL <dBm>` / `SET LEVEL OFF` | `OK LEVEL=<dBm> ATT=<dB>` | плоский уровень через PE43702 по калибровке |
 | Статус уровня (фаза 10) | `LEVEL?` | JSON `{enabled,target,points}` | таблица калибровки |
+| Allowlist (фаза 11) | `ALLOW ADD <f1> <f2>` / `ALLOW CLEAR` / `ALLOW?` | `OK ALLOW n=` / JSON | полосы, заранее разрешённые законом |
+| Нагрузка (фаза 11) | `LOAD OK` / `LOAD FAULT` / `LOAD?` | `OK LOAD …` / JSON | интерлок эквивалента 50 Ом |
+| Усилитель (фаза 11) | `PA SET I <mA>` / `PA ON` / `PA OFF` / `PA?` | `OK PA …` / JSON | ток 0–1500 мА; ON только при LOAD OK и I>0 |
+| Наведение (фаза 11) | `CUE <MHz>` | `OK CUE FREQ=… LOCK=` | SET FREQ только если частота в allowlist; **RF не включает** |
+
+Пустой allowlist **не** меняет SET FREQ / RF ON / SWEEP (совместимость фаз 1–10).
+Непустой allowlist: RF ON и коридор TX обязаны попадать в полосу.
+`CUE` всегда требует непустой allowlist и попадание.
+`LOAD FAULT` гасит RF и PA. `ERR LOAD` / `ERR ALLOW` — новые коды.
 
 ## Телеметрия (WebSocket push, 10 Гц в режиме коридора)
 
@@ -49,3 +58,5 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 | `ERR LOCK` | нет захвата петли после таймаута |
 | `ERR STATE` | команда недопустима в текущем режиме |
 | `ERR DWELL` | dwell < минимально допустимого (band select + settling) |
+| `ERR LOAD` | нет подтверждённой нагрузки 50 Ом (RF ON / PA ON) |
+| `ERR ALLOW` | частота или коридор вне allowlist; либо CUE без попадания |

@@ -12,6 +12,7 @@
 
 #include "leveling.h"
 #include "net_server.h"
+#include "policy.h"
 #include "selftest.h"
 #include "serial_sync.h"
 #include "storage.h"
@@ -139,6 +140,23 @@ void CmdServer::handleLine(char* line, Print& out) {
     out.println(F("OK IDLE"));
   } else if (strcasecmp(tok, "WIFI") == 0 && rest) {
     cmdWifi(rest, out);
+  } else if (strcasecmp(tok, "ALLOW?") == 0) {
+    char q[] = "?";
+    cmdAllow(q, out);
+  } else if (strcasecmp(tok, "LOAD?") == 0) {
+    char q[] = "?";
+    cmdLoad(q, out);
+  } else if (strcasecmp(tok, "PA?") == 0) {
+    char q[] = "?";
+    cmdPa(q, out);
+  } else if (strcasecmp(tok, "ALLOW") == 0 && rest) {
+    cmdAllow(rest, out);
+  } else if (strcasecmp(tok, "LOAD") == 0 && rest) {
+    cmdLoad(rest, out);
+  } else if (strcasecmp(tok, "PA") == 0 && rest) {
+    cmdPa(rest, out);
+  } else if (strcasecmp(tok, "CUE") == 0 && rest) {
+    cmdCue(rest, out);
   } else if (strcasecmp(tok, "STATUS?") == 0) {
     cmdStatus(out);
   } else if (strcasecmp(tok, "LEVEL?") == 0) {
@@ -237,6 +255,14 @@ void CmdServer::cmdRf(char* arg, Print& out) {
     out.println(F("ERR SYNTAX RF ON|OFF"));
     return;
   }
+  if (on && !policy_rf_enable_allowed(_s->freq_hz)) {
+    if (!policy_load_ok()) {
+      out.println(F("ERR LOAD dummy load required"));
+    } else {
+      out.println(F("ERR ALLOW frequency not in allowlist"));
+    }
+    return;
+  }
   _s->rf_on = on;
   _s->cfg.rf_output_enable = on;
   _s->drv->setChipEnable(on);
@@ -307,6 +333,12 @@ void CmdServer::cmdCorridor(char* arg, CorridorMode mode, Print& out) {
     } else if (strcasecmp(kv, "SEED") == 0) {
       cfg.seed = (uint32_t)strtoul(val, nullptr, 10);
     }
+  }
+
+  if (cfg.mode <= CorridorMode::CHIRP &&
+      !policy_corridor_allowed(cfg.f1_hz, cfg.f2_hz)) {
+    out.println(F("ERR ALLOW corridor outside allowlist"));
+    return;
   }
 
   char err[64];
@@ -435,7 +467,15 @@ void CmdServer::cmdStatus(Print& out) {
   out.print(LEGION_VERSION);
   out.print(F("\",\"board\":\""));
   out.print(LEGION_BUILD_BOARD);
-  out.println(F("\"}"));
+  out.print(F("\",\"load\":"));
+  out.print(policy_load_ok() ? 1 : 0);
+  out.print(F(",\"pa\":"));
+  out.print(policy_pa_on() ? 1 : 0);
+  out.print(F(",\"pa_ma\":"));
+  out.print((unsigned long)policy_pa_ma());
+  out.print(F(",\"allow_n\":"));
+  out.print(policy_allow_count());
+  out.println(F("}"));
 }
 
 void CmdServer::cmdRegs(Print& out) {
@@ -625,5 +665,175 @@ void CmdServer::persistLevel() {
 }
 
 void CmdServer::cmdWifi(char* arg, Print& out) { net_wifi_cmd(*_s, arg, out); }
+
+// ALLOW ADD <f1MHz> <f2MHz> | CLEAR | ?
+void CmdServer::cmdAllow(char* arg, Print& out) {
+  char* save = nullptr;
+  char* sub = strtok_r(arg, " ", &save);
+  if (!sub) {
+    out.println(F("ERR SYNTAX ALLOW ADD|CLEAR|?"));
+    return;
+  }
+  if (strcasecmp(sub, "?") == 0 || strcasecmp(sub, "STATUS?") == 0) {
+    out.print(F("{\"n\":"));
+    out.print(policy_allow_count());
+    out.print(F(",\"allow\":["));
+    const AllowBand* t = policy_allow_table();
+    const int n = policy_allow_count();
+    for (int i = 0; i < n; ++i) {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "[%.6f,%.6f]", t[i].f1_hz / 1e6, t[i].f2_hz / 1e6);
+      out.print(buf);
+      if (i + 1 < n) {
+        out.print(',');
+      }
+    }
+    out.println(F("]}"));
+    return;
+  }
+  if (strcasecmp(sub, "CLEAR") == 0) {
+    policy_allow_clear();
+    out.println(F("OK ALLOW n=0"));
+    return;
+  }
+  if (strcasecmp(sub, "ADD") != 0) {
+    out.println(F("ERR SYNTAX ALLOW ADD|CLEAR|?"));
+    return;
+  }
+  char* a = strtok_r(nullptr, " ", &save);
+  char* b = strtok_r(nullptr, " ", &save);
+  double f1d, f2d;
+  if (!a || !b || !parse_finite(a, f1d) || !parse_finite(b, f2d)) {
+    out.println(F("ERR SYNTAX ALLOW ADD <f1MHz> <f2MHz>"));
+    return;
+  }
+  const uint64_t f1 = (uint64_t)(f1d * 1e6 + 0.5);
+  const uint64_t f2 = (uint64_t)(f2d * 1e6 + 0.5);
+  if (f1 < ADF_FREQ_MIN_HZ || f2 > ADF_FREQ_MAX_HZ || f2 < f1) {
+    out.println(F("ERR RANGE allow 35-4400 MHz"));
+    return;
+  }
+  if (!policy_allow_add(f1, f2)) {
+    out.println(F("ERR RANGE allow table full"));
+    return;
+  }
+  out.print(F("OK ALLOW n="));
+  out.println(policy_allow_count());
+}
+
+void CmdServer::cmdLoad(char* arg, Print& out) {
+  char* save = nullptr;
+  char* sub = strtok_r(arg, " ", &save);
+  if (!sub) {
+    out.println(F("ERR SYNTAX LOAD OK|FAULT|?"));
+    return;
+  }
+  if (strcasecmp(sub, "?") == 0) {
+    out.print(F("{\"load\":"));
+    out.print(policy_load_ok() ? 1 : 0);
+    out.println(F("}"));
+    return;
+  }
+  if (strcasecmp(sub, "OK") == 0) {
+    policy_set_load_ok(true);
+    out.println(F("OK LOAD OK"));
+    return;
+  }
+  if (strcasecmp(sub, "FAULT") == 0) {
+    policy_set_load_ok(false);
+    if (_s->rf_on) {
+      _s->rf_on = false;
+      _s->cfg.rf_output_enable = false;
+      _s->drv->setChipEnable(false);
+    }
+    out.println(F("OK LOAD FAULT"));
+    return;
+  }
+  out.println(F("ERR SYNTAX LOAD OK|FAULT|?"));
+}
+
+void CmdServer::cmdPa(char* arg, Print& out) {
+  char* save = nullptr;
+  char* sub = strtok_r(arg, " ", &save);
+  if (!sub) {
+    out.println(F("ERR SYNTAX PA SET|ON|OFF|?"));
+    return;
+  }
+  if (strcasecmp(sub, "?") == 0) {
+    out.print(F("{\"pa\":"));
+    out.print(policy_pa_on() ? 1 : 0);
+    out.print(F(",\"ma\":"));
+    out.print((unsigned long)policy_pa_ma());
+    out.println(F("}"));
+    return;
+  }
+  if (strcasecmp(sub, "ON") == 0) {
+    if (!policy_set_pa_on(true)) {
+      if (!policy_load_ok()) {
+        out.println(F("ERR LOAD dummy load required"));
+      } else {
+        out.println(F("ERR RANGE PA current"));
+      }
+      return;
+    }
+    out.print(F("OK PA ON I="));
+    out.println((unsigned long)policy_pa_ma());
+    return;
+  }
+  if (strcasecmp(sub, "OFF") == 0) {
+    policy_set_pa_on(false);
+    out.println(F("OK PA OFF"));
+    return;
+  }
+  if (strcasecmp(sub, "SET") == 0) {
+    char* what = strtok_r(nullptr, " ", &save);
+    char* val = strtok_r(nullptr, " ", &save);
+    if (!what || !val || strcasecmp(what, "I") != 0) {
+      out.println(F("ERR SYNTAX PA SET I <mA>"));
+      return;
+    }
+    const unsigned long ma = strtoul(val, nullptr, 10);
+    if (!policy_set_pa_ma((uint32_t)ma)) {
+      out.println(F("ERR RANGE PA current 0-1500 mA"));
+      return;
+    }
+    out.print(F("OK PA I="));
+    out.println(ma);
+    return;
+  }
+  out.println(F("ERR SYNTAX PA SET|ON|OFF|?"));
+}
+
+void CmdServer::cmdCue(char* arg, Print& out) {
+  if (!arg) {
+    out.println(F("ERR SYNTAX CUE <MHz>"));
+    return;
+  }
+  double mhz;
+  if (!parse_finite(arg, mhz) || mhz <= 0.0) {
+    out.println(F("ERR SYNTAX bad freq"));
+    return;
+  }
+  const uint64_t hz = (uint64_t)(mhz * 1e6 + 0.5);
+  if (!policy_cue_allowed(hz)) {
+    out.println(F("ERR ALLOW cue requires allowlist hit"));
+    return;
+  }
+  bool lock = false;
+  const PlanStatus st = apply_frequency(*_s, hz, lock);
+  if (st == PlanStatus::ERR_RANGE) {
+    out.println(F("ERR RANGE 35-4400 MHz"));
+    return;
+  }
+  if (st != PlanStatus::OK) {
+    out.print(F("ERR PLAN "));
+    out.println((int)st);
+    return;
+  }
+  out.print(F("OK CUE FREQ="));
+  out.print(mhz, 6);
+  out.print(F(" LOCK="));
+  out.println(lock ? 1 : 0);
+}
 
 }  // namespace legion

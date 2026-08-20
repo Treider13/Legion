@@ -14,7 +14,11 @@ import { BootSequence } from "./components/boot/BootSequence";
 import { ConnectBar } from "./components/ConnectBar";
 import { CorridorPanel } from "./components/CorridorPanel";
 import { LogPanel } from "./components/LogPanel";
-import { PowerPanel } from "./components/PowerPanel";
+import { PaPanel } from "./components/PaPanel";
+import { ScanPanel } from "./components/ScanPanel";
+import { SdrPanel } from "./components/SdrPanel";
+import { SynthPanel } from "./components/SynthPanel";
+import { WorkspaceNav } from "./components/WorkspaceNav";
 import { useDeviceTier, prefersReducedMotion } from "./hooks/useDeviceTier";
 import { uiClick } from "./sound/sound";
 import { useLegion } from "./state/store";
@@ -47,6 +51,8 @@ function App() {
     return () => clearTimeout(t);
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
+  const scanRunning = useLegion((s) => s.scanRunning);
+  const workspace = useLegion((s) => s.workspace);
 
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
   useEffect(() => {
@@ -105,10 +111,10 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">LEGION</span>
-            <span className="hero-sub">УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351</span>
+            <span className="hero-sub">СТЕНД // ADF4351 + SDR</span>
           </header>
-          <div className={`hero-status ${corridorRunning ? "alert" : ""}`}>
-            {corridorRunning ? "ПОДАВЛЕНИЕ ЦЕЛИ" : "ОЖИДАНИЕ"}
+          <div className={`hero-status ${corridorRunning || scanRunning ? "alert" : ""}`}>
+            {scanRunning ? "СКАН RX" : corridorRunning ? "КОРИДОР TX" : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>
@@ -116,13 +122,17 @@ function App() {
       {/* CONSOLE */}
       <section className="console">
         <ConnectBar />
-        <div className="panel-grid">
-          <PowerPanel />
-          <CorridorPanel />
+        <WorkspaceNav />
+        <div className={workspace === "synth" ? "panel-grid" : "panel-grid panel-grid-one"}>
+          {workspace === "synth" && <SynthPanel />}
+          {workspace === "corridor" && <CorridorPanel />}
+          {workspace === "sdr" && <SdrPanel />}
+          {workspace === "scan" && <ScanPanel />}
+          {workspace === "pa" && <PaPanel />}
         </div>
         <LogPanel />
         <footer className="app-footer">
-          LEGION v0.1 · ESP32→ADF4351 · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
+          LEGION v0.1 · актуатор ESP32→ADF4351 · SDR на хосте · 35–4400 МГц · ТОЛЬКО НАГРУЗКА 50Ω
         </footer>
       </section>
     </div>

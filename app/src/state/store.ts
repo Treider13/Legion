@@ -3,12 +3,20 @@
 // ============================================================================
 import { create } from "zustand";
 
+import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
+import { MockSdrBackend } from "../sdr/backend";
+import { soapyRemoteArgs } from "../sdr/catalog";
+import type { Detection, FlashResult, SdrDeviceInfo } from "../sdr/types";
+import { decideCue, pickStrongest } from "../sense/orchestrator";
+import { AllowlistScanner } from "../sense/scan";
 import { MockTransport } from "../transport/mock";
 import { TauriSerialTransport } from "../transport/tauriSerial";
 import type { SerialPortDescriptor, Transport, TransportKind, TransportState } from "../transport/types";
 import { WebSerialTransport } from "../transport/webSerial";
 import { WebSocketTransport } from "../transport/websocket";
+
+export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa";
 
 export interface LogEntry {
   ts: number;
@@ -51,6 +59,30 @@ interface LegionStore {
   corridorRunning: boolean;
   telemFreq: number | null;
   telemLock: boolean | null;
+  // меню
+  workspace: WorkspaceId;
+  // политика / PA
+  allowBands: AllowBand[];
+  allowF1: string;
+  allowF2: string;
+  loadOk: boolean;
+  paMa: number;
+  paOn: boolean;
+  autoCue: boolean;
+  // SDR (хост, не ESP32)
+  sdrDevices: SdrDeviceInfo[];
+  sdrId: string;
+  sdrGateway: string;
+  sdrOpened: SdrDeviceInfo | null;
+  sdrRemote: string;
+  sdrFlashName: string;
+  lastFlash: FlashResult | null;
+  // SCAN RX
+  scanRunning: boolean;
+  scanThresholdDb: number;
+  scanCenterMhz: number | null;
+  detections: Detection[];
+  lastCueReason: string;
   // журнал
   log: LogEntry[];
 
@@ -60,6 +92,14 @@ interface LegionStore {
   setFreqMhz(f: string): void;
   setCorrField(field: "corrF1" | "corrF2" | "corrStepKhz" | "corrDwellMs" | "corrSeed", v: string): void;
   setCorrMode(m: "SWEEP" | "HOP" | "CHIRP"): void;
+  setWorkspace(w: WorkspaceId): void;
+  setAllowField(field: "allowF1" | "allowF2", v: string): void;
+  setPaMa(ma: number): void;
+  setAutoCue(v: boolean): void;
+  setSdrId(id: string): void;
+  setSdrGateway(v: string): void;
+  setSdrFlashName(v: string): void;
+  setScanThreshold(db: number): void;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -72,6 +112,19 @@ interface LegionStore {
   runSelftest(): Promise<void>;
   corridorStart(): Promise<void>;
   corridorStop(): Promise<void>;
+  addAllowBand(): Promise<void>;
+  clearAllowBands(): Promise<void>;
+  setLoad(ok: boolean): Promise<void>;
+  applyPaCurrent(): Promise<void>;
+  setPaEnabled(on: boolean): Promise<void>;
+  cueTo(mhz: number): Promise<void>;
+  probeSdr(): void;
+  openSdr(): void;
+  closeSdr(): void;
+  flashSdr(action: "flash-fx3" | "flash-fpga" | "load-fpga"): void;
+  injectDemoTone(): void;
+  startScan(): void;
+  stopScan(): void;
   clearLog(): void;
 }
 
@@ -79,6 +132,9 @@ const MAX_LOG = 500;
 
 let gTransport: Transport | null = null;
 let gClient: LegionClient | null = null;
+const gSdr = new MockSdrBackend();
+let gScan: AllowlistScanner | null = null;
+let gScanTimer: ReturnType<typeof setInterval> | null = null;
 
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
@@ -121,6 +177,26 @@ export const useLegion = create<LegionStore>((set, get) => {
     corridorRunning: false,
     telemFreq: null,
     telemLock: null,
+    workspace: "synth",
+    allowBands: [],
+    allowF1: "2400",
+    allowF2: "2500",
+    loadOk: true,
+    paMa: 0,
+    paOn: false,
+    autoCue: false,
+    sdrDevices: gSdr.probe(),
+    sdrId: "bladerf-micro-xa4",
+    sdrGateway: "",
+    sdrOpened: null,
+    sdrRemote: "",
+    sdrFlashName: "hostedxA4.rbf",
+    lastFlash: null,
+    scanRunning: false,
+    scanThresholdDb: 12,
+    scanCenterMhz: null,
+    detections: [],
+    lastCueReason: "",
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
@@ -129,6 +205,14 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFreqMhz: (f) => set({ freqMhz: f }),
     setCorrField: (field, v) => set({ [field]: v }),
     setCorrMode: (m) => set({ corrMode: m }),
+    setWorkspace: (w) => set({ workspace: w }),
+    setAllowField: (field, v) => set({ [field]: v }),
+    setPaMa: (ma) => set({ paMa: ma }),
+    setAutoCue: (v) => set({ autoCue: v }),
+    setSdrId: (id) => set({ sdrId: id }),
+    setSdrGateway: (v) => set({ sdrGateway: v }),
+    setSdrFlashName: (v) => set({ sdrFlashName: v }),
+    setScanThreshold: (db) => set({ scanThresholdDb: db }),
     clearLog: () => set({ log: [] }),
 
     refreshPorts: async () => {
@@ -210,6 +294,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     disconnect: async () => {
+      get().stopScan();
       if (gTransport) {
         try {
           await gTransport.disconnect();
@@ -305,6 +390,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "bad corridor params");
         return;
       }
+      if (s.allowBands.length > 0 && !s.allowBands.some((b) => f1 >= b.f1Mhz && f2 <= b.f2Mhz)) {
+        pushLog("sys", "коридор TX вне allowlist — добавьте полосу во вкладке СКАН RX");
+        return;
+      }
       const cmd =
         s.corrMode === "SWEEP"
           ? `SWEEP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
@@ -332,6 +421,178 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.ok) {
         set({ corridorRunning: false, telemFreq: null, telemLock: null });
       }
+    },
+
+    addAllowBand: async () => {
+      const s = get();
+      const band = parseBand(s.allowF1, s.allowF2);
+      if (!band) {
+        pushLog("sys", "allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.allowBands.length >= 8) {
+        pushLog("sys", "allowlist: максимум 8 полос");
+        return;
+      }
+      set({ allowBands: [...s.allowBands, band] });
+      if (gClient) {
+        const cmd = `ALLOW ADD ${band.f1Mhz} ${band.f2Mhz}`;
+        pushLog("tx", cmd);
+        await gClient.allowAdd(band.f1Mhz, band.f2Mhz);
+      }
+    },
+
+    clearAllowBands: async () => {
+      set({ allowBands: [] });
+      if (gClient) {
+        pushLog("tx", "ALLOW CLEAR");
+        await gClient.allowClear();
+      }
+    },
+
+    setLoad: async (ok) => {
+      set({ loadOk: ok, paOn: ok ? get().paOn : false });
+      if (!gClient) return;
+      pushLog("tx", ok ? "LOAD OK" : "LOAD FAULT");
+      const r = ok ? await gClient.loadOk() : await gClient.loadFault();
+      if (r.ok && !ok) set({ rfOn: false, paOn: false });
+    },
+
+    applyPaCurrent: async () => {
+      const ma = get().paMa;
+      if (!gClient) return;
+      pushLog("tx", `PA SET I ${Math.round(ma)}`);
+      const r = await gClient.paSetI(ma);
+      if (!r.ok) pushLog("sys", r.statusLine);
+    },
+
+    setPaEnabled: async (on) => {
+      if (!gClient) return;
+      if (on && !get().loadOk) {
+        pushLog("sys", "PA ON запрещён: нет нагрузки 50 Ом");
+        return;
+      }
+      pushLog("tx", on ? "PA ON" : "PA OFF");
+      const r = on ? await gClient.paOn() : await gClient.paOff();
+      if (r.ok) set({ paOn: on });
+      else pushLog("sys", r.statusLine);
+    },
+
+    cueTo: async (mhz) => {
+      const s = get();
+      if (!cueFreqAllowed(mhz, s.allowBands)) {
+        set({ lastCueReason: "частота вне allowlist" });
+        pushLog("sys", "CUE отклонён: вне allowlist");
+        return;
+      }
+      set({ freqMhz: mhz.toFixed(6), lastCueReason: `наведение ${mhz.toFixed(6)} МГц` });
+      if (!gClient) {
+        pushLog("sys", "CUE: актуатор не подключён — частота только в UI");
+        return;
+      }
+      const cmd = `CUE ${mhz.toFixed(6)}`;
+      pushLog("tx", cmd);
+      const r = await gClient.cue(mhz);
+      if (r.ok) {
+        set({ corridorRunning: false, telemFreq: null });
+      } else {
+        pushLog("sys", r.statusLine);
+        set({ lastCueReason: r.statusLine });
+      }
+    },
+
+    probeSdr: () => {
+      const list = gSdr.probe();
+      set({ sdrDevices: list });
+      pushLog("sys", `SDR probe: ${list.length} типов в каталоге`);
+    },
+
+    openSdr: () => {
+      const s = get();
+      const remote = s.sdrGateway.trim() ? soapyRemoteArgs(s.sdrGateway) : "";
+      const r = gSdr.open(s.sdrId, remote);
+      set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+      pushLog("sys", r.reason);
+    },
+
+    closeSdr: () => {
+      get().stopScan();
+      gSdr.close();
+      set({ sdrOpened: null, sdrRemote: "" });
+      pushLog("sys", "SDR закрыт");
+    },
+
+    flashSdr: (action) => {
+      const s = get();
+      const r = gSdr.flash({
+        deviceId: s.sdrOpened?.id ?? s.sdrId,
+        filename: s.sdrFlashName,
+        byteLength: 1024,
+        action,
+      });
+      set({ lastFlash: r });
+      pushLog("sys", r.ok ? `прошивка: ${r.reason}` : `прошивка отклонена: ${r.reason}`);
+    },
+
+    injectDemoTone: () => {
+      const s = get();
+      const f = s.allowBands[0] ? (s.allowBands[0].f1Mhz + s.allowBands[0].f2Mhz) / 2 : 2442;
+      gSdr.injectTone(f, -40);
+      pushLog("sys", `демо-несущая ${f.toFixed(3)} МГц @ −40 дБм (мок, не эфир)`);
+    },
+
+    startScan: () => {
+      const s = get();
+      if (!gSdr.opened()) {
+        pushLog("sys", "SCAN: сначала откройте SDR во вкладке SDR");
+        return;
+      }
+      if (s.allowBands.length === 0) {
+        pushLog("sys", "SCAN: пустой allowlist — задайте разрешённые полосы");
+        return;
+      }
+      if (gScanTimer) {
+        clearInterval(gScanTimer);
+        gScanTimer = null;
+      }
+      gScan = new AllowlistScanner(gSdr, {
+        bands: s.allowBands,
+        bwMhz: 20,
+        bins: 64,
+        thresholdDb: s.scanThresholdDb,
+      });
+      set({ scanRunning: true, detections: [], scanCenterMhz: null });
+      pushLog("sys", "SCAN RX старт (только allowlist, без излучения)");
+      gScanTimer = setInterval(() => {
+        if (!gScan) return;
+        const tick = gScan.tick();
+        if (tick.detections.length > 0) {
+          const next = [...get().detections, ...tick.detections].slice(-40);
+          set({ detections: next, scanCenterMhz: tick.centerMhz });
+          const best = pickStrongest(tick.detections);
+          const st = get();
+          if (best && st.autoCue) {
+            const d = decideCue(best, st.allowBands, st.loadOk, st.autoCue);
+            set({ lastCueReason: d.reason });
+            if (d.ok) void get().cueTo(d.freqMhz);
+          }
+        } else {
+          set({ scanCenterMhz: tick.centerMhz });
+        }
+        if (tick.done) {
+          get().stopScan();
+          pushLog("sys", "SCAN RX: проход allowlist завершён");
+        }
+      }, 80);
+    },
+
+    stopScan: () => {
+      if (gScanTimer) {
+        clearInterval(gScanTimer);
+        gScanTimer = null;
+      }
+      gScan = null;
+      if (get().scanRunning) set({ scanRunning: false });
     },
   };
 });
