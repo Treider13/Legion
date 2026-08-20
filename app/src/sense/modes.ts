@@ -12,6 +12,11 @@ export function modeOf(workspace: string): LegionMode {
   return workspace === "sdr" || workspace === "scan" ? "sdr" : "esp32";
 }
 
+/** Полосы скана и полосы ESP32 — два списка. Скан не пишет ALLOW на UART. */
+export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
+  return mode === "sdr" ? "sdrBands" : "allowBands";
+}
+
 /** Нельзя крутить коридор ESP32 и TX SDR одновременно — разные тракты. */
 export function modeConflict(
   want: LegionMode,

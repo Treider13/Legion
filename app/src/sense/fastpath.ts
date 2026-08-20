@@ -21,11 +21,6 @@ export interface HandoffPlan {
   reason: string;
   freqMhz: number;
   sdrTx: boolean;
-  /** Всегда false: режим SDR не ходит в ESP32. */
-  cue: boolean;
-  paSetI: boolean;
-  paOn: boolean;
-  rfOn: boolean;
 }
 
 export function planHandoff(i: HandoffInput): HandoffPlan {
@@ -35,10 +30,6 @@ export function planHandoff(i: HandoffInput): HandoffPlan {
     reason,
     freqMhz: freq,
     sdrTx: false,
-    cue: false,
-    paSetI: false,
-    paOn: false,
-    rfOn: false,
   });
   if (!i.det) return empty("нет улова");
   if (!i.transmitArmed) return empty("ожидание ПЕРЕДАТЬ (режим SDR)", i.det.freqMhz);
@@ -56,10 +47,6 @@ export function planHandoff(i: HandoffInput): HandoffPlan {
     reason: "SDR TX LO → RF out → усилитель (ESP32 не участвует)",
     freqMhz: i.det.freqMhz,
     sdrTx: true,
-    cue: false,
-    paSetI: false,
-    paOn: false,
-    rfOn: false,
   };
 }
 

@@ -77,7 +77,11 @@ interface LegionStore {
   autoCue: boolean;
   transmitArmed: boolean;
   lastForwardMhz: number | null;
-  // SDR (хост, не ESP32)
+  // SDR (хост, не ESP32) — свой allowlist и своя нагрузка, не UART
+  sdrBands: AllowBand[];
+  sdrF1: string;
+  sdrF2: string;
+  sdrLoadOk: boolean;
   sdrDevices: SdrDeviceInfo[];
   sdrId: string;
   sdrGateway: string;
@@ -103,6 +107,10 @@ interface LegionStore {
   setCorrMode(m: "SWEEP" | "HOP" | "CHIRP"): void;
   setWorkspace(w: WorkspaceId): void;
   setAllowField(field: "allowF1" | "allowF2", v: string): void;
+  setSdrAllowField(field: "sdrF1" | "sdrF2", v: string): void;
+  addSdrBand(): void;
+  clearSdrBands(): void;
+  setSdrLoad(ok: boolean): void;
   setPaMa(ma: number): void;
   setAutoCue(v: boolean): void;
   setSdrId(id: string): void;
@@ -176,8 +184,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     const st = get();
     const plan = planHandoff({
       det: mhzAsDet(mhz),
-      bands: st.allowBands,
-      loadOk: st.loadOk,
+      bands: st.sdrBands,
+      loadOk: st.sdrLoadOk,
       transmitArmed: st.transmitArmed,
       lastCuedMhz: gGate.lastCuedMhz,
       inflight: gGate.inflight,
@@ -232,6 +240,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     allowF1: "2400",
     allowF2: "2500",
     loadOk: true,
+    sdrBands: [],
+    sdrF1: "2400",
+    sdrF2: "2500",
+    sdrLoadOk: true,
     paMa: 0,
     paOn: false,
     autoCue: false,
@@ -260,6 +272,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setCorrMode: (m) => set({ corrMode: m }),
     setWorkspace: (w) => set({ workspace: w }),
     setAllowField: (field, v) => set({ [field]: v }),
+    setSdrAllowField: (field, v) => set({ [field]: v }),
     setPaMa: (ma) => set({ paMa: ma }),
     setAutoCue: (v) => set({ autoCue: v }),
     setSdrId: (id) =>
@@ -463,7 +476,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       if (s.allowBands.length > 0 && !s.allowBands.some((b) => f1 >= b.f1Mhz && f2 <= b.f2Mhz)) {
-        pushLog("sys", "коридор TX вне allowlist — полоса задаётся в режиме ESP32 / СКАН не нужен");
+        pushLog("sys", "коридор TX вне allowlist ESP32 — полоса на вкладке УСИЛИТЕЛЬ ESP32, не скан SDR");
         return;
       }
       const cmd =
@@ -496,6 +509,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     addAllowBand: async () => {
+      // Режим ESP32: ALLOW на UART. Скан SDR вызывает addSdrBand, не это.
       const s = get();
       const band = parseBand(s.allowF1, s.allowF2);
       if (!band) {
@@ -523,11 +537,37 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setLoad: async (ok) => {
+      // Режим ESP32: LOAD на UART. Скан SDR сюда не вызывает.
       set({ loadOk: ok, paOn: ok ? get().paOn : false });
       if (!gClient) return;
       pushLog("tx", ok ? "LOAD OK" : "LOAD FAULT");
       const r = ok ? await gClient.loadOk() : await gClient.loadFault();
       if (r.ok && !ok) set({ rfOn: false, paOn: false });
+    },
+
+    addSdrBand: () => {
+      const s = get();
+      const band = parseBand(s.sdrF1, s.sdrF2);
+      if (!band) {
+        pushLog("sys", "SDR allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.sdrBands.length >= 8) {
+        pushLog("sys", "SDR allowlist: максимум 8 полос");
+        return;
+      }
+      set({ sdrBands: [...s.sdrBands, band] });
+      pushLog("sys", `SDR полоса ${band.f1Mhz}…${band.f2Mhz} (хост, не UART ESP32)`);
+    },
+
+    clearSdrBands: () => {
+      set({ sdrBands: [] });
+      pushLog("sys", "SDR allowlist очищен (ESP32 не тронут)");
+    },
+
+    setSdrLoad: (ok) => {
+      set({ sdrLoadOk: ok });
+      pushLog("sys", ok ? "SDR: нагрузка 50 Ом на усилителе SDR" : "SDR: нагрузка снята");
     },
 
     applyPaCurrent: async () => {
@@ -614,7 +654,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     injectDemoTone: () => {
       const s = get();
-      const f = s.allowBands[0] ? (s.allowBands[0].f1Mhz + s.allowBands[0].f2Mhz) / 2 : 2442;
+      const f = s.sdrBands[0] ? (s.sdrBands[0].f1Mhz + s.sdrBands[0].f2Mhz) / 2 : 2442;
       gSdr.injectTone(f, -40);
       pushLog("sys", `демо-несущая ${f.toFixed(3)} МГц @ −40 дБм (мок, не эфир)`);
     },
@@ -632,8 +672,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", opened.reason);
         if (!opened.ok) return;
       }
-      if (s.allowBands.length === 0) {
-        pushLog("sys", "SCAN: пустой allowlist — задайте разрешённые полосы");
+      if (s.sdrBands.length === 0) {
+        pushLog("sys", "SCAN: пустой SDR allowlist — задайте полосы на вкладке СКАН (не ESP32)");
         return;
       }
       if (gScanTimer) {
@@ -641,10 +681,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         gScanTimer = null;
       }
       const hop = scanHopMhz(gSdr.analogBwMhz());
-      const centers = planCenters(s.allowBands, hop);
+      const centers = planCenters(s.sdrBands, hop);
       const bins = hop >= 40 ? 256 : 64;
       gScan = new AllowlistScanner(gSdr, {
-        bands: s.allowBands,
+        bands: s.sdrBands,
         bwMhz: hop,
         bins,
         thresholdDb: s.scanThresholdDb,
@@ -689,11 +729,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
-      if (s.allowBands.length === 0) {
-        pushLog("sys", "ПЕРЕДАТЬ: нет allowlist");
+      if (s.sdrBands.length === 0) {
+        pushLog("sys", "ПЕРЕДАТЬ: нет SDR allowlist");
         return;
       }
-      if (!s.loadOk) {
+      if (!s.sdrLoadOk) {
         pushLog("sys", "ПЕРЕДАТЬ: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
       }

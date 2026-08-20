@@ -29,8 +29,8 @@ export interface EthPlan {
 }
 
 /**
- * Официальные образы под наш замысел: RX-скан + TX LO на SDR,
- * актуатор PA — ESP32+ADF4351. Источники: Nuand, ADI, Ettus, GSG, Lime.
+ * Официальные образы режима SDR: RX-скан + TX LO на RF out → усилитель.
+ * ESP32/ADF4351 сюда не входят. Источники: Nuand, ADI, Ettus, GSG, Lime.
  */
 export const OFFICIAL_IMAGES: readonly OfficialImage[] = [
   {

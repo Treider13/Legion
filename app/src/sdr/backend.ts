@@ -118,7 +118,7 @@ export class MockSdrBackend implements SdrBackend {
     if (!this.canTx()) {
       return {
         ok: false,
-        reason: "нет TX на этом SDR — только ADF4351",
+        reason: "нет TX на этом SDR — усилитель подключать некуда",
         freqMhz,
         latencyUs: 0,
         path: "none",

@@ -76,12 +76,13 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   Одновременно коридор и SDR TX запрещены (`modeConflict`).
   I/Q на ESP32 не идёт. LAN xA4 = шлюз USB3 + SoapyRemote (RJ45 не в bladeRF).
   N210: RJ45 в сам USRP. Образы: `app/src/sdr/official.ts`.
-- **Быстрый путь detect→TX (перепроверка)**: детект и TX LO живут в процессе
-  SDR, не в React. Hop = аналоговая BW устройства (bladeRF ≤56 МГц, Nuand),
-  а не 20 МГц из UI — идея ice9/blue-dragon (стоять в окне, пока полоса
-  влезает). ПЕРЕДАТЬ взводит PA один раз; каждый улов = SDR TX + `CUE`
-  (без повторных `PA SET I` / `PA ON`). `CUE` на ESP32 идёт через
-  `synth_apply_fast` (delta SPI, без NVS и без ожидания LOCK до 50 мс).
-  **Честный бюджет:** host USB3 retune — сотни µs…мс; UART 115200 — мс;
-  SPI ADF4351 — 7–40 µs + settle 0.15–0.5 мс. Микросекунды detect→TX
-  только на FPGA HDL (xA9; xA4 49 kLE тесен). Не реализовано и не рисуем.
+- **Быстрый путь detect→TX (только режим SDR)**: детект и TX LO живут в
+  процессе SDR, не в React и не на ESP32. Hop = аналоговая BW устройства
+  (bladeRF ≤56 МГц, Nuand), а не узкое окно из UI — идея ice9/blue-dragon
+  (стоять в окне, пока полоса влезает). ПЕРЕДАТЬ: улов → TX LO SDR →
+  RF out → усилитель. Команды `CUE` / `PA SET I` / `RF ON` на ESP32
+  **не отправляются**. Полосы скана (`sdrBands`) и полосы ESP32
+  (`allowBands`) — разные списки.
+  **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. Микросекунды
+  detect→TX только на FPGA HDL (xA9; xA4 49 kLE тесен). Не реализовано
+  и не рисуем. `CUE` остаётся командой режима ESP32 (`synth_apply_fast`).

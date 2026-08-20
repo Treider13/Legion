@@ -10,8 +10,35 @@ export function PaPanel() {
       <span className="panel-title">УСИЛИТЕЛЬ // НАГРУЗКА 50Ω</span>
       <p className="panel-note">
         Режим ESP32: ток задатчика на усилитель после ADF4351. Это не усилитель на
-        RF out SDR. Скан и ПЕРЕДАТЬ на вкладке SDR сюда не ходят.
+        RF out SDR. Скан и ПЕРЕДАТЬ на вкладке SDR сюда не ходят. Полосы allowlist
+        здесь уходят на ESP32 по USB (`ALLOW ADD`) — не путать с полосами скана.
       </p>
+      <div className="corr-grid">
+        <label>
+          F1 МГц
+          <input value={s.allowF1} onChange={(e) => s.setAllowField("allowF1", e.target.value)} />
+        </label>
+        <label>
+          F2 МГц
+          <input value={s.allowF2} onChange={(e) => s.setAllowField("allowF2", e.target.value)} />
+        </label>
+      </div>
+      <div className="power-row">
+        <button className="btn-primary" onClick={() => void s.addAllowBand()}>
+          ДОБАВИТЬ ПОЛОСУ ESP32
+        </button>
+        <button className="btn-ghost" onClick={() => void s.clearAllowBands()}>
+          ОЧИСТИТЬ
+        </button>
+      </div>
+      <ul className="allow-list">
+        {s.allowBands.length === 0 && <li>пусто — SET FREQ / коридор не режутся</li>}
+        {s.allowBands.map((b, i) => (
+          <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
+            {b.f1Mhz} … {b.f2Mhz} МГц
+          </li>
+        ))}
+      </ul>
       <label className="check-row">
         <input
           type="checkbox"

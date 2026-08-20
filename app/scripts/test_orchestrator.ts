@@ -8,7 +8,7 @@ import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
-import { modeConflict, modeOf } from "../src/sense/modes";
+import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
 import {
   decideCue,
   decideForward,
@@ -238,6 +238,9 @@ function main(): void {
 
   check("вкладка scan = режим SDR", modeOf("scan") === "sdr");
   check("вкладка corridor = режим ESP32", modeOf("corridor") === "esp32");
+  check("вкладка pa = режим ESP32", modeOf("pa") === "esp32");
+  check("скан пишет sdrBands, не allowBands", bandListFor("sdr") === "sdrBands");
+  check("ESP32 пишет allowBands, не sdrBands", bandListFor("esp32") === "allowBands");
   check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
   check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
   check("нет конфликта", modeConflict("sdr", false, false) === null);
@@ -254,8 +257,13 @@ function main(): void {
     sdrCanTx: true,
   });
   check(
-    "режим SDR: только sdrTx, без CUE/PA/RF ESP32",
-    live.skip === false && live.sdrTx && !live.cue && !live.paSetI && !live.paOn && !live.rfOn,
+    "режим SDR: только sdrTx, полей CUE/PA/RF в плане нет",
+    live.skip === false &&
+      live.sdrTx &&
+      !("cue" in live) &&
+      !("paSetI" in live) &&
+      !("paOn" in live) &&
+      !("rfOn" in live),
   );
   const noArm = planHandoff({
     det,
@@ -266,7 +274,7 @@ function main(): void {
     inflight: false,
     sdrCanTx: true,
   });
-  check("без ПЕРЕДАТЬ SDR не излучает", noArm.skip && !noArm.sdrTx && !noArm.cue);
+  check("без ПЕРЕДАТЬ SDR не излучает", noArm.skip && !noArm.sdrTx);
   const same = planHandoff({
     det,
     bands: ism,

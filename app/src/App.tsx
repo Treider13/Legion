@@ -19,6 +19,7 @@ import { ScanPanel } from "./components/ScanPanel";
 import { SdrPanel } from "./components/SdrPanel";
 import { SynthPanel } from "./components/SynthPanel";
 import { WorkspaceNav } from "./components/WorkspaceNav";
+import { modeOf } from "./sense/modes";
 import { useDeviceTier, prefersReducedMotion } from "./hooks/useDeviceTier";
 import { uiClick } from "./sound/sound";
 import { useLegion } from "./state/store";
@@ -128,7 +129,16 @@ function App() {
 
       {/* CONSOLE */}
       <section className="console">
-        <ConnectBar />
+        {modeOf(workspace) === "esp32" ? (
+          <ConnectBar />
+        ) : (
+          <section className="panel connect-bar">
+            <span className="panel-title">СВЯЗЬ SDR // ETHERNET — НЕ ESP32</span>
+            <span className="panel-note">
+              Кабель и IP — вкладка SDR. USB-UART синтезатора в этом режиме нет.
+            </span>
+          </section>
+        )}
         <WorkspaceNav />
         <div className={workspace === "synth" ? "panel-grid" : "panel-grid panel-grid-one"}>
           {workspace === "synth" && <SynthPanel />}

@@ -22,7 +22,7 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
       fpgaAutoload: true,
       notes: "bladeRF-cli -f (FX3), -L hostedxA4.rbf (autoload), -l (RAM). Образ A9 на A4 не ставить.",
     },
-    paHint: "bias-tee TX on/off (BT-100). Произвольный ток — задатчик ESP32 (PA SET I).",
+    paHint: "bias-tee TX on/off (BT-100). Усилитель вешается на RF out SDR, не на ADF4351.",
     lanHint: "Нативного Ethernet нет. LAN = хост-шлюз USB3 + SoapyRemote.",
   },
   {
@@ -62,7 +62,7 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
       fpgaAutoload: false,
       notes: "hackrf_spiflash — свой путь, не Nuand и не ESP32 OTA.",
     },
-    paHint: "Нет штатного тока PA. Актуатор — ESP32+ADF4351.",
+    paHint: "Нет штатного тока PA. Усилитель — на RF out HackRF, если TX.",
     lanHint: "USB 2.0 + SoapyRemote на хосте.",
   },
   {
@@ -182,7 +182,7 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
       fpgaAutoload: false,
       notes: "Только приём. Прошивки FPGA нет.",
     },
-    paHint: "Нет TX — наведение PA только через ADF4351.",
+    paHint: "Нет TX — в режиме SDR усилитель подключать некуда. Коридор ESP32 — другой режим.",
     lanHint: "USB + rtl_tcp / SoapyRemote.",
   },
 ];

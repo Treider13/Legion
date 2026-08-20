@@ -673,6 +673,11 @@ button:disabled {
   margin-right: 6px;
 }
 
+.connect-bar .panel-note {
+  margin: 0;
+  flex: 1;
+}
+
 /* --- power / коридор --- */
 .power-row {
   display: flex;

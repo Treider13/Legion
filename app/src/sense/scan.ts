@@ -88,7 +88,7 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
   return out;
 }
 
-/** Край окна FFT может вылезти за полосу — в UI и CUE такие бины не идут. */
+/** Край окна FFT может вылезти за полосу — в UI и на TX SDR такие бины не идут. */
 export function clipToAllowlist(
   dets: readonly Detection[],
   bands: readonly AllowBand[],

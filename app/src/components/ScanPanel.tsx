@@ -1,10 +1,10 @@
-// LEGION — SCAN RX: одна антенна, allowlist, ПЕРЕДАТЬ → авто в PA/заглушку.
+// LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
 import { useLegion } from "../state/store";
 
 export function ScanPanel() {
   const s = useLegion();
-  const f1 = s.allowBands.length ? Math.min(...s.allowBands.map((b) => b.f1Mhz)) : parseFloat(s.allowF1) || 2400;
-  const f2 = s.allowBands.length ? Math.max(...s.allowBands.map((b) => b.f2Mhz)) : parseFloat(s.allowF2) || 2500;
+  const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
+  const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
   const span = Math.max(f2 - f1, 1e-6);
 
   return (
@@ -19,11 +19,11 @@ export function ScanPanel() {
       <div className="corr-grid">
         <label>
           F1 МГц
-          <input value={s.allowF1} onChange={(e) => s.setAllowField("allowF1", e.target.value)} />
+          <input value={s.sdrF1} onChange={(e) => s.setSdrAllowField("sdrF1", e.target.value)} />
         </label>
         <label>
           F2 МГц
-          <input value={s.allowF2} onChange={(e) => s.setAllowField("allowF2", e.target.value)} />
+          <input value={s.sdrF2} onChange={(e) => s.setSdrAllowField("sdrF2", e.target.value)} />
         </label>
         <label>
           ПОРОГ СНР дБ
@@ -37,16 +37,16 @@ export function ScanPanel() {
       <label className="check-row">
         <input
           type="checkbox"
-          checked={s.loadOk}
-          onChange={(e) => void s.setLoad(e.target.checked)}
+          checked={s.sdrLoadOk}
+          onChange={(e) => s.setSdrLoad(e.target.checked)}
         />
         Нагрузка 50 Ом на выходе усилителя SDR
       </label>
       <div className="power-row">
-        <button className="btn-primary" onClick={() => void s.addAllowBand()}>
+        <button className="btn-primary" onClick={() => s.addSdrBand()}>
           ДОБАВИТЬ ПОЛОСУ
         </button>
-        <button className="btn-ghost" onClick={() => void s.clearAllowBands()}>
+        <button className="btn-ghost" onClick={() => s.clearSdrBands()}>
           ОЧИСТИТЬ
         </button>
         <button className="btn-ghost" onClick={() => s.injectDemoTone()}>
@@ -72,8 +72,8 @@ export function ScanPanel() {
         )}
       </div>
       <ul className="allow-list">
-        {s.allowBands.length === 0 && <li>полос нет — скан и передача запрещены</li>}
-        {s.allowBands.map((b, i) => (
+        {s.sdrBands.length === 0 && <li>полос нет — скан и передача запрещены</li>}
+        {s.sdrBands.map((b, i) => (
           <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
             {b.f1Mhz} … {b.f2Mhz} МГц
           </li>
