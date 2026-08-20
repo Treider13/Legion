@@ -9,8 +9,8 @@ export function PaPanel() {
     <section className="panel">
       <span className="panel-title">УСИЛИТЕЛЬ // НАГРУЗКА 50Ω</span>
       <p className="panel-note">
-        Команда тока идёт в ESP32 (задатчик). BladeRF bias-tee — только on/off, не мА.
-        CUE ставит частоту синтезатора и не включает РЧ.
+        Конвейер «уловил → в нагрузку» запускается кнопкой ПЕРЕДАТЬ на вкладке СКАН RX.
+        Здесь ручной ток и интерлок. Bias-tee BladeRF — только on/off, не мА.
       </p>
       <label className="check-row">
         <input

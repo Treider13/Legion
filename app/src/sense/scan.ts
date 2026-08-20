@@ -11,6 +11,8 @@ export interface ScanConfig {
   bwMhz: number;
   bins: number;
   thresholdDb: number;
+  /** Непрерывный обход антенны RX (после ПЕРЕДАТЬ / СКАНИРОВАТЬ). */
+  loop?: boolean;
 }
 
 export interface ScanTick {
@@ -35,20 +37,31 @@ export class AllowlistScanner {
     return Math.max(0, this.centers.length - this.idx);
   }
 
+  rewind(): void {
+    this.idx = 0;
+  }
+
   tick(now = Date.now()): ScanTick {
-    if (this.centers.length === 0 || this.idx >= this.centers.length) {
+    if (this.centers.length === 0) {
       return { centerMhz: 0, detections: [], done: true };
+    }
+    if (this.idx >= this.centers.length) {
+      if (this.cfg.loop) this.idx = 0;
+      else return { centerMhz: 0, detections: [], done: true };
     }
     const centerMhz = this.centers[this.idx++];
     const bins = this.backend.scanWindow(centerMhz, this.cfg.bwMhz, this.cfg.bins);
     const detections = detectFromBins(bins, this.cfg.thresholdDb).map((d) => ({
       ...d,
       ts: now,
+      forwarded: false,
     }));
+    const wrapped = this.idx >= this.centers.length;
+    if (wrapped && this.cfg.loop) this.idx = 0;
     return {
       centerMhz,
       detections,
-      done: this.idx >= this.centers.length,
+      done: wrapped && !this.cfg.loop,
     };
   }
 }

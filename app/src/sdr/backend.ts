@@ -116,6 +116,7 @@ export function detectFromBins(
         noiseDbm,
         snrDb: snr,
         ts: 0,
+        forwarded: false,
       });
     }
   }

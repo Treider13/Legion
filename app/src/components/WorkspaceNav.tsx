@@ -5,7 +5,7 @@ const TABS: Array<{ id: WorkspaceId; title: string; hint: string }> = [
   { id: "synth", title: "СИНТЕЗАТОР", hint: "ADF4351 · частота · мощность" },
   { id: "corridor", title: "КОРИДОР TX", hint: "передача по сетке, не приём" },
   { id: "sdr", title: "SDR", hint: "BladeRF и другие · прошивка" },
-  { id: "scan", title: "СКАН RX", hint: "allowlist · обнаружение" },
+  { id: "scan", title: "СКАН RX", hint: "антенна · полоса · ПЕРЕДАТЬ" },
   { id: "pa", title: "УСИЛИТЕЛЬ", hint: "нагрузка 50Ω · ток · наведение" },
 ];
 

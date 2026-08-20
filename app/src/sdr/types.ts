@@ -68,4 +68,6 @@ export interface Detection {
   noiseDbm: number;
   snrDb: number;
   ts: number;
+  /** Уже ушло на синтезатор+PA (в нагрузку). UI красит красным. */
+  forwarded: boolean;
 }

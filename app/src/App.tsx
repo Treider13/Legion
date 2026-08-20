@@ -52,6 +52,7 @@ function App() {
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const scanRunning = useLegion((s) => s.scanRunning);
+  const transmitArmed = useLegion((s) => s.transmitArmed);
   const workspace = useLegion((s) => s.workspace);
 
   // Мост store → rfVisual (мутируемый объект, без ре-рендеров 3D)
@@ -113,8 +114,8 @@ function App() {
             <span className="hero-logo">LEGION</span>
             <span className="hero-sub">СТЕНД // ADF4351 + SDR</span>
           </header>
-          <div className={`hero-status ${corridorRunning || scanRunning ? "alert" : ""}`}>
-            {scanRunning ? "СКАН RX" : corridorRunning ? "КОРИДОР TX" : "ОЖИДАНИЕ"}
+          <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning ? "alert" : ""}`}>
+            {transmitArmed ? "ПЕРЕДАЧА В НАГРУЗКУ" : scanRunning ? "СКАН RX" : corridorRunning ? "КОРИДОР TX" : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>

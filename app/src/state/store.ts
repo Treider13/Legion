@@ -8,7 +8,13 @@ import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
 import { soapyRemoteArgs } from "../sdr/catalog";
 import type { Detection, FlashResult, SdrDeviceInfo } from "../sdr/types";
-import { decideCue, pickStrongest } from "../sense/orchestrator";
+import {
+  decideForward,
+  markForwarded,
+  mergeDetections,
+  PA_ARM_DEFAULT_MA,
+  pickStrongest,
+} from "../sense/orchestrator";
 import { AllowlistScanner } from "../sense/scan";
 import { MockTransport } from "../transport/mock";
 import { TauriSerialTransport } from "../transport/tauriSerial";
@@ -69,6 +75,8 @@ interface LegionStore {
   paMa: number;
   paOn: boolean;
   autoCue: boolean;
+  transmitArmed: boolean;
+  lastForwardMhz: number | null;
   // SDR (хост, не ESP32)
   sdrDevices: SdrDeviceInfo[];
   sdrId: string;
@@ -125,6 +133,9 @@ interface LegionStore {
   injectDemoTone(): void;
   startScan(): void;
   stopScan(): void;
+  startTransmit(): Promise<void>;
+  stopTransmit(): Promise<void>;
+  forwardTo(mhz: number): Promise<void>;
   clearLog(): void;
 }
 
@@ -185,6 +196,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     paMa: 0,
     paOn: false,
     autoCue: false,
+    transmitArmed: false,
+    lastForwardMhz: null,
     sdrDevices: gSdr.probe(),
     sdrId: "bladerf-micro-xa4",
     sdrGateway: "",
@@ -286,6 +299,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("tx", "HELLO");
         if (hello.ok) {
           await get().pollStatus();
+          const bands = get().allowBands;
+          for (const b of bands) {
+            pushLog("tx", `ALLOW ADD ${b.f1Mhz} ${b.f2Mhz}`);
+            await gClient.allowAdd(b.f1Mhz, b.f2Mhz);
+          }
         }
       } catch (e) {
         pushLog("sys", `connect failed: ${String(e)}`);
@@ -493,12 +511,41 @@ export const useLegion = create<LegionStore>((set, get) => {
       const cmd = `CUE ${mhz.toFixed(6)}`;
       pushLog("tx", cmd);
       const r = await gClient.cue(mhz);
-      if (r.ok) {
-        set({ corridorRunning: false, telemFreq: null });
-      } else {
+      if (r.ok) set({ corridorRunning: false, telemFreq: null });
+      else {
         pushLog("sys", r.statusLine);
         set({ lastCueReason: r.statusLine });
       }
+    },
+
+    forwardTo: async (mhz) => {
+      const s = get();
+      const armed = s.transmitArmed || s.autoCue;
+      const d = decideForward(mhzAsDet(mhz), s.allowBands, s.loadOk, armed, s.paMa);
+      if (!d.ok) {
+        set({ lastCueReason: d.reason });
+        return;
+      }
+      await get().cueTo(mhz);
+      if (gClient) {
+        pushLog("tx", `PA SET I ${Math.round(s.paMa)}`);
+        await gClient.paSetI(s.paMa);
+        pushLog("tx", "PA ON");
+        const pa = await gClient.paOn();
+        if (pa.ok) set({ paOn: true });
+        else pushLog("sys", pa.statusLine);
+        pushLog("tx", "RF ON");
+        const rf = await gClient.rf(true);
+        if (rf.ok) set({ rfOn: true });
+        else pushLog("sys", rf.statusLine);
+      } else {
+        pushLog("sys", "актуатор не подключён — частота помечена как переданная в UI");
+      }
+      set({
+        detections: markForwarded(get().detections, mhz),
+        lastForwardMhz: mhz,
+        lastCueReason: `→ PA ${mhz.toFixed(3)} МГц (нагрузка)`,
+      });
     },
 
     probeSdr: () => {
@@ -544,8 +591,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     startScan: () => {
       const s = get();
       if (!gSdr.opened()) {
-        pushLog("sys", "SCAN: сначала откройте SDR во вкладке SDR");
-        return;
+        const opened = gSdr.open(s.sdrId, s.sdrGateway.trim() ? soapyRemoteArgs(s.sdrGateway) : "");
+        set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+        pushLog("sys", opened.reason);
+        if (!opened.ok) return;
       }
       if (s.allowBands.length === 0) {
         pushLog("sys", "SCAN: пустой allowlist — задайте разрешённые полосы");
@@ -560,28 +609,23 @@ export const useLegion = create<LegionStore>((set, get) => {
         bwMhz: 20,
         bins: 64,
         thresholdDb: s.scanThresholdDb,
+        loop: true,
       });
-      set({ scanRunning: true, detections: [], scanCenterMhz: null });
-      pushLog("sys", "SCAN RX старт (только allowlist, без излучения)");
+      set({ scanRunning: true, scanCenterMhz: null });
+      pushLog("sys", "SCAN RX: одна антенна, непрерывный обход allowlist");
       gScanTimer = setInterval(() => {
         if (!gScan) return;
         const tick = gScan.tick();
+        if (tick.centerMhz) set({ scanCenterMhz: tick.centerMhz });
         if (tick.detections.length > 0) {
-          const next = [...get().detections, ...tick.detections].slice(-40);
-          set({ detections: next, scanCenterMhz: tick.centerMhz });
-          const best = pickStrongest(tick.detections);
+          const next = mergeDetections(get().detections, tick.detections);
+          set({ detections: next });
           const st = get();
-          if (best && st.autoCue) {
-            const d = decideCue(best, st.allowBands, st.loadOk, st.autoCue);
-            set({ lastCueReason: d.reason });
-            if (d.ok) void get().cueTo(d.freqMhz);
+          const best = pickStrongest(tick.detections);
+          if (best && (st.transmitArmed || st.autoCue)) {
+            const already = next.some((x) => x.forwarded && Math.abs(x.freqMhz - best.freqMhz) <= 0.2);
+            if (!already) void get().forwardTo(best.freqMhz);
           }
-        } else {
-          set({ scanCenterMhz: tick.centerMhz });
-        }
-        if (tick.done) {
-          get().stopScan();
-          pushLog("sys", "SCAN RX: проход allowlist завершён");
         }
       }, 80);
     },
@@ -594,5 +638,54 @@ export const useLegion = create<LegionStore>((set, get) => {
       gScan = null;
       if (get().scanRunning) set({ scanRunning: false });
     },
+
+    startTransmit: async () => {
+      const s = get();
+      if (s.allowBands.length === 0) {
+        pushLog("sys", "ПЕРЕДАТЬ: нет allowlist");
+        return;
+      }
+      if (!s.loadOk) {
+        pushLog("sys", "ПЕРЕДАТЬ: подтвердите нагрузку 50 Ом");
+        return;
+      }
+      let paMa = s.paMa;
+      if (paMa <= 0) {
+        paMa = PA_ARM_DEFAULT_MA;
+        set({ paMa });
+        pushLog("sys", `ПЕРЕДАТЬ: ток PA по умолчанию ${paMa} мА`);
+      }
+      if (gClient) {
+        pushLog("tx", "ALLOW CLEAR");
+        await gClient.allowClear();
+        for (const b of get().allowBands) {
+          pushLog("tx", `ALLOW ADD ${b.f1Mhz} ${b.f2Mhz}`);
+          await gClient.allowAdd(b.f1Mhz, b.f2Mhz);
+        }
+        pushLog("tx", "LOAD OK");
+        await gClient.loadOk();
+        pushLog("tx", `PA SET I ${paMa}`);
+        await gClient.paSetI(paMa);
+      }
+      set({ transmitArmed: true, autoCue: true });
+      pushLog("sys", "ПЕРЕДАТЬ: дальше без участия — уловленное в полосе → синтезатор → PA (заглушка)");
+      if (!get().scanRunning) get().startScan();
+    },
+
+    stopTransmit: async () => {
+      set({ transmitArmed: false, autoCue: false });
+      if (gClient) {
+        pushLog("tx", "PA OFF");
+        await gClient.paOff();
+        pushLog("tx", "RF OFF");
+        await gClient.rf(false);
+      }
+      set({ paOn: false, rfOn: false });
+      pushLog("sys", "передача в нагрузку остановлена");
+    },
   };
 });
+
+function mhzAsDet(mhz: number): import("../sdr/types").Detection {
+  return { freqMhz: mhz, powerDbm: 0, noiseDbm: 0, snrDb: 0, ts: 0, forwarded: false };
+}

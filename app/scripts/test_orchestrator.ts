@@ -6,7 +6,14 @@ import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../s
 import { detectFromBins, MockSdrBackend } from "../src/sdr/backend";
 import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
-import { decideCue, pickStrongest } from "../src/sense/orchestrator";
+import {
+  decideCue,
+  decideForward,
+  markForwarded,
+  mergeDetections,
+  pickStrongest,
+  sameBin,
+} from "../src/sense/orchestrator";
 import { AllowlistScanner, planCenters } from "../src/sense/scan";
 
 let failures = 0;
@@ -127,6 +134,24 @@ function main(): void {
   check("CUE без авто — ручной", decideCue(hit, ism, true, false).ok === false);
   check("CUE авто+нагрузка+полоса", decideCue(hit, ism, true, true).ok === true);
   check("pickStrongest", pickStrongest(dets)?.powerDbm === Math.max(...dets.map((d) => d.powerDbm)));
+  check("forward без тока запрещён", decideForward(hit, ism, true, true, 0).ok === false);
+  check("forward с током и ПЕРЕДАТЬ", decideForward(hit, ism, true, true, 250).ok === true);
+  check("sameBin 0.1 МГц", sameBin(2442.0, 2442.05));
+  const merged = mergeDetections([], dets);
+  const marked = markForwarded(merged, dets[0].freqMhz);
+  check("markForwarded красит попадание", marked.some((x) => x.forwarded));
+  check("markForwarded не красит чужое", marked.filter((x) => !sameBin(x.freqMhz, dets[0].freqMhz)).every((x) => !x.forwarded) || marked.length === 1);
+
+  const loop = new AllowlistScanner(sdr, {
+    bands: [{ f1Mhz: 2440, f2Mhz: 2444 }],
+    bwMhz: 20,
+    bins: 16,
+    thresholdDb: 12,
+    loop: true,
+  });
+  const t1 = loop.tick(1);
+  const t2 = loop.tick(2);
+  check("loop не останавливается", t1.done === false && t2.done === false && t2.centerMhz > 0);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
