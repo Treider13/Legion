@@ -21,6 +21,7 @@ import {
   mergeDetections,
   pickStrongest,
   sameBin,
+  withoutOwnTx,
 } from "../src/sense/orchestrator";
 import { AllowlistScanner, clipToAllowlist, planCenters, scanHopMhz, scanTickMs } from "../src/sense/scan";
 
@@ -317,8 +318,25 @@ function main(): void {
   check("RTL без TX не идёт в усилитель", noTx.skip);
   const gate = new HandoffGate();
   gate.reserve(2442);
+  check("reserve не есть успех TX", gate.lastCuedMhz === null && gate.pendingMhz === 2442);
+  check("queueIfBusy на том же pending не дублирует", gate.queueIfBusy(2442) === true && gate.queuedMhz === null);
   check("queueIfBusy на другом бине", gate.queueIfBusy(2480) === true && gate.queuedMhz === 2480);
+  gate.abort();
+  check("abort снимает pending", gate.pendingMhz === null && gate.lastCuedMhz === null);
+  gate.reserve(2442);
+  gate.commit(2442);
+  check("commit фиксирует TX", gate.lastCuedMhz === 2442);
   check("release отдаёт очередь", gate.release() === 2480 && gate.inflight === false);
+  check(
+    "свой тон не улов",
+    withoutOwnTx(
+      [
+        { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: false },
+        { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+      ],
+      2442,
+    ).every((d) => Math.abs(d.freqMhz - 2442) > 0.5),
+  );
 
   const loop = new AllowlistScanner(sdr, {
     bands: [{ f1Mhz: 2440, f2Mhz: 2444 }],

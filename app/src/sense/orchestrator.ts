@@ -110,3 +110,18 @@ export function mergeDetections(
 export function markForwarded(list: readonly Detection[], mhz: number): Detection[] {
   return list.map((d) => (sameBin(d.freqMhz, mhz) ? { ...d, forwarded: true } : d));
 }
+
+/**
+ * Full-duplex (bladeRF/Pluto) слышит свой CW. bb = fs/8 = 0.25 МГц.
+ * Без фильтра улов = свой тон, а не эфир.
+ */
+export const OWN_TX_GUARD_MHZ = 0.5;
+
+export function withoutOwnTx(
+  dets: readonly Detection[],
+  txMhz: number | null,
+  guardMhz = OWN_TX_GUARD_MHZ,
+): Detection[] {
+  if (txMhz == null) return [...dets];
+  return dets.filter((d) => Math.abs(d.freqMhz - txMhz) > guardMhz);
+}

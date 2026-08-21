@@ -37,6 +37,15 @@ export async function hostRpc<T>(msg: Record<string, unknown>): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+export async function hostHealth(): Promise<{ ok: boolean; txLive?: boolean; txError?: string; reason?: string }> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
+  try {
+    return await hostRpc({ op: "ping" });
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostPing(args = ""): Promise<HostPing> {
   if (!hostSdrAvailable()) {
     return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };

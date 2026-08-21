@@ -54,17 +54,29 @@ export class HandoffGate {
   inflight = false;
   lastCuedMhz: number | null = null;
   queuedMhz: number | null = null;
+  /** Частота, которую сейчас пытаемся поставить. Не успех, пока нет commit. */
+  pendingMhz: number | null = null;
 
   reserve(mhz: number): void {
     this.inflight = true;
-    this.lastCuedMhz = mhz;
+    this.pendingMhz = mhz;
     if (this.queuedMhz !== null && sameBin(this.queuedMhz, mhz)) {
       this.queuedMhz = null;
     }
   }
 
+  commit(mhz: number): void {
+    this.lastCuedMhz = mhz;
+    this.pendingMhz = null;
+  }
+
+  abort(): void {
+    this.pendingMhz = null;
+  }
+
   queueIfBusy(mhz: number): boolean {
     if (!this.inflight) return false;
+    if (this.pendingMhz !== null && sameBin(this.pendingMhz, mhz)) return true;
     if (this.lastCuedMhz !== null && sameBin(this.lastCuedMhz, mhz)) return true;
     this.queuedMhz = mhz;
     return true;
@@ -72,6 +84,7 @@ export class HandoffGate {
 
   release(): number | null {
     this.inflight = false;
+    this.pendingMhz = null;
     const q = this.queuedMhz;
     this.queuedMhz = null;
     return q;
@@ -81,5 +94,6 @@ export class HandoffGate {
     this.inflight = false;
     this.lastCuedMhz = null;
     this.queuedMhz = null;
+    this.pendingMhz = null;
   }
 }

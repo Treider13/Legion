@@ -15,6 +15,7 @@ import {
   hostClose,
   hostFlash,
   hostOpen,
+  hostHealth,
   hostPing,
   hostSdrAvailable,
   hostScan,
@@ -31,6 +32,7 @@ import {
   markForwarded,
   mergeDetections,
   pickStrongest,
+  withoutOwnTx,
 } from "../sense/orchestrator";
 import { AllowlistScanner, clipToAllowlist, planCenters, scanHopMhz, scanTickMs } from "../sense/scan";
 import { MockTransport } from "../transport/mock";
@@ -182,7 +184,15 @@ const gSdr = new MockSdrBackend();
 let gLive = false;
 let gScan: AllowlistScanner | null = null;
 let gScanTimer: ReturnType<typeof setInterval> | null = null;
+let gTxWatch: ReturnType<typeof setInterval> | null = null;
 const gGate = new HandoffGate();
+
+function stopTxWatch(): void {
+  if (gTxWatch) {
+    clearInterval(gTxWatch);
+    gTxWatch = null;
+  }
+}
 
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
@@ -231,7 +241,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         const tx = gLive ? await hostTx(plan.freqMhz) : gSdr.txCue(plan.freqMhz);
         sdrUs = tx.latencyUs;
         pushLog("sys", tx.reason);
-        if (!tx.ok) return;
+        if (!tx.ok) {
+          gGate.abort();
+          return;
+        }
+        gGate.commit(plan.freqMhz);
       }
       executeHandoff(plan, sdrUs);
     } finally {
@@ -336,6 +350,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setSdrGateway: (v) => set({ sdrGateway: v }),
     setSdrFlashName: (v) => set({ sdrFlashName: v }),
     setSdrEmulation: (v) => {
+      stopTxWatch();
       if (gLive) {
         void hostTxOff();
         void hostClose();
@@ -763,6 +778,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     closeSdr: async () => {
+      stopTxWatch();
       get().stopScan();
       if (gLive) {
         await hostTxOff();
@@ -890,14 +906,18 @@ export const useLegion = create<LegionStore>((set, get) => {
                 }
                 bins = win.bins;
                 const now = Date.now();
-                detections = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map(
-                  (d) => ({ ...d, ts: now }),
+                detections = withoutOwnTx(
+                  clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
+                    ...d,
+                    ts: now,
+                  })),
+                  get().lastForwardMhz,
                 );
               } else if (gScan) {
                 const tick = gScan.tick();
                 centerMhz = tick.centerMhz;
                 bins = tick.bins;
-                detections = tick.detections;
+                detections = withoutOwnTx(tick.detections, get().lastForwardMhz);
               } else {
                 return;
               }
@@ -964,11 +984,26 @@ export const useLegion = create<LegionStore>((set, get) => {
         "SDR: ПЕРЕДАТЬ — улов остаётся на SDR, TX LO → RF out → усилитель. ESP32 не вызывается.",
       );
       if (!get().scanRunning) get().startScan();
-      const pending = pickStrongest(get().detections.filter((d) => !d.forwarded));
+      stopTxWatch();
+      if (gLive) {
+        gTxWatch = setInterval(() => {
+          void (async () => {
+            if (!get().transmitArmed || !gLive) return;
+            const h = await hostHealth();
+            const armedOnAir = get().lastForwardMhz != null;
+            if (h.txError || (armedOnAir && h.txLive === false)) {
+              pushLog("sys", h.txError || "SDR TX поток мёртв — HUD снят");
+              await get().stopTransmit();
+            }
+          })();
+        }, 1000);
+      }
+      const pending = pickStrongest(withoutOwnTx(get().detections.filter((d) => !d.forwarded), get().lastForwardMhz));
       if (pending) runHandoff(pending.freqMhz);
     },
 
     stopTransmit: async () => {
+      stopTxWatch();
       set({ transmitArmed: false });
       gGate.reset();
       if (gLive) await hostTxOff();

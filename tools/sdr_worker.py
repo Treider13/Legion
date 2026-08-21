@@ -299,6 +299,8 @@ class Radio:
         lo_hz = cw_lo_hz(rf_hz, TX_FS)
         tone = make_cw()
         timeout = stream_timeout_us(len(tone), TX_FS)
+        prev_mhz = self.tx_mhz
+        created = False
         with self._lock:
             try:
                 if not self.full_duplex and self.rx is not None and self._rx_on:
@@ -309,14 +311,24 @@ class Radio:
                 if self.tx is None:
                     self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
                     self.dev.activateStream(self.tx)
-                # MeasureDelay: проверяем ret до «успех». 4-й positional = flags, не timeout.
+                    created = True
+                # MeasureDelay: if status.ret != len(tx_pulse): raise
                 sr = self.dev.writeStream(self.tx, [tone], len(tone), timeoutUs=timeout)
                 ret = stream_ret(sr)
                 kind = stream_kind(ret)
-                if ret <= 0:
+                if ret != len(tone):
+                    if prev_mhz is not None:
+                        self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
+                    elif created and self.tx is not None:
+                        try:
+                            self.dev.deactivateStream(self.tx)
+                            self.dev.closeStream(self.tx)
+                        except Exception:
+                            pass
+                        self.tx = None
                     return {
                         "ok": False,
-                        "reason": f"writeStream {kind} ret={ret} — тона на RF out нет",
+                        "reason": f"writeStream {kind} ret={ret} (ждали {len(tone)}) — тона на RF out нет",
                         "latencyUs": 0,
                     }
             except Exception as e:
@@ -371,7 +383,8 @@ class Radio:
     def tx_off(self) -> None:
         self._stop.set()
         if self._thr:
-            self._thr.join(timeout=1.0)
+            # writeStream timeoutUs ≥ 1s — join должен переживать один блокирующий write
+            self._thr.join(timeout=3.0)
             self._thr = None
         self.tx_mhz = None
         self.tx_error = None
@@ -481,13 +494,10 @@ def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[d
         x = buf[:ret]
         if len(x) < 8:
             continue
-        if len(x) < used:
-            # не складываем FFT разной длины (numpy ValueError)
-            pad = np.zeros(used, dtype=np.complex64)
-            pad[: len(x)] = x
-            x = pad
-        elif len(x) > used:
-            x = x[:used]
+        # нули в хвосте размазывают спектр (sinc). Только одинаковая длина.
+        if ps is not None and len(x) != used:
+            continue
+        used = len(x)
         win = np.hanning(len(x))
         spec = np.fft.fftshift(np.fft.fft(x * win))
         p = (np.abs(spec) ** 2) / len(x)
