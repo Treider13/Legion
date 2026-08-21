@@ -487,6 +487,34 @@
   line-height: 1.4;
 }
 
+/* ТИП СИГНАЛА — превью спектра/времени/созвездия */
+.wave-preview {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.wave-plot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wave-plot-k {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--lg-faint);
+}
+
+.wave-plot canvas {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--lg-border);
+  border-radius: var(--lg-radius-sm);
+  background: var(--lg-ink);
+}
+
 .allow-list {
   margin: 12px 0 0;
   padding-left: 18px;

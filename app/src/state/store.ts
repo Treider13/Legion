@@ -3,7 +3,7 @@
 // ============================================================================
 import { create } from "zustand";
 
-import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
+import { cueFreqAllowed, hzInAllowlist, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
 import {
@@ -30,10 +30,12 @@ import {
   hostScan,
   hostTx,
   hostTxOff,
+  hostTxWave,
   markCatalogPresent,
 } from "../sdr/hostClient";
 import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
+import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
@@ -65,7 +67,15 @@ import type { SerialPortDescriptor, Transport, TransportKind, TransportState } f
 import { WebSerialTransport } from "../transport/webSerial";
 import { WebSocketTransport } from "../transport/websocket";
 
-export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa" | "sdrFlash" | "esp32Flash";
+export type WorkspaceId =
+  | "synth"
+  | "corridor"
+  | "sdr"
+  | "scan"
+  | "signal"
+  | "pa"
+  | "sdrFlash"
+  | "esp32Flash";
 export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 
 export interface LogEntry {
@@ -165,6 +175,12 @@ interface LegionStore {
   lastCueReason: string;
   lastSdrTxUs: number | null;
   lastForwardPowerDbm: number | null;
+  // ТИП СИГНАЛА (baseband → SDR, нагрузка 50 Ом)
+  signalKind: WaveKind;
+  signalParams: Record<string, number>;
+  signalFreqMhz: string;
+  /** TX именно сигнальной волны — взаимоисключение со сканером-оркестратором. */
+  signalTxActive: boolean;
   // журнал
   log: LogEntry[];
 
@@ -228,6 +244,10 @@ interface LegionStore {
   startTransmit(): Promise<void>;
   stopTransmit(): Promise<void>;
   forwardTo(mhz: number): Promise<void>;
+  setSignalKind(k: WaveKind): void;
+  setSignalParam(key: string, v: number): void;
+  setSignalFreqMhz(v: string): void;
+  signalFlash(): Promise<void>;
   clearLog(): void;
 }
 
@@ -512,6 +532,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastCueReason: "",
     lastSdrTxUs: null,
     lastForwardPowerDbm: null,
+    signalKind: "qpsk",
+    signalParams: defaultParams("qpsk"),
+    signalFreqMhz: "2442.000",
+    signalTxActive: false,
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
@@ -587,6 +611,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastSdrTxUs: null,
         lastForwardPowerDbm: null,
         sdrHoldSince: null,
+        transmitArmed: false,
+        signalTxActive: false,
       });
       pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
     },
@@ -952,6 +978,71 @@ export const useLegion = create<LegionStore>((set, get) => {
       await runHandoff(mhz);
     },
 
+    setSignalKind: (k) => set({ signalKind: k, signalParams: defaultParams(k) }),
+
+    setSignalParam: (key, v) =>
+      set((s) => ({ signalParams: { ...s.signalParams, [key]: v } })),
+
+    setSignalFreqMhz: (v) => set({ signalFreqMhz: v }),
+
+    signalFlash: async () => {
+      const s = get();
+      if (s.flashBusy) {
+        pushLog("sys", "ЗАШИТЬ: идёт прошивка — сначала дождитесь");
+        return;
+      }
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
+      if (s.scanRunning) {
+        pushLog("sys", "ЗАШИТЬ: сканер работает — сначала СТОП на вкладке СКАН + TX SDR");
+        return;
+      }
+      if (s.transmitArmed) {
+        pushLog("sys", "ЗАШИТЬ: TX уже активен — сначала СТОП ПЕРЕДАЧУ");
+        return;
+      }
+      if (!s.sdrLoadOk) {
+        pushLog("sys", "ЗАШИТЬ: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+        return;
+      }
+      if (!ensureSdrBand()) return;
+      const mhz = parseFloat(s.signalFreqMhz);
+      if (!Number.isFinite(mhz)) {
+        pushLog("sys", "ЗАШИТЬ: неверная частота");
+        return;
+      }
+      if (!hzInAllowlist(mhz, get().sdrBands)) {
+        pushLog("sys", `ЗАШИТЬ: ${mhz.toFixed(3)} МГц вне полосы SDR allowlist`);
+        return;
+      }
+      if (!s.sdrOpened) {
+        await get().openSdr();
+        if (!get().sdrOpened) return;
+      }
+      const canTx = gLive ? catalogCaps(get().sdrId).canTx : gSdr.canTx();
+      if (!canTx) {
+        pushLog("sys", "ЗАШИТЬ: у этого SDR нет TX — усилитель подключать некуда");
+        return;
+      }
+      const kind = get().signalKind;
+      const tx = gLive
+        ? await hostTxWave(mhz, kind, get().signalParams)
+        : gSdr.txWave(mhz, kind);
+      pushLog("sys", tx.reason);
+      if (!tx.ok) return;
+      set({
+        transmitArmed: true,
+        signalTxActive: true,
+        lastForwardMhz: mhz,
+        lastSdrTxUs: tx.latencyUs || null,
+        sdrHoldSince: Date.now(),
+        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · нагрузка 50Ω`,
+      });
+    },
+
     probeSdr: async () => {
       if (!get().sdrEmulation && hostSdrAvailable()) {
         const st = get();
@@ -1030,7 +1121,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLive = false;
       gResense = false;
       gSkipMhz = null;
-      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
+      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null, transmitArmed: false, signalTxActive: false });
       pushLog("sys", "SDR закрыт");
     },
 
@@ -1164,6 +1255,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
           pushLog("sys", blocked);
+          return;
+        }
+        if (s.signalTxActive) {
+          pushLog("sys", "СКАНИРОВАТЬ: идёт TX сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
           return;
         }
         if (!ensureSdrBand()) return;
@@ -1378,7 +1473,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       gResense = false;
       gSkipMhz = null;
-      set({ transmitArmed: false });
+      set({ transmitArmed: false, signalTxActive: false });
       gGate.reset();
       if (gLive) await hostTxOff();
       gSdr.txOff();

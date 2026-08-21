@@ -12,6 +12,14 @@ import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
 import { markCatalogPresent } from "../src/sdr/hostClient";
+import {
+  WAVE_CATALOG,
+  clampParams,
+  constellationPoints,
+  defaultParams,
+  previewWaveform,
+  spectrumDb,
+} from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
@@ -955,6 +963,44 @@ function main(): void {
   check("parse chip classic", parseEsp32Chip("Chip is ESP32 (revision 3)") === "ESP32");
   check("S3 не classic", envMatchesChip("esp32dev", "ESP32-S3") === false);
   check("classic = esp32dev", envMatchesChip("esp32dev", "ESP32"));
+
+  // --- ТИП СИГНАЛА: каталог и превью-генератор (зеркало воркера) ---
+  check("каталог: 16 типов", WAVE_CATALOG.length === 16);
+  check("каталог: id уникальны", new Set(WAVE_CATALOG.map((w) => w.id)).size === WAVE_CATALOG.length);
+  check("каталог: у всех есть amp", WAVE_CATALOG.every((w) => w.params.some((p) => p.key === "amp")));
+  let prevOk = true;
+  for (const w of WAVE_CATALOG) {
+    const pr = defaultParams(w.id);
+    const { re, im } = previewWaveform(w.id, pr, 4096);
+    if (re.length === 0 || re.length !== im.length) {
+      prevOk = false;
+      console.log(`    … пустой превью: ${w.id}`);
+      continue;
+    }
+    let peak = 0;
+    for (let i = 0; i < re.length; i++) {
+      if (!Number.isFinite(re[i]) || !Number.isFinite(im[i])) prevOk = false;
+      peak = Math.max(peak, Math.hypot(re[i], im[i]));
+    }
+    if (peak > (pr.amp ?? 0.25) + 1e-6) {
+      prevOk = false;
+      console.log(`    … пик ${peak} > amp: ${w.id}`);
+    }
+    const spec = spectrumDb(re, im, 1024);
+    if (spec.length !== 1024 || !Number.isFinite(spec[0])) prevOk = false;
+  }
+  check("превью: все волны finite, пик ≤ amp, спектр 1024", prevOk);
+  const clamped = clampParams("qpsk", { amp: 99, alpha: -1, sps: 2.7, seed: 5 });
+  check("кламп параметров", clamped.amp === 0.9 && clamped.alpha === 0.03 && clamped.seed === 5);
+  const qp = constellationPoints("qpsk", defaultParams("qpsk"), 256);
+  const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
+  check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
+  check("у синуса нет созвездия", constellationPoints("sine", defaultParams("sine")) === null);
+  const mockWave = new MockSdrBackend();
+  mockWave.open("bladerf-micro-xa4");
+  const mw = mockWave.txWave(2442, "qpsk");
+  check("мок txWave ok и называет волну", mw.ok && mw.reason.includes("qpsk"));
+  check("мок txWave вне диапазона", mockWave.txWave(10, "qpsk").ok === false);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

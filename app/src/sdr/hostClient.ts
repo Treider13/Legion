@@ -99,6 +99,26 @@ export async function hostTx(freqMhz: number): Promise<TxCueResult> {
   };
 }
 
+export async function hostTxWave(
+  freqMhz: number,
+  wave: string,
+  params: Record<string, number>,
+): Promise<TxCueResult> {
+  const r = await hostRpc<{
+    ok?: boolean;
+    reason?: string;
+    latencyUs?: number;
+    freqMhz?: number;
+  }>({ op: "tx_wave", freqMhz, wave, params });
+  return {
+    ok: !!r.ok,
+    reason: r.reason ?? "",
+    freqMhz: r.freqMhz ?? freqMhz,
+    latencyUs: r.latencyUs ?? 0,
+    path: r.ok ? "sdr-tx" : "none",
+  };
+}
+
 export async function hostTxOff(): Promise<void> {
   await hostRpc({ op: "tx_off" });
 }
