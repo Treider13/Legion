@@ -13,8 +13,9 @@ export function ScanPanel() {
       <p className="panel-note">
         Ethernet к ноутбуку. Антенна на RX, усилитель на RF out SDR. Energy detect —
         не разбор пакетов и не RF-Clown/BlueJammer (те — nRF24 на ESP32). ПЕРЕДАТЬ:
-        улов → TX LO на этом же SDR → усилитель. Зелёный = перехвачена, красный =
-        эта частота на TX (тон в нагрузку). ESP32 сюда не входит.
+        улов → TX LO на этом же SDR → усилитель и держим, пока засечка жива.
+        Свой тон маскирует бин: раз в секунду TX гасится на проверку эфира.
+        СБРОСИТЬ — если замок подозрительный, ищем другую. ESP32 сюда не входит.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -29,7 +30,10 @@ export function ScanPanel() {
           <span className="freq-hud-v">
             {s.lastForwardMhz != null ? `${s.lastForwardMhz.toFixed(3)}` : "—"}
           </span>
-          <span className="freq-hud-u">МГц · усилитель{s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}</span>
+          <span className="freq-hud-u">
+            МГц · {s.lastForwardMhz != null ? "держим" : "усилитель"}
+            {s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
+          </span>
         </div>
       </div>
       <div className="corr-grid">
@@ -41,15 +45,24 @@ export function ScanPanel() {
           F2 МГц
           <input value={s.sdrF2} onChange={(e) => s.setSdrAllowField("sdrF2", e.target.value)} />
         </label>
-        <label>
-          ПОРОГ СНР дБ
-          <input
-            type="number"
-            value={s.scanThresholdDb}
-            onChange={(e) => s.setScanThreshold(parseFloat(e.target.value) || 0)}
-          />
-        </label>
       </div>
+      <div className="sens-row">
+        <span className="att-label">ЧУВСТВИТЕЛЬНОСТЬ ЗАСЕЧКИ</span>
+        <input
+          className="att-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={s.scanSensitivity}
+          onChange={(e) => s.setScanSensitivity(parseFloat(e.target.value))}
+          aria-label="Чувствительность засечки: низкая — все подряд, высокая — только сильные"
+        />
+        <span className="att-value">{Math.round(s.scanThresholdDb)} дБ СНР</span>
+      </div>
+      <p className="sens-hint">
+        низкая = все подряд (слабые тоже) · высокая = только сильные
+      </p>
       <label className="check-row">
         <input
           type="checkbox"
@@ -86,6 +99,13 @@ export function ScanPanel() {
             ПЕРЕДАТЬ
           </button>
         )}
+        <button
+          className="btn-ghost"
+          disabled={s.lastForwardMhz == null}
+          onClick={() => void s.resetSdrLock()}
+        >
+          СБРОСИТЬ
+        </button>
       </div>
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полос нет — скан и передача запрещены</li>}

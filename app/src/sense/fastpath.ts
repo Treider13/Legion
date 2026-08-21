@@ -14,6 +14,10 @@ export interface HandoffInput {
   lastCuedMhz: number | null;
   inflight: boolean;
   sdrCanTx: boolean;
+  /** Держим текущую засечку, не прыгаем на более сильную. */
+  holdLock?: boolean;
+  /** СБРОСИТЬ: разрешить другую частоту. */
+  forceRetarget?: boolean;
 }
 
 export interface HandoffPlan {
@@ -41,6 +45,9 @@ export function planHandoff(i: HandoffInput): HandoffPlan {
   if (i.inflight) return empty("предыдущий SDR TX ещё идёт", i.det.freqMhz);
   if (i.lastCuedMhz !== null && sameBin(i.lastCuedMhz, i.det.freqMhz)) {
     return empty("уже на этой частоте", i.det.freqMhz);
+  }
+  if (i.holdLock && !i.forceRetarget && i.lastCuedMhz !== null) {
+    return empty("держим засечку — СБРОСИТЬ чтобы сменить", i.det.freqMhz);
   }
   return {
     skip: false,
@@ -74,12 +81,23 @@ export class HandoffGate {
     this.pendingMhz = null;
   }
 
+  /** Пока идёт TX или держим засечку — чужие частоты не ставим в очередь. */
   queueIfBusy(mhz: number): boolean {
     if (!this.inflight) return false;
-    if (this.pendingMhz !== null && sameBin(this.pendingMhz, mhz)) return true;
     if (this.lastCuedMhz !== null && sameBin(this.lastCuedMhz, mhz)) return true;
+    if (this.pendingMhz !== null && sameBin(this.pendingMhz, mhz)) return true;
+    const held = this.pendingMhz ?? this.lastCuedMhz;
+    if (held !== null) return true;
     this.queuedMhz = mhz;
     return true;
+  }
+
+  dropHold(): number | null {
+    const was = this.lastCuedMhz;
+    this.lastCuedMhz = null;
+    this.queuedMhz = null;
+    this.pendingMhz = null;
+    return was;
   }
 
   release(): number | null {

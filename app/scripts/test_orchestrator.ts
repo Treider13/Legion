@@ -12,6 +12,8 @@ import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
+import { heldHitAlive, pickOtherHit, RESENSE_MS } from "../src/sense/hold";
+import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
 import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
 import {
   decideCue,
@@ -209,6 +211,18 @@ function main(): void {
     if (t.done) break;
   }
   check("сканер находит тон в allowlist", found);
+  const tight = new AllowlistScanner(sdr, { bands: ism, bwMhz: 20, bins: 32, thresholdDb: 80, loop: true });
+  const miss = tight.tick(1);
+  tight.setThresholdDb(8);
+  let afterSens = false;
+  for (let i = 0; i < 20; i++) {
+    if (tight.tick(1).detections.length) {
+      afterSens = true;
+      break;
+    }
+  }
+  check("высокая строгость режет слабые", miss.detections.length === 0 || miss.detections.every((d) => d.snrDb >= 80));
+  check("после снижения порога тон снова ловится", afterSens);
 
   const hit = dets[0];
   check("CUE без нагрузки запрещён", decideCue(hit, ism, false, true).ok === false);
@@ -316,17 +330,69 @@ function main(): void {
     sdrCanTx: false,
   });
   check("RTL без TX не идёт в усилитель", noTx.skip);
+  const holdSkip = planHandoff({
+    det: { ...det, freqMhz: 2480 },
+    bands: ism,
+    loadOk: true,
+    transmitArmed: true,
+    lastCuedMhz: 2442,
+    inflight: false,
+    sdrCanTx: true,
+    holdLock: true,
+  });
+  check("holdLock не прыгает на другую засечку", holdSkip.skip && holdSkip.reason.includes("держим"));
+  const forceHop = planHandoff({
+    det: { ...det, freqMhz: 2480 },
+    bands: ism,
+    loadOk: true,
+    transmitArmed: true,
+    lastCuedMhz: 2442,
+    inflight: false,
+    sdrCanTx: true,
+    holdLock: true,
+    forceRetarget: true,
+  });
+  check("СБРОСИТЬ / forceRetarget пускает другую частоту", forceHop.skip === false && forceHop.freqMhz === 2480);
+
+  check("чувствительность 0 → порог 3 дБ (все подряд)", sensitivityToThresholdDb(0) === 3);
+  check("чувствительность 100 → порог 24 дБ (только сильные)", sensitivityToThresholdDb(100) === 24);
+  check("порог 12 ↔ ~43 на слайдере", thresholdToSensitivity(12) === 43);
+  check("слайдер 43 → порог 12", Math.abs(sensitivityToThresholdDb(43) - 12) < 0.3);
+  check("re-sense интервал 1 с", RESENSE_MS === 1000);
+  check(
+    "heldHitAlive видит свой бин",
+    heldHitAlive(
+      [{ freqMhz: 2442.05, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true }],
+      2442,
+    ),
+  );
+  check(
+    "heldHitAlive не врёт про чужой",
+    heldHitAlive(
+      [{ freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false }],
+      2442,
+    ) === false,
+  );
+  const other = pickOtherHit(
+    [
+      { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
+      { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+    ],
+    2442,
+  );
+  check("после сброса берём другую, не ту же", other?.freqMhz === 2480);
   const gate = new HandoffGate();
   gate.reserve(2442);
   check("reserve не есть успех TX", gate.lastCuedMhz === null && gate.pendingMhz === 2442);
   check("queueIfBusy на том же pending не дублирует", gate.queueIfBusy(2442) === true && gate.queuedMhz === null);
-  check("queueIfBusy на другом бине", gate.queueIfBusy(2480) === true && gate.queuedMhz === 2480);
+  check("queueIfBusy hold не ставит чужую частоту", gate.queueIfBusy(2480) === true && gate.queuedMhz === null);
   gate.abort();
   check("abort снимает pending", gate.pendingMhz === null && gate.lastCuedMhz === null);
   gate.reserve(2442);
   gate.commit(2442);
   check("commit фиксирует TX", gate.lastCuedMhz === 2442);
-  check("release отдаёт очередь", gate.release() === 2480 && gate.inflight === false);
+  check("release при hold не отдаёт чужой hop", gate.release() === null && gate.inflight === false);
+  check("dropHold снимает замок", gate.dropHold() === 2442 && gate.lastCuedMhz === null);
   check(
     "свой тон не улов",
     withoutOwnTx(

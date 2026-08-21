@@ -728,6 +728,20 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.sens-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.sens-hint {
+  margin: 6px 0 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--lg-dim);
+}
+
 /* --- connect bar --- */
 .connect-bar {
   display: flex;

@@ -27,11 +27,17 @@ export class AllowlistScanner {
   private centers: number[] = [];
   private readonly backend: SdrBackend;
   private readonly cfg: ScanConfig;
+  private thresholdDb: number;
 
   constructor(backend: SdrBackend, cfg: ScanConfig) {
     this.backend = backend;
     this.cfg = cfg;
+    this.thresholdDb = cfg.thresholdDb;
     this.centers = planCenters(cfg.bands, cfg.bwMhz);
+  }
+
+  setThresholdDb(db: number): void {
+    this.thresholdDb = db;
   }
 
   remaining(): number {
@@ -53,7 +59,7 @@ export class AllowlistScanner {
     const centerMhz = this.centers[this.idx++];
     const bins = this.backend.scanWindow(centerMhz, this.cfg.bwMhz, this.cfg.bins);
     const detections = clipToAllowlist(
-      detectFromBins(bins, this.cfg.thresholdDb).map((d) => ({
+      detectFromBins(bins, this.thresholdDb).map((d) => ({
         ...d,
         ts: now,
         forwarded: false,
