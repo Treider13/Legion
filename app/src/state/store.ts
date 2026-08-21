@@ -147,7 +147,7 @@ interface LegionStore {
   /** 0 = все подряд, 100 = только сильные. */
   scanSensitivity: number;
   scanPattern: ScanPattern;
-  /** АВТО: приоритет = держим пока жива; обычный = очередь + выдержка. */
+  /** АВТО: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
   scanDwellMs: string;

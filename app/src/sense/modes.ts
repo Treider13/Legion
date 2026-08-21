@@ -74,7 +74,7 @@ export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
 
 export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
   return dispatch === "priority"
-    ? "ПРИОРИТЕТ (держим, пока жива)"
+    ? "ПРИОРИТЕТ (сильнее рядом — на неё)"
     : "ОБЫЧНЫЙ (по очереди, выдержка)";
 }
 
@@ -87,7 +87,7 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
     const how =
       dispatch === "turn"
         ? "обычный: живые по очереди, каждая выдержка на усилителе"
-        : "приоритет: держим частоту, пропала — следующая";
+        : "приоритет: держим; сильнее рядом — на неё, пропала — следующая";
     return {
       useScanner: true,
       openLoopTx: false,

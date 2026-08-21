@@ -528,14 +528,14 @@ function main(): void {
     { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
   ];
   check(
-    "приоритет: сильнее не сбивает, пока текущая жива",
+    "приоритет: сильнее рядом перехватывает",
     pickPriorityTarget(
       [
         { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
-        { freqMhz: 2480, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
+        { freqMhz: 2447, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
       ],
       2442,
-    ) === null,
+    )?.freqMhz === 2447,
   );
   check(
     "приоритет: слабее не сбивает",
@@ -548,13 +548,24 @@ function main(): void {
     ) === null,
   );
   check(
-    "приоритет: свой TX скрыт — не считаем пропавшей",
+    "приоритет: свой TX скрыт — слабее не считаем пропавшей",
     pickPriorityTarget(
-      [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
+      [{ freqMhz: 2480, powerDbm: -50, noiseDbm: -90, snrDb: 40, ts: 1, forwarded: false }],
       2442,
       null,
       true,
+      -20,
     ) === null,
+  );
+  check(
+    "приоритет: свой TX скрыт — сильнее рядом перехватывает",
+    pickPriorityTarget(
+      [{ freqMhz: 2447, powerDbm: -25, noiseDbm: -90, snrDb: 65, ts: 1, forwarded: false }],
+      2442,
+      null,
+      true,
+      -40,
+    )?.freqMhz === 2447,
   );
   check(
     "приоритет: пропала — берём следующую сильнейшую",

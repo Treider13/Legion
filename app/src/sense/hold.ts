@@ -25,19 +25,24 @@ export function uniqueBins(dets: readonly Detection[]): Detection[] {
 }
 
 /**
- * ПРИОРИТЕТ: взяли частоту — держим, пока жива. Сильнее не сбивает.
- * Пропала (окно без своего CW) — берём следующую сильнейшую.
- * holdMasked: свой TX вырезан из окна, «нет бина» ≠ пропала.
+ * ПРИОРИТЕТ: на усилителе сильнейшая живая.
+ * Рядом появилась сильнее — переключаемся. Слабее не сбивает.
+ * holdMasked: свой TX вырезан, «нет своего бина» ≠ пропала; чужой сильнее — да.
  */
 export function pickPriorityTarget(
   liveWindow: readonly Detection[],
   heldMhz: number | null,
   skipMhz: number | null = null,
   holdMasked = false,
+  heldPowerDbm: number | null = null,
 ): Detection | null {
   const pool =
-    skipMhz == null ? liveWindow : liveWindow.filter((d) => !sameBin(d.freqMhz, skipMhz));
+    skipMhz == null ? [...liveWindow] : liveWindow.filter((d) => !sameBin(d.freqMhz, skipMhz));
   if (heldMhz == null) return pickStrongest(pool);
+  const rival = pickStrongest(pool.filter((d) => !sameBin(d.freqMhz, heldMhz)));
+  const held = pool.find((d) => sameBin(d.freqMhz, heldMhz));
+  const heldP = held?.powerDbm ?? heldPowerDbm;
+  if (rival && heldP != null && rival.powerDbm > heldP) return rival;
   if (heldHitAlive(pool, heldMhz)) return null;
   if (holdMasked) return null;
   return pickStrongest(pool);
@@ -94,7 +99,13 @@ export function pickArmedAutoTarget(opts: {
   if (opts.dispatch === "turn") {
     return pickTurnTarget(opts.liveWindow, opts.skipMhz, opts.heldMhz, opts.heldPowerDbm);
   }
-  return pickPriorityTarget(opts.liveWindow, opts.heldMhz, opts.skipMhz, opts.holdMasked === true);
+  return pickPriorityTarget(
+    opts.liveWindow,
+    opts.heldMhz,
+    opts.skipMhz,
+    opts.holdMasked === true,
+    opts.heldPowerDbm,
+  );
 }
 
 export function windowCoversMhz(centerMhz: number, windowMhz: number, mhz: number): boolean {
