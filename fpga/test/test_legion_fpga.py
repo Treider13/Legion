@@ -135,6 +135,55 @@ ok2, _ = lf.unpack_8x32_resp(bytes(16))
 check("unpack: неверный magic → fail", not ok2)
 
 # ---------------------------------------------------------------------------
+# 3.5. USB-константы шлюза против реальных заголовков Nuand (без памяти!)
+# ---------------------------------------------------------------------------
+usb_h = os.path.join(NUAND, "host", "libraries", "libbladeRF", "src", "backend", "usb", "usb.h")
+brf_h = os.path.join(NUAND, "firmware_common", "bladeRF.h")
+if os.path.isfile(usb_h) and os.path.isfile(brf_h):
+    usb_src = open(usb_h, encoding="utf-8").read()
+    brf_src = open(brf_h, encoding="utf-8").read()
+
+    def define_val(src: str, name: str) -> int | None:
+        m = re.search(rf"#define\s+{name}\s+0x([0-9A-Fa-f]+)", src)
+        if m:
+            return int(m.group(1), 16)
+        m = re.search(rf"#define\s+{name}\s+(\d+)\s*$", src, re.M)
+        return int(m.group(1)) if m else None
+
+    import legion_gateway as lg2  # noqa: E402
+    check("EP_OUT == PERIPHERAL_EP_OUT (usb.h)",
+          lg2.EP_OUT == define_val(usb_src, "PERIPHERAL_EP_OUT"),
+          f"мой={lg2.EP_OUT:#x} nuand={define_val(usb_src, 'PERIPHERAL_EP_OUT')}")
+    check("EP_IN == PERIPHERAL_EP_IN (usb.h)",
+          lg2.EP_IN == define_val(usb_src, "PERIPHERAL_EP_IN"),
+          f"мой={lg2.EP_IN:#x} nuand={define_val(usb_src, 'PERIPHERAL_EP_IN')}")
+    check("TIMEOUT == PERIPHERAL_TIMEOUT_MS (usb.h)",
+          lg2.TIMEOUT_MS == define_val(usb_src, "PERIPHERAL_TIMEOUT_MS"))
+    check("VID == USB_NUAND_VENDOR_ID (bladeRF.h)",
+          lg2.BLADERF_VID == define_val(brf_src, "USB_NUAND_VENDOR_ID"))
+    check("PID bladeRF1 в списке (bladeRF.h)",
+          define_val(brf_src, "USB_NUAND_BLADERF_PRODUCT_ID") in lg2.BLADERF_PIDS)
+    check("PID micro в списке (bladeRF.h)",
+          define_val(brf_src, "USB_NUAND_BLADERF2_PRODUCT_ID") in lg2.BLADERF_PIDS)
+else:
+    check("заголовки Nuand для USB-констант", False, f"нет {usb_h} / {brf_h}")
+
+# ---------------------------------------------------------------------------
+# 3.6. Зеркало битов статуса: VHDL status_tx vs Python read_status
+# ---------------------------------------------------------------------------
+regs_vhd = open(os.path.join(ROOT, "hdl", "legion_regs.vhd"), encoding="utf-8").read()
+status_bits = dict(re.findall(r"status_tx\((\d+)\)\s*<=\s*tx_(\w+);", regs_vhd))
+check("статус bit0=playing (VHDL)", status_bits.get("0") == "playing")
+check("статус bit1=cap_done (VHDL)", status_bits.get("1") == "cap_done")
+check("статус bit2=det_active (VHDL)", status_bits.get("2") == "det_active")
+check("статус bit3=wd_fired (VHDL)", status_bits.get("3") == "wd_fired")
+py_bits = {"playing": 0, "capture_done": 1, "det_active": 2, "wd_fired": 3}
+# Python read_status: playing=bit0, capture_done=bit1, det_active=bit2, wd_fired=bit3
+host_src = open(os.path.join(ROOT, "host", "legion_fpga.py"), encoding="utf-8").read()
+for key, bit in py_bits.items():
+    check(f"py read_status {key}=bit{bit}", f'"{key}": bool(data & (1 << {bit}))' in host_src)
+
+# ---------------------------------------------------------------------------
 # 4. Шлюз: TCP loopback с FAKE-транспортом (протокол без железа)
 # ---------------------------------------------------------------------------
 os.environ["LEGION_FPGA_FAKE"] = "1"

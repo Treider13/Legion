@@ -28,13 +28,17 @@ import legion_fpga as lf  # noqa: E402
 
 FAKE = os.environ.get("LEGION_FPGA_FAKE", "").strip() in ("1", "true", "yes")
 
-# USB: bladeRF FX3, peripheral endpoint (как PERIPHERAL_EP_OUT/IN в
-# host/libraries/libbladeRF/src/backend/usb/nios_access.c)
-BLADERF_VID = 0x2CF0  # Nuand
-BLADERF1_PID = 0x5246  # bladeRF 1
+# USB: bladeRF FX3, peripheral endpoint. Значения сверены с исходниками Nuand
+# (тест test_legion_fpga.py читает их из реальных заголовков):
+#   firmware_common/bladeRF.h: USB_NUAND_VENDOR_ID=0x2CF0,
+#     BLADERF_PRODUCT_ID=0x5246 (bladeRF 1), BLADERF2_PRODUCT_ID=0x5250 (micro)
+#   backend/usb/usb.h: PERIPHERAL_EP_OUT=0x02, PERIPHERAL_EP_IN=0x82,
+#     PERIPHERAL_TIMEOUT_MS=250
+BLADERF_VID = 0x2CF0
+BLADERF_PIDS = (0x5246, 0x5250)  # bladeRF 1, bladeRF 2 micro
 EP_OUT = 0x02  # PERIPHERAL_EP_OUT
-EP_IN = 0x86   # PERIPHERAL_EP_IN
-TIMEOUT_MS = 1000  # PERIPHERAL_TIMEOUT_MS
+EP_IN = 0x82   # PERIPHERAL_EP_IN
+TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 
 
 class UsbTransport:
@@ -43,10 +47,14 @@ class UsbTransport:
     def __init__(self) -> None:
         import usb.core  # pyusb
 
-        self._dev = usb.core.find(idVendor=BLADERF_VID, idProduct=BLADERF1_PID)
+        self._dev = None
+        for pid in BLADERF_PIDS:
+            self._dev = usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
+            if self._dev is not None:
+                break
         if self._dev is None:
-            raise RuntimeError("bladeRF 1 не найден по USB (VID:PID %04X:%04X)"
-                               % (BLADERF_VID, BLADERF1_PID))
+            raise RuntimeError("bladeRF не найден по USB (VID %04X, PID %s)"
+                               % (BLADERF_VID, "/".join(f"{p:04X}" for p in BLADERF_PIDS)))
         try:
             self._dev.set_configuration()
         except Exception:
