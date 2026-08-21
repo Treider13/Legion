@@ -9,9 +9,9 @@ export interface FlashCliPlan {
   reason: string;
 }
 
-/** Что должен запустить оператор/CLI. Пустой argv = нет автозаписи из LEGION. */
-export function planFlashCli(job: FlashJob): FlashCliPlan {
-  const file = job.filename.split(/[/\\]/).pop() ?? job.filename;
+/** Что должен запустить оператор/CLI. Путь к файлу не режем — иначе CLI ищет в cwd. */
+export function planFlashCli(job: FlashJob, addr?: string): FlashCliPlan {
+  const file = job.filename;
   switch (job.deviceId) {
     case "bladerf-micro-xa4":
     case "bladerf-micro-xa9":
@@ -22,11 +22,13 @@ export function planFlashCli(job: FlashJob): FlashCliPlan {
         return { argv: ["bladeRF-cli", "-l", file], reason: "Nuand: FPGA в RAM -l" };
       }
       return { argv: ["bladeRF-cli", "-L", file], reason: "Nuand: FPGA autoload -L" };
-    case "usrp-n210":
+    case "usrp-n210": {
+      const ip = (addr || "192.168.10.2").trim() || "192.168.10.2";
       return {
-        argv: ["uhd_image_loader", `--args=type=usrp2,addr=192.168.10.2`, `--fpga-path=${file}`],
+        argv: ["uhd_image_loader", `--args=type=usrp2,addr=${ip}`, `--fpga-path=${file}`],
         reason: "Ettus: uhd_image_loader",
       };
+    }
     case "hackrf-one":
       return { argv: ["hackrf_spiflash", "-w", file], reason: "GSG: hackrf_spiflash -w" };
     case "plutosdr":

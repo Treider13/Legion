@@ -38,6 +38,19 @@ def main() -> int:
         if not cond:
             fails += 1
 
+    sys.path.insert(0, str(ROOT))
+    import sdr_worker as w
+
+    check("SoapyRemote args", w.parse_args("driver=remote,remote=tcp://10.0.0.5:55132") == {
+        "driver": "remote",
+        "remote": "tcp://10.0.0.5:55132",
+    })
+    check("LO = RF − fs/8 (Deepwave)", abs(w.cw_lo_hz(2442e6) - (2442e6 - w.TX_FS / 8)) < 1)
+    if w.NUMPY:
+        tone = w.make_cw()
+        check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
+        check("CW длина кратна 8", len(tone) % 8 == 0)
+
     ping = rpc(proc, {"op": "ping"})
     check("ping ok", ping.get("ok") is True)
     check("fake flag", ping.get("fake") is True)

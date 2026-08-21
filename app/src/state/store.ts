@@ -776,7 +776,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         byteLength: s.sdrImageBytes,
         action,
       };
-      const cli = planFlashCli(job);
+      const cli = planFlashCli(job, s.sdrGateway);
       if (hostSdrAvailable() && cli.argv.length > 0) {
         const r = await hostFlash(cli.argv, s.sdrImagePath || undefined);
         set({

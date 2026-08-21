@@ -357,6 +357,27 @@ function main(): void {
     }).argv.join(" ") === "bladeRF-cli -l hostedxA4.rbf",
   );
   check(
+    "CLI сохраняет полный путь файла",
+    planFlashCli({
+      deviceId: "bladerf-micro-xa4",
+      filename: "/tmp/fw/hostedxA4.rbf",
+      byteLength: 10,
+      action: "load-fpga",
+    }).argv[2] === "/tmp/fw/hostedxA4.rbf",
+  );
+  check(
+    "N210 loader берёт IP шлюза",
+    planFlashCli(
+      {
+        deviceId: "usrp-n210",
+        filename: "usrp_n210_r4_fpga.bin",
+        byteLength: 10,
+        action: "flash-fpga",
+      },
+      "10.1.2.3",
+    ).argv.some((a) => a.includes("10.1.2.3")),
+  );
+  check(
     "Nuand autoload CLI",
     planFlashCli({
       deviceId: "bladerf-micro-xa4",
