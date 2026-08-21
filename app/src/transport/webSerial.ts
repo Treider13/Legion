@@ -33,6 +33,9 @@ export class WebSerialTransport implements Transport {
   private ev: TransportEvents | null = null;
   private lineBuf = "";
   private closed = false;
+  // Записи сериализуем: getWriter() бросает «locked», если прошлый writer ещё
+  // держит lock — параллельные cmd() падали (аудит №28).
+  private writeChain: Promise<void> = Promise.resolve();
 
   setEvents(ev: TransportEvents): void {
     this.ev = ev;
@@ -79,13 +82,21 @@ export class WebSerialTransport implements Transport {
   }
 
   async writeLine(line: string): Promise<void> {
-    if (!this.port?.writable) throw new Error("port not open");
-    const writer = this.port.writable.getWriter();
-    try {
-      await writer.write(new TextEncoder().encode(line + "\n"));
-    } finally {
-      writer.releaseLock();
-    }
+    const writable = this.port?.writable;
+    if (!writable) throw new Error("port not open");
+    const data = new TextEncoder().encode(line + "\n");
+    const p = this.writeChain.then(async () => {
+      const writer = writable.getWriter();
+      try {
+        await writer.write(data);
+      } finally {
+        writer.releaseLock();
+      }
+    });
+    // Цепочка не должна умирать после первой ошибки: следующая запись идёт
+    // по catch-ветке, а вызывающему возвращаем честное отказание.
+    this.writeChain = p.catch(() => {});
+    return p;
   }
 
   async disconnect(): Promise<void> {

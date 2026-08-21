@@ -66,7 +66,7 @@ export class MockTransport implements Transport {
       if (!Number.isFinite(mhz) || mhz <= 0) {
         this.reply("ERR SYNTAX bad freq");
       } else if (mhz < 34.375 || mhz > 4400) {
-        this.reply("ERR RANGE 35-4400 MHz");
+        this.reply("ERR RANGE 34.375-4400 MHz");
       } else {
         this.freqMhz = mhz;
         // LOCK с реалистичной задержкой (см. заголовок)
@@ -157,10 +157,11 @@ export class MockTransport implements Transport {
     } else if (upper.startsWith("CUE")) {
       this.handleCue(t);
     } else if (upper === "STATUS?") {
+      // Как прошивка: в коридоре mode/freq — живые (движок), не MANUAL/ручная.
       this.reply(
         JSON.stringify({
-          freq: this.freqMhz,
-          mode: "MANUAL",
+          freq: this.corrActive ? this.corrCur : this.freqMhz,
+          mode: this.corrActive ? this.corrMode : "MANUAL",
           lock: 1,
           rf: this.rfOn ? 1 : 0,
           power: this.power,
@@ -283,7 +284,9 @@ export class MockTransport implements Transport {
     const dwellClamped = Math.max(dwell, 20); // в mock не быстрее 50 Гц — достаточно для UI
     this.corrTimer = setInterval(() => {
       if (!this.corrActive) return;
-      if (this.corrMode === "SWEEP") {
+      // CHIRP — линейная рампа, как в прошивке (engine_sweep_next);
+      // раньше мок гнал CHIRP через ветку HOP (xorshift) — врал разработчику.
+      if (this.corrMode === "SWEEP" || this.corrMode === "CHIRP") {
         this.corrCur += this.corrStepKhz / 1000;
         if (this.corrCur > this.corrF2) this.corrCur = this.corrF1;
       } else {
@@ -353,7 +356,7 @@ export class MockTransport implements Transport {
     const f1 = parseFloat(parts[2] ?? "NaN");
     const f2 = parseFloat(parts[3] ?? "NaN");
     if (!Number.isFinite(f1) || !Number.isFinite(f2) || f2 < f1 || f1 < 34.375 || f2 > 4400) {
-      this.reply("ERR RANGE allow 35-4400 MHz");
+      this.reply("ERR RANGE allow 34.375-4400 MHz");
       return;
     }
     if (this.allow.length >= 8) {
@@ -435,7 +438,7 @@ export class MockTransport implements Transport {
       return;
     }
     if (mhz < 34.375 || mhz > 4400) {
-      this.reply("ERR RANGE 35-4400 MHz");
+      this.reply("ERR RANGE 34.375-4400 MHz");
       return;
     }
     this.freqMhz = mhz;
