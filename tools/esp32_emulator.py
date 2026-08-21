@@ -35,7 +35,7 @@ class Corridor:
         self._hop = 1
         self.fm_depth_khz = 100.0
         self._glide_start = 0.0
-        self._fm_t = 0.0
+        self._fm_start = time.monotonic()
         self.lock = threading.Lock()
 
     def hop_next(self) -> None:
@@ -47,7 +47,8 @@ class Corridor:
         steps = int((self.f2 - self.f1) * 1000 / self.step_khz)
         self.cur = self.f1 + (self._hop % (steps + 1)) * self.step_khz / 1000.0
 
-    def tick(self) -> None:
+    def tick(self) -> str | None:
+        """Один шаг движка. Возвращает имя события (GLIDE DONE) или None."""
         import math
         import random
         with self.lock:
@@ -64,10 +65,14 @@ class Corridor:
                 self.cur = self.f1 + (self.f2 - self.f1) * k
                 if k >= 1.0:
                     self.active = False
+                    return "GLIDE DONE"  # как прошивка: событие при завершении
             elif self.mode.startswith("FM_"):
-                self._fm_t += self.dwell_ms / 100.0
+                # Фаза от реального времени: прошивка крутит LFO с периодом
+                # dwell_ms (тик 1 мс). Раньше фаза росла на dwell/100 за тик —
+                # эмулятор был в ~100× медленнее железа (аудит №21).
                 period = max(self.dwell_ms, 1.0)
-                phase = (self._fm_t % period) / period
+                t_ms = (time.monotonic() - self._fm_start) * 1000.0
+                phase = (t_ms % period) / period
                 if self.mode == "FM_SIN":
                     dev = math.sin(2 * math.pi * phase)
                 elif self.mode == "FM_TRI":
@@ -75,6 +80,7 @@ class Corridor:
                 else:
                     dev = random.uniform(-1, 1)
                 self.cur = self.f1 + dev * self.fm_depth_khz / 1000.0
+        return None
 
 
 class Emu:
@@ -87,6 +93,10 @@ class Emu:
         self.load_ok = True
         self.pa_ma = 0
         self.pa_on = False
+        # Выравнивание уровня (фаза 10) — как в прошивке/моке
+        self.level_pts: list[tuple[float, float]] = []
+        self.level_on = False
+        self.level_target = 0.0
 
     def handle(self, line: str) -> str:
         t = line.strip()
@@ -102,7 +112,7 @@ class Emu:
             except (IndexError, ValueError):
                 return "ERR SYNTAX bad freq"
             if not 34.375 <= mhz <= 4400:
-                return "ERR RANGE 35-4400 MHz"
+                return "ERR RANGE 34.375-4400 MHz"
             self.freq = mhz
             return f"OK FREQ={mhz:.6f} LOCK=1 ERR_HZ=0.0"
         if u.startswith("SET POWER"):
@@ -167,6 +177,58 @@ class Emu:
             except ValueError:
                 return "ERR SYNTAX bad ppm"
             return f"OK CAL REF {parts[2]} ppm"
+        if u.startswith("SET LEVEL"):
+            # SET LEVEL <dBm> | OFF — авто-выравнивание через PE43702 (фаза 10)
+            if len(parts) < 3:
+                return "ERR SYNTAX SET LEVEL <dBm>|OFF"
+            if parts[2].upper() == "OFF":
+                self.level_on = False
+                return "OK LEVEL OFF"
+            try:
+                self.level_target = float(parts[2])
+            except ValueError:
+                return "ERR SYNTAX bad level dBm"
+            self.level_on = True
+            if self.level_pts:
+                return f"OK LEVEL={self.level_target:.2f} ATT=0.00 dB"
+            return f"OK LEVEL={self.level_target:.2f} (no cal - add points via CAL LEVEL)"
+        if u.startswith("CAL LEVEL"):
+            # CAL LEVEL <freqMHz> <dBm> | CLEAR
+            if len(parts) >= 3 and parts[2].upper() == "CLEAR":
+                self.level_pts = []
+                return "OK CAL LEVEL CLEAR n=0"
+            try:
+                f = float(parts[2])
+                dbm = float(parts[3])
+            except (IndexError, ValueError):
+                return "ERR SYNTAX CAL LEVEL <freqMHz> <dBm>|CLEAR"
+            if f <= 0:
+                return "ERR SYNTAX CAL LEVEL <freqMHz> <dBm>|CLEAR"
+            self.level_pts = [(pf, pd) for pf, pd in self.level_pts if abs(pf - f) > 1e-6]
+            self.level_pts.append((f, dbm))
+            self.level_pts.sort()
+            return f"OK CAL LEVEL {f:.3f} {dbm:.2f} n={len(self.level_pts)}"
+        if u == "LEVEL?":
+            return json.dumps({
+                "enabled": 1 if self.level_on else 0,
+                "target": self.level_target,
+                "points": [[f, d] for f, d in self.level_pts],
+            })
+        if u.startswith("REGS DIFF"):
+            # REGS DIFF <r0..r5 hex> — xor против статических регистров REGS?
+            words = parts[2:]
+            if len(words) < 6:
+                return "ERR SYNTAX regs diff needs 6 hex words"
+            try:
+                mine = [int(r, 16) for r in
+                        ("0x00318000", "0x00008011", "0x18004fc2",
+                         "0x00e0000b", "0x0083203c", "0x00580005")]
+                theirs = [int(w, 16) for w in words[:6]]
+            except ValueError:
+                return "ERR SYNTAX regs diff needs 6 hex words"
+            return json.dumps({"diff": [
+                {"r": i, "xor": f"0x{m ^ t:08X}"} for i, (m, t) in enumerate(zip(mine, theirs))
+            ]})
         if u.startswith("WIFI"):
             if u == "WIFI STATUS?":
                 return '{"wifi":{"mode":"AP","ip":"192.168.4.1","ssid":"LEGION"}}'
@@ -261,6 +323,7 @@ class Emu:
         c.f1 = self.freq
         c.fm_depth_khz = 100.0
         c.dwell_ms = 100.0
+        c._fm_start = time.monotonic()
         kv = parts[3:]
         for i in range(0, len(kv) - 1, 2):
             key, val = kv[i].upper(), kv[i + 1]
@@ -290,7 +353,7 @@ class Emu:
         except ValueError:
             return "ERR SYNTAX ALLOW ADD <f1MHz> <f2MHz>"
         if not (34.375 <= f1 <= f2 <= 4400):
-            return "ERR RANGE allow 35-4400 MHz"
+            return "ERR RANGE allow 34.375-4400 MHz"
         if len(self.allow) >= 8:
             return "ERR RANGE allow table full"
         self.allow.append((f1, f2))
@@ -344,7 +407,7 @@ class Emu:
         if not self.allow or not any(a <= mhz <= b for a, b in self.allow):
             return "ERR ALLOW cue requires allowlist hit"
         if not 34.375 <= mhz <= 4400:
-            return "ERR RANGE 35-4400 MHz"
+            return "ERR RANGE 34.375-4400 MHz"
         self.corridor.active = False
         self.freq = mhz
         return f"OK CUE FREQ={mhz:.6f} LOCK=1"
@@ -360,8 +423,16 @@ def telemetry_loop(emu: Emu, master: int) -> None:
             last_step = time.monotonic()
             continue
         now = time.monotonic()
-        if (now - last_step) * 1000.0 >= c.dwell_ms:
-            c.tick()
+        # FM: dwell_ms — период LFO, а не темп шага; прошивка тикает FM каждые
+        # 1 мс. Тикать раз в период = алиасинг (фаза застынет на телеметрии).
+        step_ms = 10.0 if c.mode.startswith("FM_") else c.dwell_ms
+        if (now - last_step) * 1000.0 >= step_ms:
+            ev = c.tick()
+            if ev:  # GLIDE DONE и т.п. — как прошивка: событие отдельной строкой
+                try:
+                    os.write(master, (json.dumps({"t": 0, "event": ev}) + "\n").encode("ascii"))
+                except OSError:
+                    return
             last_step = now
         msg = json.dumps({
             "t": int(now * 1000) & 0xFFFFFFFF,
