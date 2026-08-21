@@ -12,7 +12,7 @@ import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
-import { heldHitAlive, lockIsStuck, pickAutoTarget, pickOtherHit, RESENSE_MS, STUCK_MS } from "../src/sense/hold";
+import { heldHitAlive, nextAfterOperatorReset, pickAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
 import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
 import {
@@ -437,16 +437,13 @@ function main(): void {
       2442,
     ) === false,
   );
-  const other = pickOtherHit(
-    [
-      { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
-      { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
-    ],
-    2442,
-  );
-  check("после сброса берём другую, не ту же", other?.freqMhz === 2480);
+  const archive = [
+    { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
+    { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+  ];
+  check("СБРОСИТЬ не выбирает из архива", nextAfterOperatorReset(archive) === null);
   check(
-    "авто берёт чуть сильнее",
+    "авто берёт чуть сильнее из живого окна",
     pickAutoTarget(
       [
         { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
@@ -467,8 +464,31 @@ function main(): void {
       -20,
     ) === null,
   );
-  check("залипло после 8 с", lockIsStuck(1, 1 + STUCK_MS));
-  check("ещё не залипло", lockIsStuck(1000, 1000 + STUCK_MS - 1) === false);
+  check(
+    "без известной силы не прыгаем вслепую",
+    pickAutoTarget(
+      [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
+      2442,
+      null,
+    ) === null,
+  );
+  check(
+    "после сброса живое окно минус снятая",
+    pickAutoTarget(
+      [
+        { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 2, forwarded: false },
+        { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 2, forwarded: false },
+      ],
+      null,
+      null,
+      2442,
+    )?.freqMhz === 2410,
+  );
+  const hopA = new ScanWalker({ bands: ism, pattern: "hop", windowMhz: 1, analogBwMhz: 56, seed: 1 });
+  const hopB = new ScanWalker({ bands: ism, pattern: "hop", windowMhz: 1, analogBwMhz: 56, seed: 99 });
+  const seqA = Array.from({ length: 8 }, () => hopA.next().centerMhz);
+  const seqB = Array.from({ length: 8 }, () => hopB.next().centerMhz);
+  check("разный сид — разная случайная трасса", seqA.join(",") !== seqB.join(","));
   const gate = new HandoffGate();
   gate.reserve(2442);
   check("reserve не есть успех TX", gate.lastCuedMhz === null && gate.pendingMhz === 2442);

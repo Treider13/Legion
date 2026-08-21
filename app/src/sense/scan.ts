@@ -152,14 +152,6 @@ export class AllowlistScanner {
     this.thresholdDb = db;
   }
 
-  remaining(): number {
-    return Math.max(0, this.walker.centers.length);
-  }
-
-  rewind(): void {
-    /* walker сам крутит; rewind для тестов — новый проход не нужен */
-  }
-
   tick(now = Date.now()): ScanTick {
     const step = this.walker.next();
     if (!step.centerMhz) {

@@ -1,5 +1,4 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
-import { lockIsStuck, STUCK_MS } from "../sense/hold";
 import type { ScanPattern } from "../sense/scan";
 import { useLegion } from "../state/store";
 
@@ -9,7 +8,6 @@ export function ScanPanel() {
   const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
   const span = Math.max(f2 - f1, 1e-6);
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
-  const stuck = lockIsStuck(s.sdrHoldSince, Date.now(), STUCK_MS);
 
   return (
     <section className="panel">
@@ -17,7 +15,7 @@ export function ScanPanel() {
       <p className="panel-note">
         Задайте начало и конец, нажмите ЗАПУСТИТЬ. Скан гоняет полосу сам. Сильная
         засечка сразу на TX SDR → усилитель; чуть сильнее — тоже сразу. СБРОСИТЬ —
-        если одна частота слишком долго. Energy detect, не RF-Clown/BlueJammer.
+        оператор снимает частоту, система по таймеру не прыгает. Energy detect, не RF-Clown/BlueJammer.
         ESP32 сюда не входит. Нагрузка 50 Ом обязательна для TX.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
@@ -147,7 +145,7 @@ export function ScanPanel() {
           </button>
         ) : null}
         <button
-          className={stuck ? "btn-danger" : "btn-ghost"}
+          className="btn-ghost"
           disabled={s.lastForwardMhz == null}
           onClick={() => void s.resetSdrLock()}
         >
@@ -202,7 +200,7 @@ export function ScanPanel() {
         <span className="range-cur">
           {s.scanCenterMhz !== null ? `${s.scanCenterMhz.toFixed(3)} МГц` : "—"}
           {s.transmitArmed
-            ? ` · авто TX${stuck ? " · залипло, СБРОСИТЬ" : ""}`
+            ? " · авто TX"
             : s.scanRunning
               ? " · слушает"
               : ""}

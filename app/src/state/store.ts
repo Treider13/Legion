@@ -27,7 +27,7 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { heldHitAlive, pickAutoTarget, pickOtherHit, RESENSE_MS } from "../sense/hold";
+import { heldHitAlive, nextAfterOperatorReset, pickAutoTarget, RESENSE_MS } from "../sense/hold";
 import { modeConflict, modeOf } from "../sense/modes";
 import {
   markForwarded,
@@ -137,6 +137,7 @@ interface LegionStore {
   lastInterceptMhz: number | null;
   lastCueReason: string;
   lastSdrTxUs: number | null;
+  lastForwardPowerDbm: number | null;
   // журнал
   log: LogEntry[];
 
@@ -233,26 +234,27 @@ export const useLegion = create<LegionStore>((set, get) => {
     return m ? m[1] === "1" : null;
   };
 
-  const executeHandoff = (plan: HandoffPlan, sdrUs: number): void => {
+  const executeHandoff = (plan: HandoffPlan, sdrUs: number, powerDbm: number): void => {
     // Режим SDR: никаких CUE / PA / RF на ESP32.
     set({
       detections: markForwarded(get().detections, plan.freqMhz),
       lastForwardMhz: plan.freqMhz,
+      lastForwardPowerDbm: powerDbm,
       lastSdrTxUs: sdrUs || get().lastSdrTxUs,
       sdrHoldSince: Date.now(),
       lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${sdrUs} µs host`,
     });
   };
 
-  const runHandoff = (mhz: number): void => {
-    void runHandoffAsync(mhz);
+  const runHandoff = (mhz: number, powerDbm = 0): void => {
+    void runHandoffAsync(mhz, powerDbm);
   };
 
-  const runHandoffAsync = async (mhz: number): Promise<void> => {
+  const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<void> => {
     const st = get();
     const caps = catalogCaps(st.sdrId);
     const plan = planHandoff({
-      det: mhzAsDet(mhz),
+      det: mhzAsDet(mhz, powerDbm),
       bands: st.sdrBands,
       loadOk: st.sdrLoadOk,
       transmitArmed: st.transmitArmed,
@@ -275,7 +277,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
       }
-      executeHandoff(plan, sdrUs);
+      executeHandoff(plan, sdrUs, powerDbm);
     } finally {
       const queued = gGate.release();
       if (queued !== null) void runHandoffAsync(queued);
@@ -318,8 +320,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       const stronger = pickAutoTarget(dets, heldMhz, heldDet?.powerDbm ?? null, gSkipMhz);
       if (stronger) {
         gGate.dropHold();
-        set({ lastForwardMhz: null, lastSdrTxUs: null, sdrHoldSince: null });
-        runHandoff(stronger.freqMhz);
+        set({ lastForwardMhz: null, lastForwardPowerDbm: null, lastSdrTxUs: null, sdrHoldSince: null });
+        runHandoff(stronger.freqMhz, stronger.powerDbm);
         return "switch";
       }
       if (heldHitAlive(dets, heldMhz)) {
@@ -329,11 +331,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       gGate.dropHold();
       set({
         lastForwardMhz: null,
+        lastForwardPowerDbm: null,
         lastSdrTxUs: null,
         sdrHoldSince: null,
-        lastCueReason: `засечка ${heldMhz.toFixed(3)} пропала — ищем другую`,
+        lastCueReason: `засечка ${heldMhz.toFixed(3)} пропала — ждём живое окно`,
       });
-      pushLog("sys", `засечка ${heldMhz.toFixed(3)} МГц пропала (RX без своего тона)`);
+      pushLog("sys", `засечка ${heldMhz.toFixed(3)} МГц пропала (RX без своего тона) — частоту меняет оператор или новая сильная`);
       return "gone";
     } finally {
       gResense = false;
@@ -420,6 +423,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastInterceptMhz: null,
     lastCueReason: "",
     lastSdrTxUs: null,
+    lastForwardPowerDbm: null,
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
@@ -468,6 +472,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrRemote: gSdr.remoteArgs(),
         lastForwardMhz: null,
         lastSdrTxUs: null,
+        lastForwardPowerDbm: null,
         sdrHoldSince: null,
       });
       pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
@@ -907,7 +912,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLive = false;
       gResense = false;
       gSkipMhz = null;
-      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null });
+      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
       pushLog("sys", "SDR закрыт");
     },
 
@@ -987,23 +992,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           windowMhz,
           analogBwMhz: analog,
           dwellMs: parseFloat(st.scanDwellMs),
-          seed: 1337,
+          seed: Date.now() & 0xffffffff,
         });
         gWalker = walker;
+        gScan = null;
         const nBins = walker.windowMhz >= 40 ? 256 : 64;
-        if (!gLive) {
-          gScan = new AllowlistScanner(gSdr, {
-            bands: st.sdrBands,
-            bwMhz: walker.windowMhz,
-            bins: nBins,
-            thresholdDb: st.scanThresholdDb,
-            loop: true,
-            pattern: st.scanPattern,
-            dwellMs: walker.tickMs,
-          });
-        } else {
-          gScan = null;
-        }
         set({ scanRunning: true, scanCenterMhz: null });
         const modeRu =
           st.scanPattern === "sweep" ? "туда-сюда" : st.scanPattern === "hop" ? "случайная" : "сплошная";
@@ -1021,12 +1014,12 @@ export const useLegion = create<LegionStore>((set, get) => {
               let bins: ScanBin[] = [];
               let centerMhz = 0;
               let detections: Detection[] = [];
-              const winMhz = gWalker?.windowMhz ?? windowMhz;
+              const step = gWalker?.next();
+              if (!step?.centerMhz) return;
+              const winMhz = step.windowMhz;
+              centerMhz = step.centerMhz;
               if (gLive) {
-                const step = gWalker?.next();
-                if (!step?.centerMhz) return;
-                centerMhz = step.centerMhz;
-                const win = await hostScan(centerMhz, step.windowMhz, nBins);
+                const win = await hostScan(centerMhz, winMhz, nBins);
                 if (win.txError) {
                   pushLog("sys", win.txError);
                   await get().stopTransmit();
@@ -1036,22 +1029,17 @@ export const useLegion = create<LegionStore>((set, get) => {
                   return;
                 }
                 bins = win.bins;
-                const now = Date.now();
-                detections = withoutOwnTx(
-                  clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
-                    ...d,
-                    ts: now,
-                  })),
-                  get().lastForwardMhz,
-                );
-              } else if (gScan) {
-                const tick = gScan.tick();
-                centerMhz = tick.centerMhz;
-                bins = tick.bins;
-                detections = withoutOwnTx(tick.detections, get().lastForwardMhz);
               } else {
-                return;
+                bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
               }
+              const now = Date.now();
+              detections = withoutOwnTx(
+                clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
+                  ...d,
+                  ts: now,
+                })),
+                get().lastForwardMhz,
+              );
               if (centerMhz) set({ scanCenterMhz: centerMhz });
               if (detections.length > 0) {
                 const dets = mergeDetections(get().detections, detections);
@@ -1069,25 +1057,20 @@ export const useLegion = create<LegionStore>((set, get) => {
                 lastResenseAt = Date.now();
                 const verdict = await resenseHeld(held, winMhz, nBins);
                 if (verdict === "gone") {
-                  const next = pickOtherHit(get().detections, held);
-                  if (next) runHandoff(next.freqMhz);
+                  void nextAfterOperatorReset(get().detections);
                 }
               }
               const after = get();
               const heldNow = gGate.lastCuedMhz;
-              const heldDet =
-                heldNow != null
-                  ? after.detections.find((d) => sameBin(d.freqMhz, heldNow))
-                  : undefined;
               const target = pickAutoTarget(
                 detections,
                 heldNow,
-                heldDet?.powerDbm ?? null,
+                after.lastForwardPowerDbm,
                 gSkipMhz,
               );
               if (!target) return;
               if (gGate.queueIfBusy(target.freqMhz)) return;
-              runHandoff(target.freqMhz);
+              runHandoff(target.freqMhz, target.powerDbm);
             } finally {
               inflight = false;
             }
@@ -1143,7 +1126,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ transmitArmed: true });
       pushLog(
         "sys",
-        "SDR авто: сильная засечка сразу на усилитель, чуть сильнее — тоже. СБРОСИТЬ если залипло.",
+        "SDR авто: сильная сразу на усилитель, чуть сильнее — тоже. СБРОСИТЬ — только оператор.",
       );
       if (!get().scanRunning) get().startScan();
       stopTxWatch();
@@ -1162,7 +1145,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }, 1000);
       }
       const pending = pickStrongest(withoutOwnTx(get().detections.filter((d) => !d.forwarded), get().lastForwardMhz));
-      if (pending) runHandoff(pending.freqMhz);
+      if (pending) runHandoff(pending.freqMhz, pending.powerDbm);
     },
 
     stopTransmit: async () => {
@@ -1173,7 +1156,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gGate.reset();
       if (gLive) await hostTxOff();
       gSdr.txOff();
-      set({ lastSdrTxUs: null, lastForwardMhz: null, sdrHoldSince: null, lastCueReason: "SDR TX остановлен" });
+      set({ lastSdrTxUs: null, lastForwardMhz: null, lastForwardPowerDbm: null, sdrHoldSince: null, lastCueReason: "SDR TX остановлен" });
       pushLog("sys", "SDR TX остановлен (ESP32 не тронут)");
     },
 
@@ -1187,25 +1170,24 @@ export const useLegion = create<LegionStore>((set, get) => {
       gGate.reset();
       set({
         lastForwardMhz: null,
+        lastForwardPowerDbm: null,
         lastSdrTxUs: null,
         sdrHoldSince: null,
-        lastCueReason: "сброс — долго одна частота, ищем другую",
+        lastCueReason: "оператор сбросил частоту — ждём новую сильную в окне",
       });
       if (gLive) await hostTxOff();
       gSdr.txOff();
       pushLog(
         "sys",
         skip != null
-          ? `СБРОСИТЬ: сняли ${skip.toFixed(3)} МГц, ищем другую засечку`
-          : "СБРОСИТЬ: замок снят",
+          ? `СБРОСИТЬ: оператор снял ${skip.toFixed(3)} МГц — систему не переключаем`
+          : "СБРОСИТЬ: замок снят оператором",
       );
-      if (!get().transmitArmed) return;
-      const next = pickOtherHit(get().detections, skip);
-      if (next) await runHandoffAsync(next.freqMhz);
+      void nextAfterOperatorReset(get().detections);
     },
   };
 });
 
-function mhzAsDet(mhz: number): import("../sdr/types").Detection {
-  return { freqMhz: mhz, powerDbm: 0, noiseDbm: 0, snrDb: 0, ts: 0, forwarded: false };
+function mhzAsDet(mhz: number, powerDbm = 0): import("../sdr/types").Detection {
+  return { freqMhz: mhz, powerDbm, noiseDbm: 0, snrDb: 0, ts: 0, forwarded: false };
 }
