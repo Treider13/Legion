@@ -182,6 +182,18 @@ check("gateway set неизвестного reg → отказ", r.get("ok") is 
 r = rpc({"op": "arm", "mode": "nonsense"})
 check("gateway arm неизвестного mode → отказ", r.get("ok") is False)
 
+# lb_gated без порога → честный отказ (порог 0 = гейт на шум)
+r = rpc({"op": "arm", "mode": "lb_gated"})
+check("lb_gated без det_thr → отказ", r.get("ok") is False)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
+check("lb_gated с det_thr → ok", r.get("ok") is True)
+check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
+
+# Heartbeat — релей от ноутбука, агент сам НЕ генерирует
+r = rpc({"op": "kick"})
+check("kick релей + last_kick обновлён", r.get("ok") is True and gw.last_kick > 0)
+check("агент без само-кика (нет _start_kick)", not hasattr(gw, "_start_kick"))
+
 r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)

@@ -284,9 +284,18 @@ function stopTxWalk(): void {
   }
 }
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
+/** Heartbeat ноутбука → FPGA watchdog (deadman end-to-end, 2 Гц). */
+let gFpgaKick: ReturnType<typeof setInterval> | null = null;
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
+
+function stopFpgaKick(): void {
+  if (gFpgaKick) {
+    clearInterval(gFpgaKick);
+    gFpgaKick = null;
+  }
+}
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
@@ -673,6 +682,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
+      stopFpgaKick();
+      set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -1206,13 +1217,28 @@ export const useLegion = create<LegionStore>((set, get) => {
       try {
         const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true }, get().sdrGateway);
         pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-        if (r.ok) set({ fpgaArmed: true });
+        if (r.ok) {
+          set({ fpgaArmed: true });
+          // Deadman end-to-end: heartbeat с ЭТОГО ноутбука, 2 Гц.
+          // Замерло любое звено (app/TCP/шлюз/USB) → watchdog в FPGA гасит TX.
+          stopFpgaKick();
+          gFpgaKick = setInterval(() => {
+            void hostFpga({ op: "kick" }, get().sdrGateway).then((kr) => {
+              if (!kr.ok) {
+                pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
+                stopFpgaKick();
+                set({ fpgaArmed: false });
+              }
+            });
+          }, 500);
+        }
       } finally {
         set({ fpgaBusy: false });
       }
     },
 
     fpgaDisarm: async () => {
+      stopFpgaKick();
       set({ fpgaBusy: true });
       try {
         const r = await hostFpga({ op: "disarm" }, get().sdrGateway);
@@ -1226,6 +1252,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaPollStatus: async () => {
       const r = await hostFpga({ op: "status" }, get().sdrGateway);
       set({ fpgaStatus: r });
+      // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
+      if (r.ok && r.wd_fired && get().fpgaArmed) {
+        stopFpgaKick();
+        set({ fpgaArmed: false });
+        pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
+      }
     },
 
     probeSdr: async () => {
@@ -1308,6 +1340,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
+      stopFpgaKick();
+      set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
       if (gLive) {

@@ -19,10 +19,8 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import socketserver
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,6 +63,7 @@ class FakeTransport:
 
     def __init__(self) -> None:
         self.regs = {}
+        self.cap_done = False
 
     def xfer(self, req: bytes) -> bytes:
         # Разбор как в NIOS: magic 'C', target, flags, addr, data
@@ -78,6 +77,10 @@ class FakeTransport:
         resp[1] = req[1]
         resp[2] = lf.NIOS_PKT_8x32_FLAG_SUCCESS
         if write:
+            # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
+            if addr == lf.REG_PLAYER_CTL:
+                if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:
+                    self.cap_done = True
             self.regs[addr] = data
         else:
             ctrl = self.regs.get(lf.REG_CTRL, 0)
@@ -85,7 +88,7 @@ class FakeTransport:
             mode = (ctrl >> 1) & 0x7
             status = 0
             status |= int(armed and mode in (lf.MODE_PLAYER,)) << 0   # playing
-            status |= int(self.regs.get(lf.REG_PLAYER_CTL, 0) == 0) << 1  # capture_done (fake)
+            status |= int(self.cap_done) << 1                          # capture_done
             status |= 0 << 2  # det_active
             status |= 0 << 3  # wd_fired
             resp[5:9] = status.to_bytes(4, "little")
@@ -93,11 +96,17 @@ class FakeTransport:
 
 
 class LegionGateway:
+    """Релей команд ноутбука в FPGA. Heartbeat НЕ генерируется здесь:
+    deadman-цепь end-to-end — ноутбук шлёт kick каждые 0.5 с; замерло
+    любое звено (app/TCP/агент/USB) → kicks прекращаются → watchdog в FPGA
+    гасит TX сам. Агент, генерирующий heartbeat сам, держал бы TX живым
+    после смерти ноутбука — это и был бы фейк-deadman."""
+
     def __init__(self, fake: bool) -> None:
         self.fpga = lf.LegionFpga(FakeTransport() if fake else UsbTransport())
         self.fake = fake
-        self._kick_stop = threading.Event()
-        self._kick_thr: threading.Thread | None = None
+        self.last_kick = 0.0
+        self.det_thr_set = False  # порог детектора записывался в этой сессии
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -109,16 +118,23 @@ class LegionGateway:
                     "lb_gated": lf.MODE_LB_GATED, "lb_always": lf.MODE_LB_ALWAYS}.get(mode_name)
             if mode is None:
                 return {"ok": False, "reason": f"неизвестный mode {mode_name}"}
+            # lb_gated без явного порога = гейт на шум (порог 0). Отказ честно.
+            if mode == lf.MODE_LB_GATED and msg.get("det_thr") is None and not self.det_thr_set:
+                return {"ok": False, "reason": "lb_gated: сначала det_thr (порог детектора)"}
+            if msg.get("det_thr") is not None:
+                if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
+                    return {"ok": False, "reason": "запись DET_THR не удалась"}
+                self.det_thr_set = True
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
-            if ok:
-                self._start_kick()
             return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась"}
         if op == "disarm":
-            self._stop_kick()
             return {"ok": self.fpga.disarm(), "reason": "DISARM"}
         if op == "status":
-            return self.fpga.read_status()
+            st = self.fpga.read_status()
+            st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
+            return st
         if op == "kick":
+            self.last_kick = time.monotonic()
             return {"ok": self.fpga.heartbeat()}
         if op == "set":
             reg = str(msg.get("reg") or "")
@@ -131,28 +147,11 @@ class LegionGateway:
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}
-            return {"ok": self.fpga.write_reg(regmap[reg], val)}
+            ok = self.fpga.write_reg(regmap[reg], val)
+            if ok and reg == "det_thr":
+                self.det_thr_set = True
+            return {"ok": ok}
         return {"ok": False, "reason": f"unknown op {op}"}
-
-    def _start_kick(self) -> None:
-        # Heartbeat 2 Гц: watchdog в FPGA (limit ~1 с) не должен срабатывать,
-        # пока жив ноутбук/шлюз. Обрыв любого звена → TX off сам.
-        if self._kick_thr and self._kick_thr.is_alive():
-            return
-        self._kick_stop.clear()
-
-        def loop() -> None:
-            while not self._kick_stop.wait(0.5):
-                try:
-                    self.fpga.heartbeat()
-                except Exception:
-                    break
-
-        self._kick_thr = threading.Thread(target=loop, name="legion-fpga-kick", daemon=True)
-        self._kick_thr.start()
-
-    def _stop_kick(self) -> None:
-        self._kick_stop.set()
 
 
 class _Handler(socketserver.StreamRequestHandler):
