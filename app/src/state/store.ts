@@ -28,7 +28,7 @@ import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/type
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import { heldHitAlive, pickAutoTarget, RESENSE_MS } from "../sense/hold";
-import { modeConflict, modeOf } from "../sense/modes";
+import { modeConflict, modeOf, planSdrWork, scannerParticipates } from "../sense/modes";
 import {
   markForwarded,
   mergeDetections,
@@ -199,6 +199,14 @@ const gSdr = new MockSdrBackend();
 let gLive = false;
 let gWalker: ScanWalker | null = null;
 let gScanTimer: ReturnType<typeof setInterval> | null = null;
+let gTxWalk: ReturnType<typeof setInterval> | null = null;
+
+function stopTxWalk(): void {
+  if (gTxWalk) {
+    clearInterval(gTxWalk);
+    gTxWalk = null;
+  }
+}
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
 const gGate = new HandoffGate();
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
@@ -335,6 +343,35 @@ export const useLegion = create<LegionStore>((set, get) => {
     }
   };
 
+  const startOpenLoopTx = (): void => {
+    stopTxWalk();
+    const st = get();
+    const caps = catalogCaps(st.sdrId);
+    const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
+    const walkPat = st.scanPattern === "auto" ? "sweep" : st.scanPattern;
+    const walker = new ScanWalker({
+      bands: st.sdrBands,
+      pattern: walkPat,
+      windowMhz: clampWindowMhz(parseFloat(st.scanWindowMhz), analog),
+      analogBwMhz: analog,
+      dwellMs: parseFloat(st.scanDwellMs),
+      seed: Date.now() & 0xffffffff,
+    });
+    gWalker = walker;
+    let inflight = false;
+    const stepTx = (): void => {
+      if (inflight || !get().transmitArmed) return;
+      const step = gWalker?.next();
+      if (!step?.centerMhz) return;
+      inflight = true;
+      void runHandoffAsync(step.centerMhz, 0).finally(() => {
+        inflight = false;
+      });
+    };
+    stepTx();
+    gTxWalk = setInterval(stepTx, walker.tickMs);
+  };
+
   const ensureSdrBand = (): boolean => {
     const s = get();
     if (s.sdrBands.length > 0) return true;
@@ -406,7 +443,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanRunning: false,
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
-    scanPattern: "sweep",
+    scanPattern: "auto",
     scanWindowMhz: "20",
     scanDwellMs: "40",
     scanCenterMhz: null,
@@ -451,6 +488,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setSdrFlashName: (v) => set({ sdrFlashName: v }),
     setSdrEmulation: (v) => {
       stopTxWatch();
+      stopTxWalk();
       if (gLive) {
         void hostTxOff();
         void hostClose();
@@ -892,6 +930,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     closeSdr: async () => {
       stopTxWatch();
+      stopTxWalk();
       get().stopScan();
       if (gLive) {
         await hostTxOff();
@@ -956,6 +995,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           return;
         }
         if (!ensureSdrBand()) return;
+        if (!scannerParticipates(s.scanPattern)) {
+          pushLog("sys", "СКАНИРОВАТЬ: в сплошной/случайной/туда-сюда сканер не участвует — выберите АВТО");
+          return;
+        }
         if (!s.sdrEmulation) {
           if (!get().sdrOpened) {
             await get().openSdr();
@@ -978,7 +1021,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         const windowMhz = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
         const walker = new ScanWalker({
           bands: st.sdrBands,
-          pattern: st.scanPattern,
+          pattern: "sweep",
           windowMhz,
           analogBwMhz: analog,
           dwellMs: parseFloat(st.scanDwellMs),
@@ -987,11 +1030,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         gWalker = walker;
         const nBins = walker.windowMhz >= 40 ? 256 : 64;
         set({ scanRunning: true, scanCenterMhz: null });
-        const modeRu =
-          st.scanPattern === "sweep" ? "туда-сюда" : st.scanPattern === "hop" ? "случайная" : "сплошная";
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: ${modeRu} · окно ${walker.windowMhz} МГц · выдержка ${walker.tickMs} мс`,
+          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: авто · RX energy · окно ${walker.windowMhz} МГц`,
         );
         let inflight = false;
         let lastResenseAt = 0;
@@ -1040,7 +1081,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               }
               if (bins.length > 0) set({ scanBins: bins });
               const cur = get();
-              if (!cur.transmitArmed) return;
+              if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
               const held = gGate.lastCuedMhz;
               if (held != null && !gGate.inflight && Date.now() - lastResenseAt >= RESENSE_MS) {
                 lastResenseAt = Date.now();
@@ -1099,11 +1140,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       set({ transmitArmed: true });
-      pushLog(
-        "sys",
-        `ПЕРЕДАТЬ: обход «${get().scanPattern}» + авто TX того, что засекла антенна. СБРОСИТЬ — оператор.`,
-      );
-      if (!get().scanRunning) get().startScan();
+      const work = planSdrWork(get().scanPattern);
+      pushLog("sys", `ПЕРЕДАТЬ: ${work.reason}`);
       stopTxWatch();
       if (gLive) {
         gTxWatch = setInterval(() => {
@@ -1119,12 +1157,19 @@ export const useLegion = create<LegionStore>((set, get) => {
           })();
         }, 1000);
       }
+      if (work.openLoopTx) {
+        get().stopScan();
+        startOpenLoopTx();
+        return;
+      }
+      if (!get().scanRunning) get().startScan();
       const pending = pickStrongest(withoutOwnTx(get().detections.filter((d) => !d.forwarded), get().lastForwardMhz));
       if (pending) runHandoff(pending.freqMhz, pending.powerDbm);
     },
 
     stopTransmit: async () => {
       stopTxWatch();
+      stopTxWalk();
       gResense = false;
       gSkipMhz = null;
       set({ transmitArmed: false });

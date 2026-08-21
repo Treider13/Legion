@@ -19,7 +19,9 @@ import {
   bandListFor,
   modeConflict,
   modeOf,
+  planSdrWork,
   runIntentArmsTx,
+  scannerParticipates,
   walkPatternArmsTx,
 } from "../src/sense/modes";
 import {
@@ -331,6 +333,18 @@ function main(): void {
   check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
   check("нет конфликта", modeConflict("sdr", false, false) === null);
   check("обход полосы сам TX не включает", walkPatternArmsTx() === false);
+  check("авто — сканер участвует", scannerParticipates("auto") === true);
+  check("случайная — сканер не участвует", scannerParticipates("hop") === false);
+  check("сплошная — сканер не участвует", scannerParticipates("band") === false);
+  check("planSdrWork авто: сканер, не open-loop", planSdrWork("auto").useScanner && !planSdrWork("auto").openLoopTx);
+  check("planSdrWork hop: Ethernet TX, без сканера", planSdrWork("hop").openLoopTx && !planSdrWork("hop").useScanner);
+  const autoW = new ScanWalker({ bands: ism, pattern: "auto", windowMhz: 20, analogBwMhz: 56, seed: 1 });
+  const sweepEq = new ScanWalker({ bands: ism, pattern: "sweep", windowMhz: 20, analogBwMhz: 56, seed: 1 });
+  check(
+    "авто-поиск RX ходит как sweep, не как случайный TX",
+    Array.from({ length: 5 }, () => autoW.next().centerMhz).join(",") ===
+      Array.from({ length: 5 }, () => sweepEq.next().centerMhz).join(","),
+  );
   check("слушать антенну ≠ ПЕРЕДАТЬ", runIntentArmsTx("listen") === false);
   check("ПЕРЕДАТЬ включает авто на усилитель", runIntentArmsTx("transmit") === true);
   check(

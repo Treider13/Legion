@@ -25,9 +25,32 @@ export function runIntentArmsTx(intent: SdrRunIntent): boolean {
   return intent === "transmit";
 }
 
-/** Обход (туда-сюда / сплошная / случайная) не включает TX сам. */
+/** Выбор обхода TX сам по себе не включает излучение — нужен ПЕРЕДАТЬ. */
 export function walkPatternArmsTx(): boolean {
   return false;
+}
+
+export function scannerParticipates(pattern: "auto" | "sweep" | "band" | "hop"): boolean {
+  return pattern === "auto";
+}
+
+export function planSdrWork(pattern: "auto" | "sweep" | "band" | "hop"): {
+  useScanner: boolean;
+  openLoopTx: boolean;
+  reason: string;
+} {
+  if (pattern === "auto") {
+    return {
+      useScanner: true,
+      openLoopTx: false,
+      reason: "сканер RX (FFT на ноутбуке) → ПЕРЕДАТЬ → TX SDR на усилитель",
+    };
+  }
+  return {
+    useScanner: false,
+    openLoopTx: true,
+    reason: "ноутбук задаёт TX LO по Ethernet, сканер не участвует",
+  };
 }
 
 export function autoForwardAllowed(opts: {

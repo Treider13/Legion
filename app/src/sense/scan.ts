@@ -6,7 +6,8 @@ import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
 import type { Detection, ScanBin } from "../sdr/types";
 
-export type ScanPattern = "sweep" | "band" | "hop";
+/** auto = сканер RX. sweep/band/hop = открытый TX с ноутбука, сканер не участвует. */
+export type ScanPattern = "auto" | "sweep" | "band" | "hop";
 
 export interface ScanConfig {
   bands: readonly AllowBand[];
@@ -90,7 +91,7 @@ export class ScanWalker {
     dwellMs?: number;
     seed?: number;
   }) {
-    this.pattern = opts.pattern;
+    this.pattern = opts.pattern === "auto" ? "sweep" : opts.pattern;
     this.windowMhz = clampWindowMhz(opts.windowMhz, opts.analogBwMhz);
     this.bands = opts.bands;
     this.centers = planCenters(opts.bands, this.windowMhz);
