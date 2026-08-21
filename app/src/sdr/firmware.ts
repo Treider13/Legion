@@ -34,6 +34,7 @@ export function classifyFirmware(filename: string): FirmwareKind {
 }
 
 const DEVICE_KINDS: Record<string, FirmwareKind[]> = {
+  "bladerf-x40": ["fx3", "fpga-x40"],
   "bladerf-micro-xa4": ["fx3", "fpga-a4"],
   "bladerf-micro-xa9": ["fx3", "fpga-a9"],
   "hackrf-one": ["hackrf-fw"],

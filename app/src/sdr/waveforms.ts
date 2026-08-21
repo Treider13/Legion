@@ -12,7 +12,9 @@ export const WAVE_PREVIEW_N = 4096;
 
 export type WaveKind =
   | "sine" | "tone" | "square" | "sawtooth" | "triangle" | "chirp" | "awgn"
-  | "bpsk" | "qpsk" | "qam16" | "fsk2" | "dsss" | "css" | "ofdm" | "am" | "fm";
+  | "bpsk" | "qpsk" | "qam16" | "fsk2" | "dsss" | "css" | "ofdm" | "am" | "fm"
+  | "gmsk" | "gfsk" | "oqpsk" | "psk8" | "apsk16" | "pi4dqpsk" | "fsk4" | "mfsk8"
+  | "ook" | "zadoffchu" | "scfdma" | "otfs" | "afdm" | "ocdm" | "p4";
 
 export interface WaveParam {
   key: string;
@@ -133,6 +135,97 @@ export const WAVE_CATALOG: WaveMeta[] = [
     title: "FM",
     desc: "Несущая fb, тон fm, индекс β: гребёнка Бесселя fb ± k·fm, ширина Карсона 2(β+1)fm.",
     params: [AMP, FB, { key: "fmKhz", label: "МОДУЛЯЦИЯ", unit: "кГц", min: 1, max: 500, step: 1, def: 31.25 }, { key: "beta", label: "ИНДЕКС β", min: 0.1, max: 50, step: 0.5, def: 5 }],
+  },
+  // --- 2026: IoT / LMR / спутник / 6G / радар ---
+  {
+    id: "gmsk",
+    title: "GMSK (GSM)",
+    desc: "Гауссов MSK: BT=0.3, h=0.5, постоянная огибающая. Стандарт GSM и legacy-IoT.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "gfsk",
+    title: "GFSK (BLE)",
+    desc: "Гауссов FSK: BT=0.5, h=0.5 — Bluetooth LE и простые IoT-радио.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "oqpsk",
+    title: "OQPSK (802.15.4)",
+    desc: "Q отстаёт на полсимвола, полусинус-импульс — Zigbee / IEEE 802.15.4.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "psk8",
+    title: "8-PSK + RRC",
+    desc: "M=8, Gray, дифф. кодирование, RRC — выше скорость, плотнее созвездие.",
+    params: [AMP, SPS, ALPHA, SEED],
+  },
+  {
+    id: "apsk16",
+    title: "16-APSK (DVB-S2)",
+    desc: "Кольца 4+12, γ=r2/r1=2.73 — спутниковый стандарт DVB-S2.",
+    params: [AMP, SPS, ALPHA, SEED],
+  },
+  {
+    id: "pi4dqpsk",
+    title: "π/4-DQPSK (TETRA)",
+    desc: "Приращения фазы ±π/4, ±3π/4 — TETRA/DMR; нет траекторий через ноль.",
+    params: [AMP, SPS, ALPHA, SEED],
+  },
+  {
+    id: "fsk4",
+    title: "4-FSK / C4FM",
+    desc: "APCO-25/DMR: дибиты → 4 уровня, гауссово сглаживание, непрерывная фаза.",
+    params: [AMP, { key: "devKhz", label: "ДЕВИАЦИЯ", unit: "кГц", min: 10, max: 250, step: 5, def: 125 }, SEED],
+  },
+  {
+    id: "mfsk8",
+    title: "8-FSK (FT8-like)",
+    desc: "8 тонов с гауссовыми переходами — слабосигнальная любительская связь (FT8).",
+    params: [AMP, { key: "toneKhz", label: "ШАГ ТОНОВ", unit: "кГц", min: 5, max: 200, step: 5, def: 31.25 }, SEED],
+  },
+  {
+    id: "ook",
+    title: "OOK / ASK",
+    desc: "PRBS × несущая fb — RFID и простейшие IoT-брелоки.",
+    params: [AMP, FB, SEED],
+  },
+  {
+    id: "zadoffchu",
+    title: "ZADOFF-CHU (5G)",
+    desc: "N=631 (простое), корень u — преамбулы LTE/5G PRACH: постоянная огибающая, идеальная периодическая АКФ.",
+    params: [AMP, { key: "u", label: "КОРЕНЬ u", min: 1, max: 630, step: 1, def: 25 }],
+  },
+  {
+    id: "scfdma",
+    title: "SC-FDMA (LTE UL)",
+    desc: "DFT-spread OFDM: QPSK → DFT(64) → IDFT(256) + CP — низкий PAPR аплинка LTE.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "otfs",
+    title: "OTFS (6G)",
+    desc: "QPSK на delay-Doppler сетке 64×16, IDZT (IFFT по допплеру) — устойчивость к допплеру, LEO/высокая мобильность.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "afdm",
+    title: "AFDM (6G)",
+    desc: "Аффинное ЧМ: QPSK в chirp-домене (c1=c2=1/2N, N=256) — актуальная 6G/ISAC-волна 2026.",
+    params: [AMP, SEED],
+  },
+  {
+    id: "ocdm",
+    title: "OCDM (6G)",
+    desc: "Ортогональные чирп-несущие (дискретное преобразование Френеля, N=64).",
+    params: [AMP, SEED],
+  },
+  {
+    id: "p4",
+    title: "P4 РАДАР",
+    desc: "Полифазный код L=64 (4 сэмпла/чип) — импульсное сжатие, низкие боковые лепестки АКФ.",
+    params: [AMP],
   },
 ];
 
@@ -367,6 +460,231 @@ function mseq31(): Float64Array {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 2026: IoT / LMR / спутник / 6G / радар — зеркало воркера.
+// ---------------------------------------------------------------------------
+
+function gaussKernel(sps: number, bt: number, span = 3): Float64Array {
+  const m = span * sps + 1;
+  const g = new Float64Array(m);
+  const sigma = Math.sqrt(Math.LN2) / (2 * Math.PI * bt);
+  let sum = 0;
+  for (let i = 0; i < m; i++) {
+    const t = (i - (m - 1) / 2) / sps;
+    g[i] = Math.exp(-(t * t) / (2 * sigma * sigma));
+    sum += g[i];
+  }
+  for (let i = 0; i < m; i++) g[i] /= sum;
+  return g;
+}
+
+function convolveSame(x: Float64Array, h: Float64Array): Float64Array {
+  const out = new Float64Array(x.length);
+  const half = Math.floor((h.length - 1) / 2); // целый индекс (чётные ядра!)
+  for (let i = 0; i < x.length; i++) {
+    let acc = 0;
+    for (let k = 0; k < h.length; k++) {
+      const j = i + k - half;
+      if (j >= 0 && j < x.length) acc += x[j] * h[k];
+    }
+    out[i] = acc;
+  }
+  return out;
+}
+
+/** Каузальная свёртка (np.convolve full, срез [:n]) — полусинус OQPSK. */
+function convolveCausal(x: Float64Array, h: Float64Array): Float64Array {
+  const out = new Float64Array(x.length);
+  for (let i = 0; i < x.length; i++) {
+    let acc = 0;
+    for (let k = 0; k < h.length; k++) {
+      const j = i - k;
+      if (j >= 0) acc += x[j] * h[k];
+    }
+    out[i] = acc;
+  }
+  return out;
+}
+
+/** CPFSK с гауссовым импульсом, h=0.5 (GMSK BT=0.3 / GFSK BT=0.5). */
+function gfskWave(n: number, seed: number, amp: number, bt: number): { re: Float64Array; im: Float64Array } {
+  const sps = 8;
+  const rand = mulberry32(seed);
+  const nsym = Math.floor(n / sps) + 2;
+  const up = new Float64Array(nsym * sps);
+  for (let s = 0; s < nsym; s++) up[s * sps] = rand() >= 0.5 ? 1 : -1;
+  const f = convolveSame(up, gaussKernel(sps, bt));
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  let phase = 0;
+  for (let i = 0; i < n; i++) {
+    phase += (2 * Math.PI * 0.5 * f[i]) / sps;
+    re[i] = amp * Math.cos(phase);
+    im[i] = amp * Math.sin(phase);
+  }
+  return { re, im };
+}
+
+function oqpskWave(n: number, seed: number, amp: number): { re: Float64Array; im: Float64Array } {
+  const sps = 8;
+  const rand = mulberry32(seed);
+  const nsym = Math.floor(n / sps) + 2;
+  const iUp = new Float64Array(nsym * sps);
+  const qUp = new Float64Array(nsym * sps);
+  for (let s = 0; s < nsym; s++) {
+    iUp[s * sps] = rand() >= 0.5 ? 1 : -1;
+    qUp[s * sps] = rand() >= 0.5 ? 1 : -1;
+  }
+  const hs = new Float64Array(sps);
+  for (let k = 0; k < sps; k++) hs[k] = Math.sin((Math.PI * k) / sps);
+  const fi = convolveCausal(iUp, hs);
+  const fq = convolveCausal(qUp, hs);
+  const half = sps / 2;
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    re[i] = fi[i + half];
+    im[i] = fq[i];
+    peak = Math.max(peak, Math.hypot(re[i], im[i]));
+  }
+  const g = amp / (peak || 1);
+  for (let i = 0; i < n; i++) {
+    re[i] *= g;
+    im[i] *= g;
+  }
+  return { re, im };
+}
+
+function apsk16Symbols(nsym: number, seed: number): { re: Float64Array; im: Float64Array } {
+  const rand = mulberry32(seed);
+  const re = new Float64Array(nsym);
+  const im = new Float64Array(nsym);
+  const r2 = 2.73;
+  const norm = Math.sqrt((4 + 12 * r2 * r2) / 16);
+  for (let s = 0; s < nsym; s++) {
+    const ring = Math.floor(rand() * 16);
+    let ph: number;
+    let rad: number;
+    if (ring < 4) {
+      ph = Math.PI / 4 + (ring * Math.PI) / 2;
+      rad = 1;
+    } else {
+      ph = Math.PI / 12 + ((ring - 4) * Math.PI) / 6;
+      rad = r2;
+    }
+    re[s] = (rad * Math.cos(ph)) / norm;
+    im[s] = (rad * Math.sin(ph)) / norm;
+  }
+  return { re, im };
+}
+
+/** Многоуровневый CPFSK с гауссовым сглаживанием (4-FSK / 8-FSK). */
+function mfskWave(
+  n: number,
+  seed: number,
+  amp: number,
+  levels: number,
+  devHz: number,
+  sps: number,
+): { re: Float64Array; im: Float64Array } {
+  const rand = mulberry32(seed);
+  const nsym = Math.floor(n / sps) + 2;
+  const up = new Float64Array(nsym * sps);
+  for (let s = 0; s < nsym; s++) {
+    const lv = Math.floor(rand() * levels);
+    up[s * sps] = (2 * lv - (levels - 1)) / (levels - 1);
+  }
+  const f = convolveSame(up, gaussKernel(sps, 0.5, 2));
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  let phase = 0;
+  for (let i = 0; i < n; i++) {
+    phase += (2 * Math.PI * devHz * f[i]) / sps;
+    re[i] = amp * Math.cos(phase);
+    im[i] = amp * Math.sin(phase);
+  }
+  return { re, im };
+}
+
+/** Кадровая волна N=2^k: кадр = M·s (матричная модуляция: AFDM/OCDM). */
+function frameModWave(
+  n: number,
+  seed: number,
+  amp: number,
+  nsub: number,
+  matrix: { re: Float64Array; im: Float64Array },
+): { re: Float64Array; im: Float64Array } {
+  const rand = mulberry32(seed);
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  let peak = 0;
+  for (let base = 0; base + nsub <= n; base += nsub) {
+    const sre = new Float64Array(nsub);
+    const sim = new Float64Array(nsub);
+    for (let k = 0; k < nsub; k++) {
+      const ph = Math.PI / 4 + Math.floor(rand() * 4) * (Math.PI / 2);
+      sre[k] = Math.cos(ph);
+      sim[k] = Math.sin(ph);
+    }
+    for (let m = 0; m < nsub; m++) {
+      let ar = 0;
+      let ai = 0;
+      for (let k = 0; k < nsub; k++) {
+        const mr = matrix.re[m * nsub + k];
+        const mi = matrix.im[m * nsub + k];
+        ar += sre[k] * mr - sim[k] * mi;
+        ai += sre[k] * mi + sim[k] * mr;
+      }
+      re[base + m] = ar / Math.sqrt(nsub);
+      im[base + m] = ai / Math.sqrt(nsub);
+      peak = Math.max(peak, Math.hypot(re[base + m], im[base + m]));
+    }
+  }
+  const g = amp / (peak || 1);
+  for (let i = 0; i < n; i++) {
+    re[i] *= g;
+    im[i] *= g;
+  }
+  return { re, im };
+}
+
+let afdmCache: { re: Float64Array; im: Float64Array } | null = null;
+function afdmMatrix(nsub: number): { re: Float64Array; im: Float64Array } {
+  if (afdmCache) return afdmCache;
+  const c1 = 1 / (2 * nsub);
+  const c2 = 1 / (2 * nsub);
+  const re = new Float64Array(nsub * nsub);
+  const im = new Float64Array(nsub * nsub);
+  for (let m = 0; m < nsub; m++) {
+    for (let k = 0; k < nsub; k++) {
+      const ph = 2 * Math.PI * (c1 * k * k + c2 * m * m + (k * m) / nsub);
+      re[m * nsub + k] = Math.cos(ph);
+      im[m * nsub + k] = Math.sin(ph);
+    }
+  }
+  afdmCache = { re, im };
+  return afdmCache;
+}
+
+let ocdmCache: { re: Float64Array; im: Float64Array } | null = null;
+function ocdmMatrix(nsub: number): { re: Float64Array; im: Float64Array } {
+  if (ocdmCache) return ocdmCache;
+  const re = new Float64Array(nsub * nsub);
+  const im = new Float64Array(nsub * nsub);
+  for (let m = 0; m < nsub; m++) {
+    for (let k = 0; k < nsub; k++) {
+      // Сопряжённо-транспонированная Френель-матрица (как в воркере).
+      const d = m - k;
+      const ph = Math.PI * d * d / nsub;
+      re[m * nsub + k] = Math.cos(ph);
+      im[m * nsub + k] = Math.sin(ph);
+    }
+  }
+  ocdmCache = { re, im };
+  return ocdmCache;
+}
+
 /** Один буфер baseband-сигнала для превью. Ось 0 Гц = центр RF. */
 export function previewWaveform(
   kind: WaveKind,
@@ -515,6 +833,143 @@ export function previewWaveform(
       }
       break;
     }
+    case "gmsk":
+      return gfskWave(n, p.seed ?? 1337, amp, 0.3);
+    case "gfsk":
+      return gfskWave(n, p.seed ?? 1337, amp, 0.5);
+    case "oqpsk":
+      return oqpskWave(n, p.seed ?? 1337, amp);
+    case "psk8": {
+      const sps = Math.round(p.sps ?? 4);
+      return modWave(pskSymbols(Math.floor(n / sps), 8, p.seed ?? 1337), sps, p.alpha ?? 0.035, amp, true);
+    }
+    case "apsk16": {
+      const sps = Math.round(p.sps ?? 4);
+      return modWave(apsk16Symbols(Math.floor(n / sps), p.seed ?? 1337), sps, p.alpha ?? 0.035, amp, false);
+    }
+    case "pi4dqpsk": {
+      const sps = Math.round(p.sps ?? 4);
+      const rand = mulberry32(p.seed ?? 1337);
+      const nsym = Math.floor(n / sps);
+      const step = [Math.PI / 4, (3 * Math.PI) / 4, -Math.PI / 4, (-3 * Math.PI) / 4];
+      const sre = new Float64Array(nsym);
+      const sim = new Float64Array(nsym);
+      let phase = 0;
+      for (let s = 0; s < nsym; s++) {
+        phase += step[Math.floor(rand() * 4)];
+        sre[s] = Math.cos(phase);
+        sim[s] = Math.sin(phase);
+      }
+      return modWave({ re: sre, im: sim }, sps, p.alpha ?? 0.035, amp, false);
+    }
+    case "fsk4":
+      return mfskWave(n, p.seed ?? 1337, amp, 4, (p.devKhz ?? 125) * 1e3, 8);
+    case "mfsk8":
+      return mfskWave(n, p.seed ?? 1337, amp, 8, (p.toneKhz ?? 31.25) * 1e3, 32);
+    case "ook": {
+      const fb = snap((p.fbKhz ?? 125) * 1e3);
+      const sps = 16;
+      const rand = mulberry32(p.seed ?? 1337);
+      let bit = 1;
+      for (let i = 0; i < n; i++) {
+        if (i % sps === 0) bit = rand() >= 0.5 ? 1 : 0;
+        const ph = (2 * Math.PI * fb * i) / WAVE_FS;
+        re[i] = amp * bit * Math.cos(ph);
+        im[i] = amp * bit * Math.sin(ph);
+      }
+      break;
+    }
+    case "zadoffchu": {
+      const nzc = 631;
+      const u = Math.round(p.u ?? 25);
+      for (let i = 0; i < n; i++) {
+        const k = i % nzc;
+        const ph = (-Math.PI * u * k * (k + 1)) / nzc;
+        re[i] = amp * Math.cos(ph);
+        im[i] = amp * Math.sin(ph);
+      }
+      break;
+    }
+    case "scfdma": {
+      const m = 64;
+      const nfft = 256;
+      const cp = 16;
+      const rand = mulberry32(p.seed ?? 1337);
+      let peak = 0;
+      for (let base = 0; base + nfft + cp <= n; base += nfft + cp) {
+        // QPSK → DFT(64) → первые 64 поднесущих → IDFT(256) → CP
+        const qre = new Float64Array(m);
+        const qim = new Float64Array(m);
+        for (let k = 0; k < m; k++) {
+          const ph = Math.PI / 4 + Math.floor(rand() * 4) * (Math.PI / 2);
+          qre[k] = Math.cos(ph);
+          qim[k] = Math.sin(ph);
+        }
+        fftInPlace(qre, qim, false); // DFT
+        const sre = new Float64Array(nfft);
+        const sim = new Float64Array(nfft);
+        sre.set(qre);
+        sim.set(qim);
+        fftInPlace(sre, sim, true); // IDFT (с нормировкой 1/n)
+        for (let k = 0; k < nfft + cp; k++) {
+          const src = k < cp ? nfft - cp + k : k - cp;
+          re[base + k] = sre[src] * Math.sqrt(nfft);
+          im[base + k] = sim[src] * Math.sqrt(nfft);
+          peak = Math.max(peak, Math.hypot(re[base + k], im[base + k]));
+        }
+      }
+      const g = amp / (peak || 1);
+      for (let i = 0; i < n; i++) {
+        re[i] *= g;
+        im[i] *= g;
+      }
+      break;
+    }
+    case "otfs": {
+      // IDZT при rect-пульсе: IFFT по допплеру в каждой строке задержки.
+      const m = 64;
+      const ndop = 16;
+      const rand = mulberry32(p.seed ?? 1337);
+      let peak = 0;
+      for (let base = 0; base + m * ndop <= n; base += m * ndop) {
+        for (let d = 0; d < m; d++) {
+          const xre = new Float64Array(ndop);
+          const xim = new Float64Array(ndop);
+          for (let k = 0; k < ndop; k++) {
+            const ph = Math.PI / 4 + Math.floor(rand() * 4) * (Math.PI / 2);
+            xre[k] = Math.cos(ph);
+            xim[k] = Math.sin(ph);
+          }
+          fftInPlace(xre, xim, true);
+          for (let k = 0; k < ndop; k++) {
+            re[base + d * ndop + k] = xre[k] * Math.sqrt(ndop);
+            im[base + d * ndop + k] = xim[k] * Math.sqrt(ndop);
+            peak = Math.max(peak, Math.hypot(re[base + d * ndop + k], im[base + d * ndop + k]));
+          }
+        }
+      }
+      const g = amp / (peak || 1);
+      for (let i = 0; i < n; i++) {
+        re[i] *= g;
+        im[i] *= g;
+      }
+      break;
+    }
+    case "afdm":
+      return frameModWave(n, p.seed ?? 1337, amp, 256, afdmMatrix(256));
+    case "ocdm":
+      return frameModWave(n, p.seed ?? 1337, amp, 64, ocdmMatrix(64));
+    case "p4": {
+      const length = 64;
+      const spc = 4;
+      for (let i = 0; i < n; i++) {
+        const k = (Math.floor(i / spc) % length) + 1;
+        const ph = (Math.PI * (k - 1) * (k - 1)) / length - Math.PI * (k - 1);
+        re[i] = amp * Math.cos(ph);
+        im[i] = amp * Math.sin(ph);
+      }
+      break;
+    }
     case "am": {
       const fb = snap((p.fbKhz ?? 125) * 1e3);
       const fm = (p.fmKhz ?? 31.25) * 1e3;
@@ -550,12 +1005,17 @@ export function constellationPoints(
   maxSym = 128,
 ): { i: number; q: number }[] | null {
   const p = clampParams(kind, pr);
-  if (kind === "bpsk" || kind === "qpsk") {
-    const s = pskSymbols(maxSym, kind === "bpsk" ? 2 : 4, p.seed ?? 1337);
+  if (kind === "bpsk" || kind === "qpsk" || kind === "psk8") {
+    const m = kind === "bpsk" ? 2 : kind === "qpsk" ? 4 : 8;
+    const s = pskSymbols(maxSym, m, p.seed ?? 1337);
     return Array.from({ length: maxSym }, (_, k) => ({ i: s.re[k], q: s.im[k] }));
   }
   if (kind === "qam16") {
     const s = qam16Symbols(maxSym, p.seed ?? 1337);
+    return Array.from({ length: maxSym }, (_, k) => ({ i: s.re[k], q: s.im[k] }));
+  }
+  if (kind === "apsk16") {
+    const s = apsk16Symbols(maxSym, p.seed ?? 1337);
     return Array.from({ length: maxSym }, (_, k) => ({ i: s.re[k], q: s.im[k] }));
   }
   return null;

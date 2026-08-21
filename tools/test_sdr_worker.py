@@ -86,7 +86,29 @@ def main() -> int:
             ):
                 all_ok = False
                 print(f"    … плохой буфер: {kind}")
-        check("16 волн: complex64, finite, пик ≤ amp", all_ok)
+        check("31 волна: complex64, finite, пик ≤ amp", all_ok)
+        check("каталог: 31 тип", len(w.WAVE_KINDS) == 31)
+
+        # Постоянная огибающая у CPM/чирп-волн (GMSK, Zadoff-Chu, P4)
+        for kind in ("gmsk", "gfsk", "zadoffchu", "p4", "fsk4", "mfsk8"):
+            env = np.abs(w.make_waveform(kind))
+            ripple = float(np.max(env) - np.min(env[env > 0])) if np.any(env > 0) else 9.0
+            if ripple > 0.05:
+                all_ok = False
+                print(f"    … огибающая не постоянна: {kind} ripple={ripple:.4f}")
+        check("GMSK/GFSK/ZC/P4/xFSK: постоянная огибающая (±0.05)", all_ok)
+
+        # 16-APSK: два кольца с отношением радиусов 2.73
+        apsk = w._apsk16_symbols(4096, 7)
+        rings = sorted(set(np.round(np.abs(apsk), 3)))
+        check("16-APSK: два кольца", len(rings) == 2)
+        if len(rings) == 2:
+            check("16-APSK: γ ≈ 2.73", abs(rings[1] / rings[0] - 2.73) < 0.05)
+
+        # Zadoff-Chu: идеальная периодическая АКФ (боковые ~0)
+        zc = w.make_waveform("zadoffchu", n=631)
+        ac = np.abs(np.fft.ifft(np.abs(np.fft.fft(zc)) ** 2))
+        check("ZC: АКФ ≈ дельта (боковые < 1%)", float(np.max(ac[1:])) < 0.01 * float(ac[0]))
 
         tbuf = w.make_waveform("tone", pr={"fj": 0.1})
         fax = np.fft.fftfreq(len(tbuf), 1.0 / w.TX_FS)

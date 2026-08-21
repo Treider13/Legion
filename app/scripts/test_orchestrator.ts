@@ -4,7 +4,7 @@
 // ============================================================================
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
-import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
+import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
 import { looksLikeEsp32Firmware, looksLikeSdrFirmware, refuseCrossFlash } from "../src/flash/guard";
@@ -20,7 +20,7 @@ import {
   previewWaveform,
   spectrumDb,
 } from "../src/sdr/waveforms";
-import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
+import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -965,7 +965,7 @@ function main(): void {
   check("classic = esp32dev", envMatchesChip("esp32dev", "ESP32"));
 
   // --- ТИП СИГНАЛА: каталог и превью-генератор (зеркало воркера) ---
-  check("каталог: 16 типов", WAVE_CATALOG.length === 16);
+  check("каталог: 31 тип", WAVE_CATALOG.length === 31);
   check("каталог: id уникальны", new Set(WAVE_CATALOG.map((w) => w.id)).size === WAVE_CATALOG.length);
   check("каталог: у всех есть amp", WAVE_CATALOG.every((w) => w.params.some((p) => p.key === "amp")));
   let prevOk = true;
@@ -1001,6 +1001,28 @@ function main(): void {
   const mw = mockWave.txWave(2442, "qpsk");
   check("мок txWave ok и называет волну", mw.ok && mw.reason.includes("qpsk"));
   check("мок txWave вне диапазона", mockWave.txWave(10, "qpsk").ok === false);
+
+  // --- bladeRF x40 (родной USB3, 300–3800 МГц, 28 МГц BW) ---
+  const x40 = catalogById("bladerf-x40");
+  check("x40 в каталоге", x40 !== undefined);
+  check("x40 trx 300–3800", x40?.txMhz?.[0] === 300 && x40?.txMhz?.[1] === 3800 && x40?.role === "trx");
+  check("x40 full-duplex 28 МГц", x40?.fullDuplex === true && x40?.analogBwMhz === 28);
+  check("x40 FPGA образ", imagesFor("bladerf-x40").some((r) => r.names.includes("hostedx40.rbf")));
+  check("x40 FX3 образ", imagesFor("bladerf-x40").some((r) => r.kind === "fx3"));
+  check("x40 дефолтный образ", defaultFlashName("bladerf-x40") === "hostedx40.rbf");
+  check("x40 валиден hostedx40", validateFlashJob({
+    deviceId: "bladerf-x40", filename: "hostedx40-latest.rbf", byteLength: 1000, action: "load-fpga",
+  }).ok === true);
+  check("x40 чужой A4 отказ", validateFlashJob({
+    deviceId: "bladerf-x40", filename: "hostedxA4.rbf", byteLength: 1000, action: "load-fpga",
+  }).ok === false);
+  check("x40 flash-cli = bladeRF-cli", planFlashCli({
+    deviceId: "bladerf-x40", filename: "hostedx40.rbf", byteLength: 1000, action: "load-fpga",
+  }).argv[0] === "bladeRF-cli");
+  const mockX40 = new MockSdrBackend();
+  mockX40.open("bladerf-x40");
+  check("x40 мок TX в диапазоне", mockX40.txWave(2450, "otfs").ok === true);
+  check("x40 мок TX 100 МГц вне диапазона", mockX40.txWave(100, "otfs").ok === false);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
