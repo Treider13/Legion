@@ -175,6 +175,57 @@ async function main(): Promise<void> {
   r = await client.sweepStart(2500, 2400, 1000, 10);
   check("f1>f2 → ERR RANGE", !r.ok && r.statusLine.startsWith("ERR RANGE"), r.statusLine);
 
+  // --- Политика / PA / CUE (фаза 11) ---
+  r = await client.cue(2475);
+  check("CUE без allowlist → ERR ALLOW", !r.ok && r.statusLine.startsWith("ERR ALLOW"), r.statusLine);
+
+  r = await client.allowAdd(2400, 2500);
+  check("ALLOW ADD 2400-2500", r.ok && r.statusLine.includes("n=1"), r.statusLine);
+
+  r = await client.allowStatus();
+  let allowOk = false;
+  try {
+    const j = JSON.parse(r.statusLine);
+    allowOk = j.n === 1 && Array.isArray(j.allow);
+  } catch {
+    /* noop */
+  }
+  check("ALLOW? JSON", r.ok && allowOk, r.statusLine);
+
+  r = await client.cue(2475);
+  check("CUE 2475 в полосе", r.ok && r.statusLine.includes("CUE FREQ=2475.000000"), r.statusLine);
+
+  r = await client.cue(915);
+  check("CUE 915 вне полосы → ERR ALLOW", !r.ok && r.statusLine.startsWith("ERR ALLOW"), r.statusLine);
+
+  r = await client.loadFault();
+  check("LOAD FAULT", r.ok && r.statusLine === "OK LOAD FAULT", r.statusLine);
+  r = await client.rf(true);
+  check("RF ON при FAULT → ERR LOAD", !r.ok && r.statusLine.startsWith("ERR LOAD"), r.statusLine);
+  r = await client.paOn();
+  check("PA ON при FAULT → ERR LOAD", !r.ok && r.statusLine.startsWith("ERR LOAD"), r.statusLine);
+
+  r = await client.loadOk();
+  check("LOAD OK", r.ok && r.statusLine === "OK LOAD OK", r.statusLine);
+  r = await client.paSetI(250);
+  check("PA SET I 250", r.ok && r.statusLine.includes("I=250"), r.statusLine);
+  r = await client.paOn();
+  check("PA ON", r.ok && r.statusLine.includes("PA ON"), r.statusLine);
+  r = await client.paStatus();
+  let paOk = false;
+  try {
+    const j = JSON.parse(r.statusLine);
+    paOk = j.pa === 1 && j.ma === 250;
+  } catch {
+    /* noop */
+  }
+  check("PA? JSON", r.ok && paOk, r.statusLine);
+  r = await client.paOff();
+  check("PA OFF", r.ok, r.statusLine);
+
+  r = await client.allowClear();
+  check("ALLOW CLEAR", r.ok && r.statusLine.includes("n=0"), r.statusLine);
+
   await transport.disconnect();
 
   console.log(failures === 0 ? "\nSMOKE: ALL PASS" : `\nSMOKE: ${failures} FAILURES`);

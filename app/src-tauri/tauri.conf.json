@@ -33,6 +33,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../../tools/sdr_worker.py": "sdr_worker.py"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

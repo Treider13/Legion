@@ -55,6 +55,10 @@ class CmdServer {
   void cmdGlide(char* arg, Print& out);
   void cmdFm(char* arg, Print& out);
   void cmdWifi(char* arg, Print& out);
+  void cmdAllow(char* arg, Print& out);
+  void cmdLoad(char* arg, Print& out);
+  void cmdPa(char* arg, Print& out);
+  void cmdCue(char* arg, Print& out);
 
   AppState* _s = nullptr;
   Stream* _port = nullptr;

@@ -1,8 +1,7 @@
 // ============================================================================
 // LEGION — MockTransport: эмулятор связки ESP32+ADF4351 для разработки и
 // e2e-тестов без железа. Отвечает на фаза-1 протокол (docs/protocol.md).
-// LOCK эмулируется с задержкой ~30 мс (реалистично: band select 20 мкс +
-// settling ~0.3 мс, факты F4/F5 — mock намеренно медленнее железа).
+// SET FREQ: LOCK ~30 мс (ручной путь). CUE: ~2 мс (UART, без ожидания LOCK).
 // ============================================================================
 import type {
   Transport,
@@ -31,6 +30,11 @@ export class MockTransport implements Transport {
   private corrCur = 2400;
   private corrTimer: ReturnType<typeof setInterval> | null = null;
   private hopState = 1;
+  // Политика актуатора (фаза 11) — зеркало firmware/policy.cpp
+  private allow: Array<[number, number]> = [];
+  private loadOk = true;
+  private paMa = 0;
+  private paOn = false;
 
   setEvents(ev: TransportEvents): void {
     this.ev = ev;
@@ -131,8 +135,27 @@ export class MockTransport implements Transport {
         }),
       );
     } else if (upper === "RF ON" || upper === "RF OFF") {
-      this.rfOn = upper === "RF ON";
+      const on = upper === "RF ON";
+      if (on) {
+        if (!this.loadOk) {
+          this.reply("ERR LOAD dummy load required");
+          return;
+        }
+        if (this.allow.length > 0 && !this.inAllow(this.freqMhz)) {
+          this.reply("ERR ALLOW frequency not in allowlist");
+          return;
+        }
+      }
+      this.rfOn = on;
       this.reply(`OK RF ${this.rfOn ? "ON" : "OFF"}`);
+    } else if (upper.startsWith("ALLOW") || upper === "ALLOW?") {
+      this.handleAllow(t, upper);
+    } else if (upper.startsWith("LOAD") || upper === "LOAD?") {
+      this.handleLoad(upper);
+    } else if (upper.startsWith("PA") || upper === "PA?") {
+      this.handlePa(t, upper);
+    } else if (upper.startsWith("CUE")) {
+      this.handleCue(t);
     } else if (upper === "STATUS?") {
       this.reply(
         JSON.stringify({
@@ -143,6 +166,10 @@ export class MockTransport implements Transport {
           power: this.power,
           version: "0.1.0",
           board: "mock",
+          load: this.loadOk ? 1 : 0,
+          pa: this.paOn ? 1 : 0,
+          pa_ma: this.paMa,
+          allow_n: this.allow.length,
         }),
       );
     } else if (upper === "REGS?") {
@@ -224,6 +251,10 @@ export class MockTransport implements Transport {
       this.reply("ERR RANGE corridor");
       return;
     }
+    if (this.allow.length > 0 && !this.allow.some(([a, b]) => f1 >= a && f2 <= b)) {
+      this.reply("ERR ALLOW corridor outside allowlist");
+      return;
+    }
     // SWEEP/HOP: STEP в кГц; CHIRP: STEP в Гц (как прошивка)
     let step = mode === "CHIRP" ? 100000 : 1000;
     let dwell = 10;
@@ -296,6 +327,121 @@ export class MockTransport implements Transport {
     if (db < 0) db = 0;
     if (db > 31.75) db = 31.75;
     return Math.round(db / 0.25) * 0.25;
+  }
+
+  private inAllow(mhz: number): boolean {
+    if (this.allow.length === 0) return true;
+    return this.allow.some(([a, b]) => mhz >= a && mhz <= b);
+  }
+
+  private handleAllow(t: string, upper: string): void {
+    const parts = t.split(/\s+/);
+    const sub = (parts[1] ?? (upper.endsWith("?") ? "?" : "")).toUpperCase();
+    if (upper === "ALLOW?" || sub === "?" || sub === "STATUS?") {
+      this.reply(JSON.stringify({ n: this.allow.length, allow: this.allow }));
+      return;
+    }
+    if (sub === "CLEAR") {
+      this.allow = [];
+      this.reply("OK ALLOW n=0");
+      return;
+    }
+    if (sub !== "ADD") {
+      this.reply("ERR SYNTAX ALLOW ADD|CLEAR|?");
+      return;
+    }
+    const f1 = parseFloat(parts[2] ?? "NaN");
+    const f2 = parseFloat(parts[3] ?? "NaN");
+    if (!Number.isFinite(f1) || !Number.isFinite(f2) || f2 < f1 || f1 < 34.375 || f2 > 4400) {
+      this.reply("ERR RANGE allow 35-4400 MHz");
+      return;
+    }
+    if (this.allow.length >= 8) {
+      this.reply("ERR RANGE allow table full");
+      return;
+    }
+    this.allow.push([f1, f2]);
+    this.reply(`OK ALLOW n=${this.allow.length}`);
+  }
+
+  private handleLoad(upper: string): void {
+    const sub = upper === "LOAD?" ? "?" : upper.split(/\s+/)[1] ?? "";
+    if (sub === "?") {
+      this.reply(JSON.stringify({ load: this.loadOk ? 1 : 0 }));
+      return;
+    }
+    if (sub === "OK") {
+      this.loadOk = true;
+      this.reply("OK LOAD OK");
+      return;
+    }
+    if (sub === "FAULT") {
+      this.loadOk = false;
+      this.paOn = false;
+      this.rfOn = false;
+      this.reply("OK LOAD FAULT");
+      return;
+    }
+    this.reply("ERR SYNTAX LOAD OK|FAULT|?");
+  }
+
+  private handlePa(t: string, upper: string): void {
+    const parts = t.split(/\s+/);
+    const sub = (parts[1] ?? (upper === "PA?" ? "?" : "")).toUpperCase();
+    if (upper === "PA?" || sub === "?") {
+      this.reply(JSON.stringify({ pa: this.paOn ? 1 : 0, ma: this.paMa }));
+      return;
+    }
+    if (sub === "ON") {
+      if (!this.loadOk) {
+        this.reply("ERR LOAD dummy load required");
+        return;
+      }
+      if (this.paMa === 0) {
+        this.reply("ERR RANGE PA current");
+        return;
+      }
+      this.paOn = true;
+      this.reply(`OK PA ON I=${this.paMa}`);
+      return;
+    }
+    if (sub === "OFF") {
+      this.paOn = false;
+      this.reply("OK PA OFF");
+      return;
+    }
+    if (sub === "SET" && (parts[2] ?? "").toUpperCase() === "I") {
+      const ma = parseInt(parts[3] ?? "NaN", 10);
+      if (!Number.isFinite(ma) || ma < 0 || ma > 1500) {
+        this.reply("ERR RANGE PA current 0-1500 mA");
+        return;
+      }
+      this.paMa = ma;
+      if (ma === 0) this.paOn = false;
+      this.reply(`OK PA I=${ma}`);
+      return;
+    }
+    this.reply("ERR SYNTAX PA SET|ON|OFF|?");
+  }
+
+  private handleCue(t: string): void {
+    const mhz = parseFloat(t.split(/\s+/)[1] ?? "NaN");
+    if (!Number.isFinite(mhz) || mhz <= 0) {
+      this.reply("ERR SYNTAX bad freq");
+      return;
+    }
+    if (this.allow.length === 0 || !this.inAllow(mhz)) {
+      this.reply("ERR ALLOW cue requires allowlist hit");
+      return;
+    }
+    if (mhz < 34.375 || mhz > 4400) {
+      this.reply("ERR RANGE 35-4400 MHz");
+      return;
+    }
+    this.freqMhz = mhz;
+    this.corrActive = false;
+    // CUE не ждёт LOCK (как прошивка: synth_apply_fast). 2 мс ≈ UART RTT.
+    this.reply(`OK CUE FREQ=${mhz.toFixed(6)} LOCK=1`, 2);
   }
 
   private stopCorridor(): void {

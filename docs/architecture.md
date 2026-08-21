@@ -68,3 +68,29 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
 - **Fast-scan**: delta-запись только изменившихся регистров ADF4351 (R0
   последним) относительно единого кэша реального состояния чипа в `synth`;
   срезает время SPI-записи, физику ФАПЧ не обходит. (фаза 10)
+- **Два режима (не смешивать):**
+  1. **SDR:** ПК --Ethernet--> SDR; антенна на RX, усилитель на RF out.
+     Старт/стоп и события эфира по Ethernet. ESP32 не вызывается.
+  2. **ESP32:** ПК --USB--> ESP32 --SPI--> ADF4351 --> усилитель.
+     Коридор/скорость. Нет SDR и нет антенны скана.
+  Одновременно коридор и SDR TX запрещены (`modeConflict`).
+  I/Q на ESP32 не идёт. LAN xA4 = шлюз USB3 + SoapyRemote (RJ45 не в bladeRF).
+  N210: RJ45 в сам USRP. Образы: `app/src/sdr/official.ts`.
+  Живой скан/TX: Tauri → `tools/sdr_worker.py` → SoapySDR
+  (wiki pothosware: Device + CF32 streams). Без Soapy — честный отказ
+  или явная эмуляция.
+  **Не RF-Clown / не ESP32-BlueJammer:** те проекты — ESP32 + nRF24L01, шум
+  по каналам BT/BLE/WiFi 2.4 ГГц, часто закрытый `.bin`, старт при подаче
+  питания. Это третий тракт. В LEGION их прошивки и таблицы каналов
+  не принимаются (`rejectAlienFirmware`). Режим 2 — ADF4351 по USB,
+  не nRF24. Режим 1 — hosted FPGA SDR, не jam-FPGA.
+- **Быстрый путь detect→TX (только режим SDR)**: детект и TX LO живут в
+  процессе SDR, не в React и не на ESP32. Hop = аналоговая BW устройства
+  (bladeRF ≤56 МГц, Nuand), а не узкое окно из UI — идея ice9/blue-dragon
+  (стоять в окне, пока полоса влезает). ПЕРЕДАТЬ: улов → TX LO SDR →
+  RF out → усилитель. Команды `CUE` / `PA SET I` / `RF ON` на ESP32
+  **не отправляются**. Полосы скана (`sdrBands`) и полосы ESP32
+  (`allowBands`) — разные списки.
+  **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. Микросекунды
+  detect→TX только на FPGA HDL (xA9; xA4 49 kLE тесен). Не реализовано
+  и не рисуем. `CUE` остаётся командой режима ESP32 (`synth_apply_fast`).

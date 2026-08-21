@@ -3,12 +3,70 @@
 // ============================================================================
 import { create } from "zustand";
 
+import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
+import { MockSdrBackend } from "../sdr/backend";
+import {
+  isEsp32FlashEnv,
+  parseEsp32Chip,
+  planEsp32Flash,
+  type Esp32FlashEnv,
+  type Esp32FlashResult,
+} from "../flash/esp32";
+import { planSdrWrite } from "../flash/sdrWrite";
+import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
+import { catalogById } from "../sdr/catalog";
+import { hostOpenAllowed, usableImagePath } from "../sdr/host";
+import {
+  catalogCaps,
+  hostClose,
+  hostEsp32ChipId,
+  hostEsp32Flash,
+  hostFlash,
+  hostOpen,
+  hostHealth,
+  hostPing,
+  hostSdrAvailable,
+  hostScan,
+  hostTx,
+  hostTxOff,
+  markCatalogPresent,
+} from "../sdr/hostClient";
+import { detectFromBins } from "../sdr/backend";
+import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
+import { isTauriRuntime } from "../transport/types";
+import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
+import {
+  heldHitAlive,
+  pickArmedAutoTarget,
+  refreshSkipMhz,
+  RESENSE_MS,
+  shouldContinuePriorityTick,
+} from "../sense/hold";
+import {
+  modeConflict,
+  modeOf,
+  planSdrWork,
+  scanRefusedReason,
+  scannerParticipates,
+  type AutoDispatch,
+} from "../sense/modes";
+import {
+  markForwarded,
+  mergeDetections,
+  pickStrongest,
+  withoutOwnTx,
+} from "../sense/orchestrator";
+import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
+import { sensitivityToThresholdDb, thresholdToSensitivity } from "../sense/sensitivity";
 import { MockTransport } from "../transport/mock";
 import { TauriSerialTransport } from "../transport/tauriSerial";
 import type { SerialPortDescriptor, Transport, TransportKind, TransportState } from "../transport/types";
 import { WebSerialTransport } from "../transport/webSerial";
 import { WebSocketTransport } from "../transport/websocket";
+
+export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa" | "sdrFlash" | "esp32Flash";
+export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 
 export interface LogEntry {
   ts: number;
@@ -51,6 +109,62 @@ interface LegionStore {
   corridorRunning: boolean;
   telemFreq: number | null;
   telemLock: boolean | null;
+  // меню
+  workspace: WorkspaceId;
+  // политика / PA
+  allowBands: AllowBand[];
+  allowF1: string;
+  allowF2: string;
+  loadOk: boolean;
+  paMa: number;
+  paOn: boolean;
+  autoCue: boolean;
+  transmitArmed: boolean;
+  lastForwardMhz: number | null;
+  // SDR (хост, не ESP32) — свой allowlist и своя нагрузка, не UART
+  sdrBands: AllowBand[];
+  sdrF1: string;
+  sdrF2: string;
+  sdrLoadOk: boolean;
+  sdrDevices: SdrDeviceInfo[];
+  sdrId: string;
+  sdrGateway: string;
+  sdrOpened: SdrDeviceInfo | null;
+  sdrRemote: string;
+  sdrFlashName: string;
+  sdrFlashAction: SdrFlashAction;
+  sdrFlashConfirm: boolean;
+  lastFlash: FlashResult | null;
+  flashBusy: boolean;
+  esp32FlashEnv: Esp32FlashEnv;
+  esp32FlashConfirm: boolean;
+  esp32Chip: string | null;
+  esp32ChipPort: string | null;
+  esp32ChipRaw: string;
+  lastEsp32Flash: Esp32FlashResult | null;
+  sdrEmulation: boolean;
+  sdrHostReady: boolean;
+  sdrHostDetail: string;
+  sdrImageBytes: number;
+  sdrImagePath: string;
+  // SCAN RX
+  scanRunning: boolean;
+  scanThresholdDb: number;
+  /** 0 = все подряд, 100 = только сильные. */
+  scanSensitivity: number;
+  scanPattern: ScanPattern;
+  /** АВТО: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
+  autoDispatch: AutoDispatch;
+  scanWindowMhz: string;
+  scanDwellMs: string;
+  sdrHoldSince: number | null;
+  scanCenterMhz: number | null;
+  scanBins: ScanBin[];
+  detections: Detection[];
+  lastInterceptMhz: number | null;
+  lastCueReason: string;
+  lastSdrTxUs: number | null;
+  lastForwardPowerDbm: number | null;
   // журнал
   log: LogEntry[];
 
@@ -60,6 +174,30 @@ interface LegionStore {
   setFreqMhz(f: string): void;
   setCorrField(field: "corrF1" | "corrF2" | "corrStepKhz" | "corrDwellMs" | "corrSeed", v: string): void;
   setCorrMode(m: "SWEEP" | "HOP" | "CHIRP"): void;
+  setWorkspace(w: WorkspaceId): void;
+  setAllowField(field: "allowF1" | "allowF2", v: string): void;
+  setSdrAllowField(field: "sdrF1" | "sdrF2", v: string): void;
+  addSdrBand(): void;
+  clearSdrBands(): void;
+  setSdrLoad(ok: boolean): void;
+  setPaMa(ma: number): void;
+  setAutoCue(v: boolean): void;
+  setSdrId(id: string): void;
+  setSdrGateway(v: string): void;
+  setSdrFlashName(v: string): void;
+  setSdrFlashAction(a: SdrFlashAction): void;
+  setSdrFlashConfirm(v: boolean): void;
+  setEsp32FlashEnv(v: Esp32FlashEnv): void;
+  setEsp32FlashConfirm(v: boolean): void;
+  setSdrEmulation(v: boolean): void;
+  setSdrImageFile(name: string, byteLength: number, path?: string): void;
+  setScanThreshold(db: number): void;
+  setScanSensitivity(sens: number): void;
+  setScanPattern(p: ScanPattern): void;
+  setAutoDispatch(d: AutoDispatch): void;
+  setScanWindowMhz(v: string): void;
+  setScanDwellMs(v: string): void;
+  resetSdrLock(): Promise<void>;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -72,6 +210,24 @@ interface LegionStore {
   runSelftest(): Promise<void>;
   corridorStart(): Promise<void>;
   corridorStop(): Promise<void>;
+  addAllowBand(): Promise<void>;
+  clearAllowBands(): Promise<void>;
+  setLoad(ok: boolean): Promise<void>;
+  applyPaCurrent(): Promise<void>;
+  setPaEnabled(on: boolean): Promise<void>;
+  cueTo(mhz: number): Promise<void>;
+  probeSdr(): Promise<void>;
+  openSdr(): Promise<void>;
+  closeSdr(): Promise<void>;
+  flashSdr(action?: SdrFlashAction): Promise<void>;
+  probeEsp32Chip(): Promise<void>;
+  flashEsp32(): Promise<void>;
+  injectDemoTone(): void;
+  startScan(): void;
+  stopScan(): void;
+  startTransmit(): Promise<void>;
+  stopTransmit(): Promise<void>;
+  forwardTo(mhz: number): Promise<void>;
   clearLog(): void;
 }
 
@@ -79,6 +235,31 @@ const MAX_LOG = 500;
 
 let gTransport: Transport | null = null;
 let gClient: LegionClient | null = null;
+const gSdr = new MockSdrBackend();
+let gLive = false;
+let gWalker: ScanWalker | null = null;
+let gScanTimer: ReturnType<typeof setInterval> | null = null;
+let gTxWalk: ReturnType<typeof setInterval> | null = null;
+
+function stopTxWalk(): void {
+  if (gTxWalk) {
+    clearInterval(gTxWalk);
+    gTxWalk = null;
+  }
+}
+let gTxWatch: ReturnType<typeof setInterval> | null = null;
+const gGate = new HandoffGate();
+/** Краткий RX без тона. Watch не должен глушить TX-arm. */
+let gResense = false;
+/** После СБРОСИТЬ не хватаем ту же частоту сразу. */
+let gSkipMhz: number | null = null;
+
+function stopTxWatch(): void {
+  if (gTxWatch) {
+    clearInterval(gTxWatch);
+    gTxWatch = null;
+  }
+}
 
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
@@ -91,6 +272,166 @@ export const useLegion = create<LegionStore>((set, get) => {
   const parseLockFrom = (line: string): boolean | null => {
     const m = /LOCK=(\d)/.exec(line);
     return m ? m[1] === "1" : null;
+  };
+
+  const executeHandoff = (plan: HandoffPlan, sdrUs: number, powerDbm: number): void => {
+    // Режим SDR: никаких CUE / PA / RF на ESP32.
+    set({
+      detections: markForwarded(get().detections, plan.freqMhz),
+      lastForwardMhz: plan.freqMhz,
+      lastForwardPowerDbm: powerDbm,
+      lastSdrTxUs: sdrUs || get().lastSdrTxUs,
+      sdrHoldSince: Date.now(),
+      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${sdrUs} µs host`,
+    });
+  };
+
+  const runHandoff = (mhz: number, powerDbm = 0): void => {
+    void runHandoffAsync(mhz, powerDbm);
+  };
+
+  const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
+    const st = get();
+    const caps = catalogCaps(st.sdrId);
+    const plan = planHandoff({
+      det: mhzAsDet(mhz, powerDbm),
+      bands: st.sdrBands,
+      loadOk: st.sdrLoadOk,
+      transmitArmed: st.transmitArmed,
+      lastCuedMhz: gGate.lastCuedMhz,
+      inflight: gGate.inflight,
+      sdrCanTx: gLive ? caps.canTx : gSdr.canTx(),
+    });
+    if (plan.skip) return false;
+    gGate.reserve(plan.freqMhz);
+    let sdrUs = 0;
+    try {
+      if (plan.sdrTx) {
+        const tx = gLive ? await hostTx(plan.freqMhz) : gSdr.txCue(plan.freqMhz);
+        sdrUs = tx.latencyUs;
+        pushLog("sys", tx.reason);
+        if (!tx.ok) {
+          gGate.abort();
+          return false;
+        }
+        gGate.commit(plan.freqMhz);
+        gSkipMhz = null;
+      }
+      executeHandoff(plan, sdrUs, powerDbm);
+      return true;
+    } finally {
+      const queued = gGate.release();
+      if (queued !== null) void runHandoffAsync(queued);
+    }
+  };
+
+  const restoreHeldTx = async (mhz: number): Promise<boolean> => {
+    const tx = gLive ? await hostTx(mhz) : gSdr.txCue(mhz);
+    if (!tx.ok) {
+      pushLog("sys", tx.reason);
+      return false;
+    }
+    return true;
+  };
+
+  /** Свой CW маскирует бин. Гасим тон, смотрим эфир, возвращаем если жива. */
+  const resenseHeld = async (
+    heldMhz: number,
+    windowMhz: number,
+    nBins: number,
+  ): Promise<"alive" | "gone" | "error" | "switch"> => {
+    gResense = true;
+    try {
+      if (gLive) await hostTxOff();
+      else gSdr.txOff();
+      let bins: ScanBin[] = [];
+      if (gLive) {
+        const win = await hostScan(heldMhz, windowMhz, nBins);
+        if (!win.ok) {
+          pushLog("sys", win.reason || "re-sense fail — возвращаем TX");
+          await restoreHeldTx(heldMhz);
+          return "error";
+        }
+        bins = win.bins;
+      } else {
+        bins = gSdr.scanWindow(heldMhz, windowMhz, nBins);
+      }
+      const dets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
+      const nextHit = pickArmedAutoTarget({
+        liveWindow: dets,
+        archive: get().detections,
+        heldMhz,
+        heldPowerDbm: dets.find((d) => Math.abs(d.freqMhz - heldMhz) <= 0.2)?.powerDbm ?? null,
+        skipMhz: gSkipMhz,
+        dispatch: get().autoDispatch,
+        holdMasked: false,
+      });
+      if (nextHit) {
+        // Не dropHold до успеха: иначе тот же тик видит held=null и стомпит цель окном walker.
+        const ok = await runHandoffAsync(nextHit.freqMhz, nextHit.powerDbm);
+        if (ok) return "switch";
+        const restored = await restoreHeldTx(heldMhz);
+        return restored ? "alive" : "error";
+      }
+      if (heldHitAlive(dets, heldMhz)) {
+        const ok = await restoreHeldTx(heldMhz);
+        return ok ? "alive" : "error";
+      }
+      gGate.dropHold();
+      set({
+        lastForwardMhz: null,
+        lastForwardPowerDbm: null,
+        lastSdrTxUs: null,
+        sdrHoldSince: null,
+        lastCueReason: `засечка ${heldMhz.toFixed(3)} пропала — ждём живое окно`,
+      });
+      pushLog("sys", `засечка ${heldMhz.toFixed(3)} МГц пропала (RX без своего тона) — ждём следующий живой сигнал`);
+      return "gone";
+    } finally {
+      gResense = false;
+    }
+  };
+
+  const startOpenLoopTx = (): void => {
+    stopTxWalk();
+    const st = get();
+    const caps = catalogCaps(st.sdrId);
+    const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
+    const walkPat = st.scanPattern === "auto" ? "sweep" : st.scanPattern;
+    const walker = new ScanWalker({
+      bands: st.sdrBands,
+      pattern: walkPat,
+      windowMhz: clampWindowMhz(parseFloat(st.scanWindowMhz), analog),
+      analogBwMhz: analog,
+      dwellMs: parseFloat(st.scanDwellMs),
+      seed: Date.now() & 0xffffffff,
+    });
+    gWalker = walker;
+    let inflight = false;
+    const stepTx = (): void => {
+      if (inflight || !get().transmitArmed) return;
+      const step = gWalker?.next();
+      if (!step?.centerMhz) return;
+      inflight = true;
+      void runHandoffAsync(step.centerMhz, 0).finally(() => {
+        inflight = false;
+      });
+    };
+    stepTx();
+    gTxWalk = setInterval(stepTx, walker.tickMs);
+  };
+
+  const ensureSdrBand = (): boolean => {
+    const s = get();
+    if (s.sdrBands.length > 0) return true;
+    const band = parseBand(s.sdrF1, s.sdrF2);
+    if (!band) {
+      pushLog("sys", "SDR: задайте начало и конец полосы (F1…F2)");
+      return false;
+    }
+    set({ sdrBands: [band] });
+    pushLog("sys", `SDR полоса ${band.f1Mhz}…${band.f2Mhz} (авто из F1/F2)`);
+    return true;
   };
 
   return {
@@ -121,14 +462,154 @@ export const useLegion = create<LegionStore>((set, get) => {
     corridorRunning: false,
     telemFreq: null,
     telemLock: null,
+    workspace: "synth",
+    allowBands: [],
+    allowF1: "2400",
+    allowF2: "2500",
+    loadOk: true,
+    sdrBands: [],
+    sdrF1: "2400",
+    sdrF2: "2500",
+    sdrLoadOk: true,
+    paMa: 0,
+    paOn: false,
+    autoCue: false,
+    transmitArmed: false,
+    lastForwardMhz: null,
+    sdrHoldSince: null,
+    sdrDevices: gSdr.probe(),
+    sdrId: "bladerf-micro-xa4",
+    sdrGateway: "192.168.1.20",
+    sdrOpened: null,
+    sdrRemote: "",
+    sdrFlashName: "hostedxA4.rbf",
+    sdrFlashAction: "load-fpga",
+    sdrFlashConfirm: false,
+    lastFlash: null,
+    flashBusy: false,
+    esp32FlashEnv: "esp32-s3",
+    esp32FlashConfirm: false,
+    esp32Chip: null,
+    esp32ChipPort: null,
+    esp32ChipRaw: "",
+    lastEsp32Flash: null,
+    sdrEmulation: !isTauriRuntime(),
+    sdrHostReady: false,
+    sdrHostDetail: "",
+    sdrImagePath: "",
+    sdrImageBytes: 0,
+    scanRunning: false,
+    scanThresholdDb: 12,
+    scanSensitivity: thresholdToSensitivity(12),
+    scanPattern: "auto",
+    autoDispatch: "turn",
+    scanWindowMhz: "20",
+    scanDwellMs: "40",
+    scanCenterMhz: null,
+    scanBins: [],
+    detections: [],
+    lastInterceptMhz: null,
+    lastCueReason: "",
+    lastSdrTxUs: null,
+    lastForwardPowerDbm: null,
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
-    setSelectedPort: (p) => set({ selectedPort: p }),
+    setSelectedPort: (p) => {
+      const prev = get().selectedPort;
+      if (p === prev) return;
+      set({
+        selectedPort: p,
+        esp32Chip: null,
+        esp32ChipPort: null,
+        esp32FlashConfirm: false,
+      });
+    },
     setWsUrl: (u) => set({ wsUrl: u }),
     setFreqMhz: (f) => set({ freqMhz: f }),
     setCorrField: (field, v) => set({ [field]: v }),
     setCorrMode: (m) => set({ corrMode: m }),
+    setWorkspace: (w) => {
+      const prev = modeOf(get().workspace);
+      const next = modeOf(w);
+      if (prev !== next) {
+        if (next === "esp32") {
+          get().stopScan();
+          void get().stopTransmit();
+        } else if (get().corridorRunning) {
+          void get().corridorStop();
+        }
+      }
+      set({ workspace: w });
+    },
+    setAllowField: (field, v) => set({ [field]: v }),
+    setSdrAllowField: (field, v) => set({ [field]: v }),
+    setPaMa: (ma) => set({ paMa: ma }),
+    setAutoCue: (v) => set({ autoCue: v }),
+    setSdrId: (id) =>
+      set({
+        sdrId: id,
+        sdrFlashName: defaultFlashName(id) || get().sdrFlashName,
+        sdrGateway: defaultEthHost(id),
+        sdrFlashConfirm: false,
+      }),
+    setSdrGateway: (v) => set({ sdrGateway: v }),
+    setSdrFlashName: (v) =>
+      set({
+        sdrFlashName: v,
+        sdrImagePath: usableImagePath(v) ? v.trim() : get().sdrImagePath,
+        sdrImageBytes: usableImagePath(v) && get().sdrImageBytes <= 0 ? 1 : get().sdrImageBytes,
+        sdrFlashConfirm: false,
+      }),
+    setSdrFlashAction: (a) => set({ sdrFlashAction: a, sdrFlashConfirm: false }),
+    setSdrFlashConfirm: (v) => set({ sdrFlashConfirm: v }),
+    setEsp32FlashEnv: (v) =>
+      set({
+        esp32FlashEnv: isEsp32FlashEnv(v) ? v : "esp32-s3",
+        esp32FlashConfirm: false,
+      }),
+    setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
+    setSdrEmulation: (v) => {
+      stopTxWatch();
+      stopTxWalk();
+      if (gLive) {
+        void hostTxOff();
+        void hostClose();
+      }
+      gLive = false;
+      gSdr.setEmulation(v);
+      set({
+        sdrEmulation: v,
+        sdrDevices: gSdr.probe(),
+        sdrOpened: gSdr.opened(),
+        sdrRemote: gSdr.remoteArgs(),
+        lastForwardMhz: null,
+        lastSdrTxUs: null,
+        lastForwardPowerDbm: null,
+        sdrHoldSince: null,
+      });
+      pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+    },
+    setSdrImageFile: (name, byteLength, path) =>
+      set({
+        sdrFlashName: name,
+        sdrImageBytes: byteLength,
+        sdrImagePath: path ?? "",
+        sdrFlashConfirm: false,
+      }),
+    setScanThreshold: (db) => {
+      const thr = Number.isFinite(db) ? db : 12;
+      set({ scanThresholdDb: thr, scanSensitivity: thresholdToSensitivity(thr) });
+    },
+    setScanSensitivity: (sens) => {
+      const s = Math.min(100, Math.max(0, Number.isFinite(sens) ? sens : 0));
+      const thr = sensitivityToThresholdDb(s);
+      set({ scanSensitivity: s, scanThresholdDb: thr });
+    },
+    setScanPattern: (p) => set({ scanPattern: p }),
+    setAutoDispatch: (d) => set({ autoDispatch: d }),
+    setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
+    setScanDwellMs: (v) => set({ scanDwellMs: v }),
     clearLog: () => set({ log: [] }),
 
     refreshPorts: async () => {
@@ -202,6 +683,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("tx", "HELLO");
         if (hello.ok) {
           await get().pollStatus();
+          const bands = get().allowBands;
+          for (const b of bands) {
+            pushLog("tx", `ALLOW ADD ${b.f1Mhz} ${b.f2Mhz}`);
+            await gClient.allowAdd(b.f1Mhz, b.f2Mhz);
+          }
         }
       } catch (e) {
         pushLog("sys", `connect failed: ${String(e)}`);
@@ -210,6 +696,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     disconnect: async () => {
+      // Отключение ESP32 не трогает режим SDR (скан / TX на Ethernet).
+      if (get().corridorRunning && gClient) {
+        await gClient.stop();
+        set({ corridorRunning: false, telemFreq: null, telemLock: null });
+      }
       if (gTransport) {
         try {
           await gTransport.disconnect();
@@ -230,6 +721,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setFrequency: async () => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       const mhz = parseFloat(get().freqMhz);
       if (!Number.isFinite(mhz)) {
@@ -260,6 +756,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setRf: async (on) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", on ? "RF ON" : "RF OFF");
       const r = await gClient.rf(on);
@@ -295,6 +796,11 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     corridorStart: async () => {
       if (!gClient) return;
+      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const s = get();
       const f1 = parseFloat(s.corrF1);
       const f2 = parseFloat(s.corrF2);
@@ -303,6 +809,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const seed = parseInt(s.corrSeed, 10) || 1;
       if (![f1, f2, step, dwell].every(Number.isFinite)) {
         pushLog("sys", "bad corridor params");
+        return;
+      }
+      if (s.allowBands.length > 0 && !s.allowBands.some((b) => f1 >= b.f1Mhz && f2 <= b.f2Mhz)) {
+        pushLog("sys", "коридор TX вне allowlist ESP32 — полоса на вкладке УСИЛИТЕЛЬ ESP32, не скан SDR");
         return;
       }
       const cmd =
@@ -333,5 +843,576 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ corridorRunning: false, telemFreq: null, telemLock: null });
       }
     },
+
+    addAllowBand: async () => {
+      // Режим ESP32: ALLOW на UART. Скан SDR вызывает addSdrBand, не это.
+      const s = get();
+      const band = parseBand(s.allowF1, s.allowF2);
+      if (!band) {
+        pushLog("sys", "allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.allowBands.length >= 8) {
+        pushLog("sys", "allowlist: максимум 8 полос");
+        return;
+      }
+      set({ allowBands: [...s.allowBands, band] });
+      if (gClient) {
+        const cmd = `ALLOW ADD ${band.f1Mhz} ${band.f2Mhz}`;
+        pushLog("tx", cmd);
+        await gClient.allowAdd(band.f1Mhz, band.f2Mhz);
+      }
+    },
+
+    clearAllowBands: async () => {
+      set({ allowBands: [] });
+      if (gClient) {
+        pushLog("tx", "ALLOW CLEAR");
+        await gClient.allowClear();
+      }
+    },
+
+    setLoad: async (ok) => {
+      // Режим ESP32: LOAD на UART. Скан SDR сюда не вызывает.
+      set({ loadOk: ok, paOn: ok ? get().paOn : false });
+      if (!gClient) return;
+      pushLog("tx", ok ? "LOAD OK" : "LOAD FAULT");
+      const r = ok ? await gClient.loadOk() : await gClient.loadFault();
+      if (r.ok && !ok) set({ rfOn: false, paOn: false });
+    },
+
+    addSdrBand: () => {
+      const s = get();
+      const band = parseBand(s.sdrF1, s.sdrF2);
+      if (!band) {
+        pushLog("sys", "SDR allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.sdrBands.length >= 8) {
+        pushLog("sys", "SDR allowlist: максимум 8 полос");
+        return;
+      }
+      set({ sdrBands: [...s.sdrBands, band] });
+      pushLog("sys", `SDR полоса ${band.f1Mhz}…${band.f2Mhz} (хост, не UART ESP32)`);
+    },
+
+    clearSdrBands: () => {
+      set({ sdrBands: [] });
+      pushLog("sys", "SDR allowlist очищен (ESP32 не тронут)");
+    },
+
+    setSdrLoad: (ok) => {
+      set({ sdrLoadOk: ok });
+      pushLog("sys", ok ? "SDR: нагрузка 50 Ом на усилителе SDR" : "SDR: нагрузка снята");
+    },
+
+    applyPaCurrent: async () => {
+      const ma = get().paMa;
+      if (!gClient) return;
+      pushLog("tx", `PA SET I ${Math.round(ma)}`);
+      const r = await gClient.paSetI(ma);
+      if (!r.ok) pushLog("sys", r.statusLine);
+    },
+
+    setPaEnabled: async (on) => {
+      if (!gClient) return;
+      if (on && !get().loadOk) {
+        pushLog("sys", "PA ON запрещён: нет нагрузки 50 Ом");
+        return;
+      }
+      pushLog("tx", on ? "PA ON" : "PA OFF");
+      const r = on ? await gClient.paOn() : await gClient.paOff();
+      if (r.ok) set({ paOn: on });
+      else pushLog("sys", r.statusLine);
+    },
+
+    cueTo: async (mhz) => {
+      const s = get();
+      if (!cueFreqAllowed(mhz, s.allowBands)) {
+        set({ lastCueReason: "частота вне allowlist" });
+        pushLog("sys", "CUE отклонён: вне allowlist");
+        return;
+      }
+      set({ freqMhz: mhz.toFixed(6), lastCueReason: `наведение ${mhz.toFixed(6)} МГц` });
+      if (!gClient) {
+        pushLog("sys", "CUE: актуатор не подключён — частота только в UI");
+        return;
+      }
+      const cmd = `CUE ${mhz.toFixed(6)}`;
+      pushLog("tx", cmd);
+      const r = await gClient.cue(mhz);
+      if (r.ok) set({ corridorRunning: false, telemFreq: null });
+      else {
+        pushLog("sys", r.statusLine);
+        set({ lastCueReason: r.statusLine });
+      }
+    },
+
+    forwardTo: async (mhz) => {
+      await runHandoff(mhz);
+    },
+
+    probeSdr: async () => {
+      if (!get().sdrEmulation && hostSdrAvailable()) {
+        const st = get();
+        const p = await hostPing(sdrOpenArgs(st.sdrId, st.sdrGateway));
+        const base = gSdr.probe().map((d) => ({ ...d, present: false, serial: "" }));
+        const list = markCatalogPresent(base, p.devices ?? []);
+        set({
+          sdrDevices: list,
+          sdrHostReady: !!(p.ok && p.soapy),
+          sdrHostDetail: p.reason ?? "",
+        });
+        pushLog("sys", p.reason || `SDR probe Soapy: ${(p.devices ?? []).length} устройств`);
+        return;
+      }
+      const list = gSdr.probe();
+      set({ sdrDevices: list, sdrHostReady: false, sdrHostDetail: "эмуляция каталога" });
+      pushLog("sys", `SDR probe: ${list.length} типов в каталоге (эмуляция)`);
+    },
+
+    openSdr: async () => {
+      const s = get();
+      const plan = planEthernet(s.sdrId, s.sdrGateway);
+      const remote = sdrOpenArgs(s.sdrId, s.sdrGateway);
+      if (s.sdrEmulation) {
+        gLive = false;
+        gSdr.setEmulation(true);
+        const r = gSdr.open(s.sdrId, remote);
+        set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+        pushLog("sys", r.reason);
+        pushLog("sys", plan.cableText);
+        return;
+      }
+      const ping = hostSdrAvailable()
+        ? await hostPing(sdrOpenArgs(s.sdrId, s.sdrGateway))
+        : { ok: false, soapy: false, reason: "нет Tauri" };
+      const pre = hostOpenAllowed({
+        emulation: false,
+        hasSoapyOrCli: !!(ping.ok && ping.soapy),
+        imageBytes: s.sdrImageBytes,
+      });
+      if (!pre.ok) {
+        pushLog("sys", pre.reason);
+        set({ sdrHostReady: false, sdrHostDetail: pre.reason });
+        return;
+      }
+      const caps = catalogCaps(s.sdrId);
+      const r = await hostOpen(remote, caps.analogBwMhz, caps.canTx, caps.fullDuplex);
+      if (!r.ok) {
+        pushLog("sys", r.reason);
+        return;
+      }
+      gLive = true;
+      const row = catalogById(s.sdrId);
+      set({
+        sdrOpened: row
+          ? { ...row, serial: remote || "soapy", present: true }
+          : null,
+        sdrRemote: remote,
+        sdrHostReady: true,
+        sdrHostDetail: r.reason,
+      });
+      pushLog("sys", r.reason);
+      pushLog("sys", plan.cableText);
+    },
+
+    closeSdr: async () => {
+      stopTxWatch();
+      stopTxWalk();
+      get().stopScan();
+      if (gLive) {
+        await hostTxOff();
+        await hostClose();
+      }
+      gSdr.txOff();
+      gSdr.close();
+      gLive = false;
+      gResense = false;
+      gSkipMhz = null;
+      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
+      pushLog("sys", "SDR закрыт");
+    },
+
+    flashSdr: async (action) => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      const s = get();
+      const act = action ?? s.sdrFlashAction;
+      const imagePath = (s.sdrImagePath || s.sdrFlashName).trim();
+      const job = {
+        deviceId: s.sdrOpened?.id ?? s.sdrId,
+        filename: imagePath || s.sdrFlashName,
+        byteLength: s.sdrImageBytes,
+        action: act,
+      };
+      const plan = planSdrWrite({
+        job,
+        imagePath,
+        confirmed: s.sdrFlashConfirm,
+        gateway: s.sdrGateway,
+      });
+      if (!plan.ok) {
+        const r: FlashResult = { ok: false, kind: "unknown", reason: plan.reason, written: false };
+        set({ lastFlash: r });
+        pushLog("sys", r.reason);
+        return;
+      }
+      if (!hostSdrAvailable()) {
+        const r: FlashResult = {
+          ok: false,
+          kind: "unknown",
+          reason: `команда не запущена (нет desktop LEGION): ${plan.argv.join(" ")}`,
+          written: false,
+        };
+        set({ lastFlash: r, sdrFlashConfirm: false });
+        pushLog("sys", r.reason);
+        return;
+      }
+      set({ flashBusy: true });
+      try {
+        if (get().sdrOpened || get().scanRunning || get().transmitArmed) {
+          await get().closeSdr();
+        }
+        const r = await hostFlash(plan.argv, plan.file);
+        set({
+          lastFlash: { ok: r.ok, kind: "unknown", reason: r.reason, written: r.written },
+          sdrFlashConfirm: false,
+        });
+        pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    probeEsp32Chip: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      const port = get().selectedPort;
+      set({ flashBusy: true, esp32FlashConfirm: false });
+      try {
+        const r = await hostEsp32ChipId(port);
+        const chip = r.ok ? parseEsp32Chip(r.text) : null;
+        set({
+          esp32Chip: chip,
+          esp32ChipPort: chip ? port.trim() : null,
+          esp32ChipRaw: r.text,
+        });
+        if (!r.ok) pushLog("sys", `ESP32 chip_id: ${r.text}`);
+        else if (!chip) pushLog("sys", `ESP32: не разобрали чип — не шьём. ${r.text}`);
+        else pushLog("sys", `ESP32 чип ${chip} на ${port}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    flashEsp32: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      const s = get();
+      const plan = planEsp32Flash({
+        env: s.esp32FlashEnv,
+        port: s.selectedPort,
+        confirmed: s.esp32FlashConfirm,
+        chip: s.esp32Chip,
+        chipPort: s.esp32ChipPort,
+      });
+      if (!plan.ok || !plan.env || !plan.port) {
+        const r: Esp32FlashResult = { ok: false, reason: plan.reason, written: false };
+        set({ lastEsp32Flash: r });
+        pushLog("sys", r.reason);
+        return;
+      }
+      if (!hostSdrAvailable()) {
+        const r: Esp32FlashResult = {
+          ok: false,
+          reason: `команда не запущена (нет desktop LEGION): ${plan.reason}`,
+          written: false,
+        };
+        set({ lastEsp32Flash: r, esp32FlashConfirm: false });
+        pushLog("sys", r.reason);
+        return;
+      }
+      set({ flashBusy: true });
+      try {
+        if (get().corridorRunning) await get().corridorStop();
+        if (get().transportState === "connected") await get().disconnect();
+        const r = await hostEsp32Flash(plan.env, plan.port);
+        set({ lastEsp32Flash: r, esp32FlashConfirm: false });
+        pushLog("sys", r.written ? `записано в ESP32: ${r.reason}` : `не записано: ${r.reason}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    injectDemoTone: () => {
+      const s = get();
+      const f = s.sdrBands[0] ? (s.sdrBands[0].f1Mhz + s.sdrBands[0].f2Mhz) / 2 : 2442;
+      gSdr.injectTone(f, -40);
+      pushLog("sys", `демо-несущая ${f.toFixed(3)} МГц @ −40 дБм (мок, не эфир)`);
+    },
+
+    startScan: () => {
+      void (async () => {
+        const s = get();
+        const blocked = modeConflict("sdr", s.corridorRunning, false);
+        if (blocked) {
+          pushLog("sys", blocked);
+          return;
+        }
+        if (!ensureSdrBand()) return;
+        const refused = scanRefusedReason(s.scanPattern);
+        if (refused) {
+          pushLog("sys", refused);
+          return;
+        }
+        if (!s.sdrEmulation) {
+          if (!get().sdrOpened) {
+            await get().openSdr();
+            if (!get().sdrOpened) return;
+          }
+        } else if (!gSdr.opened()) {
+          gSdr.setEmulation(true);
+          const opened = gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
+          set({ sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+          pushLog("sys", opened.reason);
+          if (!opened.ok) return;
+        }
+        if (gScanTimer) {
+          clearInterval(gScanTimer);
+          gScanTimer = null;
+        }
+        const st = get();
+        const caps = catalogCaps(st.sdrId);
+        const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
+        const windowMhz = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
+        const walker = new ScanWalker({
+          bands: st.sdrBands,
+          pattern: "sweep",
+          windowMhz,
+          analogBwMhz: analog,
+          dwellMs: parseFloat(st.scanDwellMs),
+          seed: Date.now() & 0xffffffff,
+        });
+        gWalker = walker;
+        const nBins = walker.windowMhz >= 40 ? 256 : 64;
+        set({ scanRunning: true, scanCenterMhz: null });
+        pushLog(
+          "sys",
+          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: авто · RX energy · окно ${walker.windowMhz} МГц`,
+        );
+        let inflight = false;
+        let lastResenseAt = 0;
+        const tickScan = async (): Promise<void> => {
+          if (!get().scanRunning || get().flashBusy) return;
+          let bins: ScanBin[] = [];
+          let centerMhz = 0;
+          let detections: Detection[] = [];
+          const step = gWalker?.next();
+          if (!step?.centerMhz) return;
+          const winMhz = step.windowMhz;
+          centerMhz = step.centerMhz;
+          if (gLive) {
+            const win = await hostScan(centerMhz, winMhz, nBins);
+            if (!get().scanRunning || get().flashBusy) return;
+            if (win.txError) {
+              pushLog("sys", win.txError);
+              await get().stopTransmit();
+            }
+            if (!win.ok) {
+              pushLog("sys", win.reason || "scan fail");
+              return;
+            }
+            bins = win.bins;
+          } else {
+            bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
+          }
+          const now = Date.now();
+          const raw = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
+            ...d,
+            ts: now,
+          }));
+          detections = withoutOwnTx(raw, get().lastForwardMhz);
+          if (centerMhz) set({ scanCenterMhz: centerMhz });
+          if (detections.length > 0) {
+            const dets = mergeDetections(get().detections, detections);
+            const hit = pickStrongest(detections);
+            set({
+              detections: dets,
+              lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
+            });
+          }
+          if (bins.length > 0) set({ scanBins: bins });
+          const cur = get();
+          if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
+          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, winMhz, bins.length > 0);
+          const held = gGate.lastCuedMhz;
+          if (
+            cur.autoDispatch === "priority" &&
+            held != null &&
+            !gGate.inflight &&
+            !cur.flashBusy &&
+            Date.now() - lastResenseAt >= RESENSE_MS
+          ) {
+            lastResenseAt = Date.now();
+            const rs = await resenseHeld(held, winMhz, nBins);
+            if (!shouldContinuePriorityTick(rs)) return;
+          }
+          if (!get().scanRunning || get().flashBusy || !get().transmitArmed) return;
+          const after = get();
+          const heldNow = gGate.lastCuedMhz;
+          const dispatch = after.autoDispatch;
+          const target = pickArmedAutoTarget({
+            liveWindow: dispatch === "turn" ? raw : detections,
+            archive: after.detections,
+            heldMhz: heldNow,
+            heldPowerDbm: after.lastForwardPowerDbm,
+            skipMhz: gSkipMhz,
+            dispatch,
+            holdMasked: dispatch === "priority",
+          });
+          if (!target) return;
+          if (gGate.queueIfBusy(target.freqMhz)) return;
+          runHandoff(target.freqMhz, target.powerDbm);
+        };
+        const armTick = (): void => {
+          if (inflight) return;
+          inflight = true;
+          void tickScan().finally(() => {
+            inflight = false;
+          });
+        };
+        armTick();
+        gScanTimer = setInterval(armTick, walker.tickMs);
+      })();
+    },
+
+    stopScan: () => {
+      if (gScanTimer) {
+        clearInterval(gScanTimer);
+        gScanTimer = null;
+      }
+      gWalker = null;
+      if (get().scanRunning) set({ scanRunning: false });
+    },
+
+    startTransmit: async () => {
+      const s = get();
+      if (s.flashBusy) {
+        pushLog("sys", "ПЕРЕДАТЬ: идёт прошивка — сначала дождитесь");
+        return;
+      }
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
+      if (!ensureSdrBand()) {
+        pushLog("sys", "ПЕРЕДАТЬ: нет полосы F1…F2");
+        return;
+      }
+      if (!s.sdrLoadOk) {
+        pushLog("sys", "ПЕРЕДАТЬ: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+        return;
+      }
+      if (!s.sdrOpened) {
+        await get().openSdr();
+        if (!get().sdrOpened) return;
+      }
+      const canTx = gLive ? catalogCaps(get().sdrId).canTx : gSdr.canTx();
+      if (!canTx) {
+        pushLog("sys", "ПЕРЕДАТЬ: у этого SDR нет TX — усилитель подключать некуда");
+        return;
+      }
+      set({ transmitArmed: true });
+      const work = planSdrWork(get().scanPattern, get().autoDispatch);
+      pushLog("sys", `ПЕРЕДАТЬ: ${work.reason}`);
+      stopTxWatch();
+      if (gLive) {
+        gTxWatch = setInterval(() => {
+          void (async () => {
+            if (!get().transmitArmed || !gLive || gResense) return;
+            const h = await hostHealth();
+            if (gResense) return;
+            const armedOnAir = get().lastForwardMhz != null;
+            if (h.txError || (armedOnAir && h.txLive === false)) {
+              pushLog("sys", h.txError || "SDR TX поток мёртв — HUD снят");
+              await get().stopTransmit();
+            }
+          })();
+        }, 1000);
+      }
+      if (work.openLoopTx) {
+        get().stopScan();
+        startOpenLoopTx();
+        return;
+      }
+      const alreadyScanning = get().scanRunning;
+      if (!alreadyScanning) {
+        get().startScan();
+        return;
+      }
+      const raw = clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands);
+      const dispatch = get().autoDispatch;
+      const live = dispatch === "turn" ? raw : withoutOwnTx(raw, get().lastForwardMhz);
+      const target = pickArmedAutoTarget({
+        liveWindow: live,
+        archive: get().detections,
+        heldMhz: gGate.lastCuedMhz,
+        heldPowerDbm: get().lastForwardPowerDbm,
+        skipMhz: gSkipMhz,
+        dispatch,
+        holdMasked: dispatch === "priority" && gGate.lastCuedMhz != null,
+      });
+      if (target) runHandoff(target.freqMhz, target.powerDbm);
+    },
+
+    stopTransmit: async () => {
+      stopTxWatch();
+      stopTxWalk();
+      gResense = false;
+      gSkipMhz = null;
+      set({ transmitArmed: false });
+      gGate.reset();
+      if (gLive) await hostTxOff();
+      gSdr.txOff();
+      set({ lastSdrTxUs: null, lastForwardMhz: null, lastForwardPowerDbm: null, sdrHoldSince: null, lastCueReason: "SDR TX остановлен" });
+      pushLog("sys", "SDR TX остановлен (ESP32 не тронут)");
+    },
+
+    resetSdrLock: async () => {
+      const skip = gGate.lastCuedMhz ?? get().lastForwardMhz;
+      if (skip == null && !get().transmitArmed) {
+        pushLog("sys", "СБРОСИТЬ: замка нет");
+        return;
+      }
+      gSkipMhz = skip;
+      gGate.reset();
+      set({
+        lastForwardMhz: null,
+        lastForwardPowerDbm: null,
+        lastSdrTxUs: null,
+        sdrHoldSince: null,
+        lastCueReason: "оператор сбросил частоту — ждём следующий живой сигнал",
+      });
+      if (gLive) await hostTxOff();
+      gSdr.txOff();
+      pushLog(
+        "sys",
+        skip != null
+          ? `СБРОСИТЬ: оператор снял ${skip.toFixed(3)} МГц — систему не переключаем`
+          : "СБРОСИТЬ: замок снят оператором",
+      );
+    },
   };
 });
+
+function mhzAsDet(mhz: number, powerDbm = 0): import("../sdr/types").Detection {
+  return { freqMhz: mhz, powerDbm, noiseDbm: 0, snrDb: 0, ts: 0, forwarded: false };
+}
