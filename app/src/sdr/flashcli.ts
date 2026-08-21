@@ -24,8 +24,12 @@ export function planFlashCli(job: FlashJob, addr?: string): FlashCliPlan {
       return { argv: ["bladeRF-cli", "-L", file], reason: "Nuand: FPGA autoload -L" };
     case "usrp-n210": {
       const ip = (addr || "192.168.10.2").trim() || "192.168.10.2";
+      // MCU-firmware (uhd-n210-fw) идёт через --fw-path, FPGA — через
+      // --fpga-path (Ettus KB / official.ts). Было: всегда --fpga-path —
+      // MCU-образ писался в FPGA-слот.
+      const pathArg = job.action === "flash-fx3" ? `--fw-path=${file}` : `--fpga-path=${file}`;
       return {
-        argv: ["uhd_image_loader", `--args=type=usrp2,addr=${ip}`, `--fpga-path=${file}`],
+        argv: ["uhd_image_loader", `--args=type=usrp2,addr=${ip}`, pathArg],
         reason: "Ettus: uhd_image_loader",
       };
     }

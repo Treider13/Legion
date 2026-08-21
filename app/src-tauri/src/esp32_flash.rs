@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 const ESP32_ENVS: &[&str] = &[
     "esp32dev",
@@ -152,13 +153,17 @@ fn esptool() -> Result<Esptool, String> {
     })
 }
 
-fn firmware_dir(env: &str) -> Result<PathBuf, String> {
+fn firmware_dir(app: &tauri::AppHandle, env: &str) -> Result<PathBuf, String> {
     if env == "native" || env == "native_fuzz" {
         return Err("env native на железо не шьём".into());
     }
     let candidates = [
         std::env::var("LEGION_FIRMWARE_DIR").ok().map(PathBuf::from),
         Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../firmware")),
+        // Релизный бандл: firmware/ кладём в resources (tauri.conf.json) —
+        // раньше вкладка «ПРОШИВКА ESP32» в установленном приложении всегда
+        // отвечала «firmware/ не найден» (аудит №36).
+        app.path().resource_dir().ok().map(|d| d.join("firmware")),
     ];
     for dir in candidates.into_iter().flatten() {
         let ini_path = dir.join("platformio.ini");
@@ -234,7 +239,14 @@ fn run_chip_id(port: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn esp32_chip_id(port: String) -> Result<String, String> {
+pub async fn esp32_chip_id(port: String) -> Result<String, String> {
+    // Блокирующий вызов esptool (до 25 с) — в spawn_blocking, не на IPC-потоке.
+    tauri::async_runtime::spawn_blocking(move || esp32_chip_id_blocking(port))
+        .await
+        .map_err(|e| format!("esp32_chip_id join: {e}"))?
+}
+
+fn esp32_chip_id_blocking(port: String) -> Result<String, String> {
     if !port_ok(&port) {
         return Err("порт не похож на USB-UART (/dev/ttyUSB* / ttyACM* / COM*)".into());
     }
@@ -242,14 +254,21 @@ pub fn esp32_chip_id(port: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn esp32_flash(env: String, port: String) -> Result<String, String> {
+pub async fn esp32_flash(app: tauri::AppHandle, env: String, port: String) -> Result<String, String> {
+    // pio upload до 180 с — блокирующе; уводим с IPC-потока.
+    tauri::async_runtime::spawn_blocking(move || esp32_flash_blocking(&app, env, port))
+        .await
+        .map_err(|e| format!("esp32_flash join: {e}"))?
+}
+
+fn esp32_flash_blocking(app: &tauri::AppHandle, env: String, port: String) -> Result<String, String> {
     if !env_ok(&env) {
         return Err(format!("env «{env}» не из allowlist LEGION — не шьём"));
     }
     if !port_ok(&port) {
         return Err("порт не похож на USB-UART — отказ".into());
     }
-    let dir = firmware_dir(&env)?;
+    let dir = firmware_dir(app, &env)?;
     let chip_text = run_chip_id(port.trim())?;
     let chip = parse_chip(&chip_text).ok_or_else(|| {
         format!("не разобрали чип по chip_id — upload не запущен. {chip_text}")

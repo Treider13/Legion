@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [cursor/**]
+    branches: [main, cursor/**]
   pull_request:
 
 jobs:
@@ -72,6 +72,9 @@ jobs:
       - name: Orchestrator / SDR / allowlist tests
         working-directory: app
         run: npx tsx scripts/test_orchestrator.ts
+      - name: TX race-fix scenarios (mock backend)
+        working-directory: app
+        run: npx tsx scripts/test_race_fixes.ts
       - name: WebSocket transport smoke test
         working-directory: app
         run: npx tsx scripts/smoke_ws.ts

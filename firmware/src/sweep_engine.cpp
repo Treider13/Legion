@@ -4,6 +4,8 @@
 // ============================================================================
 #include "sweep_engine.h"
 
+#include <math.h>  // isfinite — fm_depth из NVS может быть NaN
+
 #include "engine_math.h"
 #include "ble_server.h"
 #include "leveling.h"
@@ -95,8 +97,14 @@ static void sweep_task(void*) {
 
     corridor_apply_fast(f);
 
-    // Темп: FM — обновление каждый 1 мс (плавная модуляция), остальные — dwell
-    const uint32_t tick_ms = (cfg.mode >= CorridorMode::FM_SIN) ? 1 : cfg.dwell_ms;
+    // Темп: FM — обновление каждый 1 мс (плавная модуляция); GLIDE — тоже 1 мс:
+    // dwell_ms у GLIDE — ДЛИТЕЛЬНОСТЬ перехода, шагов ровно dwell_ms по 1 мс
+    // (было: тик dwell_ms × dwell_ms шагов = dwell² — GLIDE 2000 шёл ~33 мин).
+    // Остальные режимы — dwell.
+    const uint32_t tick_ms =
+        (cfg.mode >= CorridorMode::FM_SIN || cfg.mode == CorridorMode::GLIDE)
+            ? 1
+            : cfg.dwell_ms;
     vTaskDelayUntil(&last, pdMS_TO_TICKS(tick_ms));
 
     switch (cfg.mode) {
@@ -116,9 +124,15 @@ static void sweep_task(void*) {
         ++glide_step;
         if (glide_step >= total) {
           corridor_apply_fast(cfg.f2_hz);
+          // Событие — во ВСЕ транспорты: раньше уходило только в UART,
+          // WS/BLE-клиенты никогда не узнавали о конце GLIDE (висло «RUNNING»).
+          char ev[40];
+          snprintf(ev, sizeof(ev), "{\"t\":0,\"event\":\"GLIDE DONE\"}");
           serial_lock();
-          s_telem->println(F("{\"t\":0,\"event\":\"GLIDE DONE\"}"));
+          s_telem->println(ev);
           serial_unlock();
+          net_broadcast(ev);  // WS-клиенты (на H2 — no-op)
+          ble_broadcast(ev);  // BLE notify (на S2 — no-op)
           corridor_stop();  // полный стоп: флаг + MTLD off (не просто флаг)
           break;
         }
@@ -179,12 +193,19 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
   const bool is_fm = (cfg.mode >= CorridorMode::FM_SIN);
   const bool is_glide = (cfg.mode == CorridorMode::GLIDE);
 
+  // Мусорный mode (напр. из повреждённой NVS) — отказ, а не молчаливый default
+  if (cfg.mode == CorridorMode::NONE || cfg.mode > CorridorMode::FM_RAND) {
+    snprintf(err, err_len, "ERR RANGE mode");
+    return false;
+  }
   if (cfg.f1_hz < ADF_FREQ_MIN_HZ || cfg.f1_hz > ADF_FREQ_MAX_HZ) {
     snprintf(err, err_len, "ERR RANGE f1");
     return false;
   }
   if (!is_fm) {
-    if (cfg.f2_hz > ADF_FREQ_MAX_HZ || cfg.f1_hz >= cfg.f2_hz) {
+    // GLIDE: цель может быть НИЖЕ старта — переход вниз легален
+    // (engine_glide_at работает с отрицательной дельтой; был ложный отказ).
+    if (cfg.f2_hz > ADF_FREQ_MAX_HZ || (!is_glide && cfg.f1_hz >= cfg.f2_hz)) {
       snprintf(err, err_len, "ERR RANGE corridor");
       return false;
     }
@@ -199,10 +220,17 @@ bool corridor_start(const CorridorConfig& cfg, char* err, size_t err_len) {
     return false;
   }
   if (is_fm) {
-    // FM: центр ± глубина обязаны оставаться в диапазоне
-    if (cfg.fm_depth_hz <= 0.0 ||
-        cfg.f1_hz - (uint64_t)cfg.fm_depth_hz < ADF_FREQ_MIN_HZ ||
-        cfg.f1_hz + (uint64_t)cfg.fm_depth_hz > ADF_FREQ_MAX_HZ) {
+    // FM: центр ± глубина обязаны оставаться в диапазоне.
+    // Без uint64-underflow: f1 - depth при depth > f1 уходил в огромное
+    // unsigned и проверка проходила мимо; NaN пробивал <= 0.0.
+    if (!isfinite(cfg.fm_depth_hz) || cfg.fm_depth_hz <= 0.0) {
+      snprintf(err, err_len, "ERR RANGE fm depth");
+      return false;
+    }
+    const uint64_t d = (uint64_t)cfg.fm_depth_hz;
+    const uint64_t lo = cfg.f1_hz > d ? cfg.f1_hz - d : 0;
+    // d > MAX ловится через lo == 0 < MIN (f1 ≤ MAX < d); здесь d ≤ MAX.
+    if (lo < ADF_FREQ_MIN_HZ || cfg.f1_hz > ADF_FREQ_MAX_HZ - d) {
       snprintf(err, err_len, "ERR RANGE fm depth");
       return false;
     }
@@ -258,6 +286,13 @@ uint64_t corridor_current_hz() {
   return v;
 }
 
-const CorridorConfig& corridor_config() { return s_cfg; }
+CorridorConfig corridor_config() {
+  // Копия под мьютексом, не ссылка: uint64-поля на 32-битном MCU читаются
+  // неатомарно, а писать может другая задача (BLE host task → corridor_start).
+  xSemaphoreTake(s_cfg_mtx, portMAX_DELAY);
+  const CorridorConfig v = s_cfg;
+  xSemaphoreGive(s_cfg_mtx);
+  return v;
+}
 
 }  // namespace legion

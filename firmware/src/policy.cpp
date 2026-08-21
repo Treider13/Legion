@@ -20,7 +20,17 @@ void policy_init() {
 }
 
 bool policy_allow_add(uint64_t f1_hz, uint64_t f2_hz) {
-  if (!allow_band_valid(f1_hz, f2_hz) || g_n >= ALLOW_MAX_BANDS) {
+  if (!allow_band_valid(f1_hz, f2_hz)) {
+    return false;
+  }
+  // Дубль — идемпотентный успех: реплей allowlist при reconnect хоста
+  // (connect() шлёт ALLOW ADD заново) не плодит копии до переполнения таблицы.
+  for (int i = 0; i < g_n; ++i) {
+    if (g_bands[i].f1_hz == f1_hz && g_bands[i].f2_hz == f2_hz) {
+      return true;
+    }
+  }
+  if (g_n >= ALLOW_MAX_BANDS) {
     return false;
   }
   g_bands[g_n].f1_hz = f1_hz;

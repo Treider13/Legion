@@ -8,11 +8,11 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 | Команда | Формат | Ответ | Описание |
 |---|---|---|---|
 | Идентификация | `HELLO` | `OK LEGION <ver> <board>` | рукопожатие |
-| Частота | `SET FREQ <MHz>` (напр. `SET FREQ 2475.000`) | `OK FREQ=2475.000000 LOCK=1` | 35–4400 МГц |
+| Частота | `SET FREQ <MHz>` (напр. `SET FREQ 2475.000`) | `OK FREQ=2475.000000 LOCK=1` | 34.375–4400 МГц |
 | Мощность | `SET POWER <-4\|-1\|+2\|+5>` | `OK` | дБм, 4 ступени (F9) |
 | Вкл/выкл выход | `RF ON` / `RF OFF` | `OK` | через CE + R4 |
 | Свип | `SWEEP START <f1> <f2> STEP <kHz> DWELL <ms>` | `OK SWEEP RUNNING` | линейный коридор |
-| Хоппинг | `HOP START <f1> <f2> RATE <ms> SEED <n>` | `OK HOP RUNNING` | псевдослучайный (xorshift32) |
+| Хоппинг | `HOP START <f1> <f2> RATE <ms> SEED <n> [STEP <kHz>]` | `OK HOP RUNNING` | псевдослучайный (xorshift32) |
 | Чирp (фаза 6) | `CHIRP START <f1> <f2> STEP <Hz> DWELL <ms>` | `OK CHIRP RUNNING` | FMCW-рампа, **шаг в Гц** |
 | Глайд (фаза 6) | `GLIDE <targetMHz> <durationMs>` | `OK GLIDE RUNNING a -> b` | плавный переход, авто-стоп |
 | ЧМ (фаза 6) | `FM START <SIN\|TRI\|RAND> CENTER <MHz> DEPTH <kHz> RATE <ms>` | `OK FM RUNNING SIN` | ЧМ вокруг центра |
@@ -33,7 +33,8 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 | Наведение (фаза 11) | `CUE <MHz>` | `OK CUE FREQ=… LOCK=` | SET FREQ только если частота в allowlist; **RF не включает** |
 
 Пустой allowlist **не** меняет SET FREQ / RF ON / SWEEP (совместимость фаз 1–10).
-Непустой allowlist: RF ON и коридор TX обязаны попадать в полосу.
+Непустой allowlist: RF ON и коридор TX обязаны попадать в полосу — включая
+GLIDE (обе крайние точки) и FM (центр ± глубина).
 `CUE` всегда требует непустой allowlist и попадание.
 `LOAD FAULT` гасит RF и PA. `ERR LOAD` / `ERR ALLOW` — новые коды.
 
@@ -64,9 +65,8 @@ ASCII по USB-UART (115200 8N1) и JSON по WebSocket — одна семан�
 
 | Код | Значение |
 |---|---|
-| `ERR RANGE` | частота вне 35–4400 МГц |
+| `ERR RANGE` | частота вне 34.375–4400 МГц |
 | `ERR SYNTAX` | парсер не понял команду |
-| `ERR LOCK` | нет захвата петли после таймаута |
 | `ERR STATE` | команда недопустима в текущем режиме |
 | `ERR DWELL` | dwell < минимально допустимого (band select + settling) |
 | `ERR LOAD` | нет подтверждённой нагрузки 50 Ом (RF ON / PA ON) |

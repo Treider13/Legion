@@ -8,6 +8,8 @@
 
 #include <NimBLEDevice.h>
 
+#include "serial_sync.h"
+
 namespace legion {
 
 // Nordic UART Service
@@ -77,11 +79,17 @@ class TxCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class ServerCallbacks : public NimBLEServerCallbacks {
+  // Колбэки идут из host-задачи NimBLE — вывод в UART только под serial_lock,
+  // иначе строки перемешиваются с телеметрией/ответами посреди кадра.
   void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
+    serial_lock();
     Serial.println(F("BLE client connected"));
+    serial_unlock();
   }
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
+    serial_lock();
     Serial.println(F("BLE client disconnected"));
+    serial_unlock();
     s_subscribed = false;
     NimBLEDevice::startAdvertising();  // ре-адвертайзинг после отключения
   }

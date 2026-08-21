@@ -90,15 +90,31 @@ export class LegionClient {
   }
 
   async cmd(command: string, timeoutMs = RESP_TIMEOUT_MS): Promise<CmdResult> {
+    const waiter = {
+      resolve: null as unknown as (r: CmdResult) => void,
+      lines: [] as string[],
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    };
     const p = new Promise<CmdResult>((resolve) => {
-      const timer = setTimeout(() => {
+      waiter.resolve = resolve;
+      waiter.timer = setTimeout(() => {
         const idx = this.waiters.findIndex((w) => w.resolve === resolve);
         if (idx >= 0) this.waiters.splice(idx, 1);
         resolve({ ok: false, lines: [], statusLine: "ERR TIMEOUT" });
       }, timeoutMs);
-      this.waiters.push({ resolve, lines: [], timer });
+      this.waiters.push(waiter);
     });
-    await this.transport.writeLine(command);
+    try {
+      await this.transport.writeLine(command);
+    } catch (e) {
+      // Обрыв транспорта (USB выдернут, WS закрыт): честный ERR вместо
+      // исключения — иначе каждый await cmd() в store давал unhandled
+      // rejection, а disconnect() через STOP рвал connect() (аудит №26).
+      const idx = this.waiters.indexOf(waiter);
+      if (idx >= 0) this.waiters.splice(idx, 1);
+      clearTimeout(waiter.timer);
+      return { ok: false, lines: [], statusLine: `ERR IO ${String(e)}` };
+    }
     return p;
   }
 

@@ -253,6 +253,11 @@ const gGate = new HandoffGate();
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
 let gSkipMhz: number | null = null;
+/** Поколение TX-эпохи. Инкрементируют stopTransmit/closeSdr/resetSdrLock/
+ *  setSdrEmulation/setSdrLoad(false). In-flight handoff/re-sense сверяют
+ *  поколение после await: сменилось — не коммитим и не восстанавливаем TX
+ *  (найдено аудитом гонок: TX оживал после СТОП). */
+let gTxGen = 0;
 
 function stopTxWatch(): void {
   if (gTxWatch) {
@@ -303,6 +308,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       sdrCanTx: gLive ? caps.canTx : gSdr.canTx(),
     });
     if (plan.skip) return false;
+    const gen = gTxGen;
     gGate.reserve(plan.freqMhz);
     let sdrUs = 0;
     try {
@@ -314,18 +320,36 @@ export const useLegion = create<LegionStore>((set, get) => {
           gGate.abort();
           return false;
         }
+        if (gen !== gTxGen) {
+          // Пока ждали hostTx, оператор стопнул/сбросил/закрыл SDR. Его txOff
+          // ушёл в worker ПОСЛЕ нашего tx (порядок мьютекса SESSION в Rust) —
+          // эфир уже погашен. Не коммитим UI и НЕ шлём ещё один txOff
+          // (он убил бы TX новой эпохи, если та уже стартовала).
+          gGate.abort();
+          pushLog("sys", "handoff отменён оператором в полёте — состояние не коммитим");
+          return false;
+        }
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
       }
       executeHandoff(plan, sdrUs, powerDbm);
       return true;
     } finally {
-      const queued = gGate.release();
-      if (queued !== null) void runHandoffAsync(queued);
+      // release только своей эпохи: при смене поколения gate уже reset'нут
+      // бампером (bump и reset идут без await между ними — вклиниться нельзя).
+      // Без guard'а наш release обнулял inflight/pendingMhz у НОВОГО handoff
+      // и мог вытащить его queued → параллельный TX поверх чужого (перепроверка).
+      if (gen === gTxGen) {
+        const queued = gGate.release();
+        if (queued !== null) void runHandoffAsync(queued.mhz, queued.powerDbm);
+      }
     }
   };
 
   const restoreHeldTx = async (mhz: number): Promise<boolean> => {
+    // СТОП во время re-sense: не воскрешаем TX (аудит: restore не проверял
+    // transmitArmed — тон возвращался в эфир после команды оператора).
+    if (!get().transmitArmed) return false;
     const tx = gLive ? await hostTx(mhz) : gSdr.txCue(mhz);
     if (!tx.ok) {
       pushLog("sys", tx.reason);
@@ -340,6 +364,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     windowMhz: number,
     nBins: number,
   ): Promise<"alive" | "gone" | "error" | "switch"> => {
+    const gen = gTxGen;
     gResense = true;
     try {
       if (gLive) await hostTxOff();
@@ -356,6 +381,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       } else {
         bins = gSdr.scanWindow(heldMhz, windowMhz, nBins);
       }
+      // Стоп/сброс/закрытие, пока летал hostScan: ничего не восстанавливаем.
+      if (gen !== gTxGen) return "gone";
       const dets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
       const nextHit = pickArmedAutoTarget({
         liveWindow: dets,
@@ -570,8 +597,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       }),
     setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
     setSdrEmulation: (v) => {
+      // Смена бэкенда = новая эпоха: скан и TX-arm старого бэкенда гасим,
+      // иначе таймер скана продолжал молотить по мёртвому/переключённому пути.
+      gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
+      get().stopScan();
+      gGate.reset();
       if (gLive) {
         void hostTxOff();
         void hostClose();
@@ -583,6 +615,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrDevices: gSdr.probe(),
         sdrOpened: gSdr.opened(),
         sdrRemote: gSdr.remoteArgs(),
+        transmitArmed: false,
         lastForwardMhz: null,
         lastSdrTxUs: null,
         lastForwardPowerDbm: null,
@@ -658,10 +691,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         const now = performance.now();
         if (now - telemLastMs < 66) return;
         telemLastMs = now;
+        // Телеметрия НЕ включает флаг коридора: строка, ушедшая в буфер до
+        // STOP, приходит после него и воскрешала «КОРИДОР TX» в UI (гонка).
+        // Поднятие флага — через corridorStart (OK) и pollStatus (mode).
         if (get().corridorRunning) {
           set({ telemFreq: t.freq, telemLock: t.lock === 1 });
-        } else {
-          set({ telemFreq: t.freq, telemLock: t.lock === 1, corridorRunning: true });
         }
       };
       gClient.onEngineEvent = (e) => {
@@ -773,7 +807,15 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.ok && r.statusLine.startsWith("{")) {
         try {
           const st = JSON.parse(r.statusLine) as StatusJson;
-          set({ status: st, lock: st.lock === 1, rfOn: st.rf === 1 });
+          // mode синхронизирует флаг коридора (в т.ч. NVS-рестарт на железе и
+          // авто-стоп GLIDE) — вместо воскрешения по строчной телеметрии.
+          set({
+            status: st,
+            lock: st.lock === 1,
+            rfOn: st.rf === 1,
+            corridorRunning: st.mode !== "MANUAL",
+            telemFreq: st.mode !== "MANUAL" ? get().telemFreq : null,
+          });
         } catch {
           /* повреждённый JSON — игнор */
         }
@@ -849,7 +891,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       const s = get();
       const band = parseBand(s.allowF1, s.allowF2);
       if (!band) {
-        pushLog("sys", "allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        pushLog("sys", "allowlist: неверная полоса (34.375–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.allowBands.some((b) => b.f1Mhz === band.f1Mhz && b.f2Mhz === band.f2Mhz)) {
+        pushLog("sys", "allowlist: такая полоса уже есть — дубль не добавляем");
         return;
       }
       if (s.allowBands.length >= 8) {
@@ -885,7 +931,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       const s = get();
       const band = parseBand(s.sdrF1, s.sdrF2);
       if (!band) {
-        pushLog("sys", "SDR allowlist: неверная полоса (35–4400 МГц, f1≤f2)");
+        pushLog("sys", "SDR allowlist: неверная полоса (34.375–4400 МГц, f1≤f2)");
+        return;
+      }
+      if (s.sdrBands.some((b) => b.f1Mhz === band.f1Mhz && b.f2Mhz === band.f2Mhz)) {
+        pushLog("sys", "SDR allowlist: такая полоса уже есть — дубль не добавляем");
         return;
       }
       if (s.sdrBands.length >= 8) {
@@ -903,7 +953,29 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setSdrLoad: (ok) => {
       set({ sdrLoadOk: ok });
-      pushLog("sys", ok ? "SDR: нагрузка 50 Ом на усилителе SDR" : "SDR: нагрузка снята");
+      if (!ok) {
+        // Интерлок как на ESP32 (LOAD FAULT гасит RF/PA): снятие нагрузки
+        // гасит ЖИВОЙ TX. Раньше флаг менялся, а тон оставался в эфире
+        // (open-loop вообще замирал на последней частоте навсегда).
+        // reset(), не dropHold(): in-flight handoff этой эпохи по gen-guard'у
+        // не сделает release — inflight обязан сбросить бампер, иначе все
+        // будущие handoff застрянут на «предыдущий SDR TX ещё идёт».
+        gTxGen += 1;
+        gGate.reset();
+        if (gLive) void hostTxOff();
+        else gSdr.txOff();
+        set({
+          lastForwardMhz: null,
+          lastForwardPowerDbm: null,
+          lastSdrTxUs: null,
+          sdrHoldSince: null,
+          lastCueReason: "нагрузка снята — SDR TX погашен",
+        });
+      }
+      pushLog(
+        "sys",
+        ok ? "SDR: нагрузка 50 Ом на выходе усилителя SDR" : "SDR: нагрузка снята — TX погашен",
+      );
     },
 
     applyPaCurrent: async () => {
@@ -953,6 +1025,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     probeSdr: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "PROBE: идёт прошивка — дождитесь конца записи");
+        return;
+      }
       if (!get().sdrEmulation && hostSdrAvailable()) {
         const st = get();
         const p = await hostPing(sdrOpenArgs(st.sdrId, st.sdrGateway));
@@ -973,6 +1049,11 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: async () => {
       const s = get();
+      if (s.flashBusy) {
+        // Иначе Soapy откроет USB-устройство посередине записи bladeRF-cli.
+        pushLog("sys", "ОТКРЫТЬ SDR: идёт прошивка — дождитесь конца записи");
+        return;
+      }
       const plan = planEthernet(s.sdrId, s.sdrGateway);
       const remote = sdrOpenArgs(s.sdrId, s.sdrGateway);
       if (s.sdrEmulation) {
@@ -1018,9 +1099,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     closeSdr: async () => {
+      // Новая эпоха ДО awaits: in-flight handoff/re-sense по старому устройству
+      // после await не коммитятся и не восстанавливают TX.
+      gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
       get().stopScan();
+      gGate.reset();
       if (gLive) {
         await hostTxOff();
         await hostClose();
@@ -1030,7 +1115,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLive = false;
       gResense = false;
       gSkipMhz = null;
-      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
+      // transmitArmed сбрасываем: раньше после закрытия кнопка ложно
+      // показывала «СТОП ПЕРЕДАЧУ», а тики молча churn'ились в planHandoff.
+      set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
       pushLog("sys", "SDR закрыт");
     },
 
@@ -1166,6 +1253,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", blocked);
           return;
         }
+        if (s.flashBusy) {
+          // Иначе openSdr ниже открыл бы устройство посередине записи CLI.
+          pushLog("sys", "СКАНИРОВАТЬ: идёт прошивка — дождитесь конца записи");
+          return;
+        }
         if (!ensureSdrBand()) return;
         const refused = scanRefusedReason(s.scanPattern);
         if (refused) {
@@ -1278,7 +1370,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             holdMasked: dispatch === "priority",
           });
           if (!target) return;
-          if (gGate.queueIfBusy(target.freqMhz)) return;
+          if (gGate.queueIfBusy(target.freqMhz, target.powerDbm)) return;
           runHandoff(target.freqMhz, target.powerDbm);
         };
         const armTick = (): void => {
@@ -1300,6 +1392,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gWalker = null;
       if (get().scanRunning) set({ scanRunning: false });
+      if (get().transmitArmed) {
+        // Re-sense живёт внутри tickScan: без скана удержание слепое —
+        // жива ли частота, больше никто не проверяет (только watch потока).
+        pushLog("sys", "СТОП СКАН: TX-удержание продолжается вслепую, без перепроверки эфира");
+      }
     },
 
     startTransmit: async () => {
@@ -1374,6 +1471,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     stopTransmit: async () => {
+      gTxGen += 1;  // in-flight handoff/re-sense после этого не коммитятся
       stopTxWatch();
       stopTxWalk();
       gResense = false;
@@ -1393,6 +1491,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       gSkipMhz = skip;
+      gTxGen += 1;
       gGate.reset();
       set({
         lastForwardMhz: null,
