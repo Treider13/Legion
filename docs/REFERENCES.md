@@ -51,6 +51,12 @@ BATC, Hackaday, IEEE).
 | IEEE/MDPI spectrum sensing surveys (energy detection) | SCAN RX: порог над шумом, без знания сигнала |
 | [ice9-bluetooth-sniffer](https://github.com/alphafox02/ice9-bluetooth-sniffer) / [blue-dragon](https://github.com/alphafox02/blue-dragon) | Только архитектура: wideband + детект в процессе радио, hop не нужен если полоса ≤ analog BW. Не протокол BT и не payload. |
 | Nuand libbladeRF `bladerf_schedule_retune` / Triggers | Host USB ≠ µs; sample-accurate retune — FPGA/NIOS. xA4 49 kLE тесен для своего FFT. |
+| [Nuand/bladeRF HDL](https://github.com/Nuand/bladeRF/tree/master/hdl) (MIT) | FPGA-ревизия `legion` (`fpga/`): точки врезки TX/RX, контракт valid LMS6002D, паттерн PIO/NIOS-команд; target 0x80 — офиц. зарезервирован Nuand |
+| [ifrasch/bladeRF-shd](https://github.com/ifrasch/bladeRF-shd) (MIT) | референс энергодетектора в FPGA bladeRF 1 (`legion_detector.vhd`) |
+| [OpenCores dds_synthesizer](https://opencores.org/projects/dds_synthesizer) (LGPL) / fpga4fun DDS2 | идея quarter-sine LUT NCO (`legion_nco.vhd`; LUT своя, gen_sine_lut.py) |
+| Cummings «Async FIFO Design» (классика) + `lb_fifo` Nuand | Gray-указатели CDC (`legion_dcfifo.vhd`) |
+| Форум Nuand [t=13120](https://nuand.com/forums/viewtopic.php?t=13120) | подтверждённый кейс: adc_streams→dac_streams headless-repeater на micro работает |
+| EngineerZone [latency thru AD9361](https://ez.analog.com/fpga/f/q-a/165600/latency-thru-ad9361) | измеренные задержки loopback AD9361 (67/94–102 такта) — бюджет задержки micro |
 | [BlueJammer-V2](https://github.com/EmenstaNougat/BlueJammer-V2) | Только разделение UI↔радио (BW16 vs ESP32) и UART с ACK. **Не** копируем NRF24 hop / jam. |
 | ICIE 2017 (STM32F103 + ADF4351 + OLED) | референс-архитектура |
 

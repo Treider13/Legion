@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<!-- LEGION — 5 вариантов дизайна консоли на утверждение (НЕ основной дизайн).
+     Рендер: docs/design/variants/shoot.mts → v1..v5.png. Глаз — плейсхолдер
+     (настоящий 3D-глаз не трогаем и не копируем). -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEGION — варианты дизайна</title>
+<style>
+/* ============================ БАЗА (общая сетка) ============================ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); }
+.hero { position: relative; height: 38vh; min-height: 260px; overflow: hidden;
+        background: var(--heroBg); border-bottom: var(--heroBorder); }
+.hero-eye { position: absolute; left: 50%; top: 50%; width: 180px; height: 180px;
+        transform: translate(-50%,-50%); border-radius: 50%;
+        border: 2px solid var(--accent); box-shadow: 0 0 40px var(--glow), inset 0 0 30px var(--glow);
+        display: flex; align-items: center; justify-content: center; }
+.hero-eye::before { content: ""; width: 60px; height: 60px; border-radius: 50%;
+        background: var(--accent); box-shadow: 0 0 30px var(--accent); }
+.hero-eye::after { content: ""; position: absolute; inset: -18px; border-radius: 50%;
+        border: 1px dashed var(--dim); animation: spin 14s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.hero-tag { position: absolute; top: 18px; left: 24px; font-size: 12px; letter-spacing: .3em;
+        color: var(--dim); }
+.hero-status { position: absolute; top: 18px; right: 24px; font-size: 12px;
+        padding: 6px 14px; border: 1px solid var(--accent); color: var(--accent);
+        border-radius: var(--radius); background: var(--chipBg); letter-spacing: .12em; }
+.console { padding: 18px 24px 40px; max-width: 1180px; margin: 0 auto; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab { padding: 8px 16px; font-size: 11px; letter-spacing: .14em; border-radius: var(--radius);
+        border: 1px solid var(--line); color: var(--dim); background: var(--chipBg); }
+.tab.active { color: var(--accent); border-color: var(--accent); background: var(--chipActive); }
+.grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+.panel { border: 1px solid var(--line); border-radius: var(--radiusBig);
+        background: var(--panel); padding: 16px; backdrop-filter: var(--blur); }
+.panel h3 { font-size: 11px; letter-spacing: .18em; color: var(--dim); font-weight: 600;
+        margin-bottom: 10px; }
+.panel h3 b { color: var(--accent); font-weight: 600; }
+.row { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.field { flex: 1; min-width: 110px; }
+.field label { display: block; font-size: 9px; letter-spacing: .16em; color: var(--dim);
+        margin-bottom: 4px; }
+.field .val { font-size: 13px; color: var(--text); border: 1px solid var(--line);
+        background: var(--input); border-radius: var(--radius); padding: 7px 10px; }
+.scope { width: 100%; height: 150px; border-radius: var(--radius); background: var(--scopeBg);
+        border: 1px solid var(--line); margin-top: 8px; }
+.btn { padding: 9px 18px; font-size: 11px; letter-spacing: .14em; border-radius: var(--radius);
+        border: 1px solid var(--accent); cursor: pointer; font-family: var(--font); }
+.btn-primary { background: var(--accent); color: var(--btnText); font-weight: 700; }
+.btn-ghost { background: transparent; color: var(--accent); }
+.log { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radiusBig);
+        background: var(--panel); padding: 12px 16px; font-size: 11px; line-height: 1.7;
+        color: var(--dim); max-height: 130px; overflow: hidden; font-family: var(--mono); }
+.log .ok { color: var(--accent); }
+.hud { display: flex; gap: 12px; margin-bottom: 14px; }
+.hud .card { flex: 1; border: 1px solid var(--line); border-radius: var(--radius);
+        background: var(--panel); padding: 10px 14px; }
+.hud .k { font-size: 9px; letter-spacing: .18em; color: var(--dim); }
+.hud .v { font-size: 20px; color: var(--text); font-family: var(--mono); margin-top: 2px; }
+.hud .v.hot { color: var(--hot); text-shadow: 0 0 12px var(--hot); }
+
+/* ============================ V1: AURORA PRO (эволюция текущей) ============ */
+body.v1 {
+  --bg: #060911; --panel: rgba(255,255,255,.045); --chipBg: rgba(255,255,255,.05);
+  --chipActive: rgba(45,212,191,.14); --line: rgba(255,255,255,.1);
+  --text: #e9eef7; --dim: #93a0b8; --accent: #2dd4bf; --hot: #5ef2a0;
+  --glow: rgba(45,212,191,.35); --input: #05070d; --scopeBg: #05070d;
+  --heroBg: radial-gradient(80% 90% at 50% 20%, rgba(45,212,191,.09), transparent 70%);
+  --heroBorder: 1px solid rgba(255,255,255,.06);
+  --font: "Saira Stencil One", system-ui, sans-serif; --mono: "JetBrains Mono", monospace;
+  --radius: 12px; --radiusBig: 18px; --blur: saturate(150%) blur(18px); --btnText: #04211d;
+}
+/* ============================ V2: LAB INSTRUMENT (осциллограф) ============ */
+body.v2 {
+  --bg: #0b0f0a; --panel: #10160e; --chipBg: #141b10;
+  --chipActive: rgba(120, 255, 140, .12); --line: #2a3a24;
+  --text: #d8ffd8; --dim: #7fa06f; --accent: #78ff8c; --hot: #ffd76a;
+  --glow: rgba(120,255,140,.3); --input: #0a0f08; --scopeBg: #070b06;
+  --heroBg: repeating-linear-gradient(0deg, transparent 0 23px, rgba(120,255,140,.05) 23px 24px),
+            repeating-linear-gradient(90deg, transparent 0 23px, rgba(120,255,140,.05) 23px 24px), #0b0f0a;
+  --heroBorder: 2px solid #2a3a24;
+  --font: "JetBrains Mono", monospace; --mono: "JetBrains Mono", monospace;
+  --radius: 4px; --radiusBig: 6px; --blur: none; --btnText: #07130a;
+}
+body.v2 .panel { box-shadow: inset 0 0 0 1px #1a2416, 0 2px 0 #000; }
+body.v2 .hero-eye { border-style: double; border-width: 4px; }
+/* ============================ V3: TACTICAL HUD (милитари) ================== */
+body.v3 {
+  --bg: #0a0c05; --panel: rgba(20,24,10,.85); --chipBg: rgba(30,34,14,.8);
+  --chipActive: rgba(255,176,0,.15); --line: rgba(255,176,0,.25);
+  --text: #ffe9b0; --dim: #9a8a55; --accent: #ffb000; --hot: #ff5533;
+  --glow: rgba(255,176,0,.35); --input: #060704; --scopeBg: #080a04;
+  --heroBg: linear-gradient(180deg, rgba(255,176,0,.06), transparent), #0a0c05;
+  --heroBorder: 1px solid rgba(255,176,0,.35);
+  --font: "Saira Stencil One", system-ui, sans-serif; --mono: "JetBrains Mono", monospace;
+  --radius: 2px; --radiusBig: 4px; --blur: none; --btnText: #1a1000;
+}
+body.v3::after { content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.18) 2px 4px); }
+body.v3 .tab { text-transform: uppercase; }
+body.v3 .hero-eye { border-radius: 0; transform: translate(-50%,-50%) rotate(45deg); }
+body.v3 .hero-eye::before { border-radius: 0; }
+/* ============================ V4: MISSION CONTROL (NASA) =================== */
+body.v4 {
+  --bg: #050b1a; --panel: rgba(20,35,70,.5); --chipBg: rgba(30,50,95,.5);
+  --chipActive: rgba(96,165,250,.18); --line: rgba(96,165,250,.22);
+  --text: #dbeafe; --dim: #6f87b8; --accent: #60a5fa; --hot: #f472b6;
+  --glow: rgba(96,165,250,.4); --input: #04081a; --scopeBg: #04081a;
+  --heroBg: radial-gradient(70% 100% at 50% 0%, rgba(96,165,250,.14), transparent 65%), #050b1a;
+  --heroBorder: 1px solid rgba(96,165,250,.25);
+  --font: system-ui, sans-serif; --mono: "JetBrains Mono", monospace;
+  --radius: 14px; --radiusBig: 20px; --blur: blur(14px); --btnText: #04122b;
+}
+body.v4 .hero-eye { border-width: 1px; }
+body.v4 .hero-eye::after { border-style: solid; border-color: var(--accent); opacity: .4; }
+body.v4 .hud .v { font-weight: 300; }
+/* ============================ V5: MINIMAL PRO (девтул, светлый) ============ */
+body.v5 {
+  --bg: #fafafa; --panel: #ffffff; --chipBg: #f4f4f5;
+  --chipActive: rgba(9,105,218,.08); --line: #e4e4e7;
+  --text: #18181b; --dim: #71717a; --accent: #0969da; --hot: #cf222e;
+  --glow: rgba(9,105,218,.15); --input: #f6f8fa; --scopeBg: #0d1117;
+  --heroBg: #ffffff;
+  --heroBorder: 1px solid #e4e4e7;
+  --font: system-ui, sans-serif; --mono: "JetBrains Mono", monospace;
+  --radius: 8px; --radiusBig: 12px; --blur: none; --btnText: #ffffff;
+}
+body.v5 .hero-eye { border-color: #d4d4d8; box-shadow: none; }
+body.v5 .hero-eye::before { background: #0969da; box-shadow: none; }
+body.v5 .hero-eye::after { border-color: #d4d4d8; }
+body.v5 .panel { box-shadow: 0 1px 3px rgba(0,0,0,.06); backdrop-filter: none; }
+</style>
+</head>
+<body>
+<section class="hero">
+  <div class="hero-tag">LEGION // RF SYNTH CONTROL</div>
+  <div class="hero-status">РЕЖИМ SDR · TX → УСИЛИТЕЛЬ · 50Ω</div>
+  <div class="hero-eye" title="3D-глаз (не трогаем)"></div>
+</section>
+<section class="console">
+  <div class="tabs">
+    <span class="tab">SDR</span><span class="tab">СКАН + TX SDR</span>
+    <span class="tab active">ТИП СИГНАЛА</span><span class="tab">ПРОШИВКА SDR</span>
+  </div>
+  <div class="hud">
+    <div class="card"><div class="k">ПЕРЕХВАЧЕНА</div><div class="v">2449.841</div></div>
+    <div class="card"><div class="k">НА TX SDR</div><div class="v hot">2449.841 · qpsk</div></div>
+    <div class="card"><div class="k">FPGA</div><div class="v">PLAYER · WD жив</div></div>
+  </div>
+  <div class="grid">
+    <div class="panel">
+      <h3>ТИП СИГНАЛА // <b>BASEBAND → SDR</b></h3>
+      <div class="row">
+        <div class="field"><label>ТИП СИГНАЛА</label><div class="val">QPSK + RRC</div></div>
+        <div class="field"><label>ЧАСТОТА RF МГц</label><div class="val">2442.000</div></div>
+        <div class="field"><label>SPS</label><div class="val">4</div></div>
+        <div class="field"><label>RRC α</label><div class="val">0.035</div></div>
+      </div>
+      <div class="scope" id="scope"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-primary">ЗАШИТЬ НА SDR</button>
+        <button class="btn btn-ghost">СБРОС НА CW</button>
+        <button class="btn btn-ghost">СТАТУС FPGA</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>FPGA (bladeRF 1 x40) // <b>АВТОНОМНЫЙ ТРАКТ</b></h3>
+      <div class="row">
+        <div class="field"><label>РЕЖИМ FPGA</label><div class="val">PLAYER — волна из RAM</div></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>ДЕТЕКТОР</label><div class="val">порог 1000 · окно 256</div></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>WATCHDOG</label><div class="val">heartbeat 2 Гц · 1 с</div></div>
+      </div>
+      <div class="row">
+        <button class="btn btn-primary">ЗАПУСТИТЬ FPGA</button>
+        <button class="btn btn-ghost">СТАТУС</button>
+      </div>
+    </div>
+  </div>
+  <div class="log">
+    <div><span class="ok">[sys]</span> открыт Soapy driver=remote,remote=tcp://192.168.1.20:55132</div>
+    <div><span class="ok">[sys]</span> SDR TX qpsk 2442.000000 МГц (baseband +fs/8) · 200 µs host</div>
+    <div>[sys] сигнал qpsk → SDR 2442.000 МГц · нагрузка 50Ω · зашит для всех TX-режимов</div>
+    <div><span class="ok">[sys]</span> авто → 2449.841 МГц на усилитель · qpsk · 200 µs host</div>
+    <div>[sys] FPGA STATUS: playing=да · capture_done=да · watchdog=жив · детектов=12</div>
+  </div>
+</section>
+<script>
+// Спектр QPSK на canvas — одинаковый для всех вариантов, цвет из темы.
+(function () {
+  const c = document.getElementById("scope");
+  const ctx = c.getContext("2d");
+  const w = c.width = c.offsetWidth * 2, h = c.height = 300;
+  const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+  const dim = getComputedStyle(document.body).getPropertyValue("--dim").trim();
+  ctx.strokeStyle = "rgba(128,128,128,.18)";
+  for (let i = 1; i < 6; i++) { ctx.beginPath(); ctx.moveTo(0, h*i/6); ctx.lineTo(w, h*i/6); ctx.stroke(); }
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const f = (x / w - 0.5) * 2;
+    const rrc = Math.abs(f) < 0.25 ? 1 : (Math.abs(f) < 0.26 ? (0.5*(1+Math.cos(Math.PI*(Math.abs(f)-0.25)/0.01))) : 0);
+    const noise = 0.06 + Math.random() * 0.02;
+    const y = h - (rrc * 0.8 + noise) * h;
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = accent; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.fillStyle = dim; ctx.font = "20px monospace";
+  ctx.fillText("−1.0", 8, h - 8); ctx.fillText("0", w/2 - 8, h - 8); ctx.fillText("+1.0 МГц", w - 110, h - 8);
+})();
+</script>
+</body>
+</html>

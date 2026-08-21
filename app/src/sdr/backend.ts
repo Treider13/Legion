@@ -32,6 +32,8 @@ export interface SdrBackend {
   scanWindow(centerMhz: number, bwMhz: number, bins: number): ScanBin[];
   /** Перестройка TX LO в том же процессе, что и RX. Не включает PA/RF ESP32. */
   txCue(freqMhz: number): TxCueResult;
+  /** TX произвольной baseband-волны (вкладка ТИП СИГНАЛА). Мок — модель хоста. */
+  txWave(freqMhz: number, wave: string): TxCueResult;
   txOff(): void;
   lastTxMhz(): number | null;
 }
@@ -158,6 +160,14 @@ export class MockSdrBackend implements SdrBackend {
       latencyUs,
       path: "sdr-tx",
     };
+  }
+
+  txWave(freqMhz: number, wave: string): TxCueResult {
+    const r = this.txCue(freqMhz);
+    if (r.ok) {
+      r.reason = `ЭМУЛЯЦИЯ TX ${wave} ${freqMhz.toFixed(6)} МГц · модель хоста, не кабель`;
+    }
+    return r;
   }
 
   txOff(): void {

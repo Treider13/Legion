@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -22,6 +23,7 @@ def rpc(proc: subprocess.Popen[str], msg: dict) -> dict:
 def main() -> int:
     env = os.environ.copy()
     env["LEGION_SDR_FAKE"] = "1"
+    env["LEGION_FPGA_PORT"] = "5599"  # порт FPGA-агента в этом тесте
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE,
@@ -61,15 +63,74 @@ def main() -> int:
     check("stream_kind ok", w.stream_kind(4096) == "ok")
 
     if w.NUMPY:
+        import numpy as np
+
         tone = w.make_cw()
         check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
         check("CW длина кратна 8", len(tone) % 8 == 0)
         check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.25) < 0.02)
-        freqs = __import__("numpy").linspace(2440, 2444, 1024)
-        db = __import__("numpy").linspace(-90, -40, 1024)
+        freqs = np.linspace(2440, 2444, 1024)
+        db = np.linspace(-90, -40, 1024)
         pooled = w._pool_bins(freqs, db, 64)
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
+
+        # --- ТИП СИГНАЛА: синтез всех волн ---
+        all_ok = True
+        for kind in w.WAVE_KINDS:
+            buf = w.make_waveform(kind)
+            if (
+                len(buf) == 0
+                or str(buf.dtype) != "complex64"
+                or not np.isfinite(buf.real).all()
+                or not np.isfinite(buf.imag).all()
+                or float(np.max(np.abs(buf))) > 0.9 + 1e-6
+            ):
+                all_ok = False
+                print(f"    … плохой буфер: {kind}")
+        check("31 волна: complex64, finite, пик ≤ amp", all_ok)
+        check("каталог: 31 тип", len(w.WAVE_KINDS) == 31)
+
+        # Постоянная огибающая у CPM/чирп-волн (GMSK, Zadoff-Chu, P4)
+        for kind in ("gmsk", "gfsk", "zadoffchu", "p4", "fsk4", "mfsk8"):
+            env = np.abs(w.make_waveform(kind))
+            ripple = float(np.max(env) - np.min(env[env > 0])) if np.any(env > 0) else 9.0
+            if ripple > 0.05:
+                all_ok = False
+                print(f"    … огибающая не постоянна: {kind} ripple={ripple:.4f}")
+        check("GMSK/GFSK/ZC/P4/xFSK: постоянная огибающая (±0.05)", all_ok)
+
+        # 16-APSK: два кольца с отношением радиусов 2.73
+        apsk = w._apsk16_symbols(4096, 7)
+        rings = sorted(set(np.round(np.abs(apsk), 3)))
+        check("16-APSK: два кольца", len(rings) == 2)
+        if len(rings) == 2:
+            check("16-APSK: γ ≈ 2.73", abs(rings[1] / rings[0] - 2.73) < 0.05)
+
+        # Zadoff-Chu: идеальная периодическая АКФ (боковые ~0)
+        zc = w.make_waveform("zadoffchu", n=631)
+        ac = np.abs(np.fft.ifft(np.abs(np.fft.fft(zc)) ** 2))
+        check("ZC: АКФ ≈ дельта (боковые < 1%)", float(np.max(ac[1:])) < 0.01 * float(ac[0]))
+
+        tbuf = w.make_waveform("tone", pr={"fj": 0.1})
+        fax = np.fft.fftfreq(len(tbuf), 1.0 / w.TX_FS)
+        peak_hz = fax[int(np.argmax(np.abs(np.fft.fft(tbuf))))]
+        check("тон Fj=0.1 → пик на +200 кГц", abs(peak_hz - 0.1 * w.TX_FS) < 2e3)
+
+        ph4 = set(np.round(np.angle(w._psk_symbols(256, 4, 1)), 3))
+        check("QPSK: 4 фазы (π/4 + k·π/2)", len(ph4) == 4)
+        m = w._mseq31()
+        check("m-seq Gp=31: длина и баланс ±1", len(m) == 31 and abs(int(m.sum())) == 1)
+
+        # Циклический RRC: стык петли не хуже середины (нет скачка огибающей)
+        q = w.make_waveform("qpsk")
+        env = np.abs(q)
+        edge = max(float(env[0]), float(env[-1]))
+        mid = float(np.max(env[len(env) // 4 : 3 * len(env) // 4]))
+        check("QPSK петля: край в пределах огибающей", edge <= mid + 1e-6)
+
+        bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
+        check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
     ping = rpc(proc, {"op": "ping"})
     check("ping ok", ping.get("ok") is True)
@@ -94,6 +155,15 @@ def main() -> int:
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
     check("tx latency число", isinstance(tx.get("latencyUs"), int))
 
+    wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "qpsk", "params": {"amp": 0.2}})
+    check("tx_wave qpsk ok (fake)", wave.get("ok") is True and wave.get("freqMhz") == 2442.0)
+
+    bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
+    check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)
+
+    wave_live = rpc(proc, {"op": "ping"})
+    check("tx_wave → txLive", wave_live.get("txLive") is True)
+
     live = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 8})
     check("scan несёт txLive после TX", live.get("txLive") is True)
 
@@ -105,6 +175,36 @@ def main() -> int:
 
     bad = rpc(proc, {"op": "nope"})
     check("unknown op", bad.get("ok") is False)
+
+    # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
+    import threading
+    gw_env = os.environ.copy()
+    gw_env["LEGION_FPGA_FAKE"] = "1"
+    gw_env["LEGION_FPGA_PORT"] = "5599"
+    gw = subprocess.Popen(
+        [sys.executable, str(ROOT.parent / "fpga" / "host" / "legion_gateway.py")],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=gw_env,
+    )
+    try:
+        time.sleep(1.0)  # агент поднимается
+        pong = rpc(proc, {"op": "fpga", "cmd": {"op": "ping"}, "gw": "127.0.0.1"})
+        check("fpga relay ping через шлюз", pong.get("ok") is True and pong.get("fake") is True)
+
+        arm = rpc(proc, {"op": "fpga", "cmd": {"op": "arm", "mode": "player"}, "gw": "127.0.0.1"})
+        check("fpga relay arm player", arm.get("ok") is True)
+
+        st = rpc(proc, {"op": "fpga", "cmd": {"op": "status"}, "gw": "127.0.0.1"})
+        check("fpga relay status playing", st.get("ok") is True and st.get("playing") is True)
+
+        off = rpc(proc, {"op": "fpga", "cmd": {"op": "disarm"}, "gw": "127.0.0.1"})
+        check("fpga relay disarm", off.get("ok") is True)
+    finally:
+        gw.terminate()
+        gw.wait(timeout=5)
+
+    # Агент остановлен → честный отказ (не молчание и не фейк-успех)
+    nogw = rpc(proc, {"op": "fpga", "cmd": {"op": "ping"}, "gw": "127.0.0.1"})
+    check("fpga relay без агента → честный отказ", nogw.get("ok") is False)
 
     rpc(proc, {"op": "close"})
     proc.stdin.close()

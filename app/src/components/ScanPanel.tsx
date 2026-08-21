@@ -6,6 +6,7 @@ import {
   type AutoDispatch,
 } from "../sense/modes";
 import type { ScanPattern } from "../sense/scan";
+import { waveMeta } from "../sdr/waveforms";
 import { useLegion } from "../state/store";
 
 export function ScanPanel() {
@@ -116,6 +117,12 @@ export function ScanPanel() {
             ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
             : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
           : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
+      </p>
+      <p className="sens-hint">
+        TX-контент:{" "}
+        {s.txWaveKind !== null
+          ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА)`
+          : "CW тон · сменить — вкладка ТИП СИГНАЛА"}
       </p>
       {auto && (
         <>

@@ -1,0 +1,73 @@
+# ============================================================================
+# LEGION — добавление в nios_system.tcl (hdl/fpga/platforms/bladerf/build/).
+# Паттерн скопирован со штатных PIO (control, iq_corr_*) того же файла.
+# Три PIO: legion_wdata (32 out), legion_aws (8 out: bit7=we, 6..0=addr),
+#          legion_status (32 in).
+# Базовые адреса — в свободной области карты nios2.data_master (факт по
+# штатному nios_system.tcl: занято максимум 0x0001_0350 в этом диапазоне;
+# 0x0001_0500+ свободно — финальную карту подтвердить после регенерации
+# по system.h, см. fpga/README.md).
+# ============================================================================
+
+add_instance legion_wdata altera_avalon_pio
+set_instance_parameter_value legion_wdata {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value legion_wdata {bitModifyingOutReg} {0}
+set_instance_parameter_value legion_wdata {captureEdge} {0}
+set_instance_parameter_value legion_wdata {direction} {Output}
+set_instance_parameter_value legion_wdata {edgeType} {RISING}
+set_instance_parameter_value legion_wdata {generateIRQ} {0}
+set_instance_parameter_value legion_wdata {irqType} {LEVEL}
+set_instance_parameter_value legion_wdata {resetValue} {0.0}
+set_instance_parameter_value legion_wdata {simDoTestBenchWiring} {0}
+set_instance_parameter_value legion_wdata {simDrivenValue} {0.0}
+set_instance_parameter_value legion_wdata {width} {32}
+
+add_instance legion_aws altera_avalon_pio
+set_instance_parameter_value legion_aws {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value legion_aws {bitModifyingOutReg} {0}
+set_instance_parameter_value legion_aws {captureEdge} {0}
+set_instance_parameter_value legion_aws {direction} {Output}
+set_instance_parameter_value legion_aws {edgeType} {RISING}
+set_instance_parameter_value legion_aws {generateIRQ} {0}
+set_instance_parameter_value legion_aws {irqType} {LEVEL}
+set_instance_parameter_value legion_aws {resetValue} {0.0}
+set_instance_parameter_value legion_aws {simDoTestBenchWiring} {0}
+set_instance_parameter_value legion_aws {simDrivenValue} {0.0}
+set_instance_parameter_value legion_aws {width} {8}
+
+add_instance legion_status altera_avalon_pio
+set_instance_parameter_value legion_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value legion_status {bitModifyingOutReg} {0}
+set_instance_parameter_value legion_status {captureEdge} {0}
+set_instance_parameter_value legion_status {direction} {Input}
+set_instance_parameter_value legion_status {edgeType} {RISING}
+set_instance_parameter_value legion_status {generateIRQ} {0}
+set_instance_parameter_value legion_status {irqType} {LEVEL}
+set_instance_parameter_value legion_status {resetValue} {0.0}
+set_instance_parameter_value legion_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value legion_status {simDrivenValue} {0.0}
+set_instance_parameter_value legion_status {width} {32}
+
+# --- exported interfaces (паттерн: add_interface + EXPORT_OF) ---
+add_interface legion_wdata conduit end
+set_interface_property legion_wdata EXPORT_OF legion_wdata.external_connection
+add_interface legion_aws conduit end
+set_interface_property legion_aws EXPORT_OF legion_aws.external_connection
+add_interface legion_status conduit end
+set_interface_property legion_status EXPORT_OF legion_status.external_connection
+
+# --- подключение к шине NIOS (паттерн: add_connection + baseAddress) ---
+add_connection nios2.data_master legion_wdata.s1
+set_connection_parameter_value nios2.data_master/legion_wdata.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/legion_wdata.s1 baseAddress {0x00010500}
+set_connection_parameter_value nios2.data_master/legion_wdata.s1 defaultConnection {0}
+
+add_connection nios2.data_master legion_aws.s1
+set_connection_parameter_value nios2.data_master/legion_aws.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/legion_aws.s1 baseAddress {0x00010504}
+set_connection_parameter_value nios2.data_master/legion_aws.s1 defaultConnection {0}
+
+add_connection nios2.data_master legion_status.s1
+set_connection_parameter_value nios2.data_master/legion_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/legion_status.s1 baseAddress {0x00010508}
+set_connection_parameter_value nios2.data_master/legion_status.s1 defaultConnection {0}

@@ -28,6 +28,7 @@ ESP32 принимает её и физически настраивает чи�
 | Прошивка ESP32 | `firmware/` | PlatformIO; 6 плат: classic / S3 / S2 / C3 / C6 / H2 |
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
+| FPGA-ревизия x40 | `fpga/` | ревизия `legion` для bladeRF 1 x40 и micro: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; см. `fpga/README.md` |
 | Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 
@@ -39,19 +40,30 @@ ESP32 принимает её и физически настраивает чи�
 - **HOP** — псевдослучайный хоппинг по сетке с воспроизводимым seed
 - **CHIRP** — FMCW-рампа с мелким шагом (от 1 Гц)
 - **GLIDE / FM** — плавный переход и частотная модуляция (SIN/TRI/RAND)
-- **Транспорты**: USB-UART ESP32 (desktop/CLI/браузер), WiFi (WebSocket +
-  встроенный веб-UI на ESP32), BLE (Nordic UART Service — со смартфона).
-  В desktop отдельно: **USB HTOOL SL22** — те же кнопки, на прибор SCPI;
-  ESP32+ADF4351 в этом режиме не участвуют ([docs/sl22.md](docs/sl22.md))
+- **ТИП СИГНАЛА** (режим SDR) — 31 baseband-волна: синус, тон Fj + случ. фаза,
+  меандр, пила, треугольник, чирп, AWGN, BPSK/QPSK/8-PSK/16-QAM + RRC,
+  2-FSK/4-FSK/8-FSK, GMSK (GSM), GFSK (BLE), OQPSK (802.15.4), π/4-DQPSK
+  (TETRA), 16-APSK (DVB-S2), DSSS (m-seq Gp=31), CSS (LoRa), OFDM
+  (802.11a-подобный), SC-FDMA (LTE UL), Zadoff-Chu (5G PRACH), OTFS / AFDM /
+  OCDM (6G), P4 (радар), OOK, AM, FM. Предпросмотр спектра/созвездия в UI;
+  «ЗАШИТЬ НА SDR» — непрерывный I/Q-стрим с хоста (fs 2 МГц, гетеродин +fs/8),
+  только в нагрузку 50 Ом и полосу allowlist. Зашитая волна становится
+  TX-контентом всех режимов: АВТО/ПРИОРИТЕТ (сканер → цель) и open-loop
+  (качание/сплошная/случайная) идут с ней, пока оператор не сбросит на CW.
+  Важно: SDR волну не хранит — синтез и петля на хосте; отключение
+  ноутбука/программы останавливает TX (для автономной волны внутри x40 нужен
+  свой FPGA-битстрим с плеером — вне политики «только офиц. образы»)
+- **Транспорты**: USB-UART (desktop/CLI/браузер), WiFi (WebSocket + встроенный
+  веб-UI на самом ESP32), BLE (Nordic UART Service — со смартфона)
 - **Автономность**: последний режим восстанавливается после перезагрузки (NVS)
 - **SELFTEST** — диагностика SPI-связи с модулем без приборов (в т.ч. ловит
   перепутанные пины — известная болезнь дешёвых модулей)
 - **PE43702** (опция) — цифровой аттенюатор 0–31.75 дБ шагом 0.25 дБ
 - **OTA** — обновление прошивки ESP32 по WiFi
 - **Два режима (не смешивать):**
-  1. **SDR (Ethernet)** — каталог bladeRF / HackRF / Lime / Pluto / USRP /
-     RTL-SDR, официальные образы FPGA, SCAN RX, TX LO на RF out → усилитель.
-     ESP32 в этом тракте нет.
+  1. **SDR (Ethernet)** — каталог bladeRF (x40, micro xA4/xA9) / HackRF /
+     Lime / Pluto / USRP / RTL-SDR, официальные образы FPGA, SCAN RX,
+     TX LO / baseband-волна на RF out → усилитель. ESP32 в этом тракте нет.
   2. **ESP32 (USB)** — синтезатор ADF4351, коридор, ток PA, интерлок 50 Ом.
 
 ## Быстрый старт (реальное железо)
@@ -100,6 +112,9 @@ python3 tools/esp32_emulator.py   # печатает /dev/pts/N — виртуа
 | ПК-протокол | `cd app && npx tsx scripts/smoke_mock.ts` | 21 проверка команд/ошибок |
 | WebSocket | `npx tsx scripts/smoke_ws.ts` | транспорт WiFi |
 | GUI | `npx tsx scripts/gui_test.ts` | e2e в Chrome: connect → 2475 МГц → LOCK → коридор |
+| FPGA HDL | `fpga/tb/run_ghdl.sh` | GHDL-симуляция 8 тестбенчей ревизии legion (детектор/плеер/NCO/watchdog/CDC/мукс/регистры/интеграция) |
+| FPGA хост | `python3 fpga/test/test_legion_fpga.py` | упаковщик байт-в-байт против C Nuand (вендоренное дерево), карта регистров, USB-константы, протокол шлюза |
+| FPGA приёмка | `python3 fpga/test/acceptance_bench.py --gw <IP>` | E1–E6 на стенде с x40 (скрипт гоняет usb release/acquire вокруг стрим-фаз) |
 
 CI (GitHub Actions) гоняет всё это + сборку прошивки под 6 плат + сборку
 Tauri на каждый пуш; релизы (win/mac/linux бандлы) — по тегу `v*`.

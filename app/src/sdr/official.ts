@@ -34,6 +34,14 @@ export interface EthPlan {
  */
 export const OFFICIAL_IMAGES: readonly OfficialImage[] = [
   {
+    deviceIds: ["bladerf-x40"],
+    kind: "fpga-x40",
+    names: ["hostedx40.rbf", "hostedx40-latest.rbf"],
+    url: "https://www.nuand.com/fpga/hostedx40-latest.rbf",
+    repo: "https://github.com/Nuand/bladeRF",
+    tool: "bladeRF-cli -L hostedx40.rbf  (autoload)  |  -l (RAM)",
+  },
+  {
     deviceIds: ["bladerf-micro-xa4"],
     kind: "fpga-a4",
     names: ["hostedxA4.rbf", "hostedxA4-latest.rbf"],
@@ -50,7 +58,7 @@ export const OFFICIAL_IMAGES: readonly OfficialImage[] = [
     tool: "bladeRF-cli -L hostedxA9.rbf  |  -l (RAM)",
   },
   {
-    deviceIds: ["bladerf-micro-xa4", "bladerf-micro-xa9"],
+    deviceIds: ["bladerf-x40", "bladerf-micro-xa4", "bladerf-micro-xa9"],
     kind: "fx3",
     names: ["bladeRF_fw_latest.img", "bladeRF_fw_v2.6.0.img", "bladeRF.img"],
     url: "https://www.nuand.com/fx3/bladeRF_fw_latest.img",

@@ -6,6 +6,26 @@ import type { SdrCatalogEntry } from "./types";
 
 export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
   {
+    id: "bladerf-x40",
+    vendor: "Nuand",
+    name: "bladeRF 1 x40",
+    iface: "usb3",
+    nativeEthernet: false,
+    role: "trx",
+    rxMhz: [300, 3800], // LMS6002D: 300 МГц – 3.8 ГГц
+    txMhz: [300, 3800],
+    analogBwMhz: 28, // Nuand: программируемые фильтры 1.5–28 МГц
+    fullDuplex: true, // LMS6002D: независимые RX/TX тракты
+    fpga: "Cyclone IV E 40 kLE (EP4CE40)",
+    flash: {
+      fx3: true,
+      fpgaAutoload: true,
+      notes: "bladeRF-cli -f (FX3), -L hostedx40.rbf (autoload), -l (RAM). Образ micro (xA4/xA9) не ставить.",
+    },
+    paHint: "Нет bias-tee. Усилитель вешается на TX SMA, нагрузка 50 Ом обязательна.",
+    lanHint: "Нативного Ethernet нет. LAN = хост-шлюз USB3 + SoapyRemote.",
+  },
+  {
     id: "bladerf-micro-xa4",
     vendor: "Nuand",
     name: "bladeRF 2.0 micro xA4",

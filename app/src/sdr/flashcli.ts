@@ -13,6 +13,7 @@ export interface FlashCliPlan {
 export function planFlashCli(job: FlashJob, addr?: string): FlashCliPlan {
   const file = job.filename;
   switch (job.deviceId) {
+    case "bladerf-x40":
     case "bladerf-micro-xa4":
     case "bladerf-micro-xa9":
       if (job.action === "flash-fx3") {

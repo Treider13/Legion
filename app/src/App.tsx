@@ -18,6 +18,7 @@ import { PaPanel } from "./components/PaPanel";
 import { Esp32FlashPanel } from "./components/Esp32FlashPanel";
 import { ScanPanel } from "./components/ScanPanel";
 import { SdrFlashPanel } from "./components/SdrFlashPanel";
+import { SignalPanel } from "./components/SignalPanel";
 import { SdrPanel } from "./components/SdrPanel";
 import { SynthPanel } from "./components/SynthPanel";
 import { WorkspaceNav } from "./components/WorkspaceNav";
@@ -158,6 +159,7 @@ function App() {
           {workspace === "sdr" && <SdrPanel />}
           {workspace === "sdrFlash" && <SdrFlashPanel />}
           {workspace === "scan" && <ScanPanel />}
+          {workspace === "signal" && <SignalPanel />}
           {workspace === "pa" && <PaPanel />}
           {workspace === "esp32Flash" && <Esp32FlashPanel />}
         </div>

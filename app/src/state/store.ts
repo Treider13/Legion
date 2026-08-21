@@ -3,7 +3,7 @@
 // ============================================================================
 import { create } from "zustand";
 
-import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
+import { cueFreqAllowed, hzInAllowlist, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
 import {
@@ -30,10 +30,14 @@ import {
   hostScan,
   hostTx,
   hostTxOff,
+  hostTxWave,
+  hostFpga,
   markCatalogPresent,
+  type FpgaStatus,
 } from "../sdr/hostClient";
 import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
+import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
@@ -52,6 +56,7 @@ import {
   type AutoDispatch,
 } from "../sense/modes";
 import {
+  OWN_TX_GUARD_MHZ,
   markForwarded,
   mergeDetections,
   pickStrongest,
@@ -66,7 +71,15 @@ import type { SerialPortDescriptor, Transport, TransportKind, TransportState } f
 import { WebSerialTransport } from "../transport/webSerial";
 import { WebSocketTransport } from "../transport/websocket";
 
-export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa" | "sdrFlash" | "esp32Flash";
+export type WorkspaceId =
+  | "synth"
+  | "corridor"
+  | "sdr"
+  | "scan"
+  | "signal"
+  | "pa"
+  | "sdrFlash"
+  | "esp32Flash";
 export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 
 export interface LogEntry {
@@ -166,6 +179,20 @@ interface LegionStore {
   lastCueReason: string;
   lastSdrTxUs: number | null;
   lastForwardPowerDbm: number | null;
+  // ТИП СИГНАЛА (baseband → SDR, нагрузка 50 Ом)
+  signalKind: WaveKind;
+  signalParams: Record<string, number>;
+  signalFreqMhz: string;
+  /** TX именно сигнальной волны — взаимоисключение со сканером-оркестратором. */
+  signalTxActive: boolean;
+  /** Зашитая волна для ВСЕХ TX-путей SDR (АВТО/ПРИОРИТЕТ, open-loop). null = CW тон. */
+  txWaveKind: WaveKind | null;
+  txWaveParams: Record<string, number>;
+  // FPGA-ревизия legion (bladeRF 1 x40): автономный тракт в FPGA
+  fpgaMode: "player" | "nco" | "lb_gated" | "lb_always";
+  fpgaArmed: boolean;
+  fpgaBusy: boolean;
+  fpgaStatus: FpgaStatus | null;
   // журнал
   log: LogEntry[];
 
@@ -229,6 +256,15 @@ interface LegionStore {
   startTransmit(): Promise<void>;
   stopTransmit(): Promise<void>;
   forwardTo(mhz: number): Promise<void>;
+  setSignalKind(k: WaveKind): void;
+  setSignalParam(key: string, v: number): void;
+  setSignalFreqMhz(v: string): void;
+  signalFlash(): Promise<void>;
+  disarmTxWave(): void;
+  setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
+  fpgaArm(): Promise<void>;
+  fpgaDisarm(): Promise<void>;
+  fpgaPollStatus(): Promise<void>;
   clearLog(): void;
 }
 
@@ -249,7 +285,18 @@ function stopTxWalk(): void {
   }
 }
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
+/** Heartbeat ноутбука → FPGA watchdog (deadman end-to-end, 2 Гц). */
+let gFpgaKick: ReturnType<typeof setInterval> | null = null;
+/** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
+let gSignalBusy = false;
 const gGate = new HandoffGate();
+
+function stopFpgaKick(): void {
+  if (gFpgaKick) {
+    clearInterval(gFpgaKick);
+    gFpgaKick = null;
+  }
+}
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
@@ -267,6 +314,12 @@ function stopTxWatch(): void {
   }
 }
 
+/** Зашитая волна занимает до ±fs/2 = ±1 МГц вокруг центра (fs=2 МГц воркера) —
+ *  маска своего TX шире CW-тона, иначе сканер ловит собственные края спектра. */
+function ownTxGuardMhz(armed: boolean): number {
+  return armed ? 1.2 : OWN_TX_GUARD_MHZ;
+}
+
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
@@ -282,13 +335,14 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   const executeHandoff = (plan: HandoffPlan, sdrUs: number, powerDbm: number): void => {
     // Режим SDR: никаких CUE / PA / RF на ESP32.
+    const wave = get().txWaveKind ?? "cw";
     set({
       detections: markForwarded(get().detections, plan.freqMhz),
       lastForwardMhz: plan.freqMhz,
       lastForwardPowerDbm: powerDbm,
       lastSdrTxUs: sdrUs || get().lastSdrTxUs,
       sdrHoldSince: Date.now(),
-      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${sdrUs} µs host`,
+      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${wave} · ${sdrUs} µs host`,
     });
   };
 
@@ -314,7 +368,15 @@ export const useLegion = create<LegionStore>((set, get) => {
     let sdrUs = 0;
     try {
       if (plan.sdrTx) {
-        const tx = gLive ? await hostTx(plan.freqMhz) : gSdr.txCue(plan.freqMhz);
+        // Зашитая волна (вкладка ТИП СИГНАЛА) идёт во все TX-пути; иначе CW тон.
+        const armed = get().txWaveKind;
+        const tx = gLive
+          ? armed
+            ? await hostTxWave(plan.freqMhz, armed, get().txWaveParams)
+            : await hostTx(plan.freqMhz)
+          : armed
+            ? gSdr.txWave(plan.freqMhz, armed)
+            : gSdr.txCue(plan.freqMhz);
         sdrUs = tx.latencyUs;
         pushLog("sys", tx.reason);
         if (!tx.ok) {
@@ -351,7 +413,15 @@ export const useLegion = create<LegionStore>((set, get) => {
     // СТОП во время re-sense: не воскрешаем TX (аудит: restore не проверял
     // transmitArmed — тон возвращался в эфир после команды оператора).
     if (!get().transmitArmed) return false;
-    const tx = gLive ? await hostTx(mhz) : gSdr.txCue(mhz);
+    // Зашитая волна (вкладка ТИП СИГНАЛА) идёт и в restore; иначе CW тон.
+    const armed = get().txWaveKind;
+    const tx = gLive
+      ? armed
+        ? await hostTxWave(mhz, armed, get().txWaveParams)
+        : await hostTx(mhz)
+      : armed
+        ? gSdr.txWave(mhz, armed)
+        : gSdr.txCue(mhz);
     if (!tx.ok) {
       pushLog("sys", tx.reason);
       return false;
@@ -540,6 +610,16 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastCueReason: "",
     lastSdrTxUs: null,
     lastForwardPowerDbm: null,
+    signalKind: "qpsk",
+    signalParams: defaultParams("qpsk"),
+    signalFreqMhz: "2442.000",
+    signalTxActive: false,
+    txWaveKind: null,
+    txWaveParams: {},
+    fpgaMode: "player",
+    fpgaArmed: false,
+    fpgaBusy: false,
+    fpgaStatus: null,
     log: [],
 
     setTransportKind: (k) =>
@@ -595,6 +675,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
+      stopFpgaKick();
+      set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -609,6 +691,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrOpened: gSdr.opened(),
         sdrRemote: gSdr.remoteArgs(),
         transmitArmed: false,
+        signalTxActive: false,
         lastForwardMhz: null,
         lastSdrTxUs: null,
         lastForwardPowerDbm: null,
@@ -1036,6 +1119,159 @@ export const useLegion = create<LegionStore>((set, get) => {
       await runHandoff(mhz);
     },
 
+    setSignalKind: (k) => set({ signalKind: k, signalParams: defaultParams(k) }),
+
+    setSignalParam: (key, v) =>
+      set((s) => ({ signalParams: { ...s.signalParams, [key]: v } })),
+
+    setSignalFreqMhz: (v) => set({ signalFreqMhz: v }),
+
+    signalFlash: async () => {
+      const s = get();
+      if (gSignalBusy) return;
+      if (s.flashBusy) {
+        pushLog("sys", "ЗАШИТЬ: идёт прошивка — сначала дождитесь");
+        return;
+      }
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
+      if (s.scanRunning) {
+        pushLog("sys", "ЗАШИТЬ: сканер работает — сначала СТОП на вкладке СКАН + TX SDR");
+        return;
+      }
+      if (s.transmitArmed) {
+        pushLog("sys", "ЗАШИТЬ: TX уже активен — сначала СТОП ПЕРЕДАЧУ");
+        return;
+      }
+      if (!s.sdrLoadOk) {
+        pushLog("sys", "ЗАШИТЬ: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+        return;
+      }
+      if (!ensureSdrBand()) return;
+      const mhz = parseFloat(s.signalFreqMhz);
+      if (!Number.isFinite(mhz)) {
+        pushLog("sys", "ЗАШИТЬ: неверная частота");
+        return;
+      }
+      if (!hzInAllowlist(mhz, get().sdrBands)) {
+        pushLog("sys", `ЗАШИТЬ: ${mhz.toFixed(3)} МГц вне полосы SDR allowlist`);
+        return;
+      }
+      if (!s.sdrOpened) {
+        gSignalBusy = true;
+        try {
+          await get().openSdr();
+        } finally {
+          gSignalBusy = false;
+        }
+        if (!get().sdrOpened) return;
+      }
+      const canTx = gLive ? catalogCaps(get().sdrId).canTx : gSdr.canTx();
+      if (!canTx) {
+        pushLog("sys", "ЗАШИТЬ: у этого SDR нет TX — усилитель подключать некуда");
+        return;
+      }
+      const kind = get().signalKind;
+      gSignalBusy = true;
+      let tx;
+      try {
+        tx = gLive
+          ? await hostTxWave(mhz, kind, get().signalParams)
+          : gSdr.txWave(mhz, kind);
+      } finally {
+        gSignalBusy = false;
+      }
+      pushLog("sys", tx.reason);
+      if (!tx.ok) return;
+      set({
+        transmitArmed: true,
+        signalTxActive: true,
+        // Волна зашита: теперь её используют и АВТО/ПРИОРИТЕТ, и open-loop TX.
+        txWaveKind: kind,
+        txWaveParams: { ...get().signalParams },
+        lastForwardMhz: mhz,
+        lastSdrTxUs: tx.latencyUs || null,
+        sdrHoldSince: Date.now(),
+        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
+      });
+    },
+
+    disarmTxWave: () => {
+      if (get().transmitArmed) {
+        pushLog("sys", "СБРОС НА CW: TX активен — сначала СТОП");
+        return;
+      }
+      if (get().txWaveKind === null) {
+        pushLog("sys", "СБРОС НА CW: волна не зашита (уже CW тон)");
+        return;
+      }
+      set({ txWaveKind: null, txWaveParams: {} });
+      pushLog("sys", "TX-контент снят: АВТО/ПРИОРИТЕТ и open-loop снова на CW тоне");
+    },
+
+    setFpgaMode: (m) => set({ fpgaMode: m }),
+
+    fpgaArm: async () => {
+      const s = get();
+      if (s.fpgaBusy) return;
+      if (!s.sdrLoadOk) {
+        pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+        return;
+      }
+      if (s.sdrId !== "bladerf-x40") {
+        pushLog("sys", "FPGA ARM: ревизия legion собрана под bladeRF 1 x40 — выберите её на вкладке SDR");
+        return;
+      }
+      set({ fpgaBusy: true });
+      try {
+        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true }, get().sdrGateway);
+        pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+        if (r.ok) {
+          set({ fpgaArmed: true });
+          // Deadman end-to-end: heartbeat с ЭТОГО ноутбука, 2 Гц.
+          // Замерло любое звено (app/TCP/шлюз/USB) → watchdog в FPGA гасит TX.
+          stopFpgaKick();
+          gFpgaKick = setInterval(() => {
+            void hostFpga({ op: "kick" }, get().sdrGateway).then((kr) => {
+              if (!kr.ok) {
+                pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
+                stopFpgaKick();
+                set({ fpgaArmed: false });
+              }
+            });
+          }, 500);
+        }
+      } finally {
+        set({ fpgaBusy: false });
+      }
+    },
+
+    fpgaDisarm: async () => {
+      stopFpgaKick();
+      set({ fpgaBusy: true });
+      try {
+        const r = await hostFpga({ op: "disarm" }, get().sdrGateway);
+        pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+        if (r.ok) set({ fpgaArmed: false });
+      } finally {
+        set({ fpgaBusy: false });
+      }
+    },
+
+    fpgaPollStatus: async () => {
+      const r = await hostFpga({ op: "status" }, get().sdrGateway);
+      set({ fpgaStatus: r });
+      // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
+      if (r.ok && r.wd_fired && get().fpgaArmed) {
+        stopFpgaKick();
+        set({ fpgaArmed: false });
+        pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
+      }
+    },
+
     probeSdr: async () => {
       if (get().flashBusy) {
         pushLog("sys", "PROBE: идёт прошивка — дождитесь конца записи");
@@ -1116,6 +1352,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       gTxGen += 1;
       stopTxWatch();
       stopTxWalk();
+      stopFpgaKick();
+      set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -1129,7 +1367,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSkipMhz = null;
       // transmitArmed сбрасываем: раньше после закрытия кнопка ложно
       // показывала «СТОП ПЕРЕДАЧУ», а тики молча churn'ились в planHandoff.
-      set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
+      set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, signalTxActive: false, lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
       pushLog("sys", "SDR закрыт");
     },
 
@@ -1265,6 +1503,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", blocked);
           return;
         }
+        if (s.signalTxActive) {
+          pushLog("sys", "СКАНИРОВАТЬ: идёт TX сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
+          return;
+        }
         if (s.flashBusy) {
           // Иначе openSdr ниже открыл бы устройство посередине записи CLI.
           pushLog("sys", "СКАНИРОВАТЬ: идёт прошивка — дождитесь конца записи");
@@ -1342,7 +1584,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             ...d,
             ts: now,
           }));
-          detections = withoutOwnTx(raw, get().lastForwardMhz);
+          detections = withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
           if (centerMhz) set({ scanCenterMhz: centerMhz });
           if (detections.length > 0) {
             const dets = mergeDetections(get().detections, detections);
@@ -1422,6 +1664,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
+      if (s.signalTxActive) {
+        pushLog("sys", "ПЕРЕДАТЬ: идёт TX зашитого сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
+        return;
+      }
       if (!ensureSdrBand()) {
         pushLog("sys", "ПЕРЕДАТЬ: нет полосы F1…F2");
         return;
@@ -1469,7 +1715,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       const raw = clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands);
       const dispatch = get().autoDispatch;
-      const live = dispatch === "turn" ? raw : withoutOwnTx(raw, get().lastForwardMhz);
+      const live =
+        dispatch === "turn"
+          ? raw
+          : withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
       const target = pickArmedAutoTarget({
         liveWindow: live,
         archive: get().detections,
@@ -1488,7 +1737,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       gResense = false;
       gSkipMhz = null;
-      set({ transmitArmed: false });
+      set({ transmitArmed: false, signalTxActive: false });
       gGate.reset();
       if (gLive) await hostTxOff();
       gSdr.txOff();

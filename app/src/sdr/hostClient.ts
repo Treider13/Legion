@@ -99,8 +99,54 @@ export async function hostTx(freqMhz: number): Promise<TxCueResult> {
   };
 }
 
+export async function hostTxWave(
+  freqMhz: number,
+  wave: string,
+  params: Record<string, number>,
+): Promise<TxCueResult> {
+  const r = await hostRpc<{
+    ok?: boolean;
+    reason?: string;
+    latencyUs?: number;
+    freqMhz?: number;
+  }>({ op: "tx_wave", freqMhz, wave, params });
+  return {
+    ok: !!r.ok,
+    reason: r.reason ?? "",
+    freqMhz: r.freqMhz ?? freqMhz,
+    latencyUs: r.latencyUs ?? 0,
+    path: r.ok ? "sdr-tx" : "none",
+  };
+}
+
 export async function hostTxOff(): Promise<void> {
   await hostRpc({ op: "tx_off" });
+}
+
+export interface FpgaStatus {
+  ok: boolean;
+  reason?: string;
+  playing?: boolean;
+  capture_done?: boolean;
+  det_active?: boolean;
+  wd_fired?: boolean;
+  lb_level?: number;
+  det_count?: number;
+  fake?: boolean;
+}
+
+/** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.
+ *  gw — IP шлюза передаём явно: управление FPGA не зависит от того,
+ *  открыт ли Soapy-стрим (прошивка/мониторинг до старта потока). */
+export async function hostFpga(cmd: Record<string, unknown>, gw: string): Promise<FpgaStatus> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    return await hostRpc<FpgaStatus>({ op: "fpga", cmd, gw });
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
 }
 
 export async function hostClose(): Promise<void> {
