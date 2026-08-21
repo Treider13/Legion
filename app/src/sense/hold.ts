@@ -1,5 +1,5 @@
 // ============================================================================
-// LEGION — после ПЕРЕДАТЬ: приоритет (сильнее) или обычный (очередь + выдержка).
+// LEGION — после ПЕРЕДАТЬ: приоритет (держим пока жива) или обычный (очередь).
 // СБРОСИТЬ — только кнопка оператора, не таймер и не архив засечек.
 // Свой CW заполняет тот же бин: «пропала» не видно, пока тон на RF out.
 // ============================================================================
@@ -24,22 +24,23 @@ export function uniqueBins(dets: readonly Detection[]): Detection[] {
   return out;
 }
 
-/** ПРИОРИТЕТ: на усилитель только сильнейшая. Слабее текущую не сбивает. */
+/**
+ * ПРИОРИТЕТ: взяли частоту — держим, пока жива. Сильнее не сбивает.
+ * Пропала (окно без своего CW) — берём следующую сильнейшую.
+ * holdMasked: свой TX вырезан из окна, «нет бина» ≠ пропала.
+ */
 export function pickPriorityTarget(
   liveWindow: readonly Detection[],
   heldMhz: number | null,
-  heldPowerDbm: number | null,
   skipMhz: number | null = null,
+  holdMasked = false,
 ): Detection | null {
   const pool =
     skipMhz == null ? liveWindow : liveWindow.filter((d) => !sameBin(d.freqMhz, skipMhz));
-  const best = pickStrongest(pool);
-  if (!best) return null;
-  if (heldMhz == null) return best;
-  if (sameBin(best.freqMhz, heldMhz)) return null;
-  if (heldPowerDbm == null) return null;
-  if (best.powerDbm > heldPowerDbm) return best;
-  return null;
+  if (heldMhz == null) return pickStrongest(pool);
+  if (heldHitAlive(pool, heldMhz)) return null;
+  if (holdMasked) return null;
+  return pickStrongest(pool);
 }
 
 /**
@@ -86,12 +87,14 @@ export function pickArmedAutoTarget(opts: {
   heldPowerDbm: number | null;
   skipMhz: number | null;
   dispatch: AutoDispatch;
+  /** Приоритет + withoutOwnTx: не считать текущую пропавшей. */
+  holdMasked?: boolean;
 }): Detection | null {
   void opts.archive;
   if (opts.dispatch === "turn") {
     return pickTurnTarget(opts.liveWindow, opts.skipMhz, opts.heldMhz, opts.heldPowerDbm);
   }
-  return pickPriorityTarget(opts.liveWindow, opts.heldMhz, opts.heldPowerDbm, opts.skipMhz);
+  return pickPriorityTarget(opts.liveWindow, opts.heldMhz, opts.skipMhz, opts.holdMasked === true);
 }
 
 export function windowCoversMhz(centerMhz: number, windowMhz: number, mhz: number): boolean {

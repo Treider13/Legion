@@ -373,7 +373,7 @@ function main(): void {
   check("авто reason — до стопа оператора", planSdrWork("auto").reason.includes("пока оператор не стопнет"));
   check("качание reason — Ethernet до стопа", planSdrWork("sweep").reason.includes("пока оператор не стопнет"));
   check("обычный АВТО по очереди", planSdrWork("auto", "turn").reason.includes("по очереди"));
-  check("приоритет АВТО сильнее", planSdrWork("auto", "priority").reason.includes("сильнее"));
+  check("приоритет АВТО держим", planSdrWork("auto", "priority").reason.includes("держим"));
   check("имя обычного АВТО", autoDispatchLabelRu("turn") === "ОБЫЧНЫЙ");
   check("имя приоритета", autoDispatchLabelRu("priority") === "ПРИОРИТЕТ");
   check("опция обычного про выдержку", autoDispatchOptionRu("turn").includes("очереди"));
@@ -523,15 +523,14 @@ function main(): void {
     { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
   ];
   check(
-    "приоритет: сильнее сбивает текущую",
+    "приоритет: сильнее не сбивает, пока текущая жива",
     pickPriorityTarget(
       [
         { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
         { freqMhz: 2480, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
       ],
       2442,
-      -40,
-    )?.freqMhz === 2480,
+    ) === null,
   );
   check(
     "приоритет: слабее не сбивает",
@@ -541,22 +540,28 @@ function main(): void {
         { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
       ],
       2442,
-      -20,
     ) === null,
   );
   check(
-    "приоритет: без силы текущей не прыгаем вслепую",
+    "приоритет: свой TX скрыт — не считаем пропавшей",
     pickPriorityTarget(
       [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
       2442,
       null,
+      true,
     ) === null,
+  );
+  check(
+    "приоритет: пропала — берём следующую сильнейшую",
+    pickPriorityTarget(
+      [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
+      2442,
+    )?.freqMhz === 2480,
   );
   check(
     "приоритет: без замка берём сильнейший",
     pickPriorityTarget(
       [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
-      null,
       null,
     )?.freqMhz === 2480,
   );
@@ -567,7 +572,6 @@ function main(): void {
         { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 2, forwarded: false },
         { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 2, forwarded: false },
       ],
-      null,
       null,
       2442,
     )?.freqMhz === 2410,

@@ -128,7 +128,7 @@ interface LegionStore {
   /** 0 = все подряд, 100 = только сильные. */
   scanSensitivity: number;
   scanPattern: ScanPattern;
-  /** АВТО: приоритет = сильнее; обычный = очередь + выдержка. */
+  /** АВТО: приоритет = держим пока жива; обычный = очередь + выдержка. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
   scanDwellMs: string;
@@ -332,6 +332,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         heldPowerDbm: dets.find((d) => Math.abs(d.freqMhz - heldMhz) <= 0.2)?.powerDbm ?? null,
         skipMhz: gSkipMhz,
         dispatch: get().autoDispatch,
+        holdMasked: false,
       });
       if (nextHit) {
         gGate.dropHold();
@@ -1115,6 +1116,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             heldPowerDbm: after.lastForwardPowerDbm,
             skipMhz: gSkipMhz,
             dispatch,
+            holdMasked: dispatch === "priority",
           });
           if (!target) return;
           if (gGate.queueIfBusy(target.freqMhz)) return;
@@ -1203,6 +1205,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         heldPowerDbm: get().lastForwardPowerDbm,
         skipMhz: gSkipMhz,
         dispatch,
+        holdMasked: dispatch === "priority" && gGate.lastCuedMhz != null,
       });
       if (target) runHandoff(target.freqMhz, target.powerDbm);
     },
