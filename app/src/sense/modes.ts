@@ -9,7 +9,7 @@
 export type LegionMode = "sdr" | "esp32";
 
 export function modeOf(workspace: string): LegionMode {
-  return workspace === "sdr" || workspace === "scan" ? "sdr" : "esp32";
+  return workspace === "sdr" || workspace === "scan" || workspace === "sdrFlash" ? "sdr" : "esp32";
 }
 
 /** Полосы скана и полосы ESP32 — два списка. Скан не пишет ALLOW на UART. */

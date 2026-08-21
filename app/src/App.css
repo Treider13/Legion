@@ -418,6 +418,10 @@
   gap: 8px;
 }
 
+.workspace-nav-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .workspace-nav-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -428,10 +432,22 @@
 
 @media (max-width: 900px) {
   .workspace-nav,
+  .workspace-nav-4,
   .workspace-nav-3,
   .workspace-nav-2 {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+.flash-brick {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 107, 115, 0.45);
+  background: rgba(255, 107, 115, 0.08);
+  color: var(--lg-alert);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .ws-tab {

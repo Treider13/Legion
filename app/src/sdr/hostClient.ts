@@ -120,6 +120,33 @@ export async function hostFlash(argv: string[], file?: string): Promise<{ ok: bo
   }
 }
 
+export async function hostEsp32ChipId(port: string): Promise<{ ok: boolean; text: string }> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, text: "нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    const text = await invoke<string>("esp32_chip_id", { port });
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, text: String(e) };
+  }
+}
+
+export async function hostEsp32Flash(
+  env: string,
+  port: string,
+): Promise<{ ok: boolean; reason: string; written: boolean }> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "нужен desktop LEGION (Tauri) — команда не запущена", written: false };
+  }
+  try {
+    const reason = await invoke<string>("esp32_flash", { env, port });
+    return { ok: true, reason, written: true };
+  } catch (e) {
+    return { ok: false, reason: String(e), written: false };
+  }
+}
+
 export function markCatalogPresent(list: SdrDeviceInfo[], found: Array<Record<string, string>>): SdrDeviceInfo[] {
   const blob = found.map((d) => Object.values(d).join(" ").toLowerCase()).join(" ");
   return list.map((e) => {

@@ -5,6 +5,9 @@
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
+import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
+import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
+import { looksLikeEsp32Firmware, looksLikeSdrFirmware, refuseCrossFlash } from "../src/flash/guard";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
@@ -342,8 +345,10 @@ function main(): void {
   check("RTL txCue отказ", rtl.txCue(100).ok === false && rtl.canTx() === false);
 
   check("вкладка scan = режим SDR", modeOf("scan") === "sdr");
+  check("вкладка sdrFlash = режим SDR", modeOf("sdrFlash") === "sdr");
   check("вкладка corridor = режим ESP32", modeOf("corridor") === "esp32");
   check("вкладка pa = режим ESP32", modeOf("pa") === "esp32");
+  check("вкладка esp32Flash = режим ESP32", modeOf("esp32Flash") === "esp32");
   check("скан пишет sdrBands, не allowBands", bandListFor("sdr") === "sdrBands");
   check("ESP32 пишет allowBands, не sdrBands", bandListFor("esp32") === "allowBands");
   check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
@@ -763,6 +768,116 @@ function main(): void {
   const dry = new MockSdrBackend({ emulation: false });
   check("мок без эмуляции не present", dry.probe().every((d) => d.present === false));
   check("мок без эмуляции не open", dry.open("bladerf-micro-xa4").ok === false);
+
+  const sdrJob = {
+    deviceId: "bladerf-micro-xa4",
+    filename: "/tmp/fw/hostedxA4.rbf",
+    byteLength: 2048,
+    action: "load-fpga" as const,
+  };
+  check("SDR без галочки не шьём", planSdrWrite({ job: sdrJob, imagePath: sdrJob.filename, confirmed: false }).ok === false);
+  const sdrOk = planSdrWrite({ job: sdrJob, imagePath: sdrJob.filename, confirmed: true });
+  check("SDR официальный xA4 → bladeRF-cli", sdrOk.ok && sdrOk.argv[0] === "bladeRF-cli" && sdrOk.argv.includes("-l"));
+  check(
+    "SDR inspect совпадает с confirmed",
+    inspectSdrWrite({ job: sdrJob, imagePath: sdrJob.filename }).argv.join(" ") === sdrOk.argv.join(" "),
+  );
+  check(
+    "ESP32 .elf на SDR отказ",
+    planSdrWrite({
+      job: { ...sdrJob, filename: "/tmp/fw/legion.elf" },
+      imagePath: "/tmp/fw/legion.elf",
+      confirmed: true,
+    }).ok === false,
+  );
+  check(
+    "xA4 образ на xA9 отказ",
+    planSdrWrite({
+      job: { ...sdrJob, deviceId: "bladerf-micro-xa9" },
+      imagePath: sdrJob.filename,
+      confirmed: true,
+    }).ok === false,
+  );
+  check(
+    "hostedxA4 на ESP32 отказ",
+    planEsp32Flash({
+      env: "esp32-s3",
+      port: "/dev/ttyUSB0",
+      confirmed: true,
+      chip: "ESP32-S3",
+      chipPort: "/dev/ttyUSB0",
+      filename: "hostedxA4.rbf",
+    }).ok === false,
+  );
+  check(
+    "RF-Clown на ESP32 отказ",
+    planEsp32Flash({
+      env: "esp32-s3",
+      port: "/dev/ttyUSB0",
+      confirmed: true,
+      chip: "ESP32-S3",
+      chipPort: "/dev/ttyUSB0",
+      filename: "RF-Clown.bin",
+    }).ok === false,
+  );
+  check(
+    "native env отказ",
+    planEsp32Flash({
+      env: "native",
+      port: "/dev/ttyUSB0",
+      confirmed: true,
+      chip: "ESP32-S3",
+      chipPort: "/dev/ttyUSB0",
+    }).ok === false,
+  );
+  check(
+    "чип C3 ≠ env S3",
+    planEsp32Flash({
+      env: "esp32-s3",
+      port: "/dev/ttyUSB0",
+      confirmed: true,
+      chip: "ESP32-C3",
+      chipPort: "/dev/ttyUSB0",
+    }).reason.includes("кирпич"),
+  );
+  check(
+    "порт после пробы другой — отказ",
+    planEsp32Flash({
+      env: "esp32-s3",
+      port: "/dev/ttyUSB1",
+      confirmed: true,
+      chip: "ESP32-S3",
+      chipPort: "/dev/ttyUSB0",
+    }).ok === false,
+  );
+  const espOk = planEsp32Flash({
+    env: "esp32-s3",
+    port: "/dev/ttyUSB0",
+    confirmed: true,
+    chip: "ESP32-S3",
+    chipPort: "/dev/ttyUSB0",
+  });
+  check("ESP32 план = pio upload", espOk.ok === true && espOk.argv?.[0] === "pio" && espOk.argv.includes("upload"));
+  check("ESP32 план без bladeRF-cli", !(espOk.argv ?? []).includes("bladeRF-cli"));
+  check("ESP32 без галочки отказ", planEsp32Flash({
+    env: "esp32-s3",
+    port: "/dev/ttyUSB0",
+    confirmed: false,
+    chip: "ESP32-S3",
+    chipPort: "/dev/ttyUSB0",
+  }).ok === false);
+  check("порт инъекция отказ", usableSerialPort("/dev/ttyUSB0;rm") === false);
+  check("порт cwd отказ", usableSerialPort("/dev/ttyUSB0/../sda") === false);
+  check("порт ttyUSB ок", usableSerialPort("/dev/ttyUSB0"));
+  check("hosted выглядит как SDR", looksLikeSdrFirmware("hostedxA4.rbf"));
+  check("elf выглядит как ESP32", looksLikeEsp32Firmware("legion.elf"));
+  check("cross SDR←ESP32", (refuseCrossFlash("sdr", "app.elf") ?? "").includes("ESP32"));
+  check("cross ESP32←SDR", (refuseCrossFlash("esp32", "hostedxA4.rbf") ?? "").includes("SDR"));
+  check("alien jam", refuseCrossFlash("sdr", "ESP32-BlueJammer.bin") !== null);
+  check("parse chip S3", parseEsp32Chip("Chip is ESP32-S3 (QFN56)") === "ESP32-S3");
+  check("parse chip classic", parseEsp32Chip("Chip is ESP32 (revision 3)") === "ESP32");
+  check("S3 не classic", envMatchesChip("esp32dev", "ESP32-S3") === false);
+  check("classic = esp32dev", envMatchesChip("esp32dev", "ESP32"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

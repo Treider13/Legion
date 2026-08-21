@@ -6,11 +6,13 @@ const ESP32: Array<{ id: WorkspaceId; title: string; hint: string }> = [
   { id: "synth", title: "СИНТЕЗАТОР", hint: "USB → ESP32 → ADF4351" },
   { id: "corridor", title: "КОРИДОР TX", hint: "сетка / скорость, без SDR" },
   { id: "pa", title: "УСИЛИТЕЛЬ ESP32", hint: "ток · нагрузка 50Ω" },
+  { id: "esp32Flash", title: "ПРОШИВКА ESP32", hint: "pio env · chip_id · не SDR" },
 ];
 
 const SDR: Array<{ id: WorkspaceId; title: string; hint: string }> = [
   { id: "sdr", title: "SDR", hint: "Ethernet · офиц. FPGA" },
   { id: "scan", title: "СКАН + TX SDR", hint: "антенна и усилитель на SDR" },
+  { id: "sdrFlash", title: "ПРОШИВКА SDR", hint: "офиц. FPGA/FX3 · не ESP32" },
 ];
 
 export function WorkspaceNav() {
@@ -22,7 +24,7 @@ export function WorkspaceNav() {
     <nav className="workspace-nav-wrap" aria-label="Режимы стенда">
       <div className={`ws-group ${mode === "esp32" ? "ws-group-active" : ""}`}>
         <span className="ws-group-label">РЕЖИМ 2 · ESP32 (без SDR)</span>
-        <div className="workspace-nav workspace-nav-3">
+        <div className="workspace-nav workspace-nav-4">
           {ESP32.map((t) => (
             <button
               key={t.id}
@@ -40,7 +42,7 @@ export function WorkspaceNav() {
       </div>
       <div className={`ws-group ${mode === "sdr" ? "ws-group-active" : ""}`}>
         <span className="ws-group-label">РЕЖИМ 1 · SDR (Ethernet, без ESP32)</span>
-        <div className="workspace-nav workspace-nav-2">
+        <div className="workspace-nav workspace-nav-3">
           {SDR.map((t) => (
             <button
               key={t.id}

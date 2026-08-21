@@ -15,7 +15,9 @@ import { ConnectBar } from "./components/ConnectBar";
 import { CorridorPanel } from "./components/CorridorPanel";
 import { LogPanel } from "./components/LogPanel";
 import { PaPanel } from "./components/PaPanel";
+import { Esp32FlashPanel } from "./components/Esp32FlashPanel";
 import { ScanPanel } from "./components/ScanPanel";
+import { SdrFlashPanel } from "./components/SdrFlashPanel";
 import { SdrPanel } from "./components/SdrPanel";
 import { SynthPanel } from "./components/SynthPanel";
 import { WorkspaceNav } from "./components/WorkspaceNav";
@@ -151,8 +153,10 @@ function App() {
           {workspace === "synth" && <SynthPanel />}
           {workspace === "corridor" && <CorridorPanel />}
           {workspace === "sdr" && <SdrPanel />}
+          {workspace === "sdrFlash" && <SdrFlashPanel />}
           {workspace === "scan" && <ScanPanel />}
           {workspace === "pa" && <PaPanel />}
+          {workspace === "esp32Flash" && <Esp32FlashPanel />}
         </div>
         <LogPanel />
         <footer className="app-footer">

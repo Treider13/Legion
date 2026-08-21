@@ -6,13 +6,22 @@ import { create } from "zustand";
 import { cueFreqAllowed, parseBand, type AllowBand } from "../policy/allowlist";
 import { LegionClient } from "../protocol/client";
 import { MockSdrBackend } from "../sdr/backend";
+import {
+  isEsp32FlashEnv,
+  parseEsp32Chip,
+  planEsp32Flash,
+  type Esp32FlashEnv,
+  type Esp32FlashResult,
+} from "../flash/esp32";
+import { planSdrWrite } from "../flash/sdrWrite";
 import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import { catalogById } from "../sdr/catalog";
-import { planFlashCli } from "../sdr/flashcli";
-import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../sdr/host";
+import { hostOpenAllowed, usableImagePath } from "../sdr/host";
 import {
   catalogCaps,
   hostClose,
+  hostEsp32ChipId,
+  hostEsp32Flash,
   hostFlash,
   hostOpen,
   hostHealth,
@@ -50,7 +59,8 @@ import type { SerialPortDescriptor, Transport, TransportKind, TransportState } f
 import { WebSerialTransport } from "../transport/webSerial";
 import { WebSocketTransport } from "../transport/websocket";
 
-export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa";
+export type WorkspaceId = "synth" | "corridor" | "sdr" | "scan" | "pa" | "sdrFlash" | "esp32Flash";
+export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 
 export interface LogEntry {
   ts: number;
@@ -116,7 +126,16 @@ interface LegionStore {
   sdrOpened: SdrDeviceInfo | null;
   sdrRemote: string;
   sdrFlashName: string;
+  sdrFlashAction: SdrFlashAction;
+  sdrFlashConfirm: boolean;
   lastFlash: FlashResult | null;
+  flashBusy: boolean;
+  esp32FlashEnv: Esp32FlashEnv;
+  esp32FlashConfirm: boolean;
+  esp32Chip: string | null;
+  esp32ChipPort: string | null;
+  esp32ChipRaw: string;
+  lastEsp32Flash: Esp32FlashResult | null;
   sdrEmulation: boolean;
   sdrHostReady: boolean;
   sdrHostDetail: string;
@@ -160,6 +179,10 @@ interface LegionStore {
   setSdrId(id: string): void;
   setSdrGateway(v: string): void;
   setSdrFlashName(v: string): void;
+  setSdrFlashAction(a: SdrFlashAction): void;
+  setSdrFlashConfirm(v: boolean): void;
+  setEsp32FlashEnv(v: Esp32FlashEnv): void;
+  setEsp32FlashConfirm(v: boolean): void;
   setSdrEmulation(v: boolean): void;
   setSdrImageFile(name: string, byteLength: number, path?: string): void;
   setScanThreshold(db: number): void;
@@ -190,7 +213,9 @@ interface LegionStore {
   probeSdr(): Promise<void>;
   openSdr(): Promise<void>;
   closeSdr(): Promise<void>;
-  flashSdr(action: "flash-fx3" | "flash-fpga" | "load-fpga"): Promise<void>;
+  flashSdr(action?: SdrFlashAction): Promise<void>;
+  probeEsp32Chip(): Promise<void>;
+  flashEsp32(): Promise<void>;
   injectDemoTone(): void;
   startScan(): void;
   stopScan(): void;
@@ -450,7 +475,16 @@ export const useLegion = create<LegionStore>((set, get) => {
     sdrOpened: null,
     sdrRemote: "",
     sdrFlashName: "hostedxA4.rbf",
+    sdrFlashAction: "load-fpga",
+    sdrFlashConfirm: false,
     lastFlash: null,
+    flashBusy: false,
+    esp32FlashEnv: "esp32-s3",
+    esp32FlashConfirm: false,
+    esp32Chip: null,
+    esp32ChipPort: null,
+    esp32ChipRaw: "",
+    lastEsp32Flash: null,
     sdrEmulation: !isTauriRuntime(),
     sdrHostReady: false,
     sdrHostDetail: "",
@@ -473,7 +507,16 @@ export const useLegion = create<LegionStore>((set, get) => {
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
-    setSelectedPort: (p) => set({ selectedPort: p }),
+    setSelectedPort: (p) => {
+      const prev = get().selectedPort;
+      if (p === prev) return;
+      set({
+        selectedPort: p,
+        esp32Chip: null,
+        esp32ChipPort: null,
+        esp32FlashConfirm: false,
+      });
+    },
     setWsUrl: (u) => set({ wsUrl: u }),
     setFreqMhz: (f) => set({ freqMhz: f }),
     setCorrField: (field, v) => set({ [field]: v }),
@@ -500,9 +543,24 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrId: id,
         sdrFlashName: defaultFlashName(id) || get().sdrFlashName,
         sdrGateway: defaultEthHost(id),
+        sdrFlashConfirm: false,
       }),
     setSdrGateway: (v) => set({ sdrGateway: v }),
-    setSdrFlashName: (v) => set({ sdrFlashName: v }),
+    setSdrFlashName: (v) =>
+      set({
+        sdrFlashName: v,
+        sdrImagePath: usableImagePath(v) ? v.trim() : get().sdrImagePath,
+        sdrImageBytes: usableImagePath(v) && get().sdrImageBytes <= 0 ? 1 : get().sdrImageBytes,
+        sdrFlashConfirm: false,
+      }),
+    setSdrFlashAction: (a) => set({ sdrFlashAction: a, sdrFlashConfirm: false }),
+    setSdrFlashConfirm: (v) => set({ sdrFlashConfirm: v }),
+    setEsp32FlashEnv: (v) =>
+      set({
+        esp32FlashEnv: isEsp32FlashEnv(v) ? v : "esp32-s3",
+        esp32FlashConfirm: false,
+      }),
+    setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
     setSdrEmulation: (v) => {
       stopTxWatch();
       stopTxWalk();
@@ -525,7 +583,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
     },
     setSdrImageFile: (name, byteLength, path) =>
-      set({ sdrFlashName: name, sdrImageBytes: byteLength, sdrImagePath: path ?? "" }),
+      set({
+        sdrFlashName: name,
+        sdrImageBytes: byteLength,
+        sdrImagePath: path ?? "",
+        sdrFlashConfirm: false,
+      }),
     setScanThreshold: (db) => {
       const thr = Number.isFinite(db) ? db : 12;
       set({ scanThresholdDb: thr, scanSensitivity: thresholdToSensitivity(thr) });
@@ -964,37 +1027,120 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     flashSdr: async (action) => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
       const s = get();
+      const act = action ?? s.sdrFlashAction;
       const imagePath = (s.sdrImagePath || s.sdrFlashName).trim();
       const job = {
         deviceId: s.sdrOpened?.id ?? s.sdrId,
         filename: imagePath || s.sdrFlashName,
         byteLength: s.sdrImageBytes,
-        action,
+        action: act,
       };
-      const cli = planFlashCli(job, s.sdrGateway);
-      if (hostSdrAvailable() && cli.argv.length > 0) {
-        const file = flashFileRequired(s.sdrImageBytes, imagePath);
-        if (!file.ok) {
-          const r: FlashResult = { ok: false, kind: "unknown", reason: file.reason, written: false };
-          set({ lastFlash: r });
-          pushLog("sys", r.reason);
-          return;
-        }
-        const r = await hostFlash(cli.argv, usableImagePath(imagePath) ? imagePath : undefined);
-        set({
-          lastFlash: { ok: r.ok, kind: "unknown", reason: r.reason, written: r.written },
-        });
-        pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason}`);
+      const plan = planSdrWrite({
+        job,
+        imagePath,
+        confirmed: s.sdrFlashConfirm,
+        gateway: s.sdrGateway,
+      });
+      if (!plan.ok) {
+        const r: FlashResult = { ok: false, kind: "unknown", reason: plan.reason, written: false };
+        set({ lastFlash: r });
+        pushLog("sys", r.reason);
         return;
       }
-      if (!gSdr.opened()) {
-        gSdr.setEmulation(true);
-        gSdr.open(s.sdrId, sdrOpenArgs(s.sdrId, s.sdrGateway));
+      if (!hostSdrAvailable()) {
+        const r: FlashResult = {
+          ok: false,
+          kind: "unknown",
+          reason: `команда не запущена (нет desktop LEGION): ${plan.argv.join(" ")}`,
+          written: false,
+        };
+        set({ lastFlash: r, sdrFlashConfirm: false });
+        pushLog("sys", r.reason);
+        return;
       }
-      const r = gSdr.flash(job);
-      set({ lastFlash: r });
-      pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason} · ${cli.reason}`);
+      set({ flashBusy: true });
+      try {
+        if (get().sdrOpened || get().scanRunning || get().transmitArmed) {
+          await get().closeSdr();
+        }
+        const r = await hostFlash(plan.argv, plan.file);
+        set({
+          lastFlash: { ok: r.ok, kind: "unknown", reason: r.reason, written: r.written },
+          sdrFlashConfirm: false,
+        });
+        pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    probeEsp32Chip: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      const port = get().selectedPort;
+      set({ flashBusy: true, esp32FlashConfirm: false });
+      try {
+        const r = await hostEsp32ChipId(port);
+        const chip = r.ok ? parseEsp32Chip(r.text) : null;
+        set({
+          esp32Chip: chip,
+          esp32ChipPort: chip ? port.trim() : null,
+          esp32ChipRaw: r.text,
+        });
+        if (!r.ok) pushLog("sys", `ESP32 chip_id: ${r.text}`);
+        else if (!chip) pushLog("sys", `ESP32: не разобрали чип — не шьём. ${r.text}`);
+        else pushLog("sys", `ESP32 чип ${chip} на ${port}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    flashEsp32: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      const s = get();
+      const plan = planEsp32Flash({
+        env: s.esp32FlashEnv,
+        port: s.selectedPort,
+        confirmed: s.esp32FlashConfirm,
+        chip: s.esp32Chip,
+        chipPort: s.esp32ChipPort,
+      });
+      if (!plan.ok || !plan.env || !plan.port) {
+        const r: Esp32FlashResult = { ok: false, reason: plan.reason, written: false };
+        set({ lastEsp32Flash: r });
+        pushLog("sys", r.reason);
+        return;
+      }
+      if (!hostSdrAvailable()) {
+        const r: Esp32FlashResult = {
+          ok: false,
+          reason: `команда не запущена (нет desktop LEGION): ${plan.reason}`,
+          written: false,
+        };
+        set({ lastEsp32Flash: r, esp32FlashConfirm: false });
+        pushLog("sys", r.reason);
+        return;
+      }
+      set({ flashBusy: true });
+      try {
+        if (get().corridorRunning) await get().corridorStop();
+        if (get().transportState === "connected") await get().disconnect();
+        const r = await hostEsp32Flash(plan.env, plan.port);
+        set({ lastEsp32Flash: r, esp32FlashConfirm: false });
+        pushLog("sys", r.written ? `записано в ESP32: ${r.reason}` : `не записано: ${r.reason}`);
+      } finally {
+        set({ flashBusy: false });
+      }
     },
 
     injectDemoTone: () => {

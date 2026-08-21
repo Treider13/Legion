@@ -152,6 +152,10 @@ pub fn sdr_flash(argv: Vec<String>, file: Option<String>) -> Result<String, Stri
         if !Path::new(f).is_file() {
             return Err(format!("файл образа не найден: {f}"));
         }
+        let low = f.to_ascii_lowercase();
+        if low.ends_with(".elf") || low.contains("esp32") {
+            return Err("это похоже на прошивку ESP32 — на SDR не шьём".into());
+        }
     } else {
         return Err("нет абсолютного пути к образу — CLI не ищет в cwd".into());
     }

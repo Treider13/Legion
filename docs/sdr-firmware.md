@@ -54,9 +54,12 @@ SoapySDRServer --bind
 TX LO на RF out → усилитель. FX3 `.img` без FPGA задачу не закрывает.
 Имена вроде RF-Clown / BlueJammer / nRF24 отклоняются на хосте.
 
-Запись в железо — только вендорский CLI (`bladeRF-cli -l/-L/-f`,
-`uhd_image_loader`, `hackrf_spiflash`) и только если выбран реальный файл
-(размер > 0). Проверка имени ≠ запись. Без CLI LEGION пишет «не записано».
+Запись в железо — вкладки **ПРОШИВКА SDR** и **ПРОШИВКА ESP32** (не одна кнопка).
+SDR: только вендорский CLI (`bladeRF-cli -l/-L/-f`, `uhd_image_loader`,
+`hackrf_spiflash`) после `validateFlashJob` + галочки. ESP32: только
+`pio run -e <allowlist> --target upload` после `esptool chip_id` и совпадения
+кристалла с env. Чужой домен / RF-Clown / native env — отказ.
+Проверка имени ≠ запись. Без desktop LEGION команда не запускается.
 
 ## Это не RF-Clown и не BlueJammer
 
