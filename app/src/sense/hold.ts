@@ -38,3 +38,38 @@ export function pickAutoTarget(
 export function nextAfterOperatorReset(_archive: readonly Detection[]): null {
   return null;
 }
+
+/** Merge-архив (до 48 бинов) на TX не идёт — только текущее FFT-окно. */
+export function pickArmedAutoTarget(opts: {
+  liveWindow: readonly Detection[];
+  archive: readonly Detection[];
+  heldMhz: number | null;
+  heldPowerDbm: number | null;
+  skipMhz: number | null;
+}): Detection | null {
+  void opts.archive;
+  return pickAutoTarget(opts.liveWindow, opts.heldMhz, opts.heldPowerDbm, opts.skipMhz);
+}
+
+export function windowCoversMhz(centerMhz: number, windowMhz: number, mhz: number): boolean {
+  const half = windowMhz / 2;
+  return mhz >= centerMhz - half && mhz <= centerMhz + half;
+}
+
+/**
+ * СБРОСИТЬ держит частоту, пока она жива в покрывающем окне.
+ * Нет бинов (half-duplex пауза) и чужая стойка ≠ «ушла».
+ * Бины есть, засечки на этой частоте нет — skip снимаем.
+ */
+export function refreshSkipMhz(
+  skipMhz: number | null,
+  liveWindow: readonly Detection[],
+  centerMhz: number,
+  windowMhz: number,
+  hadBins = true,
+): number | null {
+  if (skipMhz == null) return null;
+  if (!hadBins) return skipMhz;
+  if (!windowCoversMhz(centerMhz, windowMhz, skipMhz)) return skipMhz;
+  return liveWindow.some((d) => sameBin(d.freqMhz, skipMhz)) ? skipMhz : null;
+}

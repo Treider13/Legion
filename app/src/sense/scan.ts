@@ -6,7 +6,7 @@ import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
 import type { Detection, ScanBin } from "../sdr/types";
 
-/** auto = сканер RX. sweep/band/hop = открытый TX с ноутбука, сканер не участвует. */
+/** auto = сканер RX. sweep=качание / band=сплошная / hop=случайная — TX с ноутбука, сканер не участвует. */
 export type ScanPattern = "auto" | "sweep" | "band" | "hop";
 
 export interface ScanConfig {

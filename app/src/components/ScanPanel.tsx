@@ -1,5 +1,5 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
-import { scannerParticipates } from "../sense/modes";
+import { patternOptionRu, scannerParticipates } from "../sense/modes";
 import type { ScanPattern } from "../sense/scan";
 import { useLegion } from "../state/store";
 
@@ -16,10 +16,11 @@ export function ScanPanel() {
     <section className="panel">
       <span className="panel-title">РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА</span>
       <p className="panel-note">
-        АВТО: сканер (антенна RX) ищет energy, ПЕРЕДАТЬ — найденное сразу на усилитель.
-        Решение FFT на ноутбуке, RF на SDR: официальный hosted FPGA сам не ищет.
-        Туда-сюда / сплошная / случайная: ноутбук гонит TX LO по Ethernet, сканер не
-        участвует. СБРОСИТЬ — оператор. ESP32 сюда не входит.
+        АВТО: сканер (антенна RX) ищет energy, ПЕРЕДАТЬ — живое окно на усилитель,
+        пока оператор не стопнет. Решение FFT на ноутбуке, RF на SDR: официальный
+        hosted FPGA сам не ищет. Качание / сплошная / случайная: ноутбук гонит TX LO
+        по Ethernet, сканер не участвует, пока оператор не стопнет. СБРОСИТЬ — оператор.
+        ESP32 сюда не входит.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -50,10 +51,10 @@ export function ScanPanel() {
             onChange={(e) => s.setScanPattern(e.target.value as ScanPattern)}
             disabled={busy}
           >
-            <option value="auto">АВТО (сканер → ПЕРЕДАТЬ)</option>
-            <option value="sweep">ТУДА-СЮДА TX (без сканера)</option>
-            <option value="band">СПЛОШНАЯ TX (без сканера)</option>
-            <option value="hop">СЛУЧАЙНАЯ TX (без сканера)</option>
+            <option value="auto">{patternOptionRu("auto")}</option>
+            <option value="sweep">{patternOptionRu("sweep")}</option>
+            <option value="band">{patternOptionRu("band")}</option>
+            <option value="hop">{patternOptionRu("hop")}</option>
           </select>
         </label>
         <label>
@@ -91,8 +92,8 @@ export function ScanPanel() {
       </div>
       <p className="sens-hint">
         {auto
-          ? "авто: сканер ищет в полосе, ПЕРЕДАТЬ отдаёт засечку на усилитель"
-          : "без сканера: ноутбук по Ethernet ставит TX LO (1 или 20 МГц шаг, выдержка)"}
+          ? "авто: сканер ищет в полосе, ПЕРЕДАТЬ отдаёт живую засечку на усилитель до стопа"
+          : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
       {auto && (
         <>

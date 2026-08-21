@@ -12,16 +12,28 @@ import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
-import { heldHitAlive, nextAfterOperatorReset, pickAutoTarget, RESENSE_MS } from "../src/sense/hold";
+import {
+  heldHitAlive,
+  nextAfterOperatorReset,
+  pickArmedAutoTarget,
+  pickAutoTarget,
+  refreshSkipMhz,
+  RESENSE_MS,
+  windowCoversMhz,
+} from "../src/sense/hold";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
 import {
   autoForwardAllowed,
   bandListFor,
   modeConflict,
   modeOf,
+  patternLabelRu,
+  patternOptionRu,
   planSdrWork,
   runIntentArmsTx,
+  scanRefusedReason,
   scannerParticipates,
+  shouldKeepTransmit,
   walkPatternArmsTx,
 } from "../src/sense/modes";
 import {
@@ -281,7 +293,7 @@ function main(): void {
   const lo = Math.min(...sweepW.centers);
   const hitHi = sweepPath.indexOf(hi);
   const afterHi = hitHi >= 0 ? sweepPath.slice(hitHi + 1, hitHi + 4) : [];
-  check("sweep туда-сюда доходит до края", hitHi >= 0);
+  check("качание (реверс) доходит до края", hitHi >= 0);
   check("sweep после края идёт назад", afterHi.some((c) => c < hi));
   check("sweep не вылезает из полосы", sweepPath.every((c) => c >= lo && c <= hi));
   const bandW = new ScanWalker({
@@ -338,6 +350,23 @@ function main(): void {
   check("сплошная — сканер не участвует", scannerParticipates("band") === false);
   check("planSdrWork авто: сканер, не open-loop", planSdrWork("auto").useScanner && !planSdrWork("auto").openLoopTx);
   check("planSdrWork hop: Ethernet TX, без сканера", planSdrWork("hop").openLoopTx && !planSdrWork("hop").useScanner);
+  check("planSdrWork качание: Ethernet TX, без сканера", planSdrWork("sweep").openLoopTx && !planSdrWork("sweep").useScanner);
+  check("planSdrWork сплошная: Ethernet TX, без сканера", planSdrWork("band").openLoopTx && !planSdrWork("band").useScanner);
+  check("имя sweep = КАЧАНИЕ, не туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ");
+  check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
+  check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
+  check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
+  check(
+    "пустой эфир не стопает АВТО",
+    shouldKeepTransmit({ operatorArmed: true, liveEmpty: true }) === true,
+  );
+  check(
+    "конец прохода walker не стопает качание",
+    shouldKeepTransmit({ operatorArmed: true, walkerFinished: true }) === true,
+  );
+  check("без ПЕРЕДАТЬ процесс не живёт", shouldKeepTransmit({ operatorArmed: false, liveEmpty: true }) === false);
+  check("авто reason — до стопа оператора", planSdrWork("auto").reason.includes("пока оператор не стопнет"));
+  check("качание reason — Ethernet до стопа", planSdrWork("sweep").reason.includes("пока оператор не стопнет"));
   const autoW = new ScanWalker({ bands: ism, pattern: "auto", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   const sweepEq = new ScanWalker({ bands: ism, pattern: "sweep", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   check(
@@ -519,6 +548,54 @@ function main(): void {
       null,
       2442,
     )?.freqMhz === 2410,
+  );
+  const staleArchive = [
+    { freqMhz: 2410, powerDbm: -5, noiseDbm: -90, snrDb: 85, ts: 1, forwarded: false },
+  ];
+  const liveNow = [
+    { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 9, forwarded: false },
+  ];
+  check(
+    "ПЕРЕДАТЬ не берёт сильный бин из архива",
+    pickArmedAutoTarget({
+      liveWindow: liveNow,
+      archive: staleArchive,
+      heldMhz: null,
+      heldPowerDbm: null,
+      skipMhz: null,
+    })?.freqMhz === 2480,
+  );
+  check(
+    "пустое живое окно не хватает архив",
+    pickArmedAutoTarget({
+      liveWindow: [],
+      archive: staleArchive,
+      heldMhz: null,
+      heldPowerDbm: null,
+      skipMhz: null,
+    }) === null,
+  );
+  check("окно покрывает центр", windowCoversMhz(2442, 20, 2442));
+  check("окно не покрывает чужую стойку", windowCoversMhz(2442, 20, 2480) === false);
+  check(
+    "сброс: частота жива в этом окне — skip держим",
+    refreshSkipMhz(2442, liveNow.concat([{ freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 9, forwarded: false }]), 2442, 20) === 2442,
+  );
+  check(
+    "сброс: в покрывающем окне частоты нет — skip снимаем",
+    refreshSkipMhz(2442, liveNow, 2442, 20) === null,
+  );
+  check(
+    "сброс: другое окно не снимает skip",
+    refreshSkipMhz(2442, liveNow, 2480, 20) === 2442,
+  );
+  check(
+    "сброс: нет бинов — skip не снимаем (half-duplex пауза)",
+    refreshSkipMhz(2442, [], 2442, 20, false) === 2442,
+  );
+  check(
+    "сброс: бины есть, засечки нет — skip снимаем, сигнал может вернуться",
+    refreshSkipMhz(2442, [], 2442, 20, true) === null,
   );
   const hopA = new ScanWalker({ bands: ism, pattern: "hop", windowMhz: 1, analogBwMhz: 56, seed: 1 });
   const hopB = new ScanWalker({ bands: ism, pattern: "hop", windowMhz: 1, analogBwMhz: 56, seed: 99 });

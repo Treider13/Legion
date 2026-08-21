@@ -27,8 +27,8 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { heldHitAlive, pickAutoTarget, RESENSE_MS } from "../sense/hold";
-import { modeConflict, modeOf, planSdrWork, scannerParticipates } from "../sense/modes";
+import { heldHitAlive, pickArmedAutoTarget, refreshSkipMhz, RESENSE_MS } from "../sense/hold";
+import { modeConflict, modeOf, planSdrWork, scanRefusedReason, scannerParticipates } from "../sense/modes";
 import {
   markForwarded,
   mergeDetections,
@@ -317,7 +317,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       const dets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
       const heldDet = dets.find((d) => sameBin(d.freqMhz, heldMhz));
-      const stronger = pickAutoTarget(dets, heldMhz, heldDet?.powerDbm ?? null, gSkipMhz);
+      const stronger = pickArmedAutoTarget({
+        liveWindow: dets,
+        archive: get().detections,
+        heldMhz,
+        heldPowerDbm: heldDet?.powerDbm ?? null,
+        skipMhz: gSkipMhz,
+      });
       if (stronger) {
         gGate.dropHold();
         set({ lastForwardMhz: null, lastForwardPowerDbm: null, lastSdrTxUs: null, sdrHoldSince: null });
@@ -995,8 +1001,9 @@ export const useLegion = create<LegionStore>((set, get) => {
           return;
         }
         if (!ensureSdrBand()) return;
-        if (!scannerParticipates(s.scanPattern)) {
-          pushLog("sys", "СКАНИРОВАТЬ: в сплошной/случайной/туда-сюда сканер не участвует — выберите АВТО");
+        const refused = scanRefusedReason(s.scanPattern);
+        if (refused) {
+          pushLog("sys", refused);
           return;
         }
         if (!s.sdrEmulation) {
@@ -1036,73 +1043,76 @@ export const useLegion = create<LegionStore>((set, get) => {
         );
         let inflight = false;
         let lastResenseAt = 0;
-        gScanTimer = setInterval(() => {
+        const tickScan = async (): Promise<void> => {
+          let bins: ScanBin[] = [];
+          let centerMhz = 0;
+          let detections: Detection[] = [];
+          const step = gWalker?.next();
+          if (!step?.centerMhz) return;
+          const winMhz = step.windowMhz;
+          centerMhz = step.centerMhz;
+          if (gLive) {
+            const win = await hostScan(centerMhz, winMhz, nBins);
+            if (win.txError) {
+              pushLog("sys", win.txError);
+              await get().stopTransmit();
+            }
+            if (!win.ok) {
+              pushLog("sys", win.reason || "scan fail");
+              return;
+            }
+            bins = win.bins;
+          } else {
+            bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
+          }
+          const now = Date.now();
+          detections = withoutOwnTx(
+            clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
+              ...d,
+              ts: now,
+            })),
+            get().lastForwardMhz,
+          );
+          if (centerMhz) set({ scanCenterMhz: centerMhz });
+          if (detections.length > 0) {
+            const dets = mergeDetections(get().detections, detections);
+            const hit = pickStrongest(detections);
+            set({
+              detections: dets,
+              lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
+            });
+          }
+          if (bins.length > 0) set({ scanBins: bins });
+          const cur = get();
+          if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
+          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, winMhz, bins.length > 0);
+          const held = gGate.lastCuedMhz;
+          if (held != null && !gGate.inflight && Date.now() - lastResenseAt >= RESENSE_MS) {
+            lastResenseAt = Date.now();
+            await resenseHeld(held, winMhz, nBins);
+          }
+          const after = get();
+          const heldNow = gGate.lastCuedMhz;
+          const target = pickArmedAutoTarget({
+            liveWindow: detections,
+            archive: after.detections,
+            heldMhz: heldNow,
+            heldPowerDbm: after.lastForwardPowerDbm,
+            skipMhz: gSkipMhz,
+          });
+          if (!target) return;
+          if (gGate.queueIfBusy(target.freqMhz)) return;
+          runHandoff(target.freqMhz, target.powerDbm);
+        };
+        const armTick = (): void => {
           if (inflight) return;
           inflight = true;
-          void (async () => {
-            try {
-              let bins: ScanBin[] = [];
-              let centerMhz = 0;
-              let detections: Detection[] = [];
-              const step = gWalker?.next();
-              if (!step?.centerMhz) return;
-              const winMhz = step.windowMhz;
-              centerMhz = step.centerMhz;
-              if (gLive) {
-                const win = await hostScan(centerMhz, winMhz, nBins);
-                if (win.txError) {
-                  pushLog("sys", win.txError);
-                  await get().stopTransmit();
-                }
-                if (!win.ok) {
-                  pushLog("sys", win.reason || "scan fail");
-                  return;
-                }
-                bins = win.bins;
-              } else {
-                bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
-              }
-              const now = Date.now();
-              detections = withoutOwnTx(
-                clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
-                  ...d,
-                  ts: now,
-                })),
-                get().lastForwardMhz,
-              );
-              if (centerMhz) set({ scanCenterMhz: centerMhz });
-              if (detections.length > 0) {
-                const dets = mergeDetections(get().detections, detections);
-                const hit = pickStrongest(detections);
-                set({
-                  detections: dets,
-                  lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
-                });
-              }
-              if (bins.length > 0) set({ scanBins: bins });
-              const cur = get();
-              if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
-              const held = gGate.lastCuedMhz;
-              if (held != null && !gGate.inflight && Date.now() - lastResenseAt >= RESENSE_MS) {
-                lastResenseAt = Date.now();
-                await resenseHeld(held, winMhz, nBins);
-              }
-              const after = get();
-              const heldNow = gGate.lastCuedMhz;
-              const target = pickAutoTarget(
-                detections,
-                heldNow,
-                after.lastForwardPowerDbm,
-                gSkipMhz,
-              );
-              if (!target) return;
-              if (gGate.queueIfBusy(target.freqMhz)) return;
-              runHandoff(target.freqMhz, target.powerDbm);
-            } finally {
-              inflight = false;
-            }
-          })();
-        }, walker.tickMs);
+          void tickScan().finally(() => {
+            inflight = false;
+          });
+        };
+        armTick();
+        gScanTimer = setInterval(armTick, walker.tickMs);
       })();
     },
 
@@ -1162,9 +1172,23 @@ export const useLegion = create<LegionStore>((set, get) => {
         startOpenLoopTx();
         return;
       }
-      if (!get().scanRunning) get().startScan();
-      const pending = pickStrongest(withoutOwnTx(get().detections.filter((d) => !d.forwarded), get().lastForwardMhz));
-      if (pending) runHandoff(pending.freqMhz, pending.powerDbm);
+      const alreadyScanning = get().scanRunning;
+      if (!alreadyScanning) {
+        get().startScan();
+        return;
+      }
+      const live = withoutOwnTx(
+        clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands),
+        get().lastForwardMhz,
+      );
+      const target = pickArmedAutoTarget({
+        liveWindow: live,
+        archive: get().detections,
+        heldMhz: gGate.lastCuedMhz,
+        heldPowerDbm: get().lastForwardPowerDbm,
+        skipMhz: gSkipMhz,
+      });
+      if (target) runHandoff(target.freqMhz, target.powerDbm);
     },
 
     stopTransmit: async () => {

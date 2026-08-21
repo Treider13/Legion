@@ -20,6 +20,7 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Нельзя крутить коридор ESP32 и TX SDR одновременно — разные тракты. */
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
+export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop";
 
 export function runIntentArmsTx(intent: SdrRunIntent): boolean {
   return intent === "transmit";
@@ -30,11 +31,43 @@ export function walkPatternArmsTx(): boolean {
   return false;
 }
 
-export function scannerParticipates(pattern: "auto" | "sweep" | "band" | "hop"): boolean {
+export function scannerParticipates(pattern: SdrWalkPattern): boolean {
   return pattern === "auto";
 }
 
-export function planSdrWork(pattern: "auto" | "sweep" | "band" | "hop"): {
+/** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
+export function patternLabelRu(pattern: SdrWalkPattern): string {
+  switch (pattern) {
+    case "auto":
+      return "АВТО";
+    case "sweep":
+      return "КАЧАНИЕ";
+    case "band":
+      return "СПЛОШНАЯ";
+    case "hop":
+      return "СЛУЧАЙНАЯ";
+  }
+}
+
+export function patternOptionRu(pattern: SdrWalkPattern): string {
+  switch (pattern) {
+    case "auto":
+      return "АВТО (сканер → ПЕРЕДАТЬ)";
+    case "sweep":
+      return "КАЧАНИЕ TX (реверс, без сканера)";
+    case "band":
+      return "СПЛОШНАЯ TX (по кругу, без сканера)";
+    case "hop":
+      return "СЛУЧАЙНАЯ TX (без сканера)";
+  }
+}
+
+export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
+  if (scannerParticipates(pattern)) return null;
+  return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите АВТО`;
+}
+
+export function planSdrWork(pattern: SdrWalkPattern): {
   useScanner: boolean;
   openLoopTx: boolean;
   reason: string;
@@ -43,14 +76,26 @@ export function planSdrWork(pattern: "auto" | "sweep" | "band" | "hop"): {
     return {
       useScanner: true,
       openLoopTx: false,
-      reason: "сканер RX (FFT на ноутбуке) → ПЕРЕДАТЬ → TX SDR на усилитель",
+      reason: "сканер RX (FFT на ноутбуке) → ПЕРЕДАТЬ → TX SDR на усилитель, пока оператор не стопнет",
     };
   }
   return {
     useScanner: false,
     openLoopTx: true,
-    reason: "ноутбук задаёт TX LO по Ethernet, сканер не участвует",
+    reason: `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер не участвует, пока оператор не стопнет`,
   };
+}
+
+/**
+ * Deepwave/Soapy: writeStream крутится, пока хост не deactivateStream.
+ * Пустой эфир и конец прохода walker сами процесс не стопают.
+ */
+export function shouldKeepTransmit(opts: {
+  operatorArmed: boolean;
+  liveEmpty?: boolean;
+  walkerFinished?: boolean;
+}): boolean {
+  return opts.operatorArmed;
 }
 
 export function autoForwardAllowed(opts: {
