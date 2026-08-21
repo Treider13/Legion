@@ -78,6 +78,9 @@ jobs:
       - name: WebSocket transport smoke test
         working-directory: app
         run: npx tsx scripts/smoke_ws.ts
+      - name: SL22 bridge smoke test
+        working-directory: app
+        run: npx tsx scripts/smoke_sl22.ts
 
   # ------------------------------------------------------------------
   # Tauri desktop: проверка сборки (факт T2: serialplugin + React 19)
