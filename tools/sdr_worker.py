@@ -744,7 +744,10 @@ class Radio:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
-        fs = min(max(bw * 1e6, 1e6), min(self.analog_bw * 1e6, 40e6))
+        # Кепка только по аналоговой BW устройства. Был ещё потолок 40 МГц:
+        # при окне 56 МГц (bladeRF) walker шагал на 56, а скан покрывал ±20 —
+        # 16 МГц между окнами не сканировались никогда (аудит N1).
+        fs = min(max(bw * 1e6, 1e6), self.analog_bw * 1e6)
         with self._lock:
             try:
                 self._ensure_rx(fs, center_mhz * 1e6)

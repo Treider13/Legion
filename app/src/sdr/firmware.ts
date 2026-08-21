@@ -88,6 +88,10 @@ export function validateFlashJob(job: FlashJob): FlashResult {
   if (!allowed.includes(kind)) {
     return fail(kind, `образ ${kind} несовместим с ${entry.name}`);
   }
+  if (entry.id === "usrp-n210" && job.action === "load-fpga") {
+    // uhd_image_loader не имеет RAM-режима: «load-fpga» молча писал бы во flash.
+    return fail(kind, "N210 не умеет FPGA в RAM — uhd_image_loader пишет только во flash; выберите FPGA В FLASH");
+  }
   if (job.action === "flash-fx3" && !FX3_ACTIONS.includes(kind)) {
     return fail(kind, "это действие ждёт FX3/MCU-образ, не FPGA");
   }

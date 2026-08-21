@@ -742,14 +742,16 @@ function main(): void {
   const gate = new HandoffGate();
   gate.reserve(2442);
   check("reserve не есть успех TX", gate.lastCuedMhz === null && gate.pendingMhz === 2442);
-  check("queueIfBusy на том же pending не дублирует", gate.queueIfBusy(2442) === true && gate.queuedMhz === null);
-  check("queueIfBusy ставит чуть сильнее в очередь", gate.queueIfBusy(2480) === true && gate.queuedMhz === 2480);
+  check("queueIfBusy на том же pending не дублирует", gate.queueIfBusy(2442) === true && gate.queued === null);
+  check("queueIfBusy ставит чуть сильнее в очередь", gate.queueIfBusy(2480, -35) === true && gate.queued?.mhz === 2480);
+  check("очередь несёт мощность цели", gate.queued?.powerDbm === -35);
   gate.abort();
   check("abort снимает pending", gate.pendingMhz === null && gate.lastCuedMhz === null);
   gate.reserve(2442);
   gate.commit(2442);
   check("commit фиксирует TX", gate.lastCuedMhz === 2442);
-  check("release отдаёт очередь", gate.release() === 2480 && gate.inflight === false);
+  const rel = gate.release();
+  check("release отдаёт очередь с мощностью", rel?.mhz === 2480 && rel?.powerDbm === -35 && gate.inflight === false);
   check("dropHold снимает замок", gate.dropHold() === 2442 && gate.lastCuedMhz === null);
   check(
     "свой тон не улов",
@@ -820,6 +822,33 @@ function main(): void {
     ).argv.some((a) => a.includes("10.1.2.3")),
   );
   check(
+    "N210 MCU-firmware идёт через --fw-path, не --fpga-path",
+    planFlashCli({
+      deviceId: "usrp-n210",
+      filename: "usrp_n210_fw.bin",
+      byteLength: 10,
+      action: "flash-fx3",
+    }).argv.some((a) => a.startsWith("--fw-path=")),
+  );
+  check(
+    "N210 FPGA идёт через --fpga-path",
+    planFlashCli({
+      deviceId: "usrp-n210",
+      filename: "usrp_n210_r4_fpga.bin",
+      byteLength: 10,
+      action: "flash-fpga",
+    }).argv.some((a) => a.startsWith("--fpga-path=")),
+  );
+  check(
+    "N210 RAM-load отклонён (uhd_image_loader пишет только во flash)",
+    validateFlashJob({
+      deviceId: "usrp-n210",
+      filename: "usrp_n210_r4_fpga.bin",
+      byteLength: 100,
+      action: "load-fpga",
+    }).ok === false,
+  );
+  check(
     "Nuand autoload CLI",
     planFlashCli({
       deviceId: "bladerf-micro-xa4",
@@ -846,9 +875,15 @@ function main(): void {
 
   const soapyHit = markCatalogPresent(
     [{ ...(xa4 as NonNullable<typeof xa4>), serial: "", present: false }],
-    [{ driver: "bladerf", label: "Nuand bladeRF" }],
+    [{ driver: "bladerf", label: "Nuand bladeRF", serial: "cafe1234" }],
   );
   check("probe Soapy помечает xA4 present", soapyHit[0]?.present === true);
+  check("probe Soapy берёт serial устройства, не свалку", soapyHit[0]?.serial === "cafe1234");
+  const soapyMiss = markCatalogPresent(
+    [{ ...(xa4 as NonNullable<typeof xa4>), serial: "", present: false }],
+    [{ driver: "rtlsdr", label: "RTL2838" }],
+  );
+  check("чужой донгл не помечает bladeRF", soapyMiss[0]?.present === false);
 
   const dry = new MockSdrBackend({ emulation: false });
   check("мок без эмуляции не present", dry.probe().every((d) => d.present === false));

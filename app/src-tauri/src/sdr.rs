@@ -83,14 +83,17 @@ fn kill_session(slot: &mut Option<Session>) {
     }
 }
 
-fn ensure(app: &AppHandle) -> Result<(), String> {
-    let mut guard = SESSION.lock().map_err(|_| "sdr lock")?;
+/// Гарантированно живая сессия под УЖЕ взятым мьютексом.
+/// Раньше ensure() лочил/отпускал SESSION, а rpc_line лочил снова — в окне
+/// между ними соседний вызов по таймауту убивал сессию, и наш запрос падал
+/// с «нет сессии SDR» вместо respawn (аудит №27).
+fn ensure_locked(app: &AppHandle, guard: &mut Option<Session>) -> Result<(), String> {
     if let Some(s) = guard.as_mut() {
         if s.child.try_wait().ok().flatten().is_none() {
             return Ok(());
         }
     }
-    kill_session(&mut *guard);
+    kill_session(guard);
     let script = worker_path(app)?;
     // stderr inherit: piped+нечитаемый stderr заполняет pipe (64 КБ) и вешает Soapy.
     let mut child = Command::new(python_bin())
@@ -111,8 +114,8 @@ fn ensure(app: &AppHandle) -> Result<(), String> {
 }
 
 fn rpc_line(app: &AppHandle, req: &str) -> Result<String, String> {
-    ensure(app)?;
     let mut guard = SESSION.lock().map_err(|_| "sdr lock")?;
+    ensure_locked(app, &mut guard)?;
     let s = guard.as_mut().ok_or("нет сессии SDR")?;
     writeln!(s.stdin, "{req}").map_err(|e| format!("write worker: {e}"))?;
     s.stdin.flush().map_err(|e| format!("flush worker: {e}"))?;
@@ -130,14 +133,42 @@ fn rpc_line(app: &AppHandle, req: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn sdr_rpc(app: AppHandle, req: String) -> Result<String, String> {
-    rpc_line(&app, &req)
+pub async fn sdr_rpc(app: AppHandle, req: String) -> Result<String, String> {
+    // Блокирующий recv до 15 с — в spawn_blocking, не на IPC-потоке.
+    tauri::async_runtime::spawn_blocking(move || rpc_line(&app, &req))
+        .await
+        .map_err(|e| format!("sdr_rpc join: {e}"))?
 }
 
 const FLASH_BINS: &[&str] = &["bladeRF-cli", "uhd_image_loader", "hackrf_spiflash"];
 
+/// Аргументы тоже по шаблону, не только argv[0]: фронт — единственный
+/// источник, но allowlist на одном бинарнике без формы аргументов — дыра
+/// (аудит №34). file обязан совпадать с параметром file.
+fn args_ok(bin: &str, args: &[String], file: &str) -> bool {
+    match bin {
+        "bladeRF-cli" => {
+            args.len() == 2 && ["-f", "-l", "-L"].contains(&args[0].as_str()) && args[1] == file
+        }
+        "hackrf_spiflash" => args.len() == 2 && args[0] == "-w" && args[1] == file,
+        "uhd_image_loader" => {
+            args.len() == 2
+                && args[0].starts_with("--args=type=usrp2,addr=")
+                && (args[1] == format!("--fpga-path={file}")
+                    || args[1] == format!("--fw-path={file}"))
+        }
+        _ => false,
+    }
+}
+
 #[tauri::command]
-pub fn sdr_flash(argv: Vec<String>, file: Option<String>) -> Result<String, String> {
+pub async fn sdr_flash(argv: Vec<String>, file: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sdr_flash_blocking(argv, file))
+        .await
+        .map_err(|e| format!("sdr_flash join: {e}"))?
+}
+
+fn sdr_flash_blocking(argv: Vec<String>, file: Option<String>) -> Result<String, String> {
     if argv.is_empty() {
         return Err("нет команды прошивки (Pluto — mass-storage вручную)".into());
     }
@@ -155,6 +186,9 @@ pub fn sdr_flash(argv: Vec<String>, file: Option<String>) -> Result<String, Stri
         let low = f.to_ascii_lowercase();
         if low.ends_with(".elf") || low.contains("esp32") {
             return Err("это похоже на прошивку ESP32 — на SDR не шьём".into());
+        }
+        if !args_ok(bin, &argv[1..], f) {
+            return Err(format!("аргументы {bin} не по шаблону LEGION — отказ"));
         }
     } else {
         return Err("нет абсолютного пути к образу — CLI не ищет в cwd".into());
@@ -201,4 +235,37 @@ pub fn sdr_host_info() -> Result<serde_json::Value, String> {
         "hasHackrfFlash": which("hackrf_spiflash").is_some(),
         "hasSoapyUtil": which("SoapySDRUtil").is_some(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn args_templates() {
+        let f = "/tmp/fw/hostedxA4.rbf";
+        assert!(args_ok("bladeRF-cli", &["-l".into(), f.into()], f));
+        assert!(args_ok("bladeRF-cli", &["-L".into(), f.into()], f));
+        assert!(args_ok("bladeRF-cli", &["-f".into(), f.into()], f));
+        // чужой файл / лишний флаг / другой бинарь — отказ
+        assert!(!args_ok("bladeRF-cli", &["-l".into(), "/etc/passwd".into()], f));
+        assert!(!args_ok("bladeRF-cli", &["-l".into(), f.into(), "--debug".into()], f));
+        assert!(!args_ok("hackrf_spiflash", &["-w".into(), f.into()], "/other.bin"));
+        assert!(args_ok("hackrf_spiflash", &["-w".into(), f.into()], f));
+        assert!(args_ok(
+            "uhd_image_loader",
+            &["--args=type=usrp2,addr=192.168.10.2".into(), format!("--fw-path={f}")],
+            f
+        ));
+        assert!(args_ok(
+            "uhd_image_loader",
+            &["--args=type=usrp2,addr=192.168.10.2".into(), format!("--fpga-path={f}")],
+            f
+        ));
+        assert!(!args_ok(
+            "uhd_image_loader",
+            &["--args=type=usrp2,addr=192.168.10.2".into(), format!("--other={f}")],
+            f
+        ));
+    }
 }

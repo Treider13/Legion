@@ -60,15 +60,17 @@ export function planHandoff(i: HandoffInput): HandoffPlan {
 export class HandoffGate {
   inflight = false;
   lastCuedMhz: number | null = null;
-  queuedMhz: number | null = null;
+  /** Очередь из одной цели с мощностью: без powerDbm queued-переход писал
+   *  0 дБм в lastForwardPowerDbm и выключал приоритетный перехват (0 непобедим). */
+  queued: { mhz: number; powerDbm: number } | null = null;
   /** Частота, которую сейчас пытаемся поставить. Не успех, пока нет commit. */
   pendingMhz: number | null = null;
 
   reserve(mhz: number): void {
     this.inflight = true;
     this.pendingMhz = mhz;
-    if (this.queuedMhz !== null && sameBin(this.queuedMhz, mhz)) {
-      this.queuedMhz = null;
+    if (this.queued !== null && sameBin(this.queued.mhz, mhz)) {
+      this.queued = null;
     }
   }
 
@@ -82,34 +84,34 @@ export class HandoffGate {
   }
 
   /** Пока TX ставится — более сильную другую частоту кладём в очередь. */
-  queueIfBusy(mhz: number): boolean {
+  queueIfBusy(mhz: number, powerDbm = 0): boolean {
     if (!this.inflight) return false;
     if (this.lastCuedMhz !== null && sameBin(this.lastCuedMhz, mhz)) return true;
     if (this.pendingMhz !== null && sameBin(this.pendingMhz, mhz)) return true;
-    this.queuedMhz = mhz;
+    this.queued = { mhz, powerDbm };
     return true;
   }
 
   dropHold(): number | null {
     const was = this.lastCuedMhz;
     this.lastCuedMhz = null;
-    this.queuedMhz = null;
+    this.queued = null;
     this.pendingMhz = null;
     return was;
   }
 
-  release(): number | null {
+  release(): { mhz: number; powerDbm: number } | null {
     this.inflight = false;
     this.pendingMhz = null;
-    const q = this.queuedMhz;
-    this.queuedMhz = null;
+    const q = this.queued;
+    this.queued = null;
     return q;
   }
 
   reset(): void {
     this.inflight = false;
     this.lastCuedMhz = null;
-    this.queuedMhz = null;
+    this.queued = null;
     this.pendingMhz = null;
   }
 }

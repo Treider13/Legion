@@ -202,24 +202,28 @@ export function ScanPanel() {
       <div className="spectrum-wrap" aria-label="Спектр скана">
         {auto && s.scanBins.length > 0 ? (
           <svg className="spectrum-svg" viewBox="0 0 640 88" preserveAspectRatio="none" role="img">
-            {s.scanBins.map((b, i) => {
-              const x = (i / Math.max(s.scanBins.length - 1, 1)) * 640;
-              const n = 88;
-              const h = Math.min(n, Math.max(2, ((b.powerDbm + 100) / 70) * n));
-              const hit = s.detections.some((d) => Math.abs(d.freqMhz - b.freqMhz) < 0.3);
-              const tx =
-                s.lastForwardMhz != null && Math.abs(b.freqMhz - s.lastForwardMhz) < 0.3;
-              return (
-                <rect
-                  key={`${b.freqMhz}-${i}`}
-                  x={x}
-                  y={88 - h}
-                  width={Math.max(640 / s.scanBins.length - 0.4, 1)}
-                  height={h}
-                  fill={tx ? "#ff6b73" : hit ? "#5eead4" : "rgba(45,212,191,0.28)"}
-                />
-              );
-            })}
+            {s.scanBins
+              .filter((b) => b.freqMhz >= f1 && b.freqMhz <= f2)
+              .map((b, i) => {
+                // Позиция по РЕАЛЬНОЙ частоте бина: раньше x брался по индексу —
+                // содержимое окна растягивалось на всю полосу (аудит N2).
+                const x = ((b.freqMhz - f1) / span) * 640;
+                const n = 88;
+                const h = Math.min(n, Math.max(2, ((b.powerDbm + 100) / 70) * n));
+                const hit = s.detections.some((d) => Math.abs(d.freqMhz - b.freqMhz) < 0.3);
+                const tx =
+                  s.lastForwardMhz != null && Math.abs(b.freqMhz - s.lastForwardMhz) < 0.3;
+                return (
+                  <rect
+                    key={`${b.freqMhz}-${i}`}
+                    x={x}
+                    y={88 - h}
+                    width={Math.max(640 / s.scanBins.length - 0.4, 1)}
+                    height={h}
+                    fill={tx ? "#ff6b73" : hit ? "#5eead4" : "rgba(45,212,191,0.28)"}
+                  />
+                );
+              })}
           </svg>
         ) : (
           <div className="spectrum-strip">

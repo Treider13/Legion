@@ -52,7 +52,7 @@ bool corridor_active();
 CorridorMode corridor_mode();
 const char* corridor_mode_name(CorridorMode m);  // для STATUS?/телеметрии
 uint64_t corridor_current_hz();
-const CorridorConfig& corridor_config();
+CorridorConfig corridor_config();  // копия под мьютексом (не ссылка — анти-torn-read)
 
 PlanStatus corridor_apply_fast(uint64_t freq_hz);
 

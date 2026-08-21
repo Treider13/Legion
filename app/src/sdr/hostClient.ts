@@ -168,17 +168,24 @@ export async function hostEsp32Flash(
 }
 
 export function markCatalogPresent(list: SdrDeviceInfo[], found: Array<Record<string, string>>): SdrDeviceInfo[] {
-  const blob = found.map((d) => Object.values(d).join(" ").toLowerCase()).join(" ");
+  // Матчим ПОСТРОЧНО, не по общему blob: раньше один найденный bladeRF помечал
+  // все модели bladeRF, а serial становился первыми 48 символами свалки всех
+  // устройств (аудит №24).
+  const rows = found.map((d) => ({
+    blob: Object.values(d).join(" ").toLowerCase(),
+    serial: String(d.serial ?? d.label ?? ""),
+  }));
+  const matches = (id: string, blob: string): boolean =>
+    (id.includes("bladerf") && blob.includes("bladerf")) ||
+    (id.includes("hackrf") && blob.includes("hackrf")) ||
+    (id.includes("pluto") && (blob.includes("pluto") || blob.includes("ad936"))) ||
+    (id.includes("n210") && (blob.includes("n210") || blob.includes("usrp2"))) ||
+    (id.includes("b210") && blob.includes("b210")) ||
+    (id.includes("lime") && blob.includes("lime")) ||
+    (id.includes("rtl") && (blob.includes("rtlsdr") || blob.includes("rtl")));
   return list.map((e) => {
-    const hit =
-      (e.id.includes("bladerf") && blob.includes("bladerf")) ||
-      (e.id.includes("hackrf") && blob.includes("hackrf")) ||
-      (e.id.includes("pluto") && (blob.includes("pluto") || blob.includes("ad936"))) ||
-      (e.id.includes("n210") && (blob.includes("usrp") || blob.includes("usrp2"))) ||
-      (e.id.includes("b210") && blob.includes("b210")) ||
-      (e.id.includes("lime") && blob.includes("lime")) ||
-      (e.id.includes("rtl") && (blob.includes("rtlsdr") || blob.includes("rtl")));
-    return { ...e, present: hit, serial: hit ? blob.slice(0, 48) : e.serial };
+    const row = rows.find((r) => matches(e.id, r.blob));
+    return { ...e, present: !!row, serial: row ? row.serial.slice(0, 64) : e.serial };
   });
 }
 
