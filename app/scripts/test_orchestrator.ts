@@ -16,14 +16,17 @@ import {
   heldHitAlive,
   nextAfterOperatorReset,
   pickArmedAutoTarget,
-  pickAutoTarget,
+  pickPriorityTarget,
+  pickTurnTarget,
   refreshSkipMhz,
-  rememberSeenMhz,
   RESENSE_MS,
+  uniqueBins,
   windowCoversMhz,
 } from "../src/sense/hold";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
 import {
+  autoDispatchLabelRu,
+  autoDispatchOptionRu,
   autoForwardAllowed,
   bandListFor,
   modeConflict,
@@ -281,7 +284,8 @@ function main(): void {
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);
   check("окно 20 МГц на xA4", clampWindowMhz(20, 56) === 20);
   check("окно 100 режется analog BW", clampWindowMhz(100, 56) === 56);
-  check("выдержка 10 → 16 мс минимум", clampDwellMs(10) === 16);
+  check("выдержка 0.3 мс → 1 мс (хост, не FPGA)", clampDwellMs(0.3) === 1);
+  check("выдержка 10 мс не режется до 16", clampDwellMs(10) === 10);
   const sweepW = new ScanWalker({
     bands: ism,
     pattern: "sweep",
@@ -368,6 +372,11 @@ function main(): void {
   check("без ПЕРЕДАТЬ процесс не живёт", shouldKeepTransmit({ operatorArmed: false, liveEmpty: true }) === false);
   check("авто reason — до стопа оператора", planSdrWork("auto").reason.includes("пока оператор не стопнет"));
   check("качание reason — Ethernet до стопа", planSdrWork("sweep").reason.includes("пока оператор не стопнет"));
+  check("обычный АВТО по очереди", planSdrWork("auto", "turn").reason.includes("по очереди"));
+  check("приоритет АВТО сильнее", planSdrWork("auto", "priority").reason.includes("сильнее"));
+  check("имя обычного АВТО", autoDispatchLabelRu("turn") === "ОБЫЧНЫЙ");
+  check("имя приоритета", autoDispatchLabelRu("priority") === "ПРИОРИТЕТ");
+  check("опция обычного про выдержку", autoDispatchOptionRu("turn").includes("очереди"));
   const autoW = new ScanWalker({ bands: ism, pattern: "auto", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   const sweepEq = new ScanWalker({ bands: ism, pattern: "sweep", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   check(
@@ -508,62 +517,79 @@ function main(): void {
     { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
   ];
   check("СБРОСИТЬ не выбирает из архива", nextAfterOperatorReset(archive) === null);
+  const three = [
+    { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false },
+    { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 1, forwarded: true },
+    { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+  ];
   check(
-    "авто: новый сигнал сразу, даже сильнее",
-    pickAutoTarget(
+    "приоритет: сильнее сбивает текущую",
+    pickPriorityTarget(
       [
         { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
         { freqMhz: 2480, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
       ],
       2442,
-      null,
-      [2442],
+      -40,
     )?.freqMhz === 2480,
   );
   check(
-    "авто: новый слабее тоже сразу на усилитель",
-    pickAutoTarget(
+    "приоритет: слабее не сбивает",
+    pickPriorityTarget(
       [
         { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
         { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
       ],
       2442,
-      null,
-      [2442],
-    )?.freqMhz === 2480,
-  );
-  check(
-    "авто: уже виденные не пинг-понгуют",
-    pickAutoTarget(
-      [
-        { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
-        { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
-      ],
-      2442,
-      null,
-      [2442, 2480],
+      -20,
     ) === null,
   );
   check(
-    "авто: без замка берём сильнейший живой",
-    pickAutoTarget(
+    "приоритет: без силы текущей не прыгаем вслепую",
+    pickPriorityTarget(
       [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
+      2442,
+      null,
+    ) === null,
+  );
+  check(
+    "приоритет: без замка берём сильнейший",
+    pickPriorityTarget(
+      [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
+      null,
       null,
     )?.freqMhz === 2480,
   );
   check(
     "после сброса живое окно минус снятая",
-    pickAutoTarget(
+    pickPriorityTarget(
       [
         { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 2, forwarded: false },
         { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 2, forwarded: false },
       ],
       null,
+      null,
       2442,
     )?.freqMhz === 2410,
   );
-  check("rememberSeen не дублирует бин", rememberSeenMhz([2442], 2442.05).length === 1);
-  check("rememberSeen добавляет новый", rememberSeenMhz([2442], 2480).join(",") === "2442,2480");
+  const q1 = pickTurnTarget(three, null, 2410, -30);
+  const q2 = pickTurnTarget(three, null, q1?.freqMhz ?? 2410, q1?.powerDbm ?? 0);
+  const q3 = pickTurnTarget(three, null, q2?.freqMhz ?? 2442, q2?.powerDbm ?? 0);
+  check("очередь идёт по кругу трёх частот", q1?.freqMhz === 2442 && q2?.freqMhz === 2480 && q3?.freqMhz === 2410);
+  check(
+    "очередь одна частота — остаёмся на ней",
+    pickTurnTarget(
+      [{ freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true }],
+      null,
+      2442,
+      -20,
+    )?.freqMhz === 2442,
+  );
+  check(
+    "очередь без замка стартует с сильнейшей",
+    pickTurnTarget(three, null, null)?.freqMhz === 2442,
+  );
+  check("uniqueBins сливает соседние", uniqueBins(three.concat(three)).length === 3);
   const staleArchive = [
     { freqMhz: 2410, powerDbm: -5, noiseDbm: -90, snrDb: 85, ts: 1, forwarded: false },
   ];
@@ -576,8 +602,9 @@ function main(): void {
       liveWindow: liveNow,
       archive: staleArchive,
       heldMhz: null,
+      heldPowerDbm: null,
       skipMhz: null,
-      seenMhz: [],
+      dispatch: "priority",
     })?.freqMhz === 2480,
   );
   check(
@@ -586,8 +613,9 @@ function main(): void {
       liveWindow: [],
       archive: staleArchive,
       heldMhz: null,
+      heldPowerDbm: null,
       skipMhz: null,
-      seenMhz: [],
+      dispatch: "turn",
     }) === null,
   );
   check("окно покрывает центр", windowCoversMhz(2442, 20, 2442));

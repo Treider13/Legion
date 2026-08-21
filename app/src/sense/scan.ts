@@ -39,9 +39,13 @@ export function clampWindowMhz(wantMhz: number, analogBwMhz: number): number {
   return Math.round(Math.min(Math.max(w, 0.2), cap) * 1000) / 1000;
 }
 
+/** Хост Soapy/JS: setInterval в целых мс. 0.3 мс FPGA не ставит. */
+export const DWELL_MIN_MS = 1;
+export const DWELL_MAX_MS = 5000;
+
 export function clampDwellMs(ms: number, fallback = 40): number {
   const n = Number.isFinite(ms) && ms > 0 ? ms : fallback;
-  return Math.round(Math.min(Math.max(n, 16), 5000));
+  return Math.round(Math.min(Math.max(n, DWELL_MIN_MS), DWELL_MAX_MS));
 }
 
 /** Детерминированный RNG для случайной полосы (тесты и повтор). */

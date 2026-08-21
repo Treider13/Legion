@@ -1,5 +1,5 @@
 // ============================================================================
-// LEGION — после ПЕРЕДАТЬ: каждый новый сигнал сразу на усилитель.
+// LEGION — после ПЕРЕДАТЬ: приоритет (сильнее) или обычный (очередь + выдержка).
 // СБРОСИТЬ — только кнопка оператора, не таймер и не архив засечек.
 // Свой CW заполняет тот же бин: «пропала» не видно, пока тон на RF out.
 // ============================================================================
@@ -8,34 +8,69 @@ import { pickStrongest, sameBin } from "./orchestrator";
 
 export const RESENSE_MS = 1000;
 
+export type AutoDispatch = "priority" | "turn";
+
 export function heldHitAlive(dets: readonly Detection[], heldMhz: number): boolean {
   return dets.some((d) => sameBin(d.freqMhz, heldMhz));
 }
 
-export function rememberSeenMhz(seen: readonly number[], mhz: number): number[] {
-  if (seen.some((f) => sameBin(f, mhz))) return [...seen];
-  return [...seen, mhz];
+export function uniqueBins(dets: readonly Detection[]): Detection[] {
+  const out: Detection[] = [];
+  for (const d of dets) {
+    const i = out.findIndex((x) => sameBin(x.freqMhz, d.freqMhz));
+    if (i < 0) out.push({ ...d });
+    else if (d.powerDbm > out[i].powerDbm) out[i] = { ...d };
+  }
+  return out;
 }
 
-/**
- * Цель авто-режима из ТЕКУЩЕГО окна, не из merge-архива.
- * Новый бин (ещё не уходил на TX в этой сессии) — сразу, даже слабее текущего.
- * Уже виденные не пинг-понгуют каждый тик (свой CW вырезан withoutOwnTx).
- * skipMhz — частота, которую оператор только что сбросил.
- */
-export function pickAutoTarget(
+/** ПРИОРИТЕТ: на усилитель только сильнейшая. Слабее текущую не сбивает. */
+export function pickPriorityTarget(
   liveWindow: readonly Detection[],
   heldMhz: number | null,
+  heldPowerDbm: number | null,
   skipMhz: number | null = null,
-  seenMhz: readonly number[] = [],
 ): Detection | null {
   const pool =
     skipMhz == null ? liveWindow : liveWindow.filter((d) => !sameBin(d.freqMhz, skipMhz));
+  const best = pickStrongest(pool);
+  if (!best) return null;
+  if (heldMhz == null) return best;
+  if (sameBin(best.freqMhz, heldMhz)) return null;
+  if (heldPowerDbm == null) return null;
+  if (best.powerDbm > heldPowerDbm) return best;
+  return null;
+}
+
+/**
+ * ОБЫЧНЫЙ: живые по кругу. Выдержка = сколько держим текущую, потом следующая.
+ * held нет в withoutOwnTx — подставляем слот, иначе третья частота выпадает.
+ */
+export function pickTurnTarget(
+  liveWindow: readonly Detection[],
+  skipMhz: number | null,
+  heldMhz: number | null,
+  heldPowerDbm: number | null = null,
+): Detection | null {
+  let pool = uniqueBins(
+    skipMhz == null ? liveWindow : liveWindow.filter((d) => !sameBin(d.freqMhz, skipMhz)),
+  );
+  if (heldMhz != null && !pool.some((d) => sameBin(d.freqMhz, heldMhz))) {
+    pool.push({
+      freqMhz: heldMhz,
+      powerDbm: heldPowerDbm ?? 0,
+      noiseDbm: 0,
+      snrDb: 0,
+      ts: 0,
+      forwarded: true,
+    });
+  }
+  pool = uniqueBins(pool).sort((a, b) => a.freqMhz - b.freqMhz);
   if (pool.length === 0) return null;
-  const fresh = pool.filter((d) => !seenMhz.some((f) => sameBin(f, d.freqMhz)));
-  if (fresh.length > 0) return pickStrongest(fresh);
-  if (heldMhz != null) return null;
-  return pickStrongest(pool);
+  if (heldMhz == null) return pickStrongest(pool);
+  const idx = pool.findIndex((d) => sameBin(d.freqMhz, heldMhz));
+  if (idx < 0) return pool[0];
+  return pool[(idx + 1) % pool.length];
 }
 
 /** СБРОСИТЬ не выбирает следующую из архива. Ждём живое окно. */
@@ -43,16 +78,20 @@ export function nextAfterOperatorReset(_archive: readonly Detection[]): null {
   return null;
 }
 
-/** Merge-архив (до 48 бинов) на TX не идёт — только текущее FFT-окно. */
+/** Merge-архив на TX не идёт — только текущее FFT-окно. */
 export function pickArmedAutoTarget(opts: {
   liveWindow: readonly Detection[];
   archive: readonly Detection[];
   heldMhz: number | null;
+  heldPowerDbm: number | null;
   skipMhz: number | null;
-  seenMhz: readonly number[];
+  dispatch: AutoDispatch;
 }): Detection | null {
   void opts.archive;
-  return pickAutoTarget(opts.liveWindow, opts.heldMhz, opts.skipMhz, opts.seenMhz);
+  if (opts.dispatch === "turn") {
+    return pickTurnTarget(opts.liveWindow, opts.skipMhz, opts.heldMhz, opts.heldPowerDbm);
+  }
+  return pickPriorityTarget(opts.liveWindow, opts.heldMhz, opts.heldPowerDbm, opts.skipMhz);
 }
 
 export function windowCoversMhz(centerMhz: number, windowMhz: number, mhz: number): boolean {

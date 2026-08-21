@@ -21,6 +21,7 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
 export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop";
+export type AutoDispatch = "priority" | "turn";
 
 export function runIntentArmsTx(intent: SdrRunIntent): boolean {
   return intent === "transmit";
@@ -67,16 +68,30 @@ export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
   return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите АВТО`;
 }
 
-export function planSdrWork(pattern: SdrWalkPattern): {
+export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
+  return dispatch === "priority" ? "ПРИОРИТЕТ" : "ОБЫЧНЫЙ";
+}
+
+export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
+  return dispatch === "priority"
+    ? "ПРИОРИТЕТ (сильнее на усилитель)"
+    : "ОБЫЧНЫЙ (по очереди, выдержка)";
+}
+
+export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "turn"): {
   useScanner: boolean;
   openLoopTx: boolean;
   reason: string;
 } {
   if (pattern === "auto") {
+    const how =
+      dispatch === "turn"
+        ? "обычный: живые по очереди, каждая выдержка на усилителе"
+        : "приоритет: сильнее сразу на усилитель";
     return {
       useScanner: true,
       openLoopTx: false,
-      reason: "сканер RX → каждый новый сигнал сразу на TX SDR → усилитель, пока оператор не стопнет",
+      reason: `сканер RX → ${how}, пока оператор не стопнет`,
     };
   }
   return {

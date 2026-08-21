@@ -1,5 +1,10 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
-import { patternOptionRu, scannerParticipates } from "../sense/modes";
+import {
+  autoDispatchOptionRu,
+  patternOptionRu,
+  scannerParticipates,
+  type AutoDispatch,
+} from "../sense/modes";
 import type { ScanPattern } from "../sense/scan";
 import { useLegion } from "../state/store";
 
@@ -16,10 +21,10 @@ export function ScanPanel() {
     <section className="panel">
       <span className="panel-title">РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА</span>
       <p className="panel-note">
-        АВТО: антенна RX находит сигнал, ПЕРЕДАТЬ — этот и каждый следующий сразу
-        на усилитель, пока оператор не стопнет. Решение FFT на ноутбуке, RF на SDR.
-        Качание / сплошная / случайная: ноутбук гонит TX LO по Ethernet, сканер не
-        участвует. СБРОСИТЬ — оператор. ESP32 сюда не входит.
+        АВТО: антенна RX находит сигнал, ПЕРЕДАТЬ — на усилитель до стопа.
+        Приоритет — сильнее. Обычный — по очереди, каждая выдержка. Хост Soapy не
+        ставит 0.3 мс: минимум 1 мс. Качание / сплошная / случайная — без сканера.
+        СБРОСИТЬ — оператор. ESP32 сюда не входит.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -35,7 +40,7 @@ export function ScanPanel() {
             {s.lastForwardMhz != null ? `${s.lastForwardMhz.toFixed(3)}` : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц · {auto ? "авто" : "открытый TX"}
+            МГц · {auto ? (s.autoDispatch === "priority" ? "приоритет" : "очередь") : "открытый TX"}
             {s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
             {s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
           </span>
@@ -56,6 +61,20 @@ export function ScanPanel() {
             <option value="hop">{patternOptionRu("hop")}</option>
           </select>
         </label>
+        {auto && (
+          <label>
+            АВТО
+            <select
+              aria-label="Приоритет или очередь АВТО"
+              value={s.autoDispatch}
+              onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
+              disabled={busy}
+            >
+              <option value="turn">{autoDispatchOptionRu("turn")}</option>
+              <option value="priority">{autoDispatchOptionRu("priority")}</option>
+            </select>
+          </label>
+        )}
         <label>
           F1 МГц
           <input
@@ -91,7 +110,9 @@ export function ScanPanel() {
       </div>
       <p className="sens-hint">
         {auto
-          ? "авто: нашёлся сигнал — сразу на усилитель; нашёлся ещё — сразу; стоп — оператор"
+          ? s.autoDispatch === "priority"
+            ? "приоритет: на усилитель идёт сильнейшая, пока оператор не стопнет"
+            : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
           : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
       {auto && (

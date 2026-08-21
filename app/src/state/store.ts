@@ -27,19 +27,19 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
+import { heldHitAlive, pickArmedAutoTarget, refreshSkipMhz, RESENSE_MS } from "../sense/hold";
 import {
-  heldHitAlive,
-  pickArmedAutoTarget,
-  refreshSkipMhz,
-  rememberSeenMhz,
-  RESENSE_MS,
-} from "../sense/hold";
-import { modeConflict, modeOf, planSdrWork, scanRefusedReason, scannerParticipates } from "../sense/modes";
+  modeConflict,
+  modeOf,
+  planSdrWork,
+  scanRefusedReason,
+  scannerParticipates,
+  type AutoDispatch,
+} from "../sense/modes";
 import {
   markForwarded,
   mergeDetections,
   pickStrongest,
-  sameBin,
   withoutOwnTx,
 } from "../sense/orchestrator";
 import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
@@ -128,6 +128,8 @@ interface LegionStore {
   /** 0 = все подряд, 100 = только сильные. */
   scanSensitivity: number;
   scanPattern: ScanPattern;
+  /** АВТО: приоритет = сильнее; обычный = очередь + выдержка. */
+  autoDispatch: AutoDispatch;
   scanWindowMhz: string;
   scanDwellMs: string;
   sdrHoldSince: number | null;
@@ -163,6 +165,7 @@ interface LegionStore {
   setScanThreshold(db: number): void;
   setScanSensitivity(sens: number): void;
   setScanPattern(p: ScanPattern): void;
+  setAutoDispatch(d: AutoDispatch): void;
   setScanWindowMhz(v: string): void;
   setScanDwellMs(v: string): void;
   resetSdrLock(): Promise<void>;
@@ -219,8 +222,6 @@ const gGate = new HandoffGate();
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
 let gSkipMhz: number | null = null;
-/** Частоты, уже ушедшие на TX в этой сессии ПЕРЕДАТЬ — чтобы не пинг-понгать. */
-let gSeenMhz: number[] = [];
 
 function stopTxWatch(): void {
   if (gTxWatch) {
@@ -284,7 +285,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
-        gSeenMhz = rememberSeenMhz(gSeenMhz, plan.freqMhz);
       }
       executeHandoff(plan, sdrUs, powerDbm);
     } finally {
@@ -329,8 +329,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         liveWindow: dets,
         archive: get().detections,
         heldMhz,
+        heldPowerDbm: dets.find((d) => Math.abs(d.freqMhz - heldMhz) <= 0.2)?.powerDbm ?? null,
         skipMhz: gSkipMhz,
-        seenMhz: gSeenMhz,
+        dispatch: get().autoDispatch,
       });
       if (nextHit) {
         gGate.dropHold();
@@ -458,6 +459,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
     scanPattern: "auto",
+    autoDispatch: "turn",
     scanWindowMhz: "20",
     scanDwellMs: "40",
     scanCenterMhz: null,
@@ -508,7 +510,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         void hostClose();
       }
       gLive = false;
-      gSeenMhz = [];
       gSdr.setEmulation(v);
       set({
         sdrEmulation: v,
@@ -534,6 +535,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ scanSensitivity: s, scanThresholdDb: thr });
     },
     setScanPattern: (p) => set({ scanPattern: p }),
+    setAutoDispatch: (d) => set({ autoDispatch: d }),
     setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
     setScanDwellMs: (v) => set({ scanDwellMs: v }),
     clearLog: () => set({ log: [] }),
@@ -956,7 +958,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLive = false;
       gResense = false;
       gSkipMhz = null;
-      gSeenMhz = [];
       set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
       pushLog("sys", "SDR закрыт");
     },
@@ -1076,13 +1077,11 @@ export const useLegion = create<LegionStore>((set, get) => {
             bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
           }
           const now = Date.now();
-          detections = withoutOwnTx(
-            clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
-              ...d,
-              ts: now,
-            })),
-            get().lastForwardMhz,
-          );
+          const raw = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
+            ...d,
+            ts: now,
+          }));
+          detections = withoutOwnTx(raw, get().lastForwardMhz);
           if (centerMhz) set({ scanCenterMhz: centerMhz });
           if (detections.length > 0) {
             const dets = mergeDetections(get().detections, detections);
@@ -1097,18 +1096,25 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
           gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, winMhz, bins.length > 0);
           const held = gGate.lastCuedMhz;
-          if (held != null && !gGate.inflight && Date.now() - lastResenseAt >= RESENSE_MS) {
+          if (
+            cur.autoDispatch === "priority" &&
+            held != null &&
+            !gGate.inflight &&
+            Date.now() - lastResenseAt >= RESENSE_MS
+          ) {
             lastResenseAt = Date.now();
             await resenseHeld(held, winMhz, nBins);
           }
           const after = get();
           const heldNow = gGate.lastCuedMhz;
+          const dispatch = after.autoDispatch;
           const target = pickArmedAutoTarget({
-            liveWindow: detections,
+            liveWindow: dispatch === "turn" ? raw : detections,
             archive: after.detections,
             heldMhz: heldNow,
+            heldPowerDbm: after.lastForwardPowerDbm,
             skipMhz: gSkipMhz,
-            seenMhz: gSeenMhz,
+            dispatch,
           });
           if (!target) return;
           if (gGate.queueIfBusy(target.freqMhz)) return;
@@ -1160,8 +1166,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       set({ transmitArmed: true });
-      gSeenMhz = [];
-      const work = planSdrWork(get().scanPattern);
+      const work = planSdrWork(get().scanPattern, get().autoDispatch);
       pushLog("sys", `ПЕРЕДАТЬ: ${work.reason}`);
       stopTxWatch();
       if (gLive) {
@@ -1188,16 +1193,16 @@ export const useLegion = create<LegionStore>((set, get) => {
         get().startScan();
         return;
       }
-      const live = withoutOwnTx(
-        clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands),
-        get().lastForwardMhz,
-      );
+      const raw = clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands);
+      const dispatch = get().autoDispatch;
+      const live = dispatch === "turn" ? raw : withoutOwnTx(raw, get().lastForwardMhz);
       const target = pickArmedAutoTarget({
         liveWindow: live,
         archive: get().detections,
         heldMhz: gGate.lastCuedMhz,
+        heldPowerDbm: get().lastForwardPowerDbm,
         skipMhz: gSkipMhz,
-        seenMhz: gSeenMhz,
+        dispatch,
       });
       if (target) runHandoff(target.freqMhz, target.powerDbm);
     },
@@ -1207,7 +1212,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       gResense = false;
       gSkipMhz = null;
-      gSeenMhz = [];
       set({ transmitArmed: false });
       gGate.reset();
       if (gLive) await hostTxOff();
