@@ -102,11 +102,11 @@ export function planEsp32Flash(opts: {
   if (!opts.confirmed) {
     return { ok: false, reason: "подтвердите: выбранная плата = env. Неверная прошивка кирпичит ESP32." };
   }
-  if (!isEsp32FlashEnv(opts.env)) {
-    return { ok: false, reason: `env «${opts.env}» не из firmware/platformio.ini — не шьём` };
-  }
   if (opts.env === "native" || opts.env === "native_fuzz") {
     return { ok: false, reason: "env native на железо не шьём" };
+  }
+  if (!isEsp32FlashEnv(opts.env)) {
+    return { ok: false, reason: `env «${opts.env}» не из firmware/platformio.ini — не шьём` };
   }
   if (!usableSerialPort(opts.port)) {
     return { ok: false, reason: "нужен реальный USB-UART порт (/dev/ttyUSB* / ttyACM* / COM*)" };
