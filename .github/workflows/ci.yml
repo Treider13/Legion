@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [cursor/**]
+    branches: [main, cursor/**]
   pull_request:
 
 jobs:
@@ -69,6 +69,12 @@ jobs:
       - name: Protocol smoke test (mock transport)
         working-directory: app
         run: npx tsx scripts/smoke_mock.ts
+      - name: Orchestrator / SDR / allowlist tests
+        working-directory: app
+        run: npx tsx scripts/test_orchestrator.ts
+      - name: TX race-fix scenarios (mock backend)
+        working-directory: app
+        run: npx tsx scripts/test_race_fixes.ts
       - name: WebSocket transport smoke test
         working-directory: app
         run: npx tsx scripts/smoke_ws.ts
@@ -147,4 +153,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyserial && python3 -m py_compile tools/legion_cli.py && python3 tools/legion_cli.py --list
+      - run: |
+          pip install pyserial
+          python3 -m py_compile tools/legion_cli.py tools/sdr_worker.py tools/test_sdr_worker.py
+          python3 tools/legion_cli.py --list
+          python3 tools/test_sdr_worker.py

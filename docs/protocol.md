@@ -16,11 +16,11 @@ PE43702 на SL22 не переводятся. Если на COM отвечае�
 | Команда | Формат | Ответ | Описание |
 |---|---|---|---|
 | Идентификация | `HELLO` | `OK LEGION <ver> <board>` | рукопожатие |
-| Частота | `SET FREQ <MHz>` (напр. `SET FREQ 2475.000`) | `OK FREQ=2475.000000 LOCK=1` | 35–4400 МГц |
+| Частота | `SET FREQ <MHz>` (напр. `SET FREQ 2475.000`) | `OK FREQ=2475.000000 LOCK=1` | 34.375–4400 МГц |
 | Мощность | `SET POWER <-4\|-1\|+2\|+5>` | `OK` | дБм, 4 ступени (F9) |
 | Вкл/выкл выход | `RF ON` / `RF OFF` | `OK` | через CE + R4 |
 | Свип | `SWEEP START <f1> <f2> STEP <kHz> DWELL <ms>` | `OK SWEEP RUNNING` | линейный коридор |
-| Хоппинг | `HOP START <f1> <f2> RATE <ms> SEED <n>` | `OK HOP RUNNING` | псевдослучайный (xorshift32) |
+| Хоппинг | `HOP START <f1> <f2> RATE <ms> SEED <n> [STEP <kHz>]` | `OK HOP RUNNING` | псевдослучайный (xorshift32) |
 | Чирp (фаза 6) | `CHIRP START <f1> <f2> STEP <Hz> DWELL <ms>` | `OK CHIRP RUNNING` | FMCW-рампа, **шаг в Гц** |
 | Глайд (фаза 6) | `GLIDE <targetMHz> <durationMs>` | `OK GLIDE RUNNING a -> b` | плавный переход, авто-стоп |
 | ЧМ (фаза 6) | `FM START <SIN\|TRI\|RAND> CENTER <MHz> DEPTH <kHz> RATE <ms>` | `OK FM RUNNING SIN` | ЧМ вокруг центра |
@@ -35,6 +35,27 @@ PE43702 на SL22 не переводятся. Если на COM отвечае�
 | Калибровка уровня (фаза 10) | `CAL LEVEL <freqMHz> <dBm>` / `CAL LEVEL CLEAR` | `OK CAL LEVEL ... n=<k>` | точка «частота → измеренный выход» |
 | Выравнивание уровня (фаза 10) | `SET LEVEL <dBm>` / `SET LEVEL OFF` | `OK LEVEL=<dBm> ATT=<dB>` | плоский уровень через PE43702 по калибровке |
 | Статус уровня (фаза 10) | `LEVEL?` | JSON `{enabled,target,points}` | таблица калибровки |
+| Allowlist (фаза 11) | `ALLOW ADD <f1> <f2>` / `ALLOW CLEAR` / `ALLOW?` | `OK ALLOW n=` / JSON | полосы, заранее разрешённые законом |
+| Нагрузка (фаза 11) | `LOAD OK` / `LOAD FAULT` / `LOAD?` | `OK LOAD …` / JSON | интерлок эквивалента 50 Ом |
+| Усилитель (фаза 11) | `PA SET I <mA>` / `PA ON` / `PA OFF` / `PA?` | `OK PA …` / JSON | ток 0–1500 мА; ON только при LOAD OK и I>0 |
+| Наведение (фаза 11) | `CUE <MHz>` | `OK CUE FREQ=… LOCK=` | SET FREQ только если частота в allowlist; **RF не включает** |
+
+Пустой allowlist **не** меняет SET FREQ / RF ON / SWEEP (совместимость фаз 1–10).
+Непустой allowlist: RF ON и коридор TX обязаны попадать в полосу — включая
+GLIDE (обе крайние точки) и FM (центр ± глубина).
+`CUE` всегда требует непустой allowlist и попадание.
+`LOAD FAULT` гасит RF и PA. `ERR LOAD` / `ERR ALLOW` — новые коды.
+
+Два режима в одной программе, тракты не смешиваются:
+
+1. **SDR (Ethernet):** антенна и усилитель на SDR. ПЕРЕДАТЬ ставит TX LO на
+   SDR и кормит RF out в усилитель. Команды `CUE` / `PA` / `RF` / `ALLOW` /
+   `LOAD` на ESP32 **не отправляются**. Полосы скана живут только на хосте.
+2. **ESP32 (USB):** коридор/частота/ток PA. Нет скана и нет SDR. `ALLOW` /
+   `LOAD` / `CUE` — только этот тракт.
+
+`CUE` остаётся в протоколе ESP32 (наведение синтезатора), но скан его не зовёт.
+На прошивке `CUE` — `synth_apply_fast` (без NVS и LOCK-wait).
 
 ## Телеметрия (WebSocket push, 10 Гц в режиме коридора)
 
@@ -52,8 +73,9 @@ PE43702 на SL22 не переводятся. Если на COM отвечае�
 
 | Код | Значение |
 |---|---|
-| `ERR RANGE` | частота вне 35–4400 МГц |
+| `ERR RANGE` | частота вне 34.375–4400 МГц |
 | `ERR SYNTAX` | парсер не понял команду |
-| `ERR LOCK` | нет захвата петли после таймаута |
 | `ERR STATE` | команда недопустима в текущем режиме |
 | `ERR DWELL` | dwell < минимально допустимого (band select + settling) |
+| `ERR LOAD` | нет подтверждённой нагрузки 50 Ом (RF ON / PA ON) |
+| `ERR ALLOW` | частота или коридор вне allowlist; либо CUE без попадания |

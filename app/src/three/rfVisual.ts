@@ -16,6 +16,10 @@ export interface RfVisualState {
   corrF2: number;
   /** Телеметрия коридора: текущая частота, МГц (null вне коридора) */
   telemFreqMhz: number | null;
+  /** Режим SDR: TX на усилитель */
+  sdrTransmit: boolean;
+  sdrHitMhz: number | null;
+  sdrTxMhz: number | null;
 }
 
 export const rfVisual: RfVisualState = {
@@ -25,6 +29,9 @@ export const rfVisual: RfVisualState = {
   corrF1: 2400,
   corrF2: 2500,
   telemFreqMhz: null,
+  sdrTransmit: false,
+  sdrHitMhz: null,
+  sdrTxMhz: null,
 };
 
 // Диапазон спектрального кольца (фиксированный «экран прибора»)

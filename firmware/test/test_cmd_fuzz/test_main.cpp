@@ -23,6 +23,7 @@ namespace legion {
 static bool g_lock_state = true;
 void Adf4351Driver::begin() {}
 void Adf4351Driver::writePlan(const SynthPlan&) {}
+void Adf4351Driver::writePlanDelta(const SynthPlan&, const SynthPlan&) {}
 void Adf4351Driver::writeRegister(uint32_t) {}
 bool Adf4351Driver::readLock() { return g_lock_state; }
 void Adf4351Driver::setChipEnable(bool) {}
@@ -69,6 +70,10 @@ PlanStatus synth_apply(uint64_t freq_hz, bool, bool& lock, SynthPlan* out) {
   SynthPlan tmp;
   return plan_frequency(freq_hz, cfg, tmp);
 }
+PlanStatus synth_apply_fast(uint64_t freq_hz, SynthPlan& out) {
+  PlannerConfig cfg;
+  return plan_frequency(freq_hz, cfg, out);
+}
 Adf4351Driver& synth_driver() { return g_drv; }
 
 // --- corridor ---
@@ -105,7 +110,7 @@ const char* corridor_mode_name(CorridorMode m) {
   }
 }
 uint64_t corridor_current_hz() { return 2400000000ULL; }
-const CorridorConfig& corridor_config() { return g_corr_cfg; }
+CorridorConfig corridor_config() { return g_corr_cfg; }
 
 // --- storage (no-op) ---
 void storage_save_freq(uint64_t) {}
@@ -124,6 +129,8 @@ void selftest_run(AppState&, Print& out) {
 void serial_sync_init() {}
 void serial_lock() {}
 void serial_unlock() {}
+void cmd_lock() {}
+void cmd_unlock() {}
 
 }  // namespace legion
 
@@ -147,10 +154,12 @@ static uint32_t rnd() {
 
 static const char* TOKENS[] = {
     "SET FREQ", "SET POWER", "SET ATT", "RF ON", "RF OFF", "STATUS?",
-    "REGS?", "SELFTEST", "HELLO", "STOP", "SWEEP START", "HOP START",
-    "CHIRP START", "GLIDE", "FM START", "CAL REF", "WIFI STATUS?",
-    "SWEEP STOP", "HOP STOP", "FM STOP", "SET LEVEL", "CAL LEVEL",
-    "LEVEL?", "SET LEVEL OFF", "CAL LEVEL CLEAR",
+    "REGS?", "REGS DIFF", "SELFTEST", "HELLO", "STOP", "SWEEP START",
+    "HOP START", "CHIRP START", "GLIDE", "FM START", "CAL REF",
+    "WIFI STATUS?", "SWEEP STOP", "HOP STOP", "FM STOP", "SET LEVEL",
+    "CAL LEVEL", "LEVEL?", "SET LEVEL OFF", "CAL LEVEL CLEAR",
+    "ALLOW ADD", "ALLOW CLEAR", "ALLOW?", "LOAD OK", "LOAD FAULT",
+    "LOAD?", "PA SET", "PA ON", "PA OFF", "PA?", "CUE",
 };
 
 static std::string fuzz_case() {
@@ -245,6 +254,43 @@ void test_fuzz_parser_10k() {
   g_uart.clear();
   g_cmd.processLine(alive3, g_uart);
   TEST_ASSERT(g_uart.buf.rfind("{", 0) == 0);
+
+  // Фаза 11: после фазза политика грязная — сбрасываем, затем проверяем.
+  // policy.cpp в этой сборке реальный (не двойник).
+  char clr[16], lok[16], cue1[32], add1[40], cue2[32], loadf[16], rfon[16];
+  strcpy(clr, "ALLOW CLEAR");
+  g_uart.clear();
+  g_cmd.processLine(clr, g_uart);
+  TEST_ASSERT(g_uart.buf.find("OK ALLOW n=0") != std::string::npos);
+  strcpy(lok, "LOAD OK");
+  g_uart.clear();
+  g_cmd.processLine(lok, g_uart);
+  TEST_ASSERT(g_uart.buf.rfind("OK LOAD OK", 0) == 0);
+
+  strcpy(cue1, "CUE 2475.000");
+  g_uart.clear();
+  g_cmd.processLine(cue1, g_uart);
+  TEST_ASSERT(g_uart.buf.rfind("ERR ALLOW", 0) == 0);
+
+  strcpy(add1, "ALLOW ADD 2400 2500");
+  g_uart.clear();
+  g_cmd.processLine(add1, g_uart);
+  TEST_ASSERT(g_uart.buf.find("OK ALLOW n=1") != std::string::npos);
+
+  strcpy(cue2, "CUE 2475.000");
+  g_uart.clear();
+  g_cmd.processLine(cue2, g_uart);
+  TEST_ASSERT(g_uart.buf.find("OK CUE FREQ=2475.000000") != std::string::npos);
+
+  strcpy(loadf, "LOAD FAULT");
+  g_uart.clear();
+  g_cmd.processLine(loadf, g_uart);
+  TEST_ASSERT(g_uart.buf.rfind("OK LOAD FAULT", 0) == 0);
+
+  strcpy(rfon, "RF ON");
+  g_uart.clear();
+  g_cmd.processLine(rfon, g_uart);
+  TEST_ASSERT(g_uart.buf.rfind("ERR LOAD", 0) == 0);
 }
 
 int main(int argc, char** argv) {

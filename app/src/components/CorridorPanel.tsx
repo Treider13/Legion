@@ -113,11 +113,11 @@ export function CorridorPanel() {
             disabled={!connected}
             onClick={() => void s.corridorStart()}
           >
-            ПОДАВИТЬ ЦЕЛЬ
+            ЗАПУСТИТЬ КОРИДОР
           </button>
         )}
         {s.corridorRunning && (
-          <span className="state-badge state-connected">ПОДАВЛЕНИЕ АКТИВНО</span>
+          <span className="state-badge state-connected">КОРИДОР TX</span>
         )}
       </div>
     </section>

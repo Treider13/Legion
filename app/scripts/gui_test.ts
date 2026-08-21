@@ -51,10 +51,14 @@ async function main(): Promise<void> {
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await new Promise((r) => setTimeout(r, 400));
 
-  // Коридор: старт (кнопка «ПОДАВИТЬ ЦЕЛЬ»)
+  // Коридор TX: вкладка + старт (не путать со сканом RX)
+  await page.evaluate(() => {
+    (document.querySelector('[data-workspace="corridor"]') as HTMLButtonElement)?.click();
+  });
+  await waitFor(page, `!!document.querySelector(".range-gate")`);
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll("button"));
-    (btns.find((b) => b.textContent?.includes("ПОДАВИТЬ")) as HTMLButtonElement)?.click();
+    (btns.find((b) => b.textContent?.includes("ЗАПУСТИТЬ КОРИДОР")) as HTMLButtonElement)?.click();
   });
   await waitFor(page, `!!document.querySelector(".range-marker")`);
   const marker1 = await page.$eval(".range-marker", (el) => (el as HTMLElement).style.left);
@@ -85,7 +89,7 @@ async function main(): Promise<void> {
     ["log has SWEEP RUNNING", logText.includes("OK SWEEP RUNNING")],
     ["telemetry flows (live readout)", rangeCur.includes("МГц") && curNum >= 2400 && curNum <= 2500],
     ["маркер движется", marker1 !== marker2],
-    ["hero-статус = ПОДАВЛЕНИЕ ЦЕЛИ", heroStatus.includes("ПОДАВЛЕНИЕ")],
+    ["hero-статус = КОРИДОР TX", heroStatus.includes("КОРИДОР TX")],
   ];
 
   let failed = 0;

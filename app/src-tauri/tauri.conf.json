@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ws: wss: ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:"
     }
   },
   "bundle": {
@@ -33,6 +33,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../../tools/sdr_worker.py": "sdr_worker.py",
+      "../../firmware": "firmware/"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

@@ -63,10 +63,12 @@ export class TauriSerialTransport implements Transport {
         const chunk = await this.port.read({ timeout: 100 });
         if (chunk) this.onChunk(chunk);
       } catch (e) {
-        // Таймаут чтения — штатно; прочее — ошибка транспорта
+        // Таймаут чтения — штатно; прочее — ошибка транспорта.
+        // При штатном disconnect() in-flight read может бросить — это не
+        // «ошибка»: не перекрываем состояние «disconnected» (аудит №28).
         const msg = String(e);
         if (!/timeout|timed out/i.test(msg)) {
-          this.emitState("error", msg);
+          if (this.reading) this.emitState("error", msg);
           break;
         }
       }
