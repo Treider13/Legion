@@ -100,15 +100,20 @@ begin
 
             -- ---------- PLAY (valid каждый 2-й такт — контракт LMS TX) ----------
             out_valid <= '0';
-            if play_en = '1' and cap_done_r = '1' then
+            if play_en = '1' then
                 phase <= not phase;
                 if phase = '1' then
+                    -- valid ВСЕГДА с каденсом: без capture_done гоним нули —
+                    -- иначе valid=0 надолго, а lms6002d при valid=0 держит
+                    -- на DAC ПОСЛЕДНИЙ сэмпл (статический мусор вместо тишины)
                     out_valid <= '1';
-                    playing_r <= '1';
-                    if rd_addr = len_m1 then
-                        rd_addr <= (others => '0');
-                    else
-                        rd_addr <= rd_addr + 1;
+                    if cap_done_r = '1' then
+                        playing_r <= '1';
+                        if rd_addr = len_m1 then
+                            rd_addr <= (others => '0');
+                        else
+                            rd_addr <= rd_addr + 1;
+                        end if;
                     end if;
                 end if;
             else

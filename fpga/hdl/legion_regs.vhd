@@ -68,6 +68,7 @@ architecture rtl of legion_regs is
     signal kick_toggle          : std_logic;
     signal kick_meta, kick_tx   : std_logic;
     signal kick_tx_d            : std_logic;
+    signal cap_meta, cap_tx     : std_logic;
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -119,6 +120,7 @@ begin
             lbs_meta  <= (others => '0'); lbs_tx  <= (others => '0');
             wdl_meta  <= (others => '0'); wdl_tx  <= (others => '0');
             kick_meta <= '0'; kick_tx <= '0'; kick_tx_d <= '0';
+            cap_meta  <= '0'; cap_tx  <= '0';
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -129,6 +131,9 @@ begin
             kick_meta <= kick_toggle;
             kick_tx   <= kick_meta;
             kick_tx_d <= kick_tx;
+            -- capture_arm: квазистатик, но плеер ловит фронт — двойной триггер
+            cap_meta  <= r_cap_arm;
+            cap_tx    <= cap_meta;
         end if;
     end process;
 
@@ -139,7 +144,7 @@ begin
     tx_lb_shift   <= unsigned(lbs_tx);
     tx_wd_limit   <= unsigned(wdl_tx);
     tx_player_len <= unsigned(len_tx);
-    tx_cap_arm    <= r_cap_arm;  -- capture идёт в tx_clock домене, см. топ
+    tx_cap_arm    <= cap_tx;
     tx_wd_kick    <= kick_tx and not kick_tx_d;
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------

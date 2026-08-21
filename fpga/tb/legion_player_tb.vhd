@@ -35,10 +35,27 @@ begin
         );
 
     stim : process
-        variable expected : integer;
+        variable expected  : integer;
+        variable saw_valid : boolean;
     begin
         wait for 20 ns;
         reset <= '0';
+        wait until rising_edge(clock);
+
+        -- PLAY ДО CAPTURE: тишина — нули, но valid с каденсом (контракт DAC)
+        play_en <= '1';
+        saw_valid := false;
+        for k in 0 to 7 loop
+            wait until rising_edge(clock);
+            if out_valid = '1' then
+                saw_valid := true;
+                assert out_i = 0 and out_q = 0
+                    report "FAIL: pre-capture silence not zero" severity failure;
+            end if;
+        end loop;
+        assert saw_valid report "FAIL: pre-capture silence w/o valid cadence" severity failure;
+        assert playing = '0' report "FAIL: playing before capture_done" severity failure;
+        play_en <= '0';
         wait until rising_edge(clock);
 
         -- CAPTURE: arm ДО старта потока (контракт: сэмпл на фронте arm

@@ -135,13 +135,15 @@ export interface FpgaStatus {
   fake?: boolean;
 }
 
-/** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS. */
-export async function hostFpga(cmd: Record<string, unknown>): Promise<FpgaStatus> {
+/** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.
+ *  gw — IP шлюза передаём явно: управление FPGA не зависит от того,
+ *  открыт ли Soapy-стрим (прошивка/мониторинг до старта потока). */
+export async function hostFpga(cmd: Record<string, unknown>, gw: string): Promise<FpgaStatus> {
   if (!hostSdrAvailable()) {
     return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
   }
   try {
-    return await hostRpc<FpgaStatus>({ op: "fpga", cmd });
+    return await hostRpc<FpgaStatus>({ op: "fpga", cmd, gw });
   } catch (e) {
     return { ok: false, reason: String(e) };
   }

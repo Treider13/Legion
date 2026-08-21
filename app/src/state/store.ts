@@ -1204,7 +1204,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       set({ fpgaBusy: true });
       try {
-        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true });
+        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true }, get().sdrGateway);
         pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) set({ fpgaArmed: true });
       } finally {
@@ -1215,7 +1215,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaDisarm: async () => {
       set({ fpgaBusy: true });
       try {
-        const r = await hostFpga({ op: "disarm" });
+        const r = await hostFpga({ op: "disarm" }, get().sdrGateway);
         pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) set({ fpgaArmed: false });
       } finally {
@@ -1224,7 +1224,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     fpgaPollStatus: async () => {
-      const r = await hostFpga({ op: "status" });
+      const r = await hostFpga({ op: "status" }, get().sdrGateway);
       set({ fpgaStatus: r });
     },
 

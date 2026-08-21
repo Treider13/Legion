@@ -1,5 +1,5 @@
---- /tmp/bladerf-hdl/hdl/fpga/platforms/bladerf/vhdl/bladerf-hosted.vhd	2026-08-21 16:43:20.672270226 +0000
-+++ /tmp/bladerf-legion.vhd	2026-08-21 17:06:25.074111950 +0000
+--- hdl/fpga/platforms/bladerf/vhdl/bladerf-hosted.vhd	2026-08-21 16:43:20.672270226 +0000
++++ /tmp/bladerf-legion.vhd	2026-08-21 17:15:59.091281892 +0000
 @@ -27,8 +27,9 @@
  library work;
      use work.bladerf_p.all;
@@ -11,7 +11,7 @@
  
      attribute noprune   : boolean ;
      attribute keep      : boolean ;
-@@ -270,6 +271,52 @@
+@@ -270,6 +271,55 @@
  
      signal rx_packet_ready           : std_logic;
  
@@ -52,6 +52,9 @@
 +    signal lg_play_en       : std_logic;
 +    signal lg_nco_en        : std_logic;
 +    signal lg_lb_wr_en      : std_logic;
++    signal lg_rx_arm        : std_logic;
++    signal lg_lb_active_tx  : std_logic;
++    signal lg_lb_active_rx  : std_logic;
 +    signal lg_det_active_tx : std_logic;
 +    signal lg_det_count     : unsigned(15 downto 0);
 +    signal lg_wd_fired      : std_logic;
@@ -64,7 +67,7 @@
  begin
  
      correction_tx_phase <= signed(correction_tx_phase_gain(31 downto 16));
-@@ -944,9 +991,11 @@
+@@ -944,9 +994,11 @@
          underflow_duration  =>  x"ffff"
        ) ;
  
@@ -79,7 +82,7 @@
  
      U_tx_iq_correction : entity work.iq_correction(tx)
        generic map (
-@@ -1211,7 +1260,10 @@
+@@ -1211,7 +1263,10 @@
          agc_dc_i_mid_export             => corr_dc_i_mid,
          agc_dc_q_mid_export             => corr_dc_q_mid,
          agc_dc_i_min_export             => corr_dc_i_min,
@@ -91,7 +94,7 @@
        ) ;
  
      -- Unpack the Nios general-purpose outputs into a record
-@@ -1398,4 +1450,152 @@
+@@ -1398,4 +1453,165 @@
              rx_packet_control      => rx_packet_control
          ) ;
  
@@ -127,6 +130,17 @@
 +        rx_det_thr    => lg_det_thr_rx,
 +        rx_det_shift  => lg_det_shift_rx
 +      );
++
++    -- arm/mode → rx_clock для гейтинга записи loopback FIFO
++    -- (квазистатичный контроль, двойной триггер — паттерн synchronizer Nuand)
++    U_legion_arm_rxsync : entity work.synchronizer
++      generic map ( RESET_LEVEL => '0' )
++      port map ( reset => rx_reset, clock => rx_clock,
++                 async => lg_tx_arm, sync => lg_rx_arm );
++    U_legion_lbact_rxsync : entity work.synchronizer
++      generic map ( RESET_LEVEL => '0' )
++      port map ( reset => rx_reset, clock => rx_clock,
++                 async => lg_lb_active_tx, sync => lg_lb_active_rx );
 +
 +    -- Детектор энергии: тап после RX iq_correction
 +    U_legion_detector : entity work.legion_detector
@@ -170,6 +184,8 @@
 +        playing      => lg_playing
 +      );
 +    lg_play_en <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
++    lg_lb_active_tx <= '1' when lg_tx_mode = LEGION_MODE_LB_GATED
++                            or lg_tx_mode = LEGION_MODE_LB_ALWAYS else '0';
 +
 +    -- NCO тон
 +    U_legion_nco : entity work.legion_nco
@@ -199,9 +215,9 @@
 +        rd_empty => lg_lb_empty,
 +        rd_level => lg_lb_level
 +      );
++    -- wr_en в домене rx_clock: агрегатный бит режима + ARM из синхронизаторов
 +    lg_lb_wr_en <= rx_sample_corrected_valid
-+                   when (lg_tx_mode = LEGION_MODE_LB_GATED or lg_tx_mode = LEGION_MODE_LB_ALWAYS)
-+                        and lg_tx_arm = '1' and lg_lb_full = '0'
++                   when lg_lb_active_rx = '1' and lg_rx_arm = '1' and lg_lb_full = '0'
 +                   else '0';
 +
 +    -- Watchdog (deadman): heartbeat от хоста через NIOS
