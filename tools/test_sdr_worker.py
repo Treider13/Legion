@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -22,6 +23,7 @@ def rpc(proc: subprocess.Popen[str], msg: dict) -> dict:
 def main() -> int:
     env = os.environ.copy()
     env["LEGION_SDR_FAKE"] = "1"
+    env["LEGION_FPGA_PORT"] = "5599"  # порт FPGA-агента в этом тесте
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE,
@@ -173,6 +175,36 @@ def main() -> int:
 
     bad = rpc(proc, {"op": "nope"})
     check("unknown op", bad.get("ok") is False)
+
+    # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
+    import threading
+    gw_env = os.environ.copy()
+    gw_env["LEGION_FPGA_FAKE"] = "1"
+    gw_env["LEGION_FPGA_PORT"] = "5599"
+    gw = subprocess.Popen(
+        [sys.executable, str(ROOT.parent / "fpga" / "host" / "legion_gateway.py")],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=gw_env,
+    )
+    try:
+        time.sleep(1.0)  # агент поднимается
+        pong = rpc(proc, {"op": "fpga", "cmd": {"op": "ping"}, "gw": "127.0.0.1"})
+        check("fpga relay ping через шлюз", pong.get("ok") is True and pong.get("fake") is True)
+
+        arm = rpc(proc, {"op": "fpga", "cmd": {"op": "arm", "mode": "player"}, "gw": "127.0.0.1"})
+        check("fpga relay arm player", arm.get("ok") is True)
+
+        st = rpc(proc, {"op": "fpga", "cmd": {"op": "status"}, "gw": "127.0.0.1"})
+        check("fpga relay status playing", st.get("ok") is True and st.get("playing") is True)
+
+        off = rpc(proc, {"op": "fpga", "cmd": {"op": "disarm"}, "gw": "127.0.0.1"})
+        check("fpga relay disarm", off.get("ok") is True)
+    finally:
+        gw.terminate()
+        gw.wait(timeout=5)
+
+    # Агент остановлен → честный отказ (не молчание и не фейк-успех)
+    nogw = rpc(proc, {"op": "fpga", "cmd": {"op": "ping"}, "gw": "127.0.0.1"})
+    check("fpga relay без агента → честный отказ", nogw.get("ok") is False)
 
     rpc(proc, {"op": "close"})
     proc.stdin.close()

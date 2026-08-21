@@ -1072,6 +1072,37 @@ def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[d
     return _pool_bins(freqs, db, n)
 
 
+FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
+
+
+def fpga_gw_host(args: str) -> str:
+    """IP шлюза из Soapy-аргументов (remote=tcp://IP:55132) или пусто."""
+    for part in (args or "").split(","):
+        part = part.strip()
+        if part.startswith("remote=tcp://"):
+            return part.split("//", 1)[1].split(":")[0]
+    return ""
+
+
+def fpga_rpc(host: str, msg: dict[str, Any]) -> dict[str, Any]:
+    """Релей команды FPGA на legion_gateway шлюза (TCP, одна JSON-строка).
+    Работает и когда Soapy не открыт: управление FPGA не зависит от стрима."""
+    import socket as _socket
+
+    if not host:
+        return {"ok": False, "reason": "нет IP шлюза (remote=tcp://...) — FPGA-агент недоступен"}
+    try:
+        with _socket.create_connection((host, FPGA_GW_PORT), timeout=3.0) as s:
+            s.sendall((json.dumps(msg) + "\n").encode())
+            f = s.makefile("rb")
+            line = f.readline()
+        if not line:
+            return {"ok": False, "reason": "шлюз закрыл соединение без ответа"}
+        return json.loads(line.decode("utf-8", "replace"))
+    except OSError as e:
+        return {"ok": False, "reason": f"FPGA-агент {host}:{FPGA_GW_PORT}: {e}"}
+
+
 def probe(args: str = "") -> dict[str, Any]:
     """Локальный enumerate пустой для SoapyRemote — нужен remote=tcp://host:55132."""
     found: list[dict[str, str]] = []
@@ -1127,6 +1158,13 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
     if op == "tx_off":
         radio.tx_off()
         return {"ok": True, "reason": "TX off"}
+    if op == "fpga":
+        # Релей на legion_gateway шлюза: {"op":"fpga", "cmd":{...}, "gw"?:ip}
+        cmd = msg.get("cmd")
+        if not isinstance(cmd, dict):
+            return {"ok": False, "reason": "fpga: нет cmd"}
+        host = str(msg.get("gw") or "") or fpga_gw_host(radio.args)
+        return fpga_rpc(host, cmd)
     if op == "close":
         radio.close()
         return {"ok": True, "reason": "closed"}
