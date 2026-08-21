@@ -257,6 +257,27 @@ r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)
 
+# USB release/acquire (один владелец): release → команды честно падают,
+# acquire → работают снова. Регистры FPGA переживают смену владельца.
+r = rpc({"op": "usb", "action": "release"})
+check("usb release ok", r.get("ok") is True)
+r = rpc({"op": "status"})
+check("при отпущенном USB status → честный отказ", r.get("ok") is False)
+r = rpc({"op": "usb", "action": "acquire"})
+check("usb acquire ok", r.get("ok") is True)
+r = rpc({"op": "status"})
+check("после acquire status снова работает", r.get("ok") is True)
+check("регистры пережили смену владельца (CTRL сохранён в fake)",
+      gw.fpga._t.regs.get(lf.REG_CTRL) is not None)
+r = rpc({"op": "usb", "action": "nonsense"})
+check("usb nonsense action → отказ", r.get("ok") is False)
+
+# RX on/off через штатный CONTROL (бит 1), RMW
+r = rpc({"op": "rx", "on": True})
+check("rx on → CONTROL bit1 взведён", r.get("ok") is True and bool(gw.fpga._t.control & 0x2))
+r = rpc({"op": "rx", "on": False})
+check("rx off → CONTROL bit1 снят", r.get("ok") is True and not (gw.fpga._t.control & 0x2))
+
 srv.shutdown()
 srv.server_close()
 

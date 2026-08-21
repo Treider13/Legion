@@ -47,9 +47,14 @@ class UsbTransport:
     def __init__(self) -> None:
         import usb.core  # pyusb
 
+        self._usb = usb
+        self._dev = None
+        self._acquire()
+
+    def _acquire(self) -> None:
         self._dev = None
         for pid in BLADERF_PIDS:
-            self._dev = usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
+            self._dev = self._usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
             if self._dev is not None:
                 break
         if self._dev is None:
@@ -58,8 +63,18 @@ class UsbTransport:
         # set_configuration только если не настроена (активная читается — уже настроена)
         try:
             self._dev.get_active_configuration()
-        except usb.core.USBError:
+        except self._usb.core.USBError:
             self._dev.set_configuration()
+
+    def release(self) -> None:
+        """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
+        if self._dev is not None:
+            self._usb.util.dispose_resources(self._dev)
+            self._dev = None
+
+    def acquire(self) -> None:
+        if self._dev is None:
+            self._acquire()
 
     def xfer(self, req: bytes) -> bytes:
         self._dev.write(EP_OUT, req, timeout=TIMEOUT_MS)
@@ -74,8 +89,18 @@ class FakeTransport:
         self.regs = {}
         self.cap_done = False
         self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
+        self.released = False
+
+    def release(self) -> None:
+        self.released = True
+
+    def acquire(self) -> None:
+        self.released = False
 
     def xfer(self, req: bytes) -> bytes:
+        # Отпущенный USB = честный отказ (как pyusb после dispose_resources)
+        if self.released:
+            raise RuntimeError("USB отпущен (release) — устройство не наше")
         # Разбор как в NIOS: magic 'C', target, flags, addr, data
         if len(req) != lf.NIOS_PKT_LEN or req[0] != lf.NIOS_PKT_8x32_MAGIC:
             return bytes(16)
@@ -186,6 +211,32 @@ class LegionGateway:
         if op == "kick":
             self.last_kick = time.monotonic()
             return {"ok": self.fpga.heartbeat()}
+        if op == "rx":
+            # Включить/выключить RX штатным CONTROL-регистром (для мониторинга
+            # детектора без lb_*: NCO-тон с кабеля и т.п.)
+            on = bool(msg.get("on"))
+            ok = self._rx_enable(on)
+            if on:
+                self._rx_by_us = True
+            return {"ok": ok, "reason": f"RX {'on' if on else 'off'} (CONTROL bit1)"}
+        if op == "usb":
+            # Один владелец USB: release → отдать устройство стрим-серверу
+            # (SoapySDRServer), acquire → забрать обратно. Регистры FPGA при
+            # этом не сбрасываются — они в фабрике, не в USB-линке.
+            action = str(msg.get("action") or "")
+            t = self.fpga._t
+            if action == "release":
+                if hasattr(t, "release"):
+                    t.release()
+                return {"ok": True, "reason": "USB отпущен (стрим-сервер может занять)"}
+            if action == "acquire":
+                if hasattr(t, "acquire"):
+                    try:
+                        t.acquire()
+                    except Exception as e:
+                        return {"ok": False, "reason": f"USB занять не удалось: {e}"}
+                return {"ok": True, "reason": "USB занят агентом"}
+            return {"ok": False, "reason": f"usb: неизвестный action {action}"}
         if op == "set":
             reg = str(msg.get("reg") or "")
             val = int(msg.get("value") or 0)

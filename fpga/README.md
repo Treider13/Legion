@@ -131,11 +131,25 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 
 ## Этапы приёмки на железе (runbook)
 
-| Этап | Критерий |
-|---|---|
-| E1 hosted из исходников | плата работает со штатными функциями LEGION |
-| E2 NCO из FPGA | линия на заданной частоте в RX-скане; START/STOP по Ethernet |
-| E3 плеер | спектр/созвездие = превью LEGION; ноутбук отключён — играет |
-| E4 детектор+гейт | инжект тона → TX за ≤10 мкс (по таймстемпам) |
-| E5 watchdog | обрыв Ethernet/смерть хоста → TX off ≤ 1 с |
-| E6 autoload | питание off/on → наш образ; откат на официальный |
+Перед сборкой: `fpga/check_toolchain.sh` — проверит Quartus 20.1.1,
+nios2_command_shell, bladeRF-cli, pyusb (честные FAIL с инструкциями).
+
+Автоматическая приёмка на стенде (ноутбук → Ethernet → шлюз с x40,
+на шлюзе `legion_gateway.py`; кабель TX→RX через аттенюатор для E2/E4):
+
+```bash
+pip install -r fpga/requirements.txt
+python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--skip-e6]
+```
+
+| Этап | Что скрипт делает | Критерий |
+|---|---|---|
+| E1 | ping агента + запись регистров | канал/образ живы |
+| E2 | NCO 250 кГц из FPGA; RX on (CONTROL bit1); det_count | растёт с кабелем (без кабеля — SKIP с подсказкой) |
+| E3 | capture_arm → usb release → стрим QPSK (воркер/SoapyRemote) → acquire → capture_done → arm player | playing=1, волна в RAM FPGA |
+| E4 | det_thr → стрим тона → det_count | вырос (гейт TX — по HDL-симуляции, на стенде вторым приёмником) |
+| E5 | перестаём слать kick → ждём ~1.6 с | wd_fired=1 (TX погашен железом) |
+| E6 | оператор: `bladeRF-cli -L`, power cycle | канал жив после перезагрузки (наш образ) |
+
+Один владелец USB: скрипт сам гоняет `usb release/acquire` агента вокруг
+стрим-фаз (SoapySDRServer на шлюзе поднимается вручную по подсказке).

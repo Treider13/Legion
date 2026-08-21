@@ -111,8 +111,9 @@ python3 tools/esp32_emulator.py   # печатает /dev/pts/N — виртуа
 | ПК-протокол | `cd app && npx tsx scripts/smoke_mock.ts` | 21 проверка команд/ошибок |
 | WebSocket | `npx tsx scripts/smoke_ws.ts` | транспорт WiFi |
 | GUI | `npx tsx scripts/gui_test.ts` | e2e в Chrome: connect → 2475 МГц → LOCK → коридор |
-| FPGA HDL | `fpga/tb/run_ghdl.sh` | GHDL-симуляция 7 модулей ревизии legion (детектор/плеер/NCO/watchdog/CDC/мукс/регистры) |
-| FPGA хост | `python3 fpga/test/test_legion_fpga.py <дерево Nuand>` | упаковщик байт-в-байт против C Nuand, карта регистров, протокол шлюза |
+| FPGA HDL | `fpga/tb/run_ghdl.sh` | GHDL-симуляция 8 тестбенчей ревизии legion (детектор/плеер/NCO/watchdog/CDC/мукс/регистры/интеграция) |
+| FPGA хост | `python3 fpga/test/test_legion_fpga.py` | упаковщик байт-в-байт против C Nuand (вендоренное дерево), карта регистров, USB-константы, протокол шлюза |
+| FPGA приёмка | `python3 fpga/test/acceptance_bench.py --gw <IP>` | E1–E6 на стенде с x40 (скрипт гоняет usb release/acquire вокруг стрим-фаз) |
 
 CI (GitHub Actions) гоняет всё это + сборку прошивки под 6 плат + сборку
 Tauri на каждый пуш; релизы (win/mac/linux бандлы) — по тегу `v*`.
