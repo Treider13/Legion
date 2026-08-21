@@ -245,6 +245,55 @@ export function SignalPanel() {
           : "TX-контент: CW тон (по умолчанию). ЗАШИТЬ — и выбранная волна уйдёт во все TX-режимы."}
       </p>
       {s.lastCueReason && <p className="sens-hint">{s.lastCueReason}</p>}
+
+      <div className="fpga-block">
+        <span className="panel-title">FPGA (bladeRF 1 x40) // АВТОНОМНЫЙ ТРАКТ</span>
+        <p className="panel-note">
+          Ревизия legion: волна/тон/loopback играют ВНУТРИ FPGA (ноутбук не в тракте
+          данных). Управление и мониторинг — по Ethernet через агент шлюза
+          (legion_gateway.py). Watchdog: пропал heartbeat ~1 с → TX гаснет сам.
+          Требует прошивки ревизии legion (fpga/README.md).
+        </p>
+        <div className="corr-grid">
+          <label>
+            РЕЖИМ FPGA
+            <select
+              aria-label="Режим FPGA"
+              value={s.fpgaMode}
+              onChange={(e) => s.setFpgaMode(e.target.value as typeof s.fpgaMode)}
+              disabled={s.fpgaArmed || s.fpgaBusy}
+            >
+              <option value="player">PLAYER — волна из RAM FPGA</option>
+              <option value="nco">NCO — тон DDS из FPGA</option>
+              <option value="lb_gated">LOOPBACK по детектору (RX→TX)</option>
+              <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
+            </select>
+          </label>
+        </div>
+        <div className="power-row">
+          {s.fpgaArmed ? (
+            <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+              ОСТАНОВИТЬ FPGA
+            </button>
+          ) : (
+            <button className="btn-primary" disabled={s.fpgaBusy} onClick={() => void s.fpgaArm()}>
+              ЗАПУСТИТЬ FPGA
+            </button>
+          )}
+          <button className="btn-ghost" onClick={() => void s.fpgaPollStatus()}>
+            СТАТУС
+          </button>
+        </div>
+        {s.fpgaStatus && (
+          <div className="sdr-facts">
+            <div>
+              {s.fpgaStatus.ok
+                ? `playing=${s.fpgaStatus.playing ? "да" : "нет"} · capture_done=${s.fpgaStatus.capture_done ? "да" : "нет"} · det=${s.fpgaStatus.det_active ? "активен" : "нет"} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · детектов=${s.fpgaStatus.det_count ?? 0} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
+                : `статус недоступен: ${s.fpgaStatus.reason ?? "?"}`}
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

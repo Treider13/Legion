@@ -123,6 +123,30 @@ export async function hostTxOff(): Promise<void> {
   await hostRpc({ op: "tx_off" });
 }
 
+export interface FpgaStatus {
+  ok: boolean;
+  reason?: string;
+  playing?: boolean;
+  capture_done?: boolean;
+  det_active?: boolean;
+  wd_fired?: boolean;
+  lb_level?: number;
+  det_count?: number;
+  fake?: boolean;
+}
+
+/** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS. */
+export async function hostFpga(cmd: Record<string, unknown>): Promise<FpgaStatus> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    return await hostRpc<FpgaStatus>({ op: "fpga", cmd });
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostClose(): Promise<void> {
   try {
     await hostRpc({ op: "close" });

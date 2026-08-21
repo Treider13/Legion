@@ -158,3 +158,25 @@ jobs:
           python3 -m py_compile tools/legion_cli.py tools/sdr_worker.py tools/test_sdr_worker.py
           python3 tools/legion_cli.py --list
           python3 tools/test_sdr_worker.py
+
+  # ------------------------------------------------------------------
+  # FPGA (ревизия legion для x40): GHDL-симуляция + хост-тесты.
+  # Дерево Nuand bladeRF клонируется для золотого теста упаковщика.
+  # ------------------------------------------------------------------
+  fpga:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GHDL
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ghdl
+      - name: GHDL testbenches
+        run: fpga/tb/run_ghdl.sh
+      - name: Clone Nuand bladeRF (golden-test reference)
+        run: git clone --depth 1 --filter=blob:none --sparse https://github.com/Nuand/bladeRF.git /tmp/bladerf-ref && cd /tmp/bladerf-ref && git sparse-checkout set hdl/fpga/platforms/common/bladerf/software hdl/fpga/platforms/bladerf fpga_common host/libraries/libbladeRF/include
+      - name: Host packer golden test vs Nuand C header
+        run: python3 fpga/test/test_legion_fpga.py /tmp/bladerf-ref

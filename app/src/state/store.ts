@@ -31,7 +31,9 @@ import {
   hostTx,
   hostTxOff,
   hostTxWave,
+  hostFpga,
   markCatalogPresent,
+  type FpgaStatus,
 } from "../sdr/hostClient";
 import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
@@ -185,6 +187,11 @@ interface LegionStore {
   /** Зашитая волна для ВСЕХ TX-путей SDR (АВТО/ПРИОРИТЕТ, open-loop). null = CW тон. */
   txWaveKind: WaveKind | null;
   txWaveParams: Record<string, number>;
+  // FPGA-ревизия legion (bladeRF 1 x40): автономный тракт в FPGA
+  fpgaMode: "player" | "nco" | "lb_gated" | "lb_always";
+  fpgaArmed: boolean;
+  fpgaBusy: boolean;
+  fpgaStatus: FpgaStatus | null;
   // журнал
   log: LogEntry[];
 
@@ -253,6 +260,10 @@ interface LegionStore {
   setSignalFreqMhz(v: string): void;
   signalFlash(): Promise<void>;
   disarmTxWave(): void;
+  setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
+  fpgaArm(): Promise<void>;
+  fpgaDisarm(): Promise<void>;
+  fpgaPollStatus(): Promise<void>;
   clearLog(): void;
 }
 
@@ -595,6 +606,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     signalTxActive: false,
     txWaveKind: null,
     txWaveParams: {},
+    fpgaMode: "player",
+    fpgaArmed: false,
+    fpgaBusy: false,
+    fpgaStatus: null,
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
@@ -1172,6 +1187,45 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       set({ txWaveKind: null, txWaveParams: {} });
       pushLog("sys", "TX-контент снят: АВТО/ПРИОРИТЕТ и open-loop снова на CW тоне");
+    },
+
+    setFpgaMode: (m) => set({ fpgaMode: m }),
+
+    fpgaArm: async () => {
+      const s = get();
+      if (s.fpgaBusy) return;
+      if (!s.sdrLoadOk) {
+        pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+        return;
+      }
+      if (s.sdrId !== "bladerf-x40") {
+        pushLog("sys", "FPGA ARM: ревизия legion собрана под bladeRF 1 x40 — выберите её на вкладке SDR");
+        return;
+      }
+      set({ fpgaBusy: true });
+      try {
+        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true });
+        pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+        if (r.ok) set({ fpgaArmed: true });
+      } finally {
+        set({ fpgaBusy: false });
+      }
+    },
+
+    fpgaDisarm: async () => {
+      set({ fpgaBusy: true });
+      try {
+        const r = await hostFpga({ op: "disarm" });
+        pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+        if (r.ok) set({ fpgaArmed: false });
+      } finally {
+        set({ fpgaBusy: false });
+      }
+    },
+
+    fpgaPollStatus: async () => {
+      const r = await hostFpga({ op: "status" });
+      set({ fpgaStatus: r });
     },
 
     probeSdr: async () => {

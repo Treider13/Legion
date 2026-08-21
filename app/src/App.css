@@ -515,6 +515,16 @@
   background: var(--lg-ink);
 }
 
+/* ТИП СИГНАЛА — блок FPGA (автономный тракт x40) */
+.fpga-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--lg-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .allow-list {
   margin: 12px 0 0;
   padding-left: 18px;

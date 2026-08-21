@@ -28,6 +28,7 @@ ESP32 принимает её и физически настраивает чи�
 | Прошивка ESP32 | `firmware/` | PlatformIO; 6 плат: classic / S3 / S2 / C3 / C6 / H2 |
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
+| FPGA-ревизия x40 | `fpga/` | ревизия `legion` для bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза; см. `fpga/README.md` |
 | Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 
@@ -110,6 +111,8 @@ python3 tools/esp32_emulator.py   # печатает /dev/pts/N — виртуа
 | ПК-протокол | `cd app && npx tsx scripts/smoke_mock.ts` | 21 проверка команд/ошибок |
 | WebSocket | `npx tsx scripts/smoke_ws.ts` | транспорт WiFi |
 | GUI | `npx tsx scripts/gui_test.ts` | e2e в Chrome: connect → 2475 МГц → LOCK → коридор |
+| FPGA HDL | `fpga/tb/run_ghdl.sh` | GHDL-симуляция 7 модулей ревизии legion (детектор/плеер/NCO/watchdog/CDC/мукс/регистры) |
+| FPGA хост | `python3 fpga/test/test_legion_fpga.py <дерево Nuand>` | упаковщик байт-в-байт против C Nuand, карта регистров, протокол шлюза |
 
 CI (GitHub Actions) гоняет всё это + сборку прошивки под 6 плат + сборку
 Tauri на каждый пуш; релизы (win/mac/linux бандлы) — по тегу `v*`.
