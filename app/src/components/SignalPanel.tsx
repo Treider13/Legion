@@ -229,10 +229,20 @@ export function SignalPanel() {
             ЗАШИТЬ НА SDR
           </button>
         )}
+        {s.txWaveKind !== null && (
+          <button className="btn-ghost" type="button" onClick={() => s.disarmTxWave()}>
+            СБРОС НА CW
+          </button>
+        )}
         <button className="btn-ghost" type="button" onClick={() => s.setWorkspace("scan")}>
           СКАН + TX SDR →
         </button>
       </div>
+      <p className="sens-hint">
+        {s.txWaveKind !== null
+          ? `Зашита волна «${waveMeta(s.txWaveKind).title}» — её используют все TX-режимы: АВТО/ПРИОРИТЕТ (сканер → цель) и без сканера (качание/сплошная/случайная с ноутбука).`
+          : "TX-контент: CW тон (по умолчанию). ЗАШИТЬ — и выбранная волна уйдёт во все TX-режимы."}
+      </p>
       {s.lastCueReason && <p className="sens-hint">{s.lastCueReason}</p>}
     </section>
   );

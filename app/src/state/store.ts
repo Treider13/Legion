@@ -181,6 +181,9 @@ interface LegionStore {
   signalFreqMhz: string;
   /** TX именно сигнальной волны — взаимоисключение со сканером-оркестратором. */
   signalTxActive: boolean;
+  /** Зашитая волна для ВСЕХ TX-путей SDR (АВТО/ПРИОРИТЕТ, open-loop). null = CW тон. */
+  txWaveKind: WaveKind | null;
+  txWaveParams: Record<string, number>;
   // журнал
   log: LogEntry[];
 
@@ -248,6 +251,7 @@ interface LegionStore {
   setSignalParam(key: string, v: number): void;
   setSignalFreqMhz(v: string): void;
   signalFlash(): Promise<void>;
+  disarmTxWave(): void;
   clearLog(): void;
 }
 
@@ -296,13 +300,14 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   const executeHandoff = (plan: HandoffPlan, sdrUs: number, powerDbm: number): void => {
     // Режим SDR: никаких CUE / PA / RF на ESP32.
+    const wave = get().txWaveKind ?? "cw";
     set({
       detections: markForwarded(get().detections, plan.freqMhz),
       lastForwardMhz: plan.freqMhz,
       lastForwardPowerDbm: powerDbm,
       lastSdrTxUs: sdrUs || get().lastSdrTxUs,
       sdrHoldSince: Date.now(),
-      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${sdrUs} µs host`,
+      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${wave} · ${sdrUs} µs host`,
     });
   };
 
@@ -327,7 +332,15 @@ export const useLegion = create<LegionStore>((set, get) => {
     let sdrUs = 0;
     try {
       if (plan.sdrTx) {
-        const tx = gLive ? await hostTx(plan.freqMhz) : gSdr.txCue(plan.freqMhz);
+        // Зашитая волна (вкладка ТИП СИГНАЛА) идёт во все TX-пути; иначе CW тон.
+        const armed = get().txWaveKind;
+        const tx = gLive
+          ? armed
+            ? await hostTxWave(plan.freqMhz, armed, get().txWaveParams)
+            : await hostTx(plan.freqMhz)
+          : armed
+            ? gSdr.txWave(plan.freqMhz, armed)
+            : gSdr.txCue(plan.freqMhz);
         sdrUs = tx.latencyUs;
         pushLog("sys", tx.reason);
         if (!tx.ok) {
@@ -346,7 +359,14 @@ export const useLegion = create<LegionStore>((set, get) => {
   };
 
   const restoreHeldTx = async (mhz: number): Promise<boolean> => {
-    const tx = gLive ? await hostTx(mhz) : gSdr.txCue(mhz);
+    const armed = get().txWaveKind;
+    const tx = gLive
+      ? armed
+        ? await hostTxWave(mhz, armed, get().txWaveParams)
+        : await hostTx(mhz)
+      : armed
+        ? gSdr.txWave(mhz, armed)
+        : gSdr.txCue(mhz);
     if (!tx.ok) {
       pushLog("sys", tx.reason);
       return false;
@@ -536,6 +556,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     signalParams: defaultParams("qpsk"),
     signalFreqMhz: "2442.000",
     signalTxActive: false,
+    txWaveKind: null,
+    txWaveParams: {},
     log: [],
 
     setTransportKind: (k) => set({ transportKind: k }),
@@ -1036,11 +1058,27 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({
         transmitArmed: true,
         signalTxActive: true,
+        // Волна зашита: теперь её используют и АВТО/ПРИОРИТЕТ, и open-loop TX.
+        txWaveKind: kind,
+        txWaveParams: { ...get().signalParams },
         lastForwardMhz: mhz,
         lastSdrTxUs: tx.latencyUs || null,
         sdrHoldSince: Date.now(),
-        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · нагрузка 50Ω`,
+        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
       });
+    },
+
+    disarmTxWave: () => {
+      if (get().transmitArmed) {
+        pushLog("sys", "СБРОС НА CW: TX активен — сначала СТОП");
+        return;
+      }
+      if (get().txWaveKind === null) {
+        pushLog("sys", "СБРОС НА CW: волна не зашита (уже CW тон)");
+        return;
+      }
+      set({ txWaveKind: null, txWaveParams: {} });
+      pushLog("sys", "TX-контент снят: АВТО/ПРИОРИТЕТ и open-loop снова на CW тоне");
     },
 
     probeSdr: async () => {
@@ -1406,6 +1444,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.signalTxActive) {
+        pushLog("sys", "ПЕРЕДАТЬ: идёт TX зашитого сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
         return;
       }
       if (!ensureSdrBand()) {
