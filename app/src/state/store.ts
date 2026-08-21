@@ -335,8 +335,14 @@ export const useLegion = create<LegionStore>((set, get) => {
       executeHandoff(plan, sdrUs, powerDbm);
       return true;
     } finally {
-      const queued = gGate.release();
-      if (queued !== null) void runHandoffAsync(queued.mhz, queued.powerDbm);
+      // release только своей эпохи: при смене поколения gate уже reset'нут
+      // бампером (bump и reset идут без await между ними — вклиниться нельзя).
+      // Без guard'а наш release обнулял inflight/pendingMhz у НОВОГО handoff
+      // и мог вытащить его queued → параллельный TX поверх чужого (перепроверка).
+      if (gen === gTxGen) {
+        const queued = gGate.release();
+        if (queued !== null) void runHandoffAsync(queued.mhz, queued.powerDbm);
+      }
     }
   };
 
@@ -951,8 +957,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         // Интерлок как на ESP32 (LOAD FAULT гасит RF/PA): снятие нагрузки
         // гасит ЖИВОЙ TX. Раньше флаг менялся, а тон оставался в эфире
         // (open-loop вообще замирал на последней частоте навсегда).
+        // reset(), не dropHold(): in-flight handoff этой эпохи по gen-guard'у
+        // не сделает release — inflight обязан сбросить бампер, иначе все
+        // будущие handoff застрянут на «предыдущий SDR TX ещё идёт».
         gTxGen += 1;
-        gGate.dropHold();
+        gGate.reset();
         if (gLive) void hostTxOff();
         else gSdr.txOff();
         set({
