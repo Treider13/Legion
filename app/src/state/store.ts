@@ -27,7 +27,13 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { heldHitAlive, pickArmedAutoTarget, refreshSkipMhz, RESENSE_MS } from "../sense/hold";
+import {
+  heldHitAlive,
+  pickArmedAutoTarget,
+  refreshSkipMhz,
+  rememberSeenMhz,
+  RESENSE_MS,
+} from "../sense/hold";
 import { modeConflict, modeOf, planSdrWork, scanRefusedReason, scannerParticipates } from "../sense/modes";
 import {
   markForwarded,
@@ -213,6 +219,8 @@ const gGate = new HandoffGate();
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
 let gSkipMhz: number | null = null;
+/** Частоты, уже ушедшие на TX в этой сессии ПЕРЕДАТЬ — чтобы не пинг-понгать. */
+let gSeenMhz: number[] = [];
 
 function stopTxWatch(): void {
   if (gTxWatch) {
@@ -276,6 +284,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
+        gSeenMhz = rememberSeenMhz(gSeenMhz, plan.freqMhz);
       }
       executeHandoff(plan, sdrUs, powerDbm);
     } finally {
@@ -316,18 +325,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         bins = gSdr.scanWindow(heldMhz, windowMhz, nBins);
       }
       const dets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
-      const heldDet = dets.find((d) => sameBin(d.freqMhz, heldMhz));
-      const stronger = pickArmedAutoTarget({
+      const nextHit = pickArmedAutoTarget({
         liveWindow: dets,
         archive: get().detections,
         heldMhz,
-        heldPowerDbm: heldDet?.powerDbm ?? null,
         skipMhz: gSkipMhz,
+        seenMhz: gSeenMhz,
       });
-      if (stronger) {
+      if (nextHit) {
         gGate.dropHold();
         set({ lastForwardMhz: null, lastForwardPowerDbm: null, lastSdrTxUs: null, sdrHoldSince: null });
-        runHandoff(stronger.freqMhz, stronger.powerDbm);
+        runHandoff(nextHit.freqMhz, nextHit.powerDbm);
         return "switch";
       }
       if (heldHitAlive(dets, heldMhz)) {
@@ -342,7 +350,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrHoldSince: null,
         lastCueReason: `засечка ${heldMhz.toFixed(3)} пропала — ждём живое окно`,
       });
-      pushLog("sys", `засечка ${heldMhz.toFixed(3)} МГц пропала (RX без своего тона) — частоту меняет оператор или новая сильная`);
+      pushLog("sys", `засечка ${heldMhz.toFixed(3)} МГц пропала (RX без своего тона) — ждём следующий живой сигнал`);
       return "gone";
     } finally {
       gResense = false;
@@ -500,6 +508,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         void hostClose();
       }
       gLive = false;
+      gSeenMhz = [];
       gSdr.setEmulation(v);
       set({
         sdrEmulation: v,
@@ -947,6 +956,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLive = false;
       gResense = false;
       gSkipMhz = null;
+      gSeenMhz = [];
       set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null, lastForwardPowerDbm: null, sdrHoldSince: null });
       pushLog("sys", "SDR закрыт");
     },
@@ -1097,8 +1107,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             liveWindow: detections,
             archive: after.detections,
             heldMhz: heldNow,
-            heldPowerDbm: after.lastForwardPowerDbm,
             skipMhz: gSkipMhz,
+            seenMhz: gSeenMhz,
           });
           if (!target) return;
           if (gGate.queueIfBusy(target.freqMhz)) return;
@@ -1150,6 +1160,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       set({ transmitArmed: true });
+      gSeenMhz = [];
       const work = planSdrWork(get().scanPattern);
       pushLog("sys", `ПЕРЕДАТЬ: ${work.reason}`);
       stopTxWatch();
@@ -1185,8 +1196,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         liveWindow: live,
         archive: get().detections,
         heldMhz: gGate.lastCuedMhz,
-        heldPowerDbm: get().lastForwardPowerDbm,
         skipMhz: gSkipMhz,
+        seenMhz: gSeenMhz,
       });
       if (target) runHandoff(target.freqMhz, target.powerDbm);
     },
@@ -1196,6 +1207,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       gResense = false;
       gSkipMhz = null;
+      gSeenMhz = [];
       set({ transmitArmed: false });
       gGate.reset();
       if (gLive) await hostTxOff();
@@ -1217,7 +1229,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastForwardPowerDbm: null,
         lastSdrTxUs: null,
         sdrHoldSince: null,
-        lastCueReason: "оператор сбросил частоту — ждём новую сильную в окне",
+        lastCueReason: "оператор сбросил частоту — ждём следующий живой сигнал",
       });
       if (gLive) await hostTxOff();
       gSdr.txOff();

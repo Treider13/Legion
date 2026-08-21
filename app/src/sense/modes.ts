@@ -76,7 +76,7 @@ export function planSdrWork(pattern: SdrWalkPattern): {
     return {
       useScanner: true,
       openLoopTx: false,
-      reason: "сканер RX (FFT на ноутбуке) → ПЕРЕДАТЬ → TX SDR на усилитель, пока оператор не стопнет",
+      reason: "сканер RX → каждый новый сигнал сразу на TX SDR → усилитель, пока оператор не стопнет",
     };
   }
   return {

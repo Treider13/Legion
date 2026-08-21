@@ -18,6 +18,7 @@ import {
   pickArmedAutoTarget,
   pickAutoTarget,
   refreshSkipMhz,
+  rememberSeenMhz,
   RESENSE_MS,
   windowCoversMhz,
 } from "../src/sense/hold";
@@ -508,34 +509,47 @@ function main(): void {
   ];
   check("СБРОСИТЬ не выбирает из архива", nextAfterOperatorReset(archive) === null);
   check(
-    "авто берёт чуть сильнее из живого окна",
+    "авто: новый сигнал сразу, даже сильнее",
     pickAutoTarget(
       [
         { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
         { freqMhz: 2480, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
       ],
       2442,
-      -40,
+      null,
+      [2442],
     )?.freqMhz === 2480,
   );
   check(
-    "слабее не сбивает авто",
+    "авто: новый слабее тоже сразу на усилитель",
     pickAutoTarget(
       [
         { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
         { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
       ],
       2442,
-      -20,
+      null,
+      [2442],
+    )?.freqMhz === 2480,
+  );
+  check(
+    "авто: уже виденные не пинг-понгуют",
+    pickAutoTarget(
+      [
+        { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
+        { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+      ],
+      2442,
+      null,
+      [2442, 2480],
     ) === null,
   );
   check(
-    "без известной силы не прыгаем вслепую",
+    "авто: без замка берём сильнейший живой",
     pickAutoTarget(
       [{ freqMhz: 2480, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false }],
-      2442,
       null,
-    ) === null,
+    )?.freqMhz === 2480,
   );
   check(
     "после сброса живое окно минус снятая",
@@ -545,10 +559,11 @@ function main(): void {
         { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 2, forwarded: false },
       ],
       null,
-      null,
       2442,
     )?.freqMhz === 2410,
   );
+  check("rememberSeen не дублирует бин", rememberSeenMhz([2442], 2442.05).length === 1);
+  check("rememberSeen добавляет новый", rememberSeenMhz([2442], 2480).join(",") === "2442,2480");
   const staleArchive = [
     { freqMhz: 2410, powerDbm: -5, noiseDbm: -90, snrDb: 85, ts: 1, forwarded: false },
   ];
@@ -561,8 +576,8 @@ function main(): void {
       liveWindow: liveNow,
       archive: staleArchive,
       heldMhz: null,
-      heldPowerDbm: null,
       skipMhz: null,
+      seenMhz: [],
     })?.freqMhz === 2480,
   );
   check(
@@ -571,8 +586,8 @@ function main(): void {
       liveWindow: [],
       archive: staleArchive,
       heldMhz: null,
-      heldPowerDbm: null,
       skipMhz: null,
+      seenMhz: [],
     }) === null,
   );
   check("окно покрывает центр", windowCoversMhz(2442, 20, 2442));
