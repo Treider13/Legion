@@ -1,6 +1,8 @@
---- /tmp/bladerf-hdl/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd	2026-08-21 16:43:20.672270226 +0000
-+++ /tmp/bladerf_p-legion.vhd	2026-08-21 17:06:34.230028562 +0000
-@@ -78,6 +78,9 @@
+diff --git a/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd b/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd
+index 29f5ec1..c8dc1b7 100644
+--- a/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd
++++ b/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd
+@@ -78,6 +78,9 @@ package bladerf_p is
          command_serial_out              :   out std_logic ;
          correction_rx_phase_gain_export :   out std_logic_vector(31 downto 0);
          correction_tx_phase_gain_export :   out std_logic_vector(31 downto 0);

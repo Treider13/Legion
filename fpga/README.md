@@ -46,12 +46,14 @@
    патчи `integration/*.diff` сгенерированы против него).
 2. Установить **Quartus Prime Lite 20.1.1** (README Nuand прямо фиксирует эту
    версию для bladeRF 1; более новые не гарантируют поддержку Cyclone IV/NIOS II).
-3. Применить интеграцию:
+3. Применить интеграцию (патчи — git-формат, проверены `git apply --check`
+   на чистом дереве; топ-левел — НОВЫЙ файл, hosted не трогаем — ревизии
+   сосуществуют, механизм Revisions из wiki Nuand):
    ```bash
    cd bladeRF
-   patch -p0 < $LEGION/fpga/integration/bladerf-hosted-legion.diff   # → новая архитектура legion
-   patch -p0 < $LEGION/fpga/integration/bladerf_p-legion.diff        # порты nios_system
-   patch -p0 < $LEGION/fpga/integration/pkt_8x32-legion.diff         # target 0x80 в NIOS
+   cp $LEGION/fpga/integration/bladerf-legion.vhd hdl/fpga/platforms/bladerf/vhdl/
+   git apply $LEGION/fpga/integration/bladerf_p-legion.diff          # порты nios_system
+   git apply $LEGION/fpga/integration/pkt_8x32-legion.diff           # target 0x80 в NIOS
    cp $LEGION/fpga/hdl/*.vhd hdl/fpga/platforms/bladerf/vhdl/
    cp $LEGION/fpga/nios/legion_cmds.* hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/
    cat $LEGION/fpga/integration/nios_system-legion.tcl.snippet >> hdl/fpga/platforms/bladerf/build/nios_system.tcl

@@ -177,6 +177,8 @@ jobs:
       - name: GHDL testbenches
         run: fpga/tb/run_ghdl.sh
       - name: Clone Nuand bladeRF (golden-test reference)
-        run: git clone --depth 1 --filter=blob:none --sparse https://github.com/Nuand/bladeRF.git /tmp/bladerf-ref && cd /tmp/bladerf-ref && git sparse-checkout set hdl/fpga/platforms/common/bladerf/software hdl/fpga/platforms/bladerf fpga_common host/libraries/libbladeRF/include
+        # fpga_common/include — форматы пакетов; libbladeRF/include — libbladeRF.h;
+        # backend/usb — usb.h с PERIPHERAL_EP_* (тест сверяет константы шлюза)
+        run: git clone --depth 1 --filter=blob:none --sparse https://github.com/Nuand/bladeRF.git /tmp/bladerf-ref && cd /tmp/bladerf-ref && git sparse-checkout set hdl/fpga/platforms/common/bladerf/software hdl/fpga/platforms/bladerf fpga_common host/libraries/libbladeRF/include host/libraries/libbladeRF/src/backend/usb
       - name: Host packer golden test vs Nuand C header
         run: python3 fpga/test/test_legion_fpga.py /tmp/bladerf-ref

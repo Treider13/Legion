@@ -55,10 +55,11 @@ class UsbTransport:
         if self._dev is None:
             raise RuntimeError("bladeRF не найден по USB (VID %04X, PID %s)"
                                % (BLADERF_VID, "/".join(f"{p:04X}" for p in BLADERF_PIDS)))
+        # set_configuration только если не настроена (активная читается — уже настроена)
         try:
+            self._dev.get_active_configuration()
+        except usb.core.USBError:
             self._dev.set_configuration()
-        except Exception:
-            pass
 
     def xfer(self, req: bytes) -> bytes:
         self._dev.write(EP_OUT, req, timeout=TIMEOUT_MS)

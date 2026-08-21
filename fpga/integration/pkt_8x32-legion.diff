@@ -1,5 +1,7 @@
---- /tmp/bladerf-hdl/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c	2026-08-21 16:43:20.676270246 +0000
-+++ /tmp/pkt_8x32-legion.c	2026-08-21 17:07:35.169516038 +0000
+diff --git a/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c b/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c
+index 207bc75..56bc3b8 100644
+--- a/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c
++++ b/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c
 @@ -28,6 +28,7 @@
  #include "pkt_8x32.h"
  #include "devices.h"
@@ -8,7 +10,7 @@
  
  static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
  {
-@@ -62,6 +63,17 @@
+@@ -62,6 +63,17 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
              return false;
  #endif  // BOARD_BLADERF_MICRO
  
@@ -26,7 +28,7 @@
          default:
              DBG("Invalid id: 0x%x\n", id);
              *data = 0x00;
-@@ -102,6 +114,15 @@
+@@ -102,6 +114,15 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
              break;
  #endif  // BOARD_BLADERF_MICRO
  
