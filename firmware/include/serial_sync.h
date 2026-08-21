@@ -12,4 +12,11 @@ void serial_sync_init();  // вызвать в setup() ДО старта зад�
 void serial_lock();       // блокирующий захват (FreeRTOS mutex)
 void serial_unlock();
 
+// Мьютекс исполнения команд: UART/WS команды исполняются в loop-задаче,
+// BLE (NimBLE onWrite) — в host-задаче стека. AppState/policy своих мьютексов
+// не имеют (uint64 freq_hz на 32-битном MCU — torn access) → сериализуем.
+// Порядок блокировок везде cmd → serial → synth/leveling, обратного нет.
+void cmd_lock();
+void cmd_unlock();
+
 }  // namespace legion

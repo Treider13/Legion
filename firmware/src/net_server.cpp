@@ -30,6 +30,10 @@ static WebServer s_http(80);
 static HTTPUpdateServer s_ota;  // OTA: POST /update (firmware.bin) — фаза 9
 static WebsocketsServer s_ws;
 static CmdServer* s_cmd = nullptr;
+// Мьютекс пула WS-клиентов: net_loop (loop-задача) принимает/закрывает слоты,
+// net_broadcast (telem_task) по ним шлёт — без сериализации был use-after-move
+// при copy-assign клиента во время send (ревизия гонок).
+static SemaphoreHandle_t s_pool_mtx = nullptr;
 
 // --- Print-адаптер: ответы команд в WS-клиента ------------------------------
 class WSPrint : public Print {
@@ -107,7 +111,9 @@ void net_init(AppState& state, CmdServer& cmd) {
   // OTA (фаза 9): POST /update с firmware.bin. Регистрируем ДО serveStatic
   // (wildcard), чтобы /update матчился первым. Таблица разделов app0/app1
   // (partitions_legion.csv) — OTA-безопасна.
-  s_ota.setup(&s_http, "/update");
+  // Логин/пароль обязательны: без них любой в сети AP перепрошивал плату.
+  s_ota.setup(&s_http, "/update", "legion", AP_PASS);
+  s_pool_mtx = xSemaphoreCreateMutex();
   Serial.println(F("OTA /update ready"));
 
   // HTTP :80 — статика из LittleFS (lite-UI)
@@ -133,6 +139,7 @@ void net_loop() {
   if (s_ws.poll()) {
     WebsocketsClient client = s_ws.accept();
     int slot = -1;
+    if (s_pool_mtx) xSemaphoreTake(s_pool_mtx, portMAX_DELAY);
     for (int i = 0; i < 4; ++i) {
       if (!s_used[i] || !s_clients[i].available()) {
         slot = i;
@@ -142,6 +149,9 @@ void net_loop() {
     if (slot >= 0) {
       s_clients[slot] = client;
       s_used[slot] = true;
+    }
+    if (s_pool_mtx) xSemaphoreGive(s_pool_mtx);
+    if (slot >= 0) {
       s_clients[slot].onMessage(onWsMessage);
       Serial.println(F("WS client connected"));
     } else {
@@ -151,11 +161,18 @@ void net_loop() {
   }
 
   for (int i = 0; i < 4; ++i) {
-    if (s_used[i]) {
+    // Чтение флага под мьютексом; poll() — вне его (он может быть долгим),
+    // но снятие слота — снова под мьютексом, чтобы не пересечься с broadcast.
+    if (s_pool_mtx) xSemaphoreTake(s_pool_mtx, portMAX_DELAY);
+    const bool used = s_used[i];
+    if (s_pool_mtx) xSemaphoreGive(s_pool_mtx);
+    if (used) {
       if (s_clients[i].available()) {
         s_clients[i].poll();
       } else {
+        if (s_pool_mtx) xSemaphoreTake(s_pool_mtx, portMAX_DELAY);
         s_used[i] = false;
+        if (s_pool_mtx) xSemaphoreGive(s_pool_mtx);
         Serial.println(F("WS client disconnected"));
       }
     }
@@ -163,11 +180,13 @@ void net_loop() {
 }
 
 void net_broadcast(const char* line) {
+  if (s_pool_mtx) xSemaphoreTake(s_pool_mtx, portMAX_DELAY);
   for (int i = 0; i < 4; ++i) {
     if (s_used[i] && s_clients[i].available()) {
       s_clients[i].send(line);
     }
   }
+  if (s_pool_mtx) xSemaphoreGive(s_pool_mtx);
 }
 
 void net_wifi_cmd(AppState& s, char* arg, Print& out) {

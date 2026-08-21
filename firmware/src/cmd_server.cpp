@@ -76,6 +76,11 @@ void CmdServer::poll() {
 }
 
 void CmdServer::processLine(char* line, Print& out) {
+  // Команды приходят из loop-задачи (UART poll / WS net_loop) и из host-задачи
+  // NimBLE (BLE onWrite) — параллельно. AppState и policy своих мьютексов не
+  // имеют (uint64 freq_hz на 32-битном MCU — torn access), поэтому исполнение
+  // команд сериализуем общим мьютексом (cmd_lock, serial_sync).
+  cmd_lock();
   // Вывод ответа под мьютексом UART: иначе строки перемешиваются с
   // телеметрией telem_task посреди кадра (найдено при ревизии гонок, п.1).
   const bool is_uart = (&out == _port);
@@ -86,6 +91,7 @@ void CmdServer::processLine(char* line, Print& out) {
   if (is_uart) {
     serial_unlock();
   }
+  cmd_unlock();
 }
 
 void CmdServer::handleLine(char* line, Print& out) {
@@ -207,7 +213,7 @@ void CmdServer::cmdSetFreq(char* arg, Print& out) {
   bool lock = false;
   const PlanStatus st = apply_frequency(*_s, hz, lock);
   if (st == PlanStatus::ERR_RANGE) {
-    out.println(F("ERR RANGE 35-4400 MHz"));
+    out.println(F("ERR RANGE 34.375-4400 MHz"));
     return;
   }
   if (st != PlanStatus::OK) {
@@ -241,7 +247,10 @@ void CmdServer::cmdSetPower(char* arg, Print& out) {
   }
   _s->cfg.output_power_code = code;
   storage_save_power(code);
-  if (_s->plan_valid) {  // переписать план с новой мощностью
+  // Вне коридора — переписать план сразу. В коридоре НЕ перестраиваем на
+  // _s->freq_hz (это устаревшая ручная частота — был скачок частоты посреди
+  // свипа): следующий шаг движка сам подхватит код из cfg через plan_frequency.
+  if (_s->plan_valid && !corridor_active()) {
     bool lock;
     synth_apply(_s->freq_hz, true, lock, &_s->plan);
   }
@@ -255,7 +264,12 @@ void CmdServer::cmdRf(char* arg, Print& out) {
     out.println(F("ERR SYNTAX RF ON|OFF"));
     return;
   }
-  if (on && !policy_rf_enable_allowed(_s->freq_hz)) {
+  // В коридоре полоса уже проверена при старте (все режимы, включая GLIDE/FM) —
+  // проверяем только интерлок нагрузки. Вне коридора — частоту из allowlist.
+  // Раньше здесь проверялась _s->freq_hz — устаревшая ручная частота.
+  const bool allowed =
+      corridor_active() ? policy_load_ok() : policy_rf_enable_allowed(_s->freq_hz);
+  if (on && !allowed) {
     if (!policy_load_ok()) {
       out.println(F("ERR LOAD dummy load required"));
     } else {
@@ -267,7 +281,9 @@ void CmdServer::cmdRf(char* arg, Print& out) {
   _s->cfg.rf_output_enable = on;
   _s->drv->setChipEnable(on);
   storage_save_rf(on);
-  if (_s->plan_valid) {
+  // Как SET POWER: в коридоре не перестраиваем на устаревшую ручную частоту —
+  // флаг rf_output_enable применится следующим шагом движка.
+  if (_s->plan_valid && !corridor_active()) {
     bool lock;
     synth_apply(_s->freq_hz, true, lock, &_s->plan);
   }
@@ -374,11 +390,23 @@ void CmdServer::cmdGlide(char* arg, Print& out) {
   cfg.f2_hz = (uint64_t)(tgd * 1e6 + 0.5);
   cfg.dwell_ms = (uint32_t)strtoul(du, nullptr, 10);
 
+  // Allowlist: обе крайние точки перехода в разрешённой полосе (как коридор;
+  // раньше GLIDE/FM политику обходили — compliance.md обещает обратное).
+  {
+    const uint64_t lo = cfg.f1_hz < cfg.f2_hz ? cfg.f1_hz : cfg.f2_hz;
+    const uint64_t hi = cfg.f1_hz < cfg.f2_hz ? cfg.f2_hz : cfg.f1_hz;
+    if (!policy_corridor_allowed(lo, hi)) {
+      out.println(F("ERR ALLOW glide outside allowlist"));
+      return;
+    }
+  }
+
   char err[64];
   if (!corridor_start(cfg, err, sizeof(err))) {
     out.println(err);
     return;
   }
+  // В NVS не сохраняем: GLIDE — одноразовый переход, восстанавливать нечего.
   out.print(F("OK GLIDE RUNNING "));
   out.print(cfg.f1_hz / 1e6, 6);
   out.print(F(" -> "));
@@ -413,7 +441,9 @@ void CmdServer::cmdFm(char* arg, Print& out) {
 
   CorridorConfig cfg;
   cfg.mode = mode;
-  cfg.f1_hz = _s->freq_hz;  // центр = текущая частота по умолчанию
+  // Центр = текущая частота: в коридоре — живая частота движка, не устаревшая
+  // ручная (_s->freq_hz замирает на моменте старта коридора).
+  cfg.f1_hz = corridor_active() ? corridor_current_hz() : _s->freq_hz;
   cfg.fm_depth_hz = 100000.0;  // 100 кГц
   cfg.dwell_ms = 100;          // период LFO 100 мс
   cfg.seed = 1;
@@ -437,18 +467,36 @@ void CmdServer::cmdFm(char* arg, Print& out) {
     }
   }
 
+  // Allowlist: вся девиация center±depth обязана лежать в разрешённой полосе
+  {
+    const uint64_t d =
+        (isfinite(cfg.fm_depth_hz) && cfg.fm_depth_hz > 0.0)
+            ? (uint64_t)cfg.fm_depth_hz
+            : 0;
+    const uint64_t lo = cfg.f1_hz > d ? cfg.f1_hz - d : 0;
+    const uint64_t hi = d > ADF_FREQ_MAX_HZ ? UINT64_MAX : cfg.f1_hz + d;
+    if (!policy_corridor_allowed(lo, hi)) {
+      out.println(F("ERR ALLOW fm outside allowlist"));
+      return;
+    }
+  }
+
   char err[64];
   if (!corridor_start(cfg, err, sizeof(err))) {
     out.println(err);
     return;
   }
+  storage_save_corridor(true, cfg);  // FM — непрерывный режим: восстанавливаем, как SWEEP
   out.print(F("OK FM RUNNING "));
   out.println(shape ? shape : "SIN");
 }
 
 void CmdServer::cmdStatus(Print& out) {
+  // В коридоре freq — живая частота движка (s_cur_hz), не устаревшая ручная
+  // (_s->freq_hz замирает на моменте старта; эмулятор показывал живую).
+  const uint64_t f = corridor_active() ? corridor_current_hz() : _s->freq_hz;
   out.print(F("{\"freq\":"));
-  out.print(_s->freq_hz / 1e6, 6);
+  out.print(f / 1e6, 6);
   out.print(F(",\"mode\":\""));
   if (corridor_active()) {
     // Все режимы по имени (было: только SWEEP/HOP — CHIRP/GLIDE/FM
@@ -481,7 +529,7 @@ void CmdServer::cmdStatus(Print& out) {
 void CmdServer::cmdRegs(Print& out) {
   out.print(F("{\"regs\":["));
   for (int i = 0; i < 6; ++i) {
-    char hex[12];
+    char hex[16];  // "0x" + 8 hex + 2 кавычки + NUL = 13 — hex[12] урезал кавычку
     snprintf(hex, sizeof(hex), "\"0x%08lX\"",
              (unsigned long)(_s->plan_valid ? _s->plan.regs[i] : 0));
     out.print(hex);
@@ -503,7 +551,9 @@ void CmdServer::cmdRegsDiff(char* arg, Print& out) {
   uint32_t theirs[6];
   char* save = nullptr;
   for (int i = 0; i < 6; ++i) {
-    char* w = strtok_r(nullptr, " ", &save);
+    // Было: strtok_r(nullptr,...) при save==nullptr — на ESP32 команда всегда
+    // отвечала ERR SYNTAX, на хосте (glibc) — SIGSEGV. Токенизируем arg.
+    char* w = strtok_r(i == 0 ? arg : nullptr, " ", &save);
     if (!w) {
       out.println(F("ERR SYNTAX regs diff needs 6 hex words"));
       return;
@@ -514,7 +564,7 @@ void CmdServer::cmdRegsDiff(char* arg, Print& out) {
   for (int i = 0; i < 6; ++i) {
     const uint32_t mine = _s->plan_valid ? _s->plan.regs[i] : 0;
     const uint32_t d = mine ^ theirs[i];
-    char hex[16];
+    char hex[32];  // {"r":0,"xor":"0x00000000"} = 24 + NUL — hex[16] урезал JSON
     snprintf(hex, sizeof(hex), "{\"r\":%d,\"xor\":\"0x%08lX\"}", i,
              (unsigned long)d);
     out.print(hex);
@@ -710,7 +760,7 @@ void CmdServer::cmdAllow(char* arg, Print& out) {
   const uint64_t f1 = (uint64_t)(f1d * 1e6 + 0.5);
   const uint64_t f2 = (uint64_t)(f2d * 1e6 + 0.5);
   if (f1 < ADF_FREQ_MIN_HZ || f2 > ADF_FREQ_MAX_HZ || f2 < f1) {
-    out.println(F("ERR RANGE allow 35-4400 MHz"));
+    out.println(F("ERR RANGE allow 34.375-4400 MHz"));
     return;
   }
   if (!policy_allow_add(f1, f2)) {
@@ -830,7 +880,7 @@ void CmdServer::cmdCue(char* arg, Print& out) {
   SynthPlan plan;
   const PlanStatus st = synth_apply_fast(hz, plan);
   if (st == PlanStatus::ERR_RANGE) {
-    out.println(F("ERR RANGE 35-4400 MHz"));
+    out.println(F("ERR RANGE 34.375-4400 MHz"));
     return;
   }
   if (st != PlanStatus::OK) {

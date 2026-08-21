@@ -110,7 +110,7 @@ const char* corridor_mode_name(CorridorMode m) {
   }
 }
 uint64_t corridor_current_hz() { return 2400000000ULL; }
-const CorridorConfig& corridor_config() { return g_corr_cfg; }
+CorridorConfig corridor_config() { return g_corr_cfg; }
 
 // --- storage (no-op) ---
 void storage_save_freq(uint64_t) {}
@@ -129,6 +129,8 @@ void selftest_run(AppState&, Print& out) {
 void serial_sync_init() {}
 void serial_lock() {}
 void serial_unlock() {}
+void cmd_lock() {}
+void cmd_unlock() {}
 
 }  // namespace legion
 
@@ -152,10 +154,10 @@ static uint32_t rnd() {
 
 static const char* TOKENS[] = {
     "SET FREQ", "SET POWER", "SET ATT", "RF ON", "RF OFF", "STATUS?",
-    "REGS?", "SELFTEST", "HELLO", "STOP", "SWEEP START", "HOP START",
-    "CHIRP START", "GLIDE", "FM START", "CAL REF", "WIFI STATUS?",
-    "SWEEP STOP", "HOP STOP", "FM STOP", "SET LEVEL", "CAL LEVEL",
-    "LEVEL?", "SET LEVEL OFF", "CAL LEVEL CLEAR",
+    "REGS?", "REGS DIFF", "SELFTEST", "HELLO", "STOP", "SWEEP START",
+    "HOP START", "CHIRP START", "GLIDE", "FM START", "CAL REF",
+    "WIFI STATUS?", "SWEEP STOP", "HOP STOP", "FM STOP", "SET LEVEL",
+    "CAL LEVEL", "LEVEL?", "SET LEVEL OFF", "CAL LEVEL CLEAR",
     "ALLOW ADD", "ALLOW CLEAR", "ALLOW?", "LOAD OK", "LOAD FAULT",
     "LOAD?", "PA SET", "PA ON", "PA OFF", "PA?", "CUE",
 };
