@@ -2,12 +2,13 @@
 // LEGION — абстракция транспорта ПК ↔ ESP32 (фаза 2)
 // Один интерфейс — три реализации + mock:
 //   TauriSerialTransport  — USB-UART через Rust serialport (desktop, основной)
+//   Sl22Transport         — USB HTOOL SL22, SCPI (переводчик app/src/sl22)
 //   WebSerialTransport    — USB из браузера (Chrome/Edge/Firefox 151+, бонус)
 //   WebSocketTransport    — WiFi (ESP32 AP/STA; серверная сторона — фаза 4)
 //   MockTransport         — эмулятор ESP32+ADF4351 для разработки без железа
 // ============================================================================
 
-export type TransportKind = "tauri-serial" | "web-serial" | "websocket" | "mock";
+export type TransportKind = "tauri-serial" | "htool-sl22" | "web-serial" | "websocket" | "mock";
 
 export type TransportState = "disconnected" | "connecting" | "connected" | "error";
 
