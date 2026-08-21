@@ -28,7 +28,7 @@ ESP32 принимает её и физически настраивает чи�
 | Прошивка ESP32 | `firmware/` | PlatformIO; 6 плат: classic / S3 / S2 / C3 / C6 / H2 |
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
-| FPGA-ревизия x40 | `fpga/` | ревизия `legion` для bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза; см. `fpga/README.md` |
+| FPGA-ревизия x40 | `fpga/` | ревизия `legion` для bladeRF 1 x40 и micro: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; см. `fpga/README.md` |
 | Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 

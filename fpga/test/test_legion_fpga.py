@@ -20,7 +20,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "host"))
 import legion_fpga as lf  # noqa: E402
 
-NUAND = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BLADERF_TREE", "/tmp/bladerf-hdl")
+# По умолчанию — вендоренное дерево в репозитории (самодостаточно);
+# переопределение: аргумент или BLADERF_TREE (для сверки со свежим апстримом).
+NUAND = sys.argv[1] if len(sys.argv) > 1 else os.environ.get(
+    "BLADERF_TREE", os.path.join(ROOT, "vendor", "bladerf"))
 
 fails = 0
 

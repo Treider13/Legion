@@ -1,0 +1,29 @@
+Вендоренное дерево Nuand bladeRF (подмножество для сборки FPGA).
+
+Источник:  https://github.com/Nuand/bladeRF
+commit 35174c30b009cdb335800c411f3c14d45283f12b
+Дата коммита: 2026-08-20
+
+Лицензия: FPGA HDL — MIT (см. COPYING в корне дерева: "FPGA HDL: MIT").
+Атрибуция — docs/REFERENCES.md.
+
+Состав (только то, что нужно для сборки ревизии legion и тестов):
+  hdl/fpga/platforms/bladerf        — bladeRF 1 (x40/x115), наша цель
+  hdl/fpga/platforms/bladerf-micro  — bladeRF 2.0 micro (xA4/xA9)
+  hdl/fpga/platforms/common         — общая NIOS-прошивка (bladeRF_nios)
+  hdl/fpga/ip                       — IP-блоки (altera/nuand/opencores/adi)
+  hdl/quartus                       — build_bladerf.sh, build.tcl
+  fpga_common, firmware_common      — форматы NIOS-пакетов, USB ID
+  host/libraries/libbladeRF/include — libbladeRF.h (золотой тест)
+  host/libraries/libbladeRF/src/backend/usb — usb.h (константы EP для теста)
+
+Обновление: fpga/vendor/sync_vendor.sh <git-ref> (по умолчанию — коммит выше),
+затем интеграция legion применяется заново (она уже в дереве — см. ниже).
+
+Интеграция legion УЖЕ ПРИМЕНЕНА к этому дереву (сборка готова из репозитория):
+  platforms/bladerf/vhdl/bladerf-legion.vhd + legion_*.vhd (модули),
+  bladerf_p.vhd (порты nios_system), nios_system.tcl (3 PIO),
+  platform.conf + build/bladerf.tcl (ревизия legion), bladerf-legion.qip,
+  common NIOS: legion_cmds.c + pkt_8x32.c (target 0x80) + Makefile.
+  Модули legion мастерятся в fpga/hdl/ (GHDL-тесты там); синхронность
+  vendor↔fpga/hdl проверяет CI (diff).

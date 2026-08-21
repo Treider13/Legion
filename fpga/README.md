@@ -27,10 +27,14 @@
    watchdog (expiry/heartbeat), dcfifo (CDC, порядок), мультиплексор
    (PASS/тишина-с-каденсом/гейтинг/watchdog), регистры (CDC, heartbeat-toggle,
    статус).
-2. **Топ-левел `bladerf-legion.vhd` проанализирован GHDL**: все legion-юниты
-   привязались, порты инстансов сверены с сущностями; остаются только
-   ожидаемые «unit not found» для vendor-IP (pll, fifo, nios_system) — они
-   существуют только в Quartus.
+2. **Топ-левели обеих платформ проанализированы GHDL**: bladeRF 1
+   (`bladerf-legion.vhd`) и micro (`platforms/bladerf-micro/vhdl/bladerf-legion.vhd`)
+   — все legion-юниты привязались, порты инстансов сверены с сущностями;
+   остаются только ожидаемые «unit not found» для vendor-IP (pll, fifo,
+   nios_system, ad9361) — они существуют только в Quartus. (Для micro пакет
+   `bladerf_p.vhd` Nuand использует deferred-константы в теле — GHDL mcode их
+   не принимает, Quartus принимает; проверка шла с check-only шимом пакета,
+   поставляемый файл не тронут.)
 3. **Упаковщик пакетов байт-в-байт совпал с настоящим
    `nios_pkt_8x32_pack()` Nuand** (90 векторов, gcc против
    `fpga_common/include/nios_pkt_8x32.h`).
@@ -40,42 +44,37 @@
 Не проверено здесь (нужен стенд): компиляция Quartus и работа на плате —
 см. этапы приёмки ниже.
 
-## Сборка (проверено по README/wiki Nuand)
+## Сборка (всё в репозитории — сеть не нужна)
 
-1. Клонировать `https://github.com/Nuand/bladeRF` (зафиксировать коммит;
-   патчи `integration/*.diff` сгенерированы против него).
-2. Установить **Quartus Prime Lite 20.1.1** (README Nuand прямо фиксирует эту
+Вендоренное дерево Nuand лежит в `fpga/vendor/bladerf/` (подмножество,
+commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
+Интеграция legion **уже применена** к дереву (обе платформы: bladeRF 1 x40
+и bladeRF 2.0 micro). Внешний инструмент ровно один — Quartus.
+
+1. Установить **Quartus Prime Lite 20.1.1** (README Nuand прямо фиксирует эту
    версию для bladeRF 1; более новые не гарантируют поддержку Cyclone IV/NIOS II).
-3. Применить интеграцию (патчи — git-формат, проверены `git apply --check`
-   на чистом дереве; топ-левел — НОВЫЙ файл, hosted не трогаем — ревизии
-   сосуществуют, механизм Revisions из wiki Nuand):
+2. Сборка (из nios2_command_shell):
    ```bash
-   cd bladeRF
-   cp $LEGION/fpga/integration/bladerf-legion.vhd hdl/fpga/platforms/bladerf/vhdl/
-   git apply $LEGION/fpga/integration/bladerf_p-legion.diff          # порты nios_system
-   git apply $LEGION/fpga/integration/pkt_8x32-legion.diff           # target 0x80 в NIOS
-   cp $LEGION/fpga/hdl/*.vhd hdl/fpga/platforms/bladerf/vhdl/
-   cp $LEGION/fpga/nios/legion_cmds.* hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/
-   cat $LEGION/fpga/integration/nios_system-legion.tcl.snippet >> hdl/fpga/platforms/bladerf/build/nios_system.tcl
+   cd fpga/vendor/bladerf/hdl/quartus
+   ./build_bladerf.sh -b bladeRF -s 40 -r legion        # bladeRF 1 x40
+   ./build_bladerf.sh -b bladeRF-micro -s A4 -r legion  # bladeRF 2.0 micro xA4
    ```
-   Затем зарегистрировать ревизию (wiki Nuand «FPGA Development»):
-   - `hdl/fpga/platforms/bladerf/build/bladerf.tcl`: добавить `make_revision legion`;
-   - `hdl/fpga/platforms/bladerf/vhdl/bladerf-legion.qip`: копия
-     `bladerf-hosted.qip` + наши `hdl/*.vhd` (паттерн set_global_assignment
-     из wiki); внутри сослаться на `bladerf-legion.vhd`;
-   - `hdl/quartus/build_bladerf.sh`: добавить `legion` в список ревизий;
-   - в `Makefile` NIOS-прошивки (`bladeRF_nios/Makefile`, C_SRCS) добавить
-     `legion_cmds.c` и флаг `-DLEGION_FPGA`.
-4. Сборка (из nios2_command_shell):
-   ```bash
-   cd hdl/quartus && ./build_bladerf.sh -b bladeRF -s 40 -r legion
-   ```
-5. Загрузка **в RAM** (разработка, ноль риска): `bladeRF-cli -l legion_x40.rbf`.
+3. Загрузка **в RAM** (разработка, ноль риска): `bladeRF-cli -l legion_x40.rbf`.
    После приёмки — во flash: `bladeRF-cli -L legion_x40.rbf` (autoload).
    Откат: питание off/on (при `-l`) или прошить официальный `hostedx40.rbf`.
    **Грабля из wiki Nuand:** `.sof` через JTAG (USB Blaster) работает только
    ПОСЛЕ инициализации платы штатным `.rbf` через bladeRF-cli — сначала `-l`,
    потом JTAG, не наоборот.
+
+### Если обновляете апстрим Nuand (не обязательно)
+
+`fpga/vendor/sync_vendor.sh <ref>` синхронизирует подмножество, после чего
+интеграцию нужно применить заново: патчи `integration/*.diff` (git-диффы,
+проверены `git apply --check`), топ-левели — `integration/bladerf-legion.vhd`
+(bladeRF1) и вендоренный `platforms/bladerf-micro/vhdl/bladerf-legion.vhd`
+(micro), сниппет `nios_system-legion.tcl.snippet`, регистрация ревизии в
+`platform.conf`/`bladerf.tcl`, qip, NIOS Makefile (C_SRCS + -DLEGION_FPGA).
+Мастера модулей — `fpga/hdl/` (GHDL-тесты); расхождение vendor↔hdl ловит CI.
 
 ## Эксплуатация
 
