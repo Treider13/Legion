@@ -48,8 +48,14 @@ begin
             active_r   <= '0';
             det_cnt_r  <= (others => '0');
         elsif rising_edge(clock) then
-            -- Окно не может превышать 4096 сэмпла
-            win_last := shift_left(to_unsigned(1, 13), to_integer(win_shift)) - 1;
+            -- Окно не может превышать 4096 сэмпла; shift>12 переполнил бы
+            -- 13-битный win_last (1<<15 обрезается в 0 → окно 4096 по мусору) —
+            -- клампим (факт: численно проверено, TB покрывает shift=15)
+            if win_shift > 12 then
+                win_last := to_unsigned(4095, 13);
+            else
+                win_last := shift_left(to_unsigned(1, 13), to_integer(win_shift)) - 1;
+            end if;
 
             if in_valid = '1' then
                 -- signed×signed: квадрат неотрицателен (max 2^30 при -2^15)

@@ -78,6 +78,16 @@ begin
         wait until rising_edge(clock);
         assert det_active = '0' report "FAIL: detect below threshold" severity failure;
 
+        -- Кламп shift=15 → окно 4096 (не мусор): энергия 10000 ≥ 1000,
+        -- детект должен взвестись ровно после 4096 сэмплов, не раньше
+        win_shift <= to_unsigned(15, 4);
+        for k in 0 to 15 loop
+            send_sample(100, 0);
+        end loop;
+        wait until rising_edge(clock);
+        assert det_count = 1 report "FAIL: shift=15 early detect (window overflow)" severity failure;
+        win_shift <= to_unsigned(4, 4);
+
         report "legion_detector_tb: PASS" severity note;
         done <= true;
         wait;

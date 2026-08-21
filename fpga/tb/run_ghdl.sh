@@ -21,7 +21,7 @@ ghdl -a $GHDL_STD --workdir=. "$HDL/legion_regs.vhd"
 
 echo "== Тестбенчи =="
 FAIL=0
-for tb in legion_detector_tb legion_player_tb legion_nco_tb legion_watchdog_tb legion_dcfifo_tb legion_tx_mux_tb legion_regs_tb; do
+for tb in legion_detector_tb legion_player_tb legion_nco_tb legion_watchdog_tb legion_dcfifo_tb legion_tx_mux_tb legion_regs_tb legion_integration_tb; do
     ghdl -a $GHDL_STD --workdir=. "$tb.vhd"
     ghdl -e $GHDL_STD --workdir=. "$tb"
     # --stop-time: страховка от зависания (зависший wait = FAIL, а не вечный цикл)

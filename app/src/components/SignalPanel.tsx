@@ -252,7 +252,10 @@ export function SignalPanel() {
           Ревизия legion: волна/тон/loopback играют ВНУТРИ FPGA (ноутбук не в тракте
           данных). Управление и мониторинг — по Ethernet через агент шлюза
           (legion_gateway.py). Watchdog: пропал heartbeat ~1 с → TX гаснет сам.
-          Требует прошивки ревизии legion (fpga/README.md).
+          Требует прошивки ревизии legion (fpga/README.md). Пока FPGA в режиме
+          PLAYER/NCO/LOOPBACK, мультиплексор FPGA перекрывает хост-стрим
+          (стрим идёт в режиме PASS). Загрузка волны в RAM: режим PASS +
+          capture_arm + обычная ЗАШИТЬ (стрим и capture одновременно).
         </p>
         <div className="corr-grid">
           <label>
