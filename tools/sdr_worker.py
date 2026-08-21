@@ -147,6 +147,247 @@ def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.25):
     return (amp * np.exp(1j * 2.0 * np.pi * bb * t)).astype(np.complex64)
 
 
+# ============================================================================
+# Синтез baseband-сигналов (вкладка ТИП СИГНАЛА). Волна строится в нулевой
+# baseband-оси при TX_FS; tx_wave гетеродинирует её на +fs/8 и ставит
+# LO = RF − fs/8 — ось 0 Гц оказывается ровно на запрошенной RF, а
+# DC-центрованные волны (QPSK, шум) не попадают под LO-утечку/IQ-коррекцию.
+# Петля TX крутит буфер по кругу: периодическим волнам частота «защёлкивается»
+# на целое число периодов, модулированным RRC применяется циклически — стык
+# буфера без щелчка.
+# ============================================================================
+
+WAVE_N = 65536  # буфер TX; OFDM укорачивается до 819×80 = 65520
+
+WAVE_KINDS = (
+    "sine", "tone", "square", "sawtooth", "triangle", "chirp", "awgn",
+    "bpsk", "qpsk", "qam16", "fsk2", "dsss", "css", "ofdm", "am", "fm",
+)
+
+
+def _pfloat(pr: dict[str, Any], key: str, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float((pr or {}).get(key, default))
+    except (TypeError, ValueError):
+        v = default
+    return min(max(v, lo), hi)
+
+
+def _amp(pr: dict[str, Any]) -> float:
+    return _pfloat(pr, "amp", 0.25, 0.01, 0.9)
+
+
+def _seed(pr: dict[str, Any]) -> int:
+    try:
+        return int((pr or {}).get("seed", 1337)) & 0x7FFFFFFF
+    except (TypeError, ValueError):
+        return 1337
+
+
+def _snap_hz(f_hz: float, fs: float, n: int) -> float:
+    """Частота с целым числом периодов в буфере — стык петли без щелчка."""
+    cycles = max(1, round(f_hz * n / fs))
+    return cycles * fs / n
+
+
+def rrc_taps(sps: int, alpha: float, span: int = 8):
+    """Root-raised-cosine — тот же excess_bw, что у GNU Radio generic_mod."""
+    m = np.arange(-span * sps / 2, span * sps / 2 + 1, dtype=np.float64) / sps
+    h = np.empty_like(m)
+    for i, ti in enumerate(m):
+        if abs(ti) < 1e-9:
+            h[i] = 1.0 - alpha + 4.0 * alpha / np.pi
+        elif abs(abs(ti) - 1.0 / (4.0 * alpha)) < 1e-9:
+            h[i] = (alpha / np.sqrt(2.0)) * (
+                (1.0 + 2.0 / np.pi) * np.sin(np.pi / (4.0 * alpha))
+                + (1.0 - 2.0 / np.pi) * np.cos(np.pi / (4.0 * alpha))
+            )
+        else:
+            h[i] = (
+                np.sin(np.pi * ti * (1.0 - alpha))
+                + 4.0 * alpha * ti * np.cos(np.pi * ti * (1.0 + alpha))
+            ) / (np.pi * ti * (1.0 - (4.0 * alpha * ti) ** 2))
+    return h / np.sqrt(np.sum(h ** 2))
+
+
+def _circ_filter(h: Any, x: Any):
+    """Циклическая свёртка через БПФ — хвосты RRC заворачиваются в буфер."""
+    n = len(x)
+    return np.fft.ifft(np.fft.fft(x) * np.fft.fft(h, n))
+
+
+def _psk_symbols(nsym: int, m: int, seed: int):
+    """Gray PSK со сдвигом pi/M — как pskmod(..., pi/M, 'gray') в MATLAB."""
+    bps = int(np.log2(m))
+    rs = np.random.RandomState(seed)
+    bits = rs.randint(0, 2, nsym * bps).reshape(nsym, bps)
+    val = np.zeros(nsym, dtype=int)
+    for k in range(bps):
+        val |= bits[:, k] << (bps - 1 - k)
+    gray = val ^ (val >> 1)
+    return np.exp(1j * (np.pi / m + gray * 2.0 * np.pi / m))
+
+
+def _qam16_symbols(nsym: int, seed: int):
+    """16-QAM, Gray PAM-4 на I и Q, нормировка 1/sqrt(10)."""
+    rs = np.random.RandomState(seed)
+    bits = rs.randint(0, 2, nsym * 4).reshape(nsym, 4)
+
+    def pam4(b0: Any, b1: Any) -> Any:
+        g = b0 * 2 + (b0 ^ b1)  # 00→-3, 01→-1, 11→+1, 10→+3
+        return (2 * g - 3) / np.sqrt(10.0)
+
+    return pam4(bits[:, 0], bits[:, 1]) + 1j * pam4(bits[:, 2], bits[:, 3])
+
+
+def _mod_wave(symbols: Any, sps: int, alpha: float, amp: float, n: int, diff: bool):
+    """Символы → (дифф. кодирование) → апсэмплинг → циклический RRC → пик=amp."""
+    if diff:
+        symbols = np.cumprod(symbols)
+    up = np.zeros(len(symbols) * sps, dtype=complex)
+    up[::sps] = symbols
+    y = _circ_filter(rrc_taps(sps, alpha), up)
+    peak = float(np.max(np.abs(y))) or 1.0
+    return (amp * y / peak).astype(np.complex64)
+
+
+def _mseq31():
+    """m-последовательность, Gp=31: LFSR x^5+x^3+1 (примитивный полином)."""
+    r = [0, 0, 0, 0, 1]
+    out = []
+    for _ in range(31):
+        out.append(r[-1])
+        fb = r[4] ^ r[2]
+        r = [fb] + r[:-1]
+    return np.array(out, dtype=np.float64) * 2.0 - 1.0
+
+
+def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, Any] | None = None):
+    """Один буфер baseband-сигнала. Ось 0 Гц = центр запрошенной RF."""
+    if not NUMPY:
+        raise RuntimeError("numpy required")
+    if kind not in WAVE_KINDS:
+        raise ValueError(f"unknown waveform {kind}")
+    pr = pr or {}
+    amp = _amp(pr)
+    t = np.arange(n, dtype=np.float64) / fs
+
+    if kind == "sine":
+        # Аналитический сигнал: одна линия на fj·fs (fj=0 → ровно на RF).
+        fj = _pfloat(pr, "fj", 0.0, -0.45, 0.45)
+        fj = round(fj * n) / n
+        return (amp * np.exp(1j * 2.0 * np.pi * fj * np.arange(n))).astype(np.complex64)
+
+    if kind == "tone":
+        # Узкополосный тон со смещением Fj и случайной фазой (модель tone_jammer).
+        fj = _pfloat(pr, "fj", 0.1, -0.45, 0.45)
+        fj = round(fj * n) / n
+        theta = float(np.random.uniform(0.0, 2.0 * np.pi))
+        return (amp * np.exp(1j * (2.0 * np.pi * fj * np.arange(n) + theta))).astype(np.complex64)
+
+    if kind == "square":
+        fb = _snap_hz(_pfloat(pr, "fbKhz", 125.0, 1.0, fs / 2e3) * 1e3, fs, n)
+        return (amp * np.sign(np.sin(2.0 * np.pi * fb * t))).astype(np.complex64)
+
+    if kind == "sawtooth":
+        fb = _snap_hz(_pfloat(pr, "fbKhz", 125.0, 1.0, fs / 2e3) * 1e3, fs, n)
+        return (amp * (2.0 * ((fb * t) % 1.0) - 1.0)).astype(np.complex64)
+
+    if kind == "triangle":
+        fb = _snap_hz(_pfloat(pr, "fbKhz", 125.0, 1.0, fs / 2e3) * 1e3, fs, n)
+        return (amp * (2.0 / np.pi) * np.arcsin(np.sin(2.0 * np.pi * fb * t))).astype(np.complex64)
+
+    if kind == "chirp":
+        # Линейный чирп −span/2 → +span/2 за буфер; ∫f dt = 0 → фаза стыкуется.
+        span = _pfloat(pr, "spanKhz", 1000.0, 10.0, fs / 2e3) * 1e3
+        f0 = -span / 2.0
+        k = span / (n / fs)
+        return (amp * np.exp(1j * 2.0 * np.pi * (f0 * t + 0.5 * k * t * t))).astype(np.complex64)
+
+    if kind == "awgn":
+        # Комплексный AWGN: RMS = amp/2, жёсткий клип на amp (защита ЦАП).
+        rs = np.random.RandomState(_seed(pr))
+        x = (rs.randn(n) + 1j * rs.randn(n)) / np.sqrt(2.0) * (amp / 2.0)
+        mag = np.abs(x)
+        over = mag > amp
+        x[over] *= amp / mag[over]
+        return x.astype(np.complex64)
+
+    if kind in ("bpsk", "qpsk", "qam16"):
+        sps = int(_pfloat(pr, "sps", 4, 2, 16))
+        alpha = _pfloat(pr, "alpha", 0.035, 0.03, 0.5)
+        nsym = n // sps
+        if kind == "bpsk":
+            sym = _psk_symbols(nsym, 2, _seed(pr))
+        elif kind == "qpsk":
+            sym = _psk_symbols(nsym, 4, _seed(pr))
+        else:
+            sym = _qam16_symbols(nsym, _seed(pr))
+        # Дифф. кодирование — для PSK (как differential=True у generic_mod).
+        return _mod_wave(sym, sps, alpha, amp, n, diff=(kind != "qam16"))
+
+    if kind == "fsk2":
+        # CPFSK: фаза непрерывна, девиация ±dev вокруг оси.
+        sps = int(_pfloat(pr, "sps", 8, 2, 64))
+        dev = _pfloat(pr, "devKhz", 250.0, 1.0, fs / 4e3) * 1e3
+        sym = 2 * np.random.RandomState(_seed(pr)).randint(0, 2, n // sps + 1) - 1
+        up = np.repeat(sym, sps)[:n]
+        phase = np.cumsum(2.0 * np.pi * dev * up / fs)
+        return (amp * np.exp(1j * phase)).astype(np.complex64)
+
+    if kind == "dsss":
+        # BPSK × m-последовательность Gp=31, 2 сэмпла/чип (модель 802.11b).
+        spc = 2
+        chips = _mseq31()
+        nbits = n // (31 * spc)
+        data = np.random.RandomState(_seed(pr)).randint(0, 2, nbits) * 2 - 1
+        spread = np.repeat(data, 31) * np.tile(chips, nbits)
+        return (amp * np.repeat(spread, spc)[:n]).astype(np.complex64)
+
+    if kind == "css":
+        # Chirp spread spectrum (LoRa-подобный): символ = циклический сдвиг чирпа.
+        sf = int(_pfloat(pr, "sf", 6, 5, 10))
+        m = 1 << sf
+        rs = np.random.RandomState(_seed(pr))
+        k = np.arange(m, dtype=np.float64)
+        out = [
+            np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) + (float(s) / m) * k))
+            for s in rs.randint(0, m, n // m)
+        ]
+        y = np.concatenate(out) if out else np.zeros(n, dtype=complex)
+        return (amp * y).astype(np.complex64)
+
+    if kind == "ofdm":
+        # 802.11a-подобный: NFFT=64, CP=16, 52 поднесущие QPSK (π/4, Gray-порядок).
+        nfft, cp = 64, 16
+        used = list(range(-26, 0)) + list(range(1, 27))
+        rs = np.random.RandomState(_seed(pr))
+        nsym = n // (nfft + cp)
+        frames = []
+        for _ in range(nsym):
+            spec = np.zeros(nfft, dtype=complex)
+            ph = np.pi / 4 + rs.randint(0, 4, len(used)) * np.pi / 2
+            spec[np.mod(used, nfft)] = np.exp(1j * ph)
+            td = np.fft.ifft(spec) * np.sqrt(nfft)
+            frames.append(np.concatenate([td[-cp:], td]))
+        y = np.concatenate(frames) if frames else np.zeros(n, dtype=complex)
+        peak = float(np.max(np.abs(y))) or 1.0
+        return (amp * y / peak).astype(np.complex64)
+
+    if kind == "am":
+        fb = _snap_hz(_pfloat(pr, "fbKhz", 125.0, 1.0, fs / 2e3) * 1e3, fs, n)
+        fm = _pfloat(pr, "fmKhz", 31.25, 0.1, 500.0) * 1e3
+        m = _pfloat(pr, "m", 0.5, 0.05, 1.0)
+        env = (1.0 + m * np.sin(2.0 * np.pi * fm * t)) / (1.0 + m)
+        return (amp * env * np.exp(1j * 2.0 * np.pi * fb * t)).astype(np.complex64)
+
+    # fm: несущая fb, тон fm, индекс beta — линии Бесселя fb ± k·fm.
+    fb = _snap_hz(_pfloat(pr, "fbKhz", 125.0, 1.0, fs / 2e3) * 1e3, fs, n)
+    fm = _pfloat(pr, "fmKhz", 31.25, 0.1, 500.0) * 1e3
+    beta = _pfloat(pr, "beta", 5.0, 0.1, 50.0)
+    return (amp * np.exp(1j * (2.0 * np.pi * fb * t + beta * np.sin(2.0 * np.pi * fm * t)))).astype(np.complex64)
+
+
 class Radio:
     def __init__(self) -> None:
         self.dev = None
@@ -280,6 +521,59 @@ class Radio:
             out["txError"] = self.tx_error
         return out
 
+    def _tx_prime(self, buf: Any, lo_hz: float, prev_mhz: float | None) -> dict[str, Any] | None:
+        """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
+        иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима."""
+        timeout = stream_timeout_us(len(buf), TX_FS)
+        created = False
+        with self._lock:
+            try:
+                if not self.full_duplex and self.rx is not None and self._rx_on:
+                    self.dev.deactivateStream(self.rx)
+                    self._rx_on = False
+                self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
+                self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
+                if self.tx is None:
+                    self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
+                    self.dev.activateStream(self.tx)
+                    created = True
+                # MeasureDelay: if status.ret != len(tx_pulse): raise
+                sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
+                ret = stream_ret(sr)
+                kind = stream_kind(ret)
+                if ret != len(buf):
+                    if prev_mhz is not None:
+                        self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
+                    elif created and self.tx is not None:
+                        try:
+                            self.dev.deactivateStream(self.tx)
+                            self.dev.closeStream(self.tx)
+                        except Exception:
+                            pass
+                        self.tx = None
+                    return {
+                        "ok": False,
+                        "reason": f"writeStream {kind} ret={ret} (ждали {len(buf)}) — сигнала на RF out нет",
+                        "latencyUs": 0,
+                    }
+            except Exception as e:
+                return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
+        return None
+
+    def _tx_commit(self, buf: Any, freq_mhz: float, t0: float, label: str) -> dict[str, Any]:
+        self._tone = buf
+        self.tx_mhz = freq_mhz
+        self.tx_error = None
+        self.tx_fail = 0
+        self._start_tx_loop()
+        us = int((time.perf_counter() - t0) * 1e6)
+        return {
+            "ok": True,
+            "reason": f"{label} · {us} µs host",
+            "latencyUs": us,
+            "freqMhz": freq_mhz,
+        }
+
     def tx_cue(self, freq_mhz: float) -> dict[str, Any]:
         if not self.can_tx:
             return {"ok": False, "reason": "нет TX — усилитель подключать некуда", "latencyUs": 0}
@@ -298,53 +592,60 @@ class Radio:
         rf_hz = freq_mhz * 1e6
         lo_hz = cw_lo_hz(rf_hz, TX_FS)
         tone = make_cw()
-        timeout = stream_timeout_us(len(tone), TX_FS)
-        prev_mhz = self.tx_mhz
-        created = False
-        with self._lock:
-            try:
-                if not self.full_duplex and self.rx is not None and self._rx_on:
-                    self.dev.deactivateStream(self.rx)
-                    self._rx_on = False
-                self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
-                self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
-                if self.tx is None:
-                    self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
-                    self.dev.activateStream(self.tx)
-                    created = True
-                # MeasureDelay: if status.ret != len(tx_pulse): raise
-                sr = self.dev.writeStream(self.tx, [tone], len(tone), timeoutUs=timeout)
-                ret = stream_ret(sr)
-                kind = stream_kind(ret)
-                if ret != len(tone):
-                    if prev_mhz is not None:
-                        self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
-                    elif created and self.tx is not None:
-                        try:
-                            self.dev.deactivateStream(self.tx)
-                            self.dev.closeStream(self.tx)
-                        except Exception:
-                            pass
-                        self.tx = None
-                    return {
-                        "ok": False,
-                        "reason": f"writeStream {kind} ret={ret} (ждали {len(tone)}) — тона на RF out нет",
-                        "latencyUs": 0,
-                    }
-            except Exception as e:
-                return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
-        self._tone = tone
-        self.tx_mhz = freq_mhz
-        self.tx_error = None
-        self.tx_fail = 0
-        self._start_tx_loop()
-        us = int((time.perf_counter() - t0) * 1e6)
-        return {
-            "ok": True,
-            "reason": f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f}) · {us} µs host",
-            "latencyUs": us,
-            "freqMhz": freq_mhz,
-        }
+        err = self._tx_prime(tone, lo_hz, self.tx_mhz)
+        if err is not None:
+            return err
+        return self._tx_commit(
+            tone, freq_mhz, t0,
+            f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f})",
+        )
+
+    def tx_wave(self, freq_mhz: float, wave: str, params: dict[str, Any]) -> dict[str, Any]:
+        """TX произвольной baseband-волны из WAVE_KINDS (вкладка ТИП СИГНАЛА).
+        Буфер гетеродинируется на +fs/8, LO = RF − fs/8: ось 0 Гц волны
+        оказывается на запрошенной RF, DC-волны не давятся IQ-коррекцией."""
+        if wave not in WAVE_KINDS:
+            return {"ok": False, "reason": f"неизвестный тип сигнала: {wave}", "latencyUs": 0}
+        if not self.can_tx:
+            return {"ok": False, "reason": "нет TX — усилитель подключать некуда", "latencyUs": 0}
+        t0 = time.perf_counter()
+        if self.fake:
+            if NUMPY:
+                try:
+                    make_waveform(wave, TX_FS, WAVE_N, params)
+                except Exception as e:
+                    return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
+            self.tx_mhz = freq_mhz
+            self.tx_error = None
+            us = int((time.perf_counter() - t0) * 1e6)
+            return {
+                "ok": True,
+                "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц",
+                "latencyUs": us,
+                "freqMhz": freq_mhz,
+            }
+        if self.dev is None:
+            return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
+        if not SOAPY:
+            return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
+        if not NUMPY:
+            return {"ok": False, "reason": "нет numpy — сигнал не синтезировать", "latencyUs": 0}
+        try:
+            buf = make_waveform(wave, TX_FS, WAVE_N, params)
+        except Exception as e:
+            return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
+        n = len(buf)
+        t = np.arange(n, dtype=np.float64) / TX_FS
+        buf = (buf * np.exp(1j * 2.0 * np.pi * (TX_FS / 8.0) * t)).astype(np.complex64)
+        rf_hz = freq_mhz * 1e6
+        lo_hz = cw_lo_hz(rf_hz, TX_FS)
+        err = self._tx_prime(buf, lo_hz, self.tx_mhz)
+        if err is not None:
+            return err
+        return self._tx_commit(
+            buf, freq_mhz, t0,
+            f"SDR TX {wave} {freq_mhz:.6f} МГц (baseband +fs/8, LO {(lo_hz/1e6):.6f})",
+        )
 
     def _start_tx_loop(self) -> None:
         if self._thr and self._thr.is_alive():
@@ -560,6 +861,13 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
     if op == "tx":
         return radio.tx_cue(float(msg["freqMhz"]))
+    if op == "tx_wave":
+        params = msg.get("params")
+        return radio.tx_wave(
+            float(msg["freqMhz"]),
+            str(msg.get("wave") or ""),
+            params if isinstance(params, dict) else {},
+        )
     if op == "tx_off":
         radio.tx_off()
         return {"ok": True, "reason": "TX off"}

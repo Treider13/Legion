@@ -61,15 +61,52 @@ def main() -> int:
     check("stream_kind ok", w.stream_kind(4096) == "ok")
 
     if w.NUMPY:
+        import numpy as np
+
         tone = w.make_cw()
         check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
         check("CW длина кратна 8", len(tone) % 8 == 0)
         check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.25) < 0.02)
-        freqs = __import__("numpy").linspace(2440, 2444, 1024)
-        db = __import__("numpy").linspace(-90, -40, 1024)
+        freqs = np.linspace(2440, 2444, 1024)
+        db = np.linspace(-90, -40, 1024)
         pooled = w._pool_bins(freqs, db, 64)
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
+
+        # --- ТИП СИГНАЛА: синтез всех волн ---
+        all_ok = True
+        for kind in w.WAVE_KINDS:
+            buf = w.make_waveform(kind)
+            if (
+                len(buf) == 0
+                or str(buf.dtype) != "complex64"
+                or not np.isfinite(buf.real).all()
+                or not np.isfinite(buf.imag).all()
+                or float(np.max(np.abs(buf))) > 0.9 + 1e-6
+            ):
+                all_ok = False
+                print(f"    … плохой буфер: {kind}")
+        check("16 волн: complex64, finite, пик ≤ amp", all_ok)
+
+        tbuf = w.make_waveform("tone", pr={"fj": 0.1})
+        fax = np.fft.fftfreq(len(tbuf), 1.0 / w.TX_FS)
+        peak_hz = fax[int(np.argmax(np.abs(np.fft.fft(tbuf))))]
+        check("тон Fj=0.1 → пик на +200 кГц", abs(peak_hz - 0.1 * w.TX_FS) < 2e3)
+
+        ph4 = set(np.round(np.angle(w._psk_symbols(256, 4, 1)), 3))
+        check("QPSK: 4 фазы (π/4 + k·π/2)", len(ph4) == 4)
+        m = w._mseq31()
+        check("m-seq Gp=31: длина и баланс ±1", len(m) == 31 and abs(int(m.sum())) == 1)
+
+        # Циклический RRC: стык петли не хуже середины (нет скачка огибающей)
+        q = w.make_waveform("qpsk")
+        env = np.abs(q)
+        edge = max(float(env[0]), float(env[-1]))
+        mid = float(np.max(env[len(env) // 4 : 3 * len(env) // 4]))
+        check("QPSK петля: край в пределах огибающей", edge <= mid + 1e-6)
+
+        bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
+        check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
     ping = rpc(proc, {"op": "ping"})
     check("ping ok", ping.get("ok") is True)
@@ -93,6 +130,15 @@ def main() -> int:
     tx = rpc(proc, {"op": "tx", "freqMhz": 2442.5})
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
     check("tx latency число", isinstance(tx.get("latencyUs"), int))
+
+    wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "qpsk", "params": {"amp": 0.2}})
+    check("tx_wave qpsk ok (fake)", wave.get("ok") is True and wave.get("freqMhz") == 2442.0)
+
+    bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
+    check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)
+
+    wave_live = rpc(proc, {"op": "ping"})
+    check("tx_wave → txLive", wave_live.get("txLive") is True)
 
     live = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 8})
     check("scan несёт txLive после TX", live.get("txLive") is True)
