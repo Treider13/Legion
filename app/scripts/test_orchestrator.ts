@@ -23,6 +23,7 @@ import {
   pickTurnTarget,
   refreshSkipMhz,
   RESENSE_MS,
+  shouldContinuePriorityTick,
   uniqueBins,
   windowCoversMhz,
 } from "../src/sense/hold";
@@ -566,6 +567,71 @@ function main(): void {
       true,
       -40,
     )?.freqMhz === 2447,
+  );
+  check(
+    "приоритет: равная мощность не перехватывает",
+    pickPriorityTarget(
+      [
+        { freqMhz: 2442, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: true },
+        { freqMhz: 2447, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false },
+      ],
+      2442,
+    ) === null,
+  );
+  check(
+    "withoutOwnTx прячет 2442, 2447 остаётся",
+    withoutOwnTx(
+      [
+        { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 1, forwarded: true },
+        { freqMhz: 2447, powerDbm: -25, noiseDbm: -90, snrDb: 65, ts: 1, forwarded: false },
+      ],
+      2442,
+    ).every((d) => Math.abs(d.freqMhz - 2447) < 0.01) &&
+      withoutOwnTx(
+        [
+          { freqMhz: 2442, powerDbm: -10, noiseDbm: -90, snrDb: 80, ts: 1, forwarded: true },
+          { freqMhz: 2447, powerDbm: -25, noiseDbm: -90, snrDb: 65, ts: 1, forwarded: false },
+        ],
+        2442,
+      ).length === 1,
+  );
+  check(
+    "armed priority + mask: сильнее перехватывает",
+    pickArmedAutoTarget({
+      liveWindow: [{ freqMhz: 2447, powerDbm: -25, noiseDbm: -90, snrDb: 65, ts: 1, forwarded: false }],
+      archive: [{ freqMhz: 2410, powerDbm: -5, noiseDbm: -90, snrDb: 85, ts: 1, forwarded: false }],
+      heldMhz: 2442,
+      heldPowerDbm: -40,
+      skipMhz: null,
+      dispatch: "priority",
+      holdMasked: true,
+    })?.freqMhz === 2447,
+  );
+  check(
+    "armed priority + mask: архив не стомпит",
+    pickArmedAutoTarget({
+      liveWindow: [],
+      archive: [{ freqMhz: 2410, powerDbm: -5, noiseDbm: -90, snrDb: 85, ts: 1, forwarded: false }],
+      heldMhz: 2442,
+      heldPowerDbm: -40,
+      skipMhz: null,
+      dispatch: "priority",
+      holdMasked: true,
+    }) === null,
+  );
+  check("после switch второй pick тика запрещён", shouldContinuePriorityTick("switch") === false);
+  check("после gone тик может взять следующую", shouldContinuePriorityTick("gone") === true);
+  check("после alive тик может украсть сильнее", shouldContinuePriorityTick("alive") === true);
+  const walkerOnly = [
+    { freqMhz: 2410, powerDbm: -30, noiseDbm: -90, snrDb: 60, ts: 1, forwarded: false },
+  ];
+  check(
+    "факт стомпа: held=null на окне walker берёт 2410, не 2447",
+    pickPriorityTarget(walkerOnly, null)?.freqMhz === 2410,
+  );
+  check(
+    "поэтому switch не продолжает тик — иначе 2410 перебьёт 2447",
+    shouldContinuePriorityTick("switch") === false,
   );
   check(
     "приоритет: пропала — берём следующую сильнейшую",

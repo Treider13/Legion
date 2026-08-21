@@ -36,7 +36,13 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { heldHitAlive, pickArmedAutoTarget, refreshSkipMhz, RESENSE_MS } from "../sense/hold";
+import {
+  heldHitAlive,
+  pickArmedAutoTarget,
+  refreshSkipMhz,
+  RESENSE_MS,
+  shouldContinuePriorityTick,
+} from "../sense/hold";
 import {
   modeConflict,
   modeOf,
@@ -284,7 +290,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     void runHandoffAsync(mhz, powerDbm);
   };
 
-  const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<void> => {
+  const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
     const st = get();
     const caps = catalogCaps(st.sdrId);
     const plan = planHandoff({
@@ -296,7 +302,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       inflight: gGate.inflight,
       sdrCanTx: gLive ? caps.canTx : gSdr.canTx(),
     });
-    if (plan.skip) return;
+    if (plan.skip) return false;
     gGate.reserve(plan.freqMhz);
     let sdrUs = 0;
     try {
@@ -306,12 +312,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", tx.reason);
         if (!tx.ok) {
           gGate.abort();
-          return;
+          return false;
         }
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
       }
       executeHandoff(plan, sdrUs, powerDbm);
+      return true;
     } finally {
       const queued = gGate.release();
       if (queued !== null) void runHandoffAsync(queued);
@@ -360,10 +367,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         holdMasked: false,
       });
       if (nextHit) {
-        gGate.dropHold();
-        set({ lastForwardMhz: null, lastForwardPowerDbm: null, lastSdrTxUs: null, sdrHoldSince: null });
-        runHandoff(nextHit.freqMhz, nextHit.powerDbm);
-        return "switch";
+        // Не dropHold до успеха: иначе тот же тик видит held=null и стомпит цель окном walker.
+        const ok = await runHandoffAsync(nextHit.freqMhz, nextHit.powerDbm);
+        if (ok) return "switch";
+        const restored = await restoreHeldTx(heldMhz);
+        return restored ? "alive" : "error";
       }
       if (heldHitAlive(dets, heldMhz)) {
         const ok = await restoreHeldTx(heldMhz);
@@ -1202,6 +1210,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         let inflight = false;
         let lastResenseAt = 0;
         const tickScan = async (): Promise<void> => {
+          if (!get().scanRunning || get().flashBusy) return;
           let bins: ScanBin[] = [];
           let centerMhz = 0;
           let detections: Detection[] = [];
@@ -1211,6 +1220,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           centerMhz = step.centerMhz;
           if (gLive) {
             const win = await hostScan(centerMhz, winMhz, nBins);
+            if (!get().scanRunning || get().flashBusy) return;
             if (win.txError) {
               pushLog("sys", win.txError);
               await get().stopTransmit();
@@ -1247,11 +1257,14 @@ export const useLegion = create<LegionStore>((set, get) => {
             cur.autoDispatch === "priority" &&
             held != null &&
             !gGate.inflight &&
+            !cur.flashBusy &&
             Date.now() - lastResenseAt >= RESENSE_MS
           ) {
             lastResenseAt = Date.now();
-            await resenseHeld(held, winMhz, nBins);
+            const rs = await resenseHeld(held, winMhz, nBins);
+            if (!shouldContinuePriorityTick(rs)) return;
           }
+          if (!get().scanRunning || get().flashBusy || !get().transmitArmed) return;
           const after = get();
           const heldNow = gGate.lastCuedMhz;
           const dispatch = after.autoDispatch;
@@ -1291,6 +1304,10 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startTransmit: async () => {
       const s = get();
+      if (s.flashBusy) {
+        pushLog("sys", "ПЕРЕДАТЬ: идёт прошивка — сначала дождитесь");
+        return;
+      }
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);

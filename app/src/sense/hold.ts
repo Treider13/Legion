@@ -9,6 +9,15 @@ import { pickStrongest, sameBin } from "./orchestrator";
 export const RESENSE_MS = 1000;
 
 export type AutoDispatch = "priority" | "turn";
+export type ResenseResult = "alive" | "gone" | "error" | "switch";
+
+/**
+ * Re-sense уже поставил новую цель. Окно walker (другой центр) не должно
+ * делать второй pick: held=null + чужие бины → стомп (2447 сменится на 2410).
+ */
+export function shouldContinuePriorityTick(result: ResenseResult): boolean {
+  return result !== "switch";
+}
 
 export function heldHitAlive(dets: readonly Detection[], heldMhz: number): boolean {
   return dets.some((d) => sameBin(d.freqMhz, heldMhz));

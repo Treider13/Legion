@@ -35,7 +35,7 @@ export function parseEsp32Chip(text: string): string | null {
   const m =
     /Chip is (ESP32-S3|ESP32-S2|ESP32-C6|ESP32-C3|ESP32-H2|ESP32-P4|ESP32)\b/i.exec(s) ??
     /Detecting chip type\.\.\. (ESP32-S3|ESP32-S2|ESP32-C6|ESP32-C3|ESP32-H2|ESP32)\b/i.exec(s);
-  return m ? m[1].toUpperCase().replace("ESP32S3", "ESP32-S3") : null;
+  return m ? m[1].toUpperCase() : null;
 }
 
 export function envMatchesChip(env: Esp32FlashEnv, chip: string): boolean {
