@@ -14,7 +14,14 @@ import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import { heldHitAlive, nextAfterOperatorReset, pickAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
-import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
+import {
+  autoForwardAllowed,
+  bandListFor,
+  modeConflict,
+  modeOf,
+  runIntentArmsTx,
+  walkPatternArmsTx,
+} from "../src/sense/modes";
 import {
   decideCue,
   decideForward,
@@ -323,6 +330,21 @@ function main(): void {
   check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
   check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
   check("нет конфликта", modeConflict("sdr", false, false) === null);
+  check("обход полосы сам TX не включает", walkPatternArmsTx() === false);
+  check("слушать антенну ≠ ПЕРЕДАТЬ", runIntentArmsTx("listen") === false);
+  check("ПЕРЕДАТЬ включает авто на усилитель", runIntentArmsTx("transmit") === true);
+  check(
+    "без ПЕРЕДАТЬ засечка на усилитель не идёт",
+    autoForwardAllowed({ transmitArmed: false, loadOk: true, sdrCanTx: true }) === false,
+  );
+  check(
+    "ПЕРЕДАТЬ + нагрузка + TX → авто",
+    autoForwardAllowed({ transmitArmed: true, loadOk: true, sdrCanTx: true }) === true,
+  );
+  check(
+    "ПЕРЕДАТЬ без нагрузки нельзя",
+    autoForwardAllowed({ transmitArmed: true, loadOk: false, sdrCanTx: true }) === false,
+  );
 
   const det = { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false };
   check("SDR TX без тока ESP32 разрешён", decideSdrTx(det, ism, true, true).ok === true);

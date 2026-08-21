@@ -18,6 +18,26 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 }
 
 /** Нельзя крутить коридор ESP32 и TX SDR одновременно — разные тракты. */
+/** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
+export type SdrRunIntent = "listen" | "transmit";
+
+export function runIntentArmsTx(intent: SdrRunIntent): boolean {
+  return intent === "transmit";
+}
+
+/** Обход (туда-сюда / сплошная / случайная) не включает TX сам. */
+export function walkPatternArmsTx(): boolean {
+  return false;
+}
+
+export function autoForwardAllowed(opts: {
+  transmitArmed: boolean;
+  loadOk: boolean;
+  sdrCanTx: boolean;
+}): boolean {
+  return opts.transmitArmed && opts.loadOk && opts.sdrCanTx;
+}
+
 export function modeConflict(
   want: LegionMode,
   corridorRunning: boolean,

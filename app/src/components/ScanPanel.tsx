@@ -11,12 +11,12 @@ export function ScanPanel() {
 
   return (
     <section className="panel">
-      <span className="panel-title">РЕЖИМ SDR // АВТО: ПОЛОСА → ЗАСЕЧКА → УСИЛИТЕЛЬ</span>
+      <span className="panel-title">РЕЖИМ SDR // ОБХОД ОПЕРАТОРА + ПЕРЕДАТЬ</span>
       <p className="panel-note">
-        Задайте начало и конец, нажмите ЗАПУСТИТЬ. Скан гоняет полосу сам. Сильная
-        засечка сразу на TX SDR → усилитель; чуть сильнее — тоже сразу. СБРОСИТЬ —
-        оператор снимает частоту, система по таймеру не прыгает. Energy detect, не RF-Clown/BlueJammer.
-        ESP32 сюда не входит. Нагрузка 50 Ом обязательна для TX.
+        Выберите обход (туда-сюда, сплошная, случайная), F1…F2, окно и выдержку.
+        СКАНИРОВАТЬ — только антенна, TX нет. ПЕРЕДАТЬ — SDR работает в выбранном
+        обходе и сам гонит на усилитель то, что засекла антенна. СБРОСИТЬ — снимает
+        текущую частоту, решает оператор. Energy detect, не RF-Clown. ESP32 не входит.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -32,7 +32,7 @@ export function ScanPanel() {
             {s.lastForwardMhz != null ? `${s.lastForwardMhz.toFixed(3)}` : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц · авто
+            МГц · {s.transmitArmed ? "ПЕРЕДАТЬ" : "усилитель"}
             {s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
             {s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
           </span>
@@ -131,19 +131,19 @@ export function ScanPanel() {
             СТОП СКАН
           </button>
         ) : (
-          <button className="btn-primary" onClick={() => void s.startAuto()}>
-            ЗАПУСТИТЬ
+          <button className="btn-primary" onClick={() => s.startScan()}>
+            СКАНИРОВАТЬ
           </button>
         )}
         {s.transmitArmed ? (
           <button className="btn-danger" onClick={() => void s.stopTransmit()}>
             СТОП ПЕРЕДАЧУ
           </button>
-        ) : s.scanRunning ? (
+        ) : (
           <button className="btn-primary" onClick={() => void s.startTransmit()}>
             ПЕРЕДАТЬ
           </button>
-        ) : null}
+        )}
         <button
           className="btn-ghost"
           disabled={s.lastForwardMhz == null}
@@ -153,7 +153,7 @@ export function ScanPanel() {
         </button>
       </div>
       <ul className="allow-list">
-        {s.sdrBands.length === 0 && <li>полоса из F1…F2 при ЗАПУСТИТЬ, либо добавьте вручную</li>}
+        {s.sdrBands.length === 0 && <li>полоса из F1…F2 при СКАНИРОВАТЬ / ПЕРЕДАТЬ, либо добавьте вручную</li>}
         {s.sdrBands.map((b, i) => (
           <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
             {b.f1Mhz} … {b.f2Mhz} МГц
@@ -200,14 +200,14 @@ export function ScanPanel() {
         <span className="range-cur">
           {s.scanCenterMhz !== null ? `${s.scanCenterMhz.toFixed(3)} МГц` : "—"}
           {s.transmitArmed
-            ? " · авто TX"
+            ? ` · ПЕРЕДАТЬ · ${s.scanPattern}`
             : s.scanRunning
               ? " · слушает"
               : ""}
         </span>
         <span>{f2}</span>
       </div>
-      <p className="status-line">{s.lastCueReason || "задайте F1…F2 и ЗАПУСТИТЬ"}</p>
+      <p className="status-line">{s.lastCueReason || "выберите обход, затем СКАНИРОВАТЬ или ПЕРЕДАТЬ"}</p>
       <table className="det-table">
         <thead>
           <tr>

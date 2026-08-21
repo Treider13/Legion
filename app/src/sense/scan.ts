@@ -13,7 +13,7 @@ export interface ScanConfig {
   bwMhz: number;
   bins: number;
   thresholdDb: number;
-  /** Непрерывный обход антенны RX (после ЗАПУСТИТЬ). */
+  /** Непрерывный обход антенны RX (СКАНИРОВАТЬ или ПЕРЕДАТЬ). */
   loop?: boolean;
   pattern?: ScanPattern;
   dwellMs?: number;

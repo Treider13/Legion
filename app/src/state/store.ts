@@ -27,7 +27,7 @@ import { detectFromBins } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
-import { heldHitAlive, nextAfterOperatorReset, pickAutoTarget, RESENSE_MS } from "../sense/hold";
+import { heldHitAlive, pickAutoTarget, RESENSE_MS } from "../sense/hold";
 import { modeConflict, modeOf } from "../sense/modes";
 import {
   markForwarded,
@@ -36,13 +36,7 @@ import {
   sameBin,
   withoutOwnTx,
 } from "../sense/orchestrator";
-import {
-  AllowlistScanner,
-  clampWindowMhz,
-  clipToAllowlist,
-  ScanWalker,
-  type ScanPattern,
-} from "../sense/scan";
+import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../sense/sensitivity";
 import { MockTransport } from "../transport/mock";
 import { TauriSerialTransport } from "../transport/tauriSerial";
@@ -165,7 +159,6 @@ interface LegionStore {
   setScanPattern(p: ScanPattern): void;
   setScanWindowMhz(v: string): void;
   setScanDwellMs(v: string): void;
-  startAuto(): Promise<void>;
   resetSdrLock(): Promise<void>;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
@@ -204,7 +197,6 @@ let gTransport: Transport | null = null;
 let gClient: LegionClient | null = null;
 const gSdr = new MockSdrBackend();
 let gLive = false;
-let gScan: AllowlistScanner | null = null;
 let gWalker: ScanWalker | null = null;
 let gScanTimer: ReturnType<typeof setInterval> | null = null;
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
@@ -482,13 +474,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     setScanThreshold: (db) => {
       const thr = Number.isFinite(db) ? db : 12;
       set({ scanThresholdDb: thr, scanSensitivity: thresholdToSensitivity(thr) });
-      gScan?.setThresholdDb(thr);
     },
     setScanSensitivity: (sens) => {
       const s = Math.min(100, Math.max(0, Number.isFinite(sens) ? sens : 0));
       const thr = sensitivityToThresholdDb(s);
       set({ scanSensitivity: s, scanThresholdDb: thr });
-      gScan?.setThresholdDb(thr);
     },
     setScanPattern: (p) => set({ scanPattern: p }),
     setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
@@ -995,7 +985,6 @@ export const useLegion = create<LegionStore>((set, get) => {
           seed: Date.now() & 0xffffffff,
         });
         gWalker = walker;
-        gScan = null;
         const nBins = walker.windowMhz >= 40 ? 256 : 64;
         set({ scanRunning: true, scanCenterMhz: null });
         const modeRu =
@@ -1055,10 +1044,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               const held = gGate.lastCuedMhz;
               if (held != null && !gGate.inflight && Date.now() - lastResenseAt >= RESENSE_MS) {
                 lastResenseAt = Date.now();
-                const verdict = await resenseHeld(held, winMhz, nBins);
-                if (verdict === "gone") {
-                  void nextAfterOperatorReset(get().detections);
-                }
+                await resenseHeld(held, winMhz, nBins);
               }
               const after = get();
               const heldNow = gGate.lastCuedMhz;
@@ -1079,22 +1065,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       })();
     },
 
-    startAuto: async () => {
-      if (!ensureSdrBand()) return;
-      if (get().sdrLoadOk) {
-        await get().startTransmit();
-        return;
-      }
-      get().startScan();
-      pushLog("sys", "ЗАПУСТИТЬ: скан идёт, TX нет — нет нагрузки 50 Ом");
-    },
-
     stopScan: () => {
       if (gScanTimer) {
         clearInterval(gScanTimer);
         gScanTimer = null;
       }
-      gScan = null;
       gWalker = null;
       if (get().scanRunning) set({ scanRunning: false });
     },
@@ -1126,7 +1101,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ transmitArmed: true });
       pushLog(
         "sys",
-        "SDR авто: сильная сразу на усилитель, чуть сильнее — тоже. СБРОСИТЬ — только оператор.",
+        `ПЕРЕДАТЬ: обход «${get().scanPattern}» + авто TX того, что засекла антенна. СБРОСИТЬ — оператор.`,
       );
       if (!get().scanRunning) get().startScan();
       stopTxWatch();
@@ -1183,7 +1158,6 @@ export const useLegion = create<LegionStore>((set, get) => {
           ? `СБРОСИТЬ: оператор снял ${skip.toFixed(3)} МГц — систему не переключаем`
           : "СБРОСИТЬ: замок снят оператором",
       );
-      void nextAfterOperatorReset(get().detections);
     },
   };
 });
