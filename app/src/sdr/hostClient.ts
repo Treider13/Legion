@@ -1,0 +1,127 @@
+// ============================================================================
+// LEGION — клиент живого SDR (Tauri → sdr_worker.py → SoapySDR).
+// Не ESP32. В браузере без Tauri не работает.
+// ============================================================================
+import { catalogById } from "./catalog";
+import type { ScanBin, SdrDeviceInfo, TxCueResult } from "./types";
+import { isTauriRuntime } from "../transport/types";
+
+export interface HostPing {
+  ok: boolean;
+  soapy?: boolean;
+  numpy?: boolean;
+  fake?: boolean;
+  reason?: string;
+  devices?: Array<Record<string, string>>;
+}
+
+export interface HostScanResult {
+  ok: boolean;
+  bins: ScanBin[];
+  reason?: string;
+}
+
+async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  const { invoke: inv } = await import("@tauri-apps/api/core");
+  return inv<T>(cmd, args);
+}
+
+export function hostSdrAvailable(): boolean {
+  return isTauriRuntime();
+}
+
+export async function hostRpc<T>(msg: Record<string, unknown>): Promise<T> {
+  const raw = await invoke<string>("sdr_rpc", { req: JSON.stringify(msg) });
+  return JSON.parse(raw) as T;
+}
+
+export async function hostPing(): Promise<HostPing> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    return await hostRpc<HostPing>({ op: "probe" });
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+export async function hostOpen(
+  args: string,
+  analogBwMhz: number,
+  canTx: boolean,
+  fullDuplex: boolean,
+): Promise<{ ok: boolean; reason: string }> {
+  return hostRpc({ op: "open", args, analogBwMhz, canTx, fullDuplex });
+}
+
+export async function hostScan(centerMhz: number, bwMhz: number, bins: number): Promise<HostScanResult> {
+  const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
+    op: "scan",
+    centerMhz,
+    bwMhz,
+    bins,
+  });
+  return { ok: !!r.ok, bins: r.bins ?? [], reason: r.reason };
+}
+
+export async function hostTx(freqMhz: number): Promise<TxCueResult> {
+  const r = await hostRpc<{
+    ok: boolean;
+    reason?: string;
+    latencyUs?: number;
+    freqMhz?: number;
+  }>({ op: "tx", freqMhz });
+  return {
+    ok: !!r.ok,
+    reason: r.reason ?? "",
+    freqMhz: r.freqMhz ?? freqMhz,
+    latencyUs: r.latencyUs ?? 0,
+    path: r.ok ? "sdr-tx" : "none",
+  };
+}
+
+export async function hostTxOff(): Promise<void> {
+  await hostRpc({ op: "tx_off" });
+}
+
+export async function hostClose(): Promise<void> {
+  try {
+    await hostRpc({ op: "close" });
+  } catch {
+    /* worker мог уже выйти */
+  }
+}
+
+export async function hostFlash(argv: string[], file?: string): Promise<{ ok: boolean; reason: string; written: boolean }> {
+  try {
+    const reason = await invoke<string>("sdr_flash", { argv, file: file ?? null });
+    return { ok: true, reason, written: true };
+  } catch (e) {
+    return { ok: false, reason: String(e), written: false };
+  }
+}
+
+export function markCatalogPresent(list: SdrDeviceInfo[], found: Array<Record<string, string>>): SdrDeviceInfo[] {
+  const blob = found.map((d) => Object.values(d).join(" ").toLowerCase()).join(" ");
+  return list.map((e) => {
+    const hit =
+      (e.id.includes("bladerf") && blob.includes("bladerf")) ||
+      (e.id.includes("hackrf") && blob.includes("hackrf")) ||
+      (e.id.includes("pluto") && (blob.includes("pluto") || blob.includes("ad936"))) ||
+      (e.id.includes("n210") && (blob.includes("usrp") || blob.includes("usrp2"))) ||
+      (e.id.includes("b210") && blob.includes("b210")) ||
+      (e.id.includes("lime") && blob.includes("lime")) ||
+      (e.id.includes("rtl") && (blob.includes("rtlsdr") || blob.includes("rtl")));
+    return { ...e, present: hit, serial: hit ? blob.slice(0, 48) : e.serial };
+  });
+}
+
+export function catalogCaps(id: string) {
+  const row = catalogById(id);
+  return {
+    analogBwMhz: row?.analogBwMhz ?? 20,
+    canTx: row?.role === "trx" && row.txMhz !== null,
+    fullDuplex: row?.fullDuplex === true,
+  };
+}

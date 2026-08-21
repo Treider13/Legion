@@ -18,8 +18,17 @@ I/Q на ESP32 не идёт. ESP32 не шьёт FPGA SDR.
 SoapySDRServer --bind
 ```
 
-Клиент LEGION: `driver=remote,remote=tcp://<шлюз>:55132`
-([pothosware/SoapyRemote](https://github.com/pothosware/SoapyRemote), порт 55132).
+Клиент LEGION (desktop): `tools/sdr_worker.py` → SoapySDR Python
+([wiki](https://github.com/pothosware/SoapySDR/wiki/PythonSupport)):
+`Device(dict(driver="remote", remote="tcp://<шлюз>:55132"))`, порт 55132.
+
+На шлюзе / ноутбуке:
+
+```
+sudo apt install python3-soapysdr soapysdr-tools python3-numpy
+# + драйвер: SoapyBladeRF / SoapyUHD / SoapyPlutoSDR
+SoapySDRServer --bind
+```
 
 | SDR | Куда RJ45 | Официальный образ | Чем шить |
 |---|---|---|---|

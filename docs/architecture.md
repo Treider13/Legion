@@ -76,6 +76,9 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   Одновременно коридор и SDR TX запрещены (`modeConflict`).
   I/Q на ESP32 не идёт. LAN xA4 = шлюз USB3 + SoapyRemote (RJ45 не в bladeRF).
   N210: RJ45 в сам USRP. Образы: `app/src/sdr/official.ts`.
+  Живой скан/TX: Tauri → `tools/sdr_worker.py` → SoapySDR
+  (wiki pothosware: Device + CF32 streams). Без Soapy — честный отказ
+  или явная эмуляция.
   **Не RF-Clown / не ESP32-BlueJammer:** те проекты — ESP32 + nRF24L01, шум
   по каналам BT/BLE/WiFi 2.4 ГГц, часто закрытый `.bin`, старт при подаче
   питания. Это третий тракт. В LEGION их прошивки и таблицы каналов

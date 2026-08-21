@@ -1,3 +1,5 @@
+mod sdr;
+
 /// LEGION: начальный serial-порт из переменной окружения LEGION_PORT.
 /// Легитимный хук для автоматизации/тестов и headless-сценариев.
 #[tauri::command]
@@ -13,7 +15,12 @@ pub fn run() {
   tauri::Builder::default()
     // LEGION: USB-UART транспорт к ESP32 (факт T2: serialplugin v3 + serialport 4.5)
     .plugin(tauri_plugin_serialplugin::init())
-    .invoke_handler(tauri::generate_handler![legion_default_port])
+    .invoke_handler(tauri::generate_handler![
+      legion_default_port,
+      sdr::sdr_rpc,
+      sdr::sdr_flash,
+      sdr::sdr_host_info
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

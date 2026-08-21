@@ -15,7 +15,7 @@ export function hostOpenAllowed(i: HostOpenInput): { ok: boolean; reason: string
   if (!i.hasSoapyOrCli) {
     return {
       ok: false,
-      reason: "нет SoapySDR/bladeRF-cli в этом процессе — включите эмуляцию или поставьте CLI на шлюзе",
+      reason: "нет SoapySDR на хосте — поставьте python3-soapysdr + SoapyRemote или включите эмуляцию",
     };
   }
   return { ok: true, reason: "хост-инструмент есть — открытие через Soapy/UHD, не UART ESP32" };

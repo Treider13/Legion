@@ -8,6 +8,7 @@ import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed } from "../src/sdr/host";
+import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
@@ -376,6 +377,12 @@ function main(): void {
     hasSoapyOrCli: false,
     imageBytes: 0,
   }).ok);
+
+  const soapyHit = markCatalogPresent(
+    [{ ...(xa4 as NonNullable<typeof xa4>), serial: "", present: false }],
+    [{ driver: "bladerf", label: "Nuand bladeRF" }],
+  );
+  check("probe Soapy помечает xA4 present", soapyHit[0]?.present === true);
 
   const dry = new MockSdrBackend({ emulation: false });
   check("мок без эмуляции не present", dry.probe().every((d) => d.present === false));

@@ -1,9 +1,15 @@
 // LEGION — режим SDR: Ethernet + официальная прошивка. Не ESP32 и не OTA.
+import { useEffect } from "react";
+
 import { defaultFlashName, imagesFor, planEthernet } from "../sdr/official";
 import { useLegion } from "../state/store";
 
 export function SdrPanel() {
   const s = useLegion();
+  useEffect(() => {
+    void s.probeSdr();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const opened = s.sdrOpened;
   const plan = planEthernet(s.sdrId, s.sdrGateway);
   const images = imagesFor(s.sdrId);
@@ -14,7 +20,8 @@ export function SdrPanel() {
       <p className="panel-note">
         Отдельный режим от синтезатора ESP32. Сюда не шьётся прошивка ESP32.
         Ethernet-кабель — по схеме ниже. На SDR — только официальный hosted-образ
-        вендора (RX-скан + TX LO). RF-Clown / BlueJammer / nRF24 сюда не шьём.
+        вендора (RX-скан + TX LO). На шлюзе: SoapySDRServer --bind и
+        python3-soapysdr + SoapyRemote. Desktop LEGION ходит в Soapy, не в UART.
       </p>
       <div className="corr-grid">
         <label>
@@ -48,6 +55,10 @@ export function SdrPanel() {
         </label>
       </div>
       <div className="sdr-facts">
+        <div>
+          Хост Soapy: {s.sdrHostReady ? "готов" : "нет"}
+          {s.sdrHostDetail ? ` · ${s.sdrHostDetail}` : ""}
+        </div>
         <div>Кабель: {plan.cableText}</div>
         <div>{plan.serverHint}</div>
         {plan.openArgs && <div>Открытие: {plan.openArgs}</div>}
@@ -77,7 +88,12 @@ export function SdrPanel() {
           aria-label="Файл прошивки SDR с сайта вендора"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) s.setSdrImageFile(f.name, f.size);
+            if (f) {
+              const path = "path" in f && typeof (f as File & { path?: string }).path === "string"
+                ? (f as File & { path: string }).path
+                : "";
+              s.setSdrImageFile(f.name, f.size, path);
+            }
           }}
         />
         <span className="panel-note">
@@ -87,7 +103,7 @@ export function SdrPanel() {
         </span>
       </label>
       <div className="power-row">
-        <button className="btn-ghost" onClick={() => s.probeSdr()}>
+        <button className="btn-ghost" onClick={() => void s.probeSdr()}>
           PROBE
         </button>
         {opened ? (
