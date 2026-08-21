@@ -1,0 +1,246 @@
+--- /tmp/bladerf-hdl/hdl/fpga/platforms/bladerf/vhdl/bladerf-hosted.vhd	2026-08-21 16:43:20.672270226 +0000
++++ /tmp/bladerf-legion.vhd	2026-08-21 17:06:25.074111950 +0000
+@@ -27,8 +27,9 @@
+ library work;
+     use work.bladerf_p.all;
+     use work.fifo_readwrite_p.all;
++    use work.legion_pkg.all;
+ 
+-architecture hosted_bladerf of bladerf is
++architecture legion of bladerf is
+ 
+     attribute noprune   : boolean ;
+     attribute keep      : boolean ;
+@@ -270,6 +271,52 @@
+ 
+     signal rx_packet_ready           : std_logic;
+ 
++    -- ==================== LEGION revision signals ====================
++    signal legion_aws_slv    : std_logic_vector(7 downto 0);
++    signal legion_wdata_slv  : std_logic_vector(31 downto 0);
++    signal legion_status_slv : std_logic_vector(31 downto 0);
++
++    signal lg_tx_arm        : std_logic;
++    signal lg_tx_mode       : std_logic_vector(2 downto 0);
++    signal lg_tx_wd_en      : std_logic;
++    signal lg_tx_nco_ftw    : unsigned(31 downto 0);
++    signal lg_tx_lb_shift   : unsigned(3 downto 0);
++    signal lg_tx_wd_limit   : unsigned(15 downto 0);
++    signal lg_tx_player_len : unsigned(11 downto 0);
++    signal lg_tx_cap_arm    : std_logic;
++    signal lg_tx_wd_kick    : std_logic;
++
++    signal lg_play_i        : signed(15 downto 0);
++    signal lg_play_q        : signed(15 downto 0);
++    signal lg_play_valid    : std_logic;
++    signal lg_playing       : std_logic;
++    signal lg_cap_done      : std_logic;
++
++    signal lg_nco_i         : signed(15 downto 0);
++    signal lg_nco_q         : signed(15 downto 0);
++    signal lg_nco_valid     : std_logic;
++
++    signal lg_lb_data       : std_logic_vector(31 downto 0);
++    signal lg_lb_empty      : std_logic;
++    signal lg_lb_full       : std_logic;
++    signal lg_lb_rd_en      : std_logic;
++    signal lg_lb_level      : unsigned(7 downto 0);
++
++    signal lg_det_active_rx : std_logic;
++    signal lg_det_thr_rx    : std_logic_vector(31 downto 0);
++    signal lg_det_shift_rx  : unsigned(3 downto 0);
++    signal lg_play_en       : std_logic;
++    signal lg_nco_en        : std_logic;
++    signal lg_lb_wr_en      : std_logic;
++    signal lg_det_active_tx : std_logic;
++    signal lg_det_count     : unsigned(15 downto 0);
++    signal lg_wd_fired      : std_logic;
++    signal lg_wd_ok         : std_logic;
++
++    signal lg_mux_i         : signed(15 downto 0);
++    signal lg_mux_q         : signed(15 downto 0);
++    signal lg_mux_valid     : std_logic;
++
+ begin
+ 
+     correction_tx_phase <= signed(correction_tx_phase_gain(31 downto 16));
+@@ -944,9 +991,11 @@
+         underflow_duration  =>  x"ffff"
+       ) ;
+ 
+-    tx_sample_raw_i     <= tx_samples(0).data_i;
+-    tx_sample_raw_q     <= tx_samples(0).data_q;
+-    tx_sample_raw_valid <= tx_samples(0).data_v;
++    -- LEGION: TX-источник выбирается мультиплексором (поток хоста по
++    -- умолчанию — режим PASS не меняет штатное поведение)
++    tx_sample_raw_i     <= lg_mux_i;
++    tx_sample_raw_q     <= lg_mux_q;
++    tx_sample_raw_valid <= lg_mux_valid;
+ 
+     U_tx_iq_correction : entity work.iq_correction(tx)
+       generic map (
+@@ -1211,7 +1260,10 @@
+         agc_dc_i_mid_export             => corr_dc_i_mid,
+         agc_dc_q_mid_export             => corr_dc_q_mid,
+         agc_dc_i_min_export             => corr_dc_i_min,
+-        agc_dc_q_min_export             => corr_dc_q_min
++        agc_dc_q_min_export             => corr_dc_q_min,
++        legion_aws_export               => legion_aws_slv,
++        legion_wdata_export             => legion_wdata_slv,
++        legion_status_export            => legion_status_slv
+       ) ;
+ 
+     -- Unpack the Nios general-purpose outputs into a record
+@@ -1398,4 +1450,152 @@
+             rx_packet_control      => rx_packet_control
+         ) ;
+ 
++    -- ==================== LEGION revision blocks ====================
++    -- Регистры (домен 80 МГц NIOS → CDC)
++    U_legion_regs : entity work.legion_regs
++      port map (
++        nios_clk      => \80MHz\,
++        nios_reset    => sys_rst_80M,
++        pio_addr      => legion_aws_slv(6 downto 0),
++        pio_we        => legion_aws_slv(7),
++        pio_wdata     => legion_wdata_slv,
++        pio_status    => legion_status_slv,
++        tx_clock      => tx_clock,
++        tx_reset      => tx_reset,
++        tx_arm        => lg_tx_arm,
++        tx_mode       => lg_tx_mode,
++        tx_wd_en      => lg_tx_wd_en,
++        tx_nco_ftw    => lg_tx_nco_ftw,
++        tx_lb_shift   => lg_tx_lb_shift,
++        tx_wd_limit   => lg_tx_wd_limit,
++        tx_player_len => lg_tx_player_len,
++        tx_cap_arm    => lg_tx_cap_arm,
++        tx_wd_kick    => lg_tx_wd_kick,
++        tx_playing    => lg_playing,
++        tx_cap_done   => lg_cap_done,
++        tx_wd_fired   => lg_wd_fired,
++        tx_lb_level   => lg_lb_level,
++        tx_det_active => lg_det_active_tx,
++        tx_det_count  => lg_det_count,
++        rx_clock      => rx_clock,
++        rx_reset      => rx_reset,
++        rx_det_thr    => lg_det_thr_rx,
++        rx_det_shift  => lg_det_shift_rx
++      );
++
++    -- Детектор энергии: тап после RX iq_correction
++    U_legion_detector : entity work.legion_detector
++      port map (
++        clock       => rx_clock,
++        reset       => rx_reset,
++        in_i        => rx_sample_corrected_i,
++        in_q        => rx_sample_corrected_q,
++        in_valid    => rx_sample_corrected_valid,
++        threshold   => unsigned(lg_det_thr_rx),
++        win_shift   => lg_det_shift_rx,
++        det_active  => lg_det_active_rx,
++        det_count   => lg_det_count
++      );
++
++    -- det_active → tx_clock (квазистатичный уровень)
++    U_legion_det_sync : entity work.synchronizer
++      generic map ( RESET_LEVEL => '0' )
++      port map (
++        reset  => tx_reset,
++        clock  => tx_clock,
++        async  => lg_det_active_rx,
++        sync   => lg_det_active_tx
++      );
++
++    -- Плеер волны: capture из потока хоста (fifo_reader), play из RAM
++    U_legion_player : entity work.legion_player
++      port map (
++        clock        => tx_clock,
++        reset        => tx_reset,
++        cap_i        => tx_samples(0).data_i,
++        cap_q        => tx_samples(0).data_q,
++        cap_valid    => tx_samples(0).data_v,
++        capture_arm  => lg_tx_cap_arm,
++        capture_done => lg_cap_done,
++        play_en      => lg_play_en,
++        len_m1       => lg_tx_player_len,
++        out_i        => lg_play_i,
++        out_q        => lg_play_q,
++        out_valid    => lg_play_valid,
++        playing      => lg_playing
++      );
++    lg_play_en <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
++
++    -- NCO тон
++    U_legion_nco : entity work.legion_nco
++      port map (
++        clock     => tx_clock,
++        reset     => tx_reset,
++        enable    => lg_nco_en,
++        ftw       => lg_tx_nco_ftw,
++        out_i     => lg_nco_i,
++        out_q     => lg_nco_q,
++        out_valid => lg_nco_valid
++      );
++    lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO else '0';
++
++    -- CDC FIFO RX→TX для loopback (письмо: исправленные RX-сэмплы)
++    U_legion_dcfifo : entity work.legion_dcfifo
++      port map (
++        wr_clk   => rx_clock,
++        wr_reset => rx_reset,
++        wr_data  => std_logic_vector(rx_sample_corrected_i) & std_logic_vector(rx_sample_corrected_q),
++        wr_en    => lg_lb_wr_en,
++        wr_full  => lg_lb_full,
++        rd_clk   => tx_clock,
++        rd_reset => tx_reset,
++        rd_data  => lg_lb_data,
++        rd_en    => lg_lb_rd_en,
++        rd_empty => lg_lb_empty,
++        rd_level => lg_lb_level
++      );
++    lg_lb_wr_en <= rx_sample_corrected_valid
++                   when (lg_tx_mode = LEGION_MODE_LB_GATED or lg_tx_mode = LEGION_MODE_LB_ALWAYS)
++                        and lg_tx_arm = '1' and lg_lb_full = '0'
++                   else '0';
++
++    -- Watchdog (deadman): heartbeat от хоста через NIOS
++    U_legion_watchdog : entity work.legion_watchdog
++      port map (
++        clock     => tx_clock,
++        reset     => tx_reset,
++        enable    => lg_tx_wd_en,
++        heartbeat => lg_tx_wd_kick,
++        limit     => lg_tx_wd_limit,
++        expired   => lg_wd_fired
++      );
++    lg_wd_ok <= not lg_wd_fired;
++
++    -- Мультиплексор TX-источника
++    U_legion_tx_mux : entity work.legion_tx_mux
++      port map (
++        clock      => tx_clock,
++        reset      => tx_reset,
++        arm        => lg_tx_arm,
++        mode       => lg_tx_mode,
++        wd_ok      => lg_wd_ok,
++        det_active => lg_det_active_tx,
++        lb_shift   => lg_tx_lb_shift,
++        host_i     => tx_samples(0).data_i,
++        host_q     => tx_samples(0).data_q,
++        host_valid => tx_samples(0).data_v,
++        play_i     => lg_play_i,
++        play_q     => lg_play_q,
++        play_valid => lg_play_valid,
++        nco_i      => lg_nco_i,
++        nco_q      => lg_nco_q,
++        nco_valid  => lg_nco_valid,
++        lb_data    => lg_lb_data,
++        lb_empty   => lg_lb_empty,
++        lb_rd_en   => lg_lb_rd_en,
++        out_i      => lg_mux_i,
++        out_q      => lg_mux_q,
++        out_valid  => lg_mux_valid
++      );
++
+ end architecture ; -- arch

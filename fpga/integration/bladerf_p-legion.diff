@@ -1,0 +1,12 @@
+--- /tmp/bladerf-hdl/hdl/fpga/platforms/bladerf/vhdl/bladerf_p.vhd	2026-08-21 16:43:20.672270226 +0000
++++ /tmp/bladerf_p-legion.vhd	2026-08-21 17:06:34.230028562 +0000
+@@ -78,6 +78,9 @@
+         command_serial_out              :   out std_logic ;
+         correction_rx_phase_gain_export :   out std_logic_vector(31 downto 0);
+         correction_tx_phase_gain_export :   out std_logic_vector(31 downto 0);
++        legion_aws_export               :   out std_logic_vector(7 downto 0);
++        legion_wdata_export             :   out std_logic_vector(31 downto 0);
++        legion_status_export            :   in  std_logic_vector(31 downto 0) := (others => '0');
+         rx_tamer_ts_sync_in             :   in  std_logic;
+         rx_tamer_ts_sync_out            :   out std_logic ;
+         rx_tamer_ts_pps                 :   in  std_logic ;
