@@ -9,7 +9,7 @@ import { MockSdrBackend } from "../sdr/backend";
 import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import { catalogById } from "../sdr/catalog";
 import { planFlashCli } from "../sdr/flashcli";
-import { flashFileRequired, hostOpenAllowed } from "../sdr/host";
+import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../sdr/host";
 import {
   catalogCaps,
   hostClose,
@@ -336,9 +336,20 @@ export const useLegion = create<LegionStore>((set, get) => {
     setSdrGateway: (v) => set({ sdrGateway: v }),
     setSdrFlashName: (v) => set({ sdrFlashName: v }),
     setSdrEmulation: (v) => {
-      if (!v) gLive = false;
+      if (gLive) {
+        void hostTxOff();
+        void hostClose();
+      }
+      gLive = false;
       gSdr.setEmulation(v);
-      set({ sdrEmulation: v, sdrDevices: gSdr.probe(), sdrOpened: gSdr.opened(), sdrRemote: gSdr.remoteArgs() });
+      set({
+        sdrEmulation: v,
+        sdrDevices: gSdr.probe(),
+        sdrOpened: gSdr.opened(),
+        sdrRemote: gSdr.remoteArgs(),
+        lastForwardMhz: null,
+        lastSdrTxUs: null,
+      });
       pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
     },
     setSdrImageFile: (name, byteLength, path) =>
@@ -688,7 +699,8 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     probeSdr: async () => {
       if (!get().sdrEmulation && hostSdrAvailable()) {
-        const p = await hostPing();
+        const st = get();
+        const p = await hostPing(sdrOpenArgs(st.sdrId, st.sdrGateway));
         const base = gSdr.probe().map((d) => ({ ...d, present: false, serial: "" }));
         const list = markCatalogPresent(base, p.devices ?? []);
         set({
@@ -717,7 +729,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", plan.cableText);
         return;
       }
-      const ping = hostSdrAvailable() ? await hostPing() : { ok: false, soapy: false, reason: "нет Tauri" };
+      const ping = hostSdrAvailable()
+        ? await hostPing(sdrOpenArgs(s.sdrId, s.sdrGateway))
+        : { ok: false, soapy: false, reason: "нет Tauri" };
       const pre = hostOpenAllowed({
         emulation: false,
         hasSoapyOrCli: !!(ping.ok && ping.soapy),
@@ -757,28 +771,29 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSdr.txOff();
       gSdr.close();
       gLive = false;
-      set({ sdrOpened: null, sdrRemote: "" });
+      set({ sdrOpened: null, sdrRemote: "", lastForwardMhz: null, lastSdrTxUs: null });
       pushLog("sys", "SDR закрыт");
     },
 
     flashSdr: async (action) => {
       const s = get();
-      const file = flashFileRequired(s.sdrImageBytes);
-      if (!file.ok) {
-        const r: FlashResult = { ok: false, kind: "unknown", reason: file.reason, written: false };
-        set({ lastFlash: r });
-        pushLog("sys", r.reason);
-        return;
-      }
+      const imagePath = (s.sdrImagePath || s.sdrFlashName).trim();
       const job = {
         deviceId: s.sdrOpened?.id ?? s.sdrId,
-        filename: s.sdrImagePath || s.sdrFlashName,
+        filename: imagePath || s.sdrFlashName,
         byteLength: s.sdrImageBytes,
         action,
       };
       const cli = planFlashCli(job, s.sdrGateway);
       if (hostSdrAvailable() && cli.argv.length > 0) {
-        const r = await hostFlash(cli.argv, s.sdrImagePath || undefined);
+        const file = flashFileRequired(s.sdrImageBytes, imagePath);
+        if (!file.ok) {
+          const r: FlashResult = { ok: false, kind: "unknown", reason: file.reason, written: false };
+          set({ lastFlash: r });
+          pushLog("sys", r.reason);
+          return;
+        }
+        const r = await hostFlash(cli.argv, usableImagePath(imagePath) ? imagePath : undefined);
         set({
           lastFlash: { ok: r.ok, kind: "unknown", reason: r.reason, written: r.written },
         });
@@ -865,12 +880,19 @@ export const useLegion = create<LegionStore>((set, get) => {
                 centerMhz = centers[centerIdx % centers.length];
                 centerIdx += 1;
                 const win = await hostScan(centerMhz, hop, nBins);
+                if (win.txError) {
+                  pushLog("sys", win.txError);
+                  await get().stopTransmit();
+                }
                 if (!win.ok) {
                   pushLog("sys", win.reason || "scan fail");
                   return;
                 }
                 bins = win.bins;
-                detections = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
+                const now = Date.now();
+                detections = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map(
+                  (d) => ({ ...d, ts: now }),
+                );
               } else if (gScan) {
                 const tick = gScan.tick();
                 centerMhz = tick.centerMhz;
@@ -951,7 +973,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gGate.reset();
       if (gLive) await hostTxOff();
       gSdr.txOff();
-      set({ lastSdrTxUs: null });
+      set({ lastSdrTxUs: null, lastForwardMhz: null, lastCueReason: "SDR TX остановлен" });
       pushLog("sys", "SDR TX остановлен (ESP32 не тронут)");
     },
   };

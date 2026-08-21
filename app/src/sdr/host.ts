@@ -21,9 +21,26 @@ export function hostOpenAllowed(i: HostOpenInput): { ok: boolean; reason: string
   return { ok: true, reason: "хост-инструмент есть — открытие через Soapy/UHD, не UART ESP32" };
 }
 
-export function flashFileRequired(byteLength: number): { ok: boolean; reason: string } {
-  if (!(byteLength > 0)) {
-    return { ok: false, reason: "нет файла образа — выберите скачанный с сайта вендора файл" };
+/** CLI вендора ищет файл в cwd процесса Tauri — имя без пути врёт «успех». */
+export function usableImagePath(path: string): boolean {
+  const p = path.trim();
+  if (!p) return false;
+  if (p.startsWith("/")) return true;
+  if (/^[A-Za-z]:[\\/]/.test(p)) return true;
+  if (p.startsWith("\\\\")) return true;
+  return false;
+}
+
+export function flashFileRequired(byteLength: number, path = ""): { ok: boolean; reason: string } {
+  if (!usableImagePath(path)) {
+    return {
+      ok: false,
+      reason:
+        "нужен абсолютный путь к образу вендора (поле ОБРАЗ или desktop file.path) — имя без каталога CLI ищет в cwd",
+    };
   }
-  return { ok: true, reason: `размер ${byteLength} байт` };
+  if (!(byteLength > 0)) {
+    return { ok: true, reason: `путь ${path.trim()}` };
+  }
+  return { ok: true, reason: `размер ${byteLength} байт · ${path.trim()}` };
 }

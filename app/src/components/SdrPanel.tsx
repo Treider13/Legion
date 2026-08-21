@@ -98,8 +98,8 @@ export function SdrPanel() {
         />
         <span className="panel-note">
           {s.sdrImageBytes > 0
-            ? `${s.sdrFlashName} · ${s.sdrImageBytes} байт`
-            : "не выбран — запись в железо без файла запрещена"}
+            ? `${s.sdrFlashName} · ${s.sdrImageBytes} байт${s.sdrImagePath ? "" : " · нет абсолютного пути — введите путь в ОБРАЗ"}`
+            : "нужен абсолютный путь к файлу вендора (не одно имя — CLI ищет в cwd)"}
         </span>
       </label>
       <div className="power-row">

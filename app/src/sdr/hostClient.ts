@@ -19,6 +19,8 @@ export interface HostScanResult {
   ok: boolean;
   bins: ScanBin[];
   reason?: string;
+  txLive?: boolean;
+  txError?: string;
 }
 
 async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -35,12 +37,13 @@ export async function hostRpc<T>(msg: Record<string, unknown>): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
-export async function hostPing(): Promise<HostPing> {
+export async function hostPing(args = ""): Promise<HostPing> {
   if (!hostSdrAvailable()) {
     return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
   }
   try {
-    return await hostRpc<HostPing>({ op: "probe" });
+    // SoapyRemote: enumerate без remote=tcp://host:55132 не видит шлюз (wiki SoapyRemote).
+    return await hostRpc<HostPing>({ op: "probe", args });
   } catch (e) {
     return { ok: false, reason: String(e) };
   }
@@ -62,7 +65,13 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
     bwMhz,
     bins,
   });
-  return { ok: !!r.ok, bins: r.bins ?? [], reason: r.reason };
+  return {
+    ok: !!r.ok,
+    bins: r.bins ?? [],
+    reason: r.reason,
+    txLive: r.txLive,
+    txError: r.txError,
+  };
 }
 
 export async function hostTx(freqMhz: number): Promise<TxCueResult> {

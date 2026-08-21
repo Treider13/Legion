@@ -7,7 +7,7 @@ import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, soapyRemoteArgs } from "../src/sdr/catalog";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { planFlashCli } from "../src/sdr/flashcli";
-import { flashFileRequired, hostOpenAllowed } from "../src/sdr/host";
+import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
 import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
@@ -387,7 +387,10 @@ function main(): void {
     }).argv.includes("-L"),
   );
   check("без файла образа нельзя", flashFileRequired(0).ok === false);
-  check("с файлом размер ок", flashFileRequired(2048).ok);
+  check("одно имя без пути нельзя", flashFileRequired(2048, "hostedxA4.rbf").ok === false);
+  check("абсолютный путь ок", flashFileRequired(2048, "/tmp/fw/hostedxA4.rbf").ok);
+  check("usableImagePath unix", usableImagePath("/tmp/hostedxA4.rbf"));
+  check("usableImagePath basename нет", usableImagePath("hostedxA4.rbf") === false);
   check("без эмуляции и без CLI открытие запрещено", hostOpenAllowed({
     emulation: false,
     hasSoapyOrCli: false,
