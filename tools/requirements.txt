@@ -1,2 +1,7 @@
 # LEGION tools — зависимости Python (CLI, эмулятор, фаззер)
 pyserial>=3.5
+# sdr_worker.py: FFT скана и синтез волн (без numpy воркер честно отвечает
+# «numpy required» — для боевой работы обязателен)
+numpy>=1.26
+# SoapySDR — НЕ pip: системный пакет (apt install python3-soapysdr) или
+# сборка pothosware/SoapySDR на шлюзе; воркер без него отвечает честным отказом.
