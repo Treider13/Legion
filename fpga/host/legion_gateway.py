@@ -72,11 +72,13 @@ class FakeTransport:
     def __init__(self) -> None:
         self.regs = {}
         self.cap_done = False
+        self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
 
     def xfer(self, req: bytes) -> bytes:
         # Разбор как в NIOS: magic 'C', target, flags, addr, data
         if len(req) != lf.NIOS_PKT_LEN or req[0] != lf.NIOS_PKT_8x32_MAGIC:
             return bytes(16)
+        target = req[1]
         write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
         addr = req[4]
         data = int.from_bytes(req[5:9], "little")
@@ -84,6 +86,12 @@ class FakeTransport:
         resp[0] = lf.NIOS_PKT_8x32_MAGIC
         resp[1] = req[1]
         resp[2] = lf.NIOS_PKT_8x32_FLAG_SUCCESS
+        if target == 0x01:
+            # Штатный CONTROL: readback = текущее значение (control_reg_read)
+            if write:
+                self.control = data
+            resp[5:9] = self.control.to_bytes(4, "little")
+            return bytes(resp)
         if write:
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
@@ -108,13 +116,36 @@ class LegionGateway:
     deadman-цепь end-to-end — ноутбук шлёт kick каждые 0.5 с; замерло
     любое звено (app/TCP/агент/USB) → kicks прекращаются → watchdog в FPGA
     гасит TX сам. Агент, генерирующий heartbeat сам, держал бы TX живым
-    после смерти ноутбука — это и был бы фейк-deadman."""
+    после смерти ноутбука — это и был бы фейк-deadman.
+
+    Один владелец USB на шлюзе (факт из дескриптора FX3: интерфейс один,
+    alt-settings; peripheral EP внутри RF alt) — SoapySDRServer и этот
+    агент одновременно на одном x40 не работают (см. fpga/README.md)."""
 
     def __init__(self, fake: bool) -> None:
         self.fpga = lf.LegionFpga(FakeTransport() if fake else UsbTransport())
         self.fake = fake
         self.last_kick = 0.0
         self.det_thr_set = False  # порог детектора записывался в этой сессии
+        self._rx_by_us = False    # RX включён нами (для lb_*), снять при disarm
+
+    # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
+    # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
+    # (факт: pack() в bladerf_p.vhd дерева Nuand).
+    def _control_read(self) -> int:
+        ok, data = lf.unpack_8x32_resp(
+            self.fpga._t.xfer(lf.pack_8x32(0x01, False, 0, 0)))
+        return data if ok else 0
+
+    def _control_write(self, data: int) -> bool:
+        ok, _ = lf.unpack_8x32_resp(
+            self.fpga._t.xfer(lf.pack_8x32(0x01, True, 0, data)))
+        return ok
+
+    def _rx_enable(self, on: bool) -> bool:
+        ctrl = self._control_read()
+        ctrl = (ctrl | 0x2) if on else (ctrl & ~0x2 & 0xFFFFFFFF)
+        return self._control_write(ctrl)
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -133,10 +164,20 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
+            # lb_* режимы питаются от RX-потока: включаем RX штатным
+            # CONTROL-регистром (бит 1 = lms_rx_enable), RMW — не трогаем прочее
+            if mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS):
+                if not self._rx_enable(True):
+                    return {"ok": False, "reason": "CONTROL: не включить RX (lms_rx_enable)"}
+                self._rx_by_us = True
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась"}
         if op == "disarm":
-            return {"ok": self.fpga.disarm(), "reason": "DISARM"}
+            ok = self.fpga.disarm()
+            if ok and self._rx_by_us:
+                self._rx_enable(False)  # RX включали мы — снимаем
+                self._rx_by_us = False
+            return {"ok": ok, "reason": "DISARM"}
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
