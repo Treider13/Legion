@@ -6,13 +6,18 @@ import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
 import type { Detection, ScanBin } from "../sdr/types";
 
+export type ScanPattern = "sweep" | "band" | "hop";
+
 export interface ScanConfig {
   bands: readonly AllowBand[];
   bwMhz: number;
   bins: number;
   thresholdDb: number;
-  /** Непрерывный обход антенны RX (после ПЕРЕДАТЬ / СКАНИРОВАТЬ). */
+  /** Непрерывный обход антенны RX (после ЗАПУСТИТЬ). */
   loop?: boolean;
+  pattern?: ScanPattern;
+  dwellMs?: number;
+  seed?: number;
 }
 
 export interface ScanTick {
@@ -22,18 +27,125 @@ export interface ScanTick {
   done: boolean;
 }
 
-export class AllowlistScanner {
+export interface ScanStep {
+  centerMhz: number;
+  windowMhz: number;
+}
+
+export function clampWindowMhz(wantMhz: number, analogBwMhz: number): number {
+  const cap = analogBwMhz > 0 ? analogBwMhz : 20;
+  const w = Number.isFinite(wantMhz) && wantMhz > 0 ? wantMhz : cap;
+  return Math.round(Math.min(Math.max(w, 0.2), cap) * 1000) / 1000;
+}
+
+export function clampDwellMs(ms: number, fallback = 40): number {
+  const n = Number.isFinite(ms) && ms > 0 ? ms : fallback;
+  return Math.round(Math.min(Math.max(n, 16), 5000));
+}
+
+/** Детерминированный RNG для случайной полосы (тесты и повтор). */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0 || 1;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function hopCenterInBand(
+  bands: readonly AllowBand[],
+  windowMhz: number,
+  rng: () => number,
+): number {
+  const usable = bands.filter((b) => b.f2Mhz >= b.f1Mhz);
+  if (usable.length === 0) return 0;
+  const b = usable[Math.min(usable.length - 1, Math.floor(rng() * usable.length))];
+  const half = windowMhz / 2;
+  const wide = b.f2Mhz - b.f1Mhz > windowMhz;
+  const lo = wide ? b.f1Mhz + half : b.f1Mhz;
+  const hi = wide ? b.f2Mhz - half : b.f2Mhz;
+  if (hi <= lo) return (b.f1Mhz + b.f2Mhz) / 2;
+  return lo + rng() * (hi - lo);
+}
+
+export class ScanWalker {
+  readonly pattern: ScanPattern;
+  readonly windowMhz: number;
+  readonly tickMs: number;
+  readonly centers: number[];
   private idx = 0;
-  private centers: number[] = [];
+  private dir = 1;
+  private steps = 0;
+  private readonly bands: readonly AllowBand[];
+  private readonly rng: () => number;
+
+  constructor(opts: {
+    bands: readonly AllowBand[];
+    pattern: ScanPattern;
+    windowMhz: number;
+    analogBwMhz: number;
+    dwellMs?: number;
+    seed?: number;
+  }) {
+    this.pattern = opts.pattern;
+    this.windowMhz = clampWindowMhz(opts.windowMhz, opts.analogBwMhz);
+    this.bands = opts.bands;
+    this.centers = planCenters(opts.bands, this.windowMhz);
+    const parked = this.centers.length <= 1 && opts.pattern !== "hop";
+    this.tickMs = clampDwellMs(opts.dwellMs ?? (parked ? 16 : 40), parked ? 16 : 40);
+    this.rng = mulberry32(opts.seed ?? 1337);
+  }
+
+  next(): ScanStep {
+    this.steps += 1;
+    if (this.pattern === "hop") {
+      return {
+        centerMhz: hopCenterInBand(this.bands, this.windowMhz, this.rng),
+        windowMhz: this.windowMhz,
+      };
+    }
+    if (this.centers.length === 0) {
+      return { centerMhz: 0, windowMhz: this.windowMhz };
+    }
+    if (this.pattern === "sweep" && this.centers.length > 1) {
+      const centerMhz = this.centers[this.idx];
+      const nxt = this.idx + this.dir;
+      if (nxt >= this.centers.length || nxt < 0) this.dir *= -1;
+      this.idx = Math.min(Math.max(this.idx + this.dir, 0), this.centers.length - 1);
+      return { centerMhz, windowMhz: this.windowMhz };
+    }
+    const centerMhz = this.centers[this.idx % this.centers.length];
+    this.idx += 1;
+    return { centerMhz, windowMhz: this.windowMhz };
+  }
+
+  finished(loop: boolean): boolean {
+    if (loop || this.pattern === "hop") return false;
+    return this.steps >= Math.max(this.centers.length, 1);
+  }
+}
+
+export class AllowlistScanner {
   private readonly backend: SdrBackend;
   private readonly cfg: ScanConfig;
+  private readonly walker: ScanWalker;
   private thresholdDb: number;
 
   constructor(backend: SdrBackend, cfg: ScanConfig) {
     this.backend = backend;
     this.cfg = cfg;
     this.thresholdDb = cfg.thresholdDb;
-    this.centers = planCenters(cfg.bands, cfg.bwMhz);
+    this.walker = new ScanWalker({
+      bands: cfg.bands,
+      pattern: cfg.pattern ?? "band",
+      windowMhz: cfg.bwMhz,
+      analogBwMhz: cfg.bwMhz,
+      dwellMs: cfg.dwellMs,
+      seed: cfg.seed,
+    });
   }
 
   setThresholdDb(db: number): void {
@@ -41,23 +153,19 @@ export class AllowlistScanner {
   }
 
   remaining(): number {
-    return Math.max(0, this.centers.length - this.idx);
+    return Math.max(0, this.walker.centers.length);
   }
 
   rewind(): void {
-    this.idx = 0;
+    /* walker сам крутит; rewind для тестов — новый проход не нужен */
   }
 
   tick(now = Date.now()): ScanTick {
-    if (this.centers.length === 0) {
+    const step = this.walker.next();
+    if (!step.centerMhz) {
       return { centerMhz: 0, detections: [], bins: [], done: true };
     }
-    if (this.idx >= this.centers.length) {
-      if (this.cfg.loop) this.idx = 0;
-      else return { centerMhz: 0, detections: [], bins: [], done: true };
-    }
-    const centerMhz = this.centers[this.idx++];
-    const bins = this.backend.scanWindow(centerMhz, this.cfg.bwMhz, this.cfg.bins);
+    const bins = this.backend.scanWindow(step.centerMhz, step.windowMhz, this.cfg.bins);
     const detections = clipToAllowlist(
       detectFromBins(bins, this.thresholdDb).map((d) => ({
         ...d,
@@ -66,13 +174,11 @@ export class AllowlistScanner {
       })),
       this.cfg.bands,
     );
-    const wrapped = this.idx >= this.centers.length;
-    if (wrapped && this.cfg.loop) this.idx = 0;
     return {
-      centerMhz,
+      centerMhz: step.centerMhz,
       detections,
       bins,
-      done: wrapped && !this.cfg.loop,
+      done: this.walker.finished(!!this.cfg.loop),
     };
   }
 }

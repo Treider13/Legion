@@ -81,13 +81,11 @@ export class HandoffGate {
     this.pendingMhz = null;
   }
 
-  /** Пока идёт TX или держим засечку — чужие частоты не ставим в очередь. */
+  /** Пока TX ставится — более сильную другую частоту кладём в очередь. */
   queueIfBusy(mhz: number): boolean {
     if (!this.inflight) return false;
     if (this.lastCuedMhz !== null && sameBin(this.lastCuedMhz, mhz)) return true;
     if (this.pendingMhz !== null && sameBin(this.pendingMhz, mhz)) return true;
-    const held = this.pendingMhz ?? this.lastCuedMhz;
-    if (held !== null) return true;
     this.queuedMhz = mhz;
     return true;
   }

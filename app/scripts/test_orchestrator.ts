@@ -12,7 +12,7 @@ import { markCatalogPresent } from "../src/sdr/hostClient";
 import { defaultFlashName, defaultEthHost, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
-import { heldHitAlive, pickOtherHit, RESENSE_MS } from "../src/sense/hold";
+import { heldHitAlive, lockIsStuck, pickAutoTarget, pickOtherHit, RESENSE_MS, STUCK_MS } from "../src/sense/hold";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/sensitivity";
 import { bandListFor, modeConflict, modeOf } from "../src/sense/modes";
 import {
@@ -25,7 +25,18 @@ import {
   sameBin,
   withoutOwnTx,
 } from "../src/sense/orchestrator";
-import { AllowlistScanner, clipToAllowlist, planCenters, scanHopMhz, scanTickMs } from "../src/sense/scan";
+import {
+  AllowlistScanner,
+  clampDwellMs,
+  clampWindowMhz,
+  clipToAllowlist,
+  hopCenterInBand,
+  mulberry32,
+  planCenters,
+  scanHopMhz,
+  scanTickMs,
+  ScanWalker,
+} from "../src/sense/scan";
 
 let failures = 0;
 
@@ -245,6 +256,49 @@ function main(): void {
   );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
+  check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);
+  check("окно 20 МГц на xA4", clampWindowMhz(20, 56) === 20);
+  check("окно 100 режется analog BW", clampWindowMhz(100, 56) === 56);
+  check("выдержка 10 → 16 мс минимум", clampDwellMs(10) === 16);
+  const sweepW = new ScanWalker({
+    bands: ism,
+    pattern: "sweep",
+    windowMhz: 20,
+    analogBwMhz: 56,
+    dwellMs: 40,
+  });
+  const sweepPath = Array.from({ length: 12 }, () => sweepW.next().centerMhz);
+  const hi = Math.max(...sweepW.centers);
+  const lo = Math.min(...sweepW.centers);
+  const hitHi = sweepPath.indexOf(hi);
+  const afterHi = hitHi >= 0 ? sweepPath.slice(hitHi + 1, hitHi + 4) : [];
+  check("sweep туда-сюда доходит до края", hitHi >= 0);
+  check("sweep после края идёт назад", afterHi.some((c) => c < hi));
+  check("sweep не вылезает из полосы", sweepPath.every((c) => c >= lo && c <= hi));
+  const bandW = new ScanWalker({
+    bands: [{ f1Mhz: 2440, f2Mhz: 2448 }],
+    pattern: "band",
+    windowMhz: 20,
+    analogBwMhz: 56,
+  });
+  check("сплошная узкая полоса — одна стойка", bandW.centers.length === 1);
+  const hopW = new ScanWalker({
+    bands: ism,
+    pattern: "hop",
+    windowMhz: 1,
+    analogBwMhz: 56,
+    dwellMs: 80,
+    seed: 7,
+  });
+  check("случайная выдержка 80 мс", hopW.tickMs === 80);
+  const hops = Array.from({ length: 20 }, () => hopW.next().centerMhz);
+  check(
+    "случайные центры внутри полосы",
+    hops.every((c) => c >= 2400 && c <= 2500) && new Set(hops.map((c) => c.toFixed(3))).size > 3,
+  );
+  const rng = mulberry32(1);
+  const hc = hopCenterInBand(ism, 20, rng);
+  check("hop 20 МГц не на самом краю полосы", hc > 2400 && hc < 2500);
 
   const edgeTone = new MockSdrBackend();
   edgeTone.open("bladerf-micro-xa4");
@@ -341,6 +395,16 @@ function main(): void {
     holdLock: true,
   });
   check("holdLock не прыгает на другую засечку", holdSkip.skip && holdSkip.reason.includes("держим"));
+  const autoHop = planHandoff({
+    det: { ...det, freqMhz: 2480, powerDbm: -30 },
+    bands: ism,
+    loadOk: true,
+    transmitArmed: true,
+    lastCuedMhz: 2442,
+    inflight: false,
+    sdrCanTx: true,
+  });
+  check("авто: чуть сильнее сразу на усилитель", autoHop.skip === false && autoHop.freqMhz === 2480);
   const forceHop = planHandoff({
     det: { ...det, freqMhz: 2480 },
     bands: ism,
@@ -381,17 +445,41 @@ function main(): void {
     2442,
   );
   check("после сброса берём другую, не ту же", other?.freqMhz === 2480);
+  check(
+    "авто берёт чуть сильнее",
+    pickAutoTarget(
+      [
+        { freqMhz: 2442, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: true },
+        { freqMhz: 2480, powerDbm: -35, noiseDbm: -90, snrDb: 55, ts: 1, forwarded: false },
+      ],
+      2442,
+      -40,
+    )?.freqMhz === 2480,
+  );
+  check(
+    "слабее не сбивает авто",
+    pickAutoTarget(
+      [
+        { freqMhz: 2442, powerDbm: -20, noiseDbm: -90, snrDb: 70, ts: 1, forwarded: true },
+        { freqMhz: 2480, powerDbm: -40, noiseDbm: -90, snrDb: 50, ts: 1, forwarded: false },
+      ],
+      2442,
+      -20,
+    ) === null,
+  );
+  check("залипло после 8 с", lockIsStuck(1, 1 + STUCK_MS));
+  check("ещё не залипло", lockIsStuck(1000, 1000 + STUCK_MS - 1) === false);
   const gate = new HandoffGate();
   gate.reserve(2442);
   check("reserve не есть успех TX", gate.lastCuedMhz === null && gate.pendingMhz === 2442);
   check("queueIfBusy на том же pending не дублирует", gate.queueIfBusy(2442) === true && gate.queuedMhz === null);
-  check("queueIfBusy hold не ставит чужую частоту", gate.queueIfBusy(2480) === true && gate.queuedMhz === null);
+  check("queueIfBusy ставит чуть сильнее в очередь", gate.queueIfBusy(2480) === true && gate.queuedMhz === 2480);
   gate.abort();
   check("abort снимает pending", gate.pendingMhz === null && gate.lastCuedMhz === null);
   gate.reserve(2442);
   gate.commit(2442);
   check("commit фиксирует TX", gate.lastCuedMhz === 2442);
-  check("release при hold не отдаёт чужой hop", gate.release() === null && gate.inflight === false);
+  check("release отдаёт очередь", gate.release() === 2480 && gate.inflight === false);
   check("dropHold снимает замок", gate.dropHold() === 2442 && gate.lastCuedMhz === null);
   check(
     "свой тон не улов",

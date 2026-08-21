@@ -1,4 +1,6 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
+import { lockIsStuck, STUCK_MS } from "../sense/hold";
+import type { ScanPattern } from "../sense/scan";
 import { useLegion } from "../state/store";
 
 export function ScanPanel() {
@@ -6,16 +8,17 @@ export function ScanPanel() {
   const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
   const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
   const span = Math.max(f2 - f1, 1e-6);
+  const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
+  const stuck = lockIsStuck(s.sdrHoldSince, Date.now(), STUCK_MS);
 
   return (
     <section className="panel">
-      <span className="panel-title">РЕЖИМ SDR // АНТЕННА + УСИЛИТЕЛЬ НА SDR</span>
+      <span className="panel-title">РЕЖИМ SDR // АВТО: ПОЛОСА → ЗАСЕЧКА → УСИЛИТЕЛЬ</span>
       <p className="panel-note">
-        Ethernet к ноутбуку. Антенна на RX, усилитель на RF out SDR. Energy detect —
-        не разбор пакетов и не RF-Clown/BlueJammer (те — nRF24 на ESP32). ПЕРЕДАТЬ:
-        улов → TX LO на этом же SDR → усилитель и держим, пока засечка жива.
-        Свой тон маскирует бин: раз в секунду TX гасится на проверку эфира.
-        СБРОСИТЬ — если замок подозрительный, ищем другую. ESP32 сюда не входит.
+        Задайте начало и конец, нажмите ЗАПУСТИТЬ. Скан гоняет полосу сам. Сильная
+        засечка сразу на TX SDR → усилитель; чуть сильнее — тоже сразу. СБРОСИТЬ —
+        если одна частота слишком долго. Energy detect, не RF-Clown/BlueJammer.
+        ESP32 сюда не входит. Нагрузка 50 Ом обязательна для TX.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -31,21 +34,65 @@ export function ScanPanel() {
             {s.lastForwardMhz != null ? `${s.lastForwardMhz.toFixed(3)}` : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц · {s.lastForwardMhz != null ? "держим" : "усилитель"}
+            МГц · авто
+            {s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
             {s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
           </span>
         </div>
       </div>
       <div className="corr-grid">
         <label>
+          ОБХОД
+          <select
+            aria-label="Режим обхода полосы"
+            value={s.scanPattern}
+            onChange={(e) => s.setScanPattern(e.target.value as ScanPattern)}
+            disabled={s.scanRunning}
+          >
+            <option value="sweep">ТУДА-СЮДА</option>
+            <option value="band">СПЛОШНАЯ ПОЛОСА</option>
+            <option value="hop">СЛУЧАЙНАЯ</option>
+          </select>
+        </label>
+        <label>
           F1 МГц
-          <input value={s.sdrF1} onChange={(e) => s.setSdrAllowField("sdrF1", e.target.value)} />
+          <input
+            value={s.sdrF1}
+            onChange={(e) => s.setSdrAllowField("sdrF1", e.target.value)}
+            disabled={s.scanRunning}
+          />
         </label>
         <label>
           F2 МГц
-          <input value={s.sdrF2} onChange={(e) => s.setSdrAllowField("sdrF2", e.target.value)} />
+          <input
+            value={s.sdrF2}
+            onChange={(e) => s.setSdrAllowField("sdrF2", e.target.value)}
+            disabled={s.scanRunning}
+          />
+        </label>
+        <label>
+          ОКНО МГц
+          <input
+            value={s.scanWindowMhz}
+            onChange={(e) => s.setScanWindowMhz(e.target.value)}
+            disabled={s.scanRunning}
+            aria-label="Ширина окна скана в МГц"
+          />
+        </label>
+        <label>
+          ВЫДЕРЖКА мс
+          <input
+            value={s.scanDwellMs}
+            onChange={(e) => s.setScanDwellMs(e.target.value)}
+            disabled={s.scanRunning}
+            aria-label="Время стоянки на окне"
+          />
         </label>
       </div>
+      <p className="sens-hint">
+        окно: 1 МГц или 20 МГц — сколько сразу смотрим. случайная: выдержка на каждой
+        стойке. сплошная: по полосе в одну сторону. туда-сюда: туда и обратно.
+      </p>
       <div className="sens-row">
         <span className="att-label">ЧУВСТВИТЕЛЬНОСТЬ ЗАСЕЧКИ</span>
         <input
@@ -72,10 +119,10 @@ export function ScanPanel() {
         Нагрузка 50 Ом на выходе усилителя SDR
       </label>
       <div className="power-row">
-        <button className="btn-primary" onClick={() => s.addSdrBand()}>
+        <button className="btn-primary" onClick={() => s.addSdrBand()} disabled={s.scanRunning}>
           ДОБАВИТЬ ПОЛОСУ
         </button>
-        <button className="btn-ghost" onClick={() => s.clearSdrBands()}>
+        <button className="btn-ghost" onClick={() => s.clearSdrBands()} disabled={s.scanRunning}>
           ОЧИСТИТЬ
         </button>
         <button className="btn-ghost" onClick={() => s.injectDemoTone()}>
@@ -86,21 +133,21 @@ export function ScanPanel() {
             СТОП СКАН
           </button>
         ) : (
-          <button className="btn-primary" onClick={() => s.startScan()}>
-            СКАНИРОВАТЬ
+          <button className="btn-primary" onClick={() => void s.startAuto()}>
+            ЗАПУСТИТЬ
           </button>
         )}
         {s.transmitArmed ? (
           <button className="btn-danger" onClick={() => void s.stopTransmit()}>
             СТОП ПЕРЕДАЧУ
           </button>
-        ) : (
+        ) : s.scanRunning ? (
           <button className="btn-primary" onClick={() => void s.startTransmit()}>
             ПЕРЕДАТЬ
           </button>
-        )}
+        ) : null}
         <button
-          className="btn-ghost"
+          className={stuck ? "btn-danger" : "btn-ghost"}
           disabled={s.lastForwardMhz == null}
           onClick={() => void s.resetSdrLock()}
         >
@@ -108,7 +155,7 @@ export function ScanPanel() {
         </button>
       </div>
       <ul className="allow-list">
-        {s.sdrBands.length === 0 && <li>полос нет — скан и передача запрещены</li>}
+        {s.sdrBands.length === 0 && <li>полоса из F1…F2 при ЗАПУСТИТЬ, либо добавьте вручную</li>}
         {s.sdrBands.map((b, i) => (
           <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
             {b.f1Mhz} … {b.f2Mhz} МГц
@@ -155,14 +202,14 @@ export function ScanPanel() {
         <span className="range-cur">
           {s.scanCenterMhz !== null ? `${s.scanCenterMhz.toFixed(3)} МГц` : "—"}
           {s.transmitArmed
-            ? ` · SDR TX → усилитель${s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs` : ""}`
+            ? ` · авто TX${stuck ? " · залипло, СБРОСИТЬ" : ""}`
             : s.scanRunning
               ? " · слушает"
               : ""}
         </span>
         <span>{f2}</span>
       </div>
-      <p className="status-line">{s.lastCueReason || "ожидание улова в заданной полосе"}</p>
+      <p className="status-line">{s.lastCueReason || "задайте F1…F2 и ЗАПУСТИТЬ"}</p>
       <table className="det-table">
         <thead>
           <tr>
@@ -175,7 +222,7 @@ export function ScanPanel() {
         <tbody>
           {s.detections.length === 0 && (
             <tr>
-              <td colSpan={4}>нет событий — задайте полосу и сканируйте</td>
+              <td colSpan={4}>нет событий — задайте полосу и запустите</td>
             </tr>
           )}
           {s.detections
