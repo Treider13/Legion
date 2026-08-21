@@ -281,5 +281,38 @@ check("rx off → CONTROL bit1 снят", r.get("ok") is True and not (gw.fpga._
 srv.shutdown()
 srv.server_close()
 
+# ---------------------------------------------------------------------------
+# 5. Авторизация шлюза токеном (LEGION_FPGA_TOKEN)
+# ---------------------------------------------------------------------------
+os.environ["LEGION_FPGA_TOKEN"] = "sekret"
+import importlib as _imp
+_imp.reload(lg)  # подхватить AUTH_TOKEN заново
+gw2 = lg.LegionGateway(fake=True)
+srv2 = lg._Server(("127.0.0.1", 0), lg._Handler)
+srv2.gw = gw2
+_th.Thread(target=srv2.serve_forever, daemon=True).start()
+port2 = srv2.server_address[1]
+
+
+def rpc2(msg: dict) -> dict:
+    with _socket.create_connection(("127.0.0.1", port2), timeout=3) as s:
+        s.sendall((json_dumps(msg) + "\n").encode())
+        return json_loads(s.makefile("rb").readline())
+
+
+r = rpc2({"op": "ping"})
+check("ping без токена — открыт (discovery)", r.get("ok") is True)
+r = rpc2({"op": "status"})
+check("status без токена — отказ", r.get("ok") is False and "token" in str(r.get("reason")))
+r = rpc2({"op": "status", "token": "wrong"})
+check("неверный токен — отказ", r.get("ok") is False)
+r = rpc2({"op": "status", "token": "sekret"})
+check("верный токен — работает", r.get("ok") is True)
+r = rpc2({"op": "arm", "mode": "player", "token": "sekret"})
+check("arm с токеном — работает", r.get("ok") is True)
+srv2.shutdown()
+srv2.server_close()
+os.environ.pop("LEGION_FPGA_TOKEN")
+
 print("LEGION FPGA HOST: ALL PASS" if fails == 0 else f"LEGION FPGA HOST: {fails} FAILURES")
 sys.exit(0 if fails == 0 else 1)

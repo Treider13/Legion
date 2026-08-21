@@ -102,7 +102,14 @@ begin
                     when LEGION_REG_PLAYER_LEN => r_player_len <= pio_wdata(11 downto 0);
                     when LEGION_REG_PLAYER_CTL => r_cap_arm    <= pio_wdata(0);
                     when LEGION_REG_LB_SHIFT   => r_lb_shift   <= pio_wdata(3 downto 0);
-                    when LEGION_REG_WD_LIMIT   => r_wd_limit   <= pio_wdata(15 downto 0);
+                    -- limit=0 при WD_EN=1 молча отключал бы deadman
+                    -- (65535×65536 тактов ≈ «никогда») — кламп к ≥1
+                    when LEGION_REG_WD_LIMIT   =>
+                        if pio_wdata(15 downto 0) = x"0000" then
+                            r_wd_limit <= x"0001";
+                        else
+                            r_wd_limit <= pio_wdata(15 downto 0);
+                        end if;
                     when LEGION_REG_WD_KICK    => kick_toggle  <= not kick_toggle;
                     when others => null;
                 end case;

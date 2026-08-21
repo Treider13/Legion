@@ -13,7 +13,7 @@
 | Каталог | Содержимое |
 |---|---|
 | `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
-| `tb/` | GHDL-тестбенчи + `run_ghdl.sh` (7/7 PASS) |
+| `tb/` | GHDL-тестбенчи + `run_ghdl.sh` (8/8 PASS) |
 | `nios/` | `legion_cmds.c/h` — обработчик регистров на NIOS II (target 0x80) |
 | `host/` | `legion_fpga.py` (регистровый API), `legion_gateway.py` (TCP↔USB агент шлюза), `gen_sine_lut.py` |
 | `integration/` | Патчи к дереву Nuand: топ-левел, `bladerf_p.vhd`, `pkt_8x32.c`, сниппет `nios_system.tcl` |
@@ -21,12 +21,13 @@
 
 ## Проверено без железа (факты этой ревизии)
 
-1. **GHDL-симуляция всех модулей: 7/7 PASS** (`fpga/tb/run_ghdl.sh`):
-   детектор (порог/окно/счётчик), плеер (capture→play по кругу, каденс valid
-   каждый 2-й такт — контракт LMS6002D), NCO (частота по нулям Q, амплитуда),
-   watchdog (expiry/heartbeat), dcfifo (CDC, порядок), мультиплексор
-   (PASS/тишина-с-каденсом/гейтинг/watchdog), регистры (CDC, heartbeat-toggle,
-   статус).
+1. **GHDL-симуляция всех модулей: 8/8 PASS** (`fpga/tb/run_ghdl.sh`):
+   детектор (порог/окно/счётчик/кламп shift), плеер (capture→play по кругу,
+   каденс valid каждый 2-й такт — контракт LMS6002D, тишина-с-каденсом до
+   capture), NCO (частота по нулям Q, амплитуда), watchdog (expiry/heartbeat),
+   dcfifo (CDC, порядок), мультиплексор (PASS/тишина-с-каденсом/гейтинг/
+   watchdog/голодание FIFO), регистры (CDC, heartbeat-toggle, кламп WD_LIMIT,
+   статус), интеграция dcfifo+mux (два домена, порядок 16/16).
 2. **Топ-левели обеих платформ проанализированы GHDL**: bladeRF 1
    (`bladerf-legion.vhd`) и micro (`platforms/bladerf-micro/vhdl/bladerf-legion.vhd`)
    — все legion-юниты привязались, порты инстансов сверены с сущностями;
@@ -79,7 +80,10 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 ## Эксплуатация
 
 1. На шлюзе: `python3 legion_gateway.py` (порт 5531; `LEGION_FPGA_FAKE=1` —
-   проверка протокола без железа).
+   проверка протокола без железа). **Авторизация:** задайте
+   `LEGION_FPGA_TOKEN=<секрет>` на агенте — тогда каждая команда (кроме ping)
+   требует токен; в приложении — поле «ТОКЕН ШЛЮЗА» на вкладке ТИП СИГНАЛА.
+   Без переменной — открытая доверенная LAN стенда (как WiFi AP прошивки).
 2. LEGION на ноутбуке: вкладка ТИП СИГНАЛА → блок FPGA — ARM/СТОП/статус.
    Режимы: `player` (волна из RAM), `nco` (тон), `lb_gated` (RX→TX по
    детектору), `lb_always` (RX→TX постоянно), `pass` (обычный стрим).

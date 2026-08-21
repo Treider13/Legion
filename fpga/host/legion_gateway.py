@@ -28,6 +28,11 @@ import legion_fpga as lf  # noqa: E402
 
 FAKE = os.environ.get("LEGION_FPGA_FAKE", "").strip() in ("1", "true", "yes")
 
+# Токен доступа: если LEGION_FPGA_TOKEN задан — все команды (кроме ping)
+# обязаны нести "token". Пустая переменная = открытая доверенная LAN
+# (лабораторный стенд), но по умолчанию на стенде токен задавать.
+AUTH_TOKEN = os.environ.get("LEGION_FPGA_TOKEN", "").strip()
+
 # USB: bladeRF FX3, peripheral endpoint. Значения сверены с исходниками Nuand
 # (тест test_legion_fpga.py читает их из реальных заголовков):
 #   firmware_common/bladeRF.h: USB_NUAND_VENDOR_ID=0x2CF0,
@@ -264,7 +269,12 @@ class _Handler(socketserver.StreamRequestHandler):
                 continue
             try:
                 msg = json.loads(line.decode("utf-8", "replace"))
-                resp = gw.handle(msg)
+                # Авторизация: при заданном LEGION_FPGA_TOKEN каждая команда
+                # (кроме ping) несёт токен; неверный/отсутствует — отказ.
+                if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
+                    resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
+                else:
+                    resp = gw.handle(msg)
             except Exception as e:
                 resp = {"ok": False, "reason": str(e)}
             self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
