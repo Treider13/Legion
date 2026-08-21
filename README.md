@@ -39,8 +39,10 @@ ESP32 принимает её и физически настраивает чи�
 - **HOP** — псевдослучайный хоппинг по сетке с воспроизводимым seed
 - **CHIRP** — FMCW-рампа с мелким шагом (от 1 Гц)
 - **GLIDE / FM** — плавный переход и частотная модуляция (SIN/TRI/RAND)
-- **Транспорты**: USB-UART (desktop/CLI/браузер), WiFi (WebSocket + встроенный
-  веб-UI на самом ESP32), BLE (Nordic UART Service — со смартфона)
+- **Транспорты**: USB-UART ESP32 (desktop/CLI/браузер), WiFi (WebSocket +
+  встроенный веб-UI на ESP32), BLE (Nordic UART Service — со смартфона).
+  В desktop отдельно: **USB HTOOL SL22** — те же кнопки, на прибор SCPI;
+  ESP32+ADF4351 в этом режиме не участвуют ([docs/sl22.md](docs/sl22.md))
 - **Автономность**: последний режим восстанавливается после перезагрузки (NVS)
 - **SELFTEST** — диагностика SPI-связи с модулем без приборов (в т.ч. ловит
   перепутанные пины — известная болезнь дешёвых модулей)
@@ -105,7 +107,7 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 ## Документация
 
 [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-[wiring](docs/wiring.md) · [hardware](docs/hardware.md) ·
+[sl22](docs/sl22.md) · [wiring](docs/wiring.md) · [hardware](docs/hardware.md) ·
 [module-quirks](docs/module-quirks.md) · [compliance](docs/compliance.md) ·
 [REFERENCES](docs/REFERENCES.md) · [datasheet-facts](docs/datasheet-facts.md) ·
 [analysis-upgrade](docs/analysis-upgrade.md)

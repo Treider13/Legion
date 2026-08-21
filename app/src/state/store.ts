@@ -60,6 +60,7 @@ import {
 import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../sense/sensitivity";
 import { MockTransport } from "../transport/mock";
+import { Sl22Transport } from "../sl22/transport";
 import { TauriSerialTransport } from "../transport/tauriSerial";
 import type { SerialPortDescriptor, Transport, TransportKind, TransportState } from "../transport/types";
 import { WebSerialTransport } from "../transport/webSerial";
@@ -541,17 +542,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastForwardPowerDbm: null,
     log: [],
 
-    setTransportKind: (k) => set({ transportKind: k }),
-    setSelectedPort: (p) => {
-      const prev = get().selectedPort;
-      if (p === prev) return;
-      set({
-        selectedPort: p,
-        esp32Chip: null,
-        esp32ChipPort: null,
-        esp32FlashConfirm: false,
-      });
-    },
+    setTransportKind: (k) =>
+      set(k === "htool-sl22" ? { transportKind: k, corrMode: "SWEEP" } : { transportKind: k }),
+    setSelectedPort: (p) => set({ selectedPort: p }),
     setWsUrl: (u) => set({ wsUrl: u }),
     setFreqMhz: (f) => set({ freqMhz: f }),
     setCorrField: (field, v) => set({ [field]: v }),
@@ -646,7 +639,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     clearLog: () => set({ log: [] }),
 
     refreshPorts: async () => {
-      if (get().transportKind !== "tauri-serial") return;
+      const kind = get().transportKind;
+      if (kind !== "tauri-serial" && kind !== "htool-sl22") return;
       try {
         const ports = await TauriSerialTransport.listPorts();
         set({ ports });
@@ -669,6 +663,15 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
           gTransport = new TauriSerialTransport(selectedPort);
+          break;
+        case "htool-sl22":
+          if (!selectedPort) {
+            pushLog("sys", "no serial port selected");
+            return;
+          }
+          set({ corrMode: "SWEEP" });
+          gTransport = new Sl22Transport(selectedPort);
+          pushLog("sys", "HTOOL SL22: SCPI bridge (no ESP32/ADF4351)");
           break;
         case "web-serial":
           gTransport = new WebSerialTransport();
@@ -744,7 +747,15 @@ export const useLegion = create<LegionStore>((set, get) => {
         gTransport = null;
         gClient = null;
       }
-      set({ transportState: "disconnected", lock: null });
+      set({
+        transportState: "disconnected",
+        lock: null,
+        rfOn: false,
+        corridorRunning: false,
+        telemFreq: null,
+        telemLock: null,
+        status: null,
+      });
     },
 
     send: async (cmd) => {
@@ -844,6 +855,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       const s = get();
+      const mode = s.transportKind === "htool-sl22" ? "SWEEP" : s.corrMode;
       const f1 = parseFloat(s.corrF1);
       const f2 = parseFloat(s.corrF2);
       const step = parseInt(s.corrStepKhz, 10);
@@ -858,16 +870,16 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       const cmd =
-        s.corrMode === "SWEEP"
+        mode === "SWEEP"
           ? `SWEEP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
-          : s.corrMode === "CHIRP"
+          : mode === "CHIRP"
             ? `CHIRP START ${f1} ${f2} STEP ${step} DWELL ${dwell}`
             : `HOP START ${f1} ${f2} RATE ${dwell} SEED ${seed} STEP ${step}`;
       pushLog("tx", cmd);
       const r =
-        s.corrMode === "SWEEP"
+        mode === "SWEEP"
           ? await gClient.sweepStart(f1, f2, step, dwell)
-          : s.corrMode === "CHIRP"
+          : mode === "CHIRP"
             ? await gClient.chirpStart(f1, f2, step, dwell)  // CHIRP: шаг в Гц
             : await gClient.hopStart(f1, f2, dwell, seed, step);
       if (r.ok) {
