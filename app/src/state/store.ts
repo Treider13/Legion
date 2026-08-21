@@ -54,6 +54,7 @@ import {
   type AutoDispatch,
 } from "../sense/modes";
 import {
+  OWN_TX_GUARD_MHZ,
   markForwarded,
   mergeDetections,
   pickStrongest,
@@ -272,6 +273,8 @@ function stopTxWalk(): void {
   }
 }
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
+/** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
+let gSignalBusy = false;
 const gGate = new HandoffGate();
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
 let gResense = false;
@@ -283,6 +286,12 @@ function stopTxWatch(): void {
     clearInterval(gTxWatch);
     gTxWatch = null;
   }
+}
+
+/** Зашитая волна занимает до ±fs/2 = ±1 МГц вокруг центра (fs=2 МГц воркера) —
+ *  маска своего TX шире CW-тона, иначе сканер ловит собственные края спектра. */
+function ownTxGuardMhz(armed: boolean): number {
+  return armed ? 1.2 : OWN_TX_GUARD_MHZ;
 }
 
 export const useLegion = create<LegionStore>((set, get) => {
@@ -1009,6 +1018,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     signalFlash: async () => {
       const s = get();
+      if (gSignalBusy) return;
       if (s.flashBusy) {
         pushLog("sys", "ЗАШИТЬ: идёт прошивка — сначала дождитесь");
         return;
@@ -1041,7 +1051,12 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       if (!s.sdrOpened) {
-        await get().openSdr();
+        gSignalBusy = true;
+        try {
+          await get().openSdr();
+        } finally {
+          gSignalBusy = false;
+        }
         if (!get().sdrOpened) return;
       }
       const canTx = gLive ? catalogCaps(get().sdrId).canTx : gSdr.canTx();
@@ -1050,9 +1065,15 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       const kind = get().signalKind;
-      const tx = gLive
-        ? await hostTxWave(mhz, kind, get().signalParams)
-        : gSdr.txWave(mhz, kind);
+      gSignalBusy = true;
+      let tx;
+      try {
+        tx = gLive
+          ? await hostTxWave(mhz, kind, get().signalParams)
+          : gSdr.txWave(mhz, kind);
+      } finally {
+        gSignalBusy = false;
+      }
       pushLog("sys", tx.reason);
       if (!tx.ok) return;
       set({
@@ -1371,7 +1392,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             ...d,
             ts: now,
           }));
-          detections = withoutOwnTx(raw, get().lastForwardMhz);
+          detections = withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
           if (centerMhz) set({ scanCenterMhz: centerMhz });
           if (detections.length > 0) {
             const dets = mergeDetections(get().detections, detections);
@@ -1497,7 +1518,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       const raw = clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands);
       const dispatch = get().autoDispatch;
-      const live = dispatch === "turn" ? raw : withoutOwnTx(raw, get().lastForwardMhz);
+      const live =
+        dispatch === "turn"
+          ? raw
+          : withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
       const target = pickArmedAutoTarget({
         liveWindow: live,
         archive: get().detections,

@@ -122,7 +122,6 @@ export function SignalPanel() {
   );
   const specRef = useRef<HTMLCanvasElement>(null);
   const timeRef = useRef<HTMLCanvasElement>(null);
-  const constRef = useRef<HTMLCanvasElement>(null);
 
   const constellation = useMemo(
     () => constellationPoints(s.signalKind, params),
@@ -136,7 +135,6 @@ export function SignalPanel() {
       if (constellation) drawConstellation(timeRef.current, constellation);
       else drawTime(timeRef.current, re, im);
     }
-    if (constRef.current) drawConstellation(constRef.current, constellation ?? []);
   }, [s.signalKind, params, constellation]);
 
   const busy = s.transmitArmed || s.scanRunning;

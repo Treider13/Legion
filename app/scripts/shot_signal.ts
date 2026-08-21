@@ -58,26 +58,34 @@ async function main(): Promise<void> {
   await clickButton(page, "ДЕМО-НЕСУЩАЯ");
   await new Promise((r) => setTimeout(r, 300));
   await clickButton(page, "ПЕРЕДАТЬ");
-  // ждём handoff с зашитой волной (qpsk), не CW
+  // Ждём НОВЫЙ handoff: status-line (lastCueReason) обновляется только на
+  // handoff оркестратора — не матчим старый лог от шага 1.
+  let autoOk = false;
   try {
     await poll(
       page,
-      `(document.querySelector('.console')?.textContent ?? "").includes("ЭМУЛЯЦИЯ TX qpsk 2442")`,
+      `(() => { const t = document.querySelector('.status-line')?.textContent ?? "";
+        return t.includes("авто →") && t.includes("· qpsk ·"); })()`,
       15000,
     );
-    console.log("3. АВТО handoff использует зашитую волну qpsk: true");
+    autoOk = true;
   } catch {
-    console.log("3. АВТО handoff использует зашитую волну qpsk: FALSE");
+    autoOk = false;
   }
-  log = String(await page.evaluate(`document.querySelector('.console')?.textContent ?? ""`));
+  console.log("3. АВТО handoff использует зашитую волну qpsk:", autoOk);
   const statusLine = String(await page.evaluate(`document.querySelector('.status-line')?.textContent ?? ""`));
   console.log("3. status-line:", JSON.stringify(statusLine));
-  console.log("3. lastCueReason несёт волну:", statusLine.includes("qpsk"));
   await page.screenshot({ path: "/tmp/legion_sig_auto.png" });
   await clickButton(page, "СТОП ПЕРЕДАЧУ");
   await new Promise((r) => setTimeout(r, 400));
 
   // --- 4) КАЧАНИЕ (без сканера): ПЕРЕДАТЬ → open-loop TX с волной ---
+  // Чистим журнал, чтобы считать только НОВЫЕ TX (без записей шагов 1–3).
+  await page.evaluate(`(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find((x) => x.textContent && x.textContent.trim() === "ОЧИСТИТЬ");
+    if (b) b.click();
+  })()`);
   await page.evaluate(`(() => {
     const sel = document.querySelector('[aria-label="Режим работы SDR"]');
     sel.value = "sweep";
@@ -87,8 +95,9 @@ async function main(): Promise<void> {
   await clickButton(page, "ПЕРЕДАТЬ");
   await new Promise((r) => setTimeout(r, 2500));
   log = String(await page.evaluate(`document.querySelector('.console')?.textContent ?? ""`));
-  const sweepHits = (log.match(/ЭМУЛЯЦИЯ TX qpsk/g) || []).length;
-  console.log("4. open-loop КАЧАНИЕ использует qpsk (число TX):", sweepHits);
+  const sweepQpsk = (log.match(/ЭМУЛЯЦИЯ TX qpsk/g) || []).length;
+  const sweepCw = (log.match(/ЭМУЛЯЦИЯ \d|SDR TX \d/g) || []).length;
+  console.log("4. open-loop КАЧАНИЕ: TX с qpsk =", sweepQpsk, ", TX с CW =", sweepCw);
   await page.screenshot({ path: "/tmp/legion_sig_sweep.png" });
   await clickButton(page, "СТОП ПЕРЕДАЧУ");
 

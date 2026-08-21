@@ -761,7 +761,9 @@ class Radio:
 
     def _tx_prime(self, buf: Any, lo_hz: float, prev_mhz: float | None) -> dict[str, Any] | None:
         """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
-        иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима."""
+        иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима.
+        Буфер подменяется под локом сразу после первой записи — TX-петля не
+        успевает выпустить старую волну на новой частоте."""
         timeout = stream_timeout_us(len(buf), TX_FS)
         created = False
         with self._lock:
@@ -770,6 +772,12 @@ class Radio:
                     self.dev.deactivateStream(self.rx)
                     self._rx_on = False
                 self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
+                try:
+                    # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
+                    # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.
+                    self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(TX_FS, self.analog_bw * 1e6))
+                except Exception:
+                    pass
                 self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
                 if self.tx is None:
                     self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
@@ -794,6 +802,7 @@ class Radio:
                         "reason": f"writeStream {kind} ret={ret} (ждали {len(buf)}) — сигнала на RF out нет",
                         "latencyUs": 0,
                     }
+                self._tone = buf
             except Exception as e:
                 return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
         return None
