@@ -272,6 +272,18 @@ export function SignalPanel() {
               <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
             </select>
           </label>
+          <label>
+            ТОКЕН ШЛЮЗА (если задан на агенте)
+            <input
+              aria-label="Токен шлюза FPGA"
+              type="password"
+              value={s.fpgaToken}
+              onChange={(e) => s.setFpgaToken(e.target.value)}
+              disabled={s.fpgaArmed || s.fpgaBusy}
+              spellCheck={false}
+              placeholder="LEGION_FPGA_TOKEN"
+            />
+          </label>
         </div>
         <div className="power-row">
           {s.fpgaArmed ? (

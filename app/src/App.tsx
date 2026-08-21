@@ -55,6 +55,9 @@ function App() {
     return () => clearTimeout(t);
   }, [booted]);
   const corridorRunning = useLegion((s) => s.corridorRunning);
+  const scanRunning = useLegion((s) => s.scanRunning);
+  const transmitArmed = useLegion((s) => s.transmitArmed);
+  const workspace = useLegion((s) => s.workspace);
   const transportKind = useLegion((s) => s.transportKind);
   const sl22 = transportKind === "htool-sl22";
 

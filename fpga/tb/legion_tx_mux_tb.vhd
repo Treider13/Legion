@@ -112,6 +112,24 @@ begin
         end loop;
         assert saw_valid report "FAIL: LB_GATED did not open on detect" severity failure;
 
+        -- 6) LB_ALWAYS, FIFO опустел на открытом гейте: каденс valid ЖИВЁТ,
+        --    данные — нули (иначе DAC завис бы на последнем сэмпле).
+        -- 4 такта на рассасывание in-flight сэмпла из шага 5 (конвейер).
+        mode <= LEGION_MODE_LB_ALWAYS;
+        lb_empty <= '1';
+        det_active <= '0';
+        for k in 0 to 3 loop wait until rising_edge(clock); end loop;
+        saw_valid := false;
+        for k in 0 to 7 loop
+            wait until rising_edge(clock);
+            if out_valid = '1' then
+                saw_valid := true;
+                assert out_i = 0 and out_q = 0
+                    report "FAIL: starved LB not zero" severity failure;
+            end if;
+        end loop;
+        assert saw_valid report "FAIL: starved LB lost valid cadence (stale DAC)" severity failure;
+
         report "legion_tx_mux_tb: PASS" severity note;
         done <= true;
         wait;

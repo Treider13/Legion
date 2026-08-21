@@ -95,6 +95,12 @@ begin
         end loop;
         assert kicked report "FAIL: heartbeat strobe not generated" severity failure;
 
+        -- WD_LIMIT=0 → кламп к 1 (иначе deadman молча выкл при WD_EN=1)
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WD_LIMIT, 0);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_wd_limit = to_unsigned(1, 16)
+            report "FAIL: WD_LIMIT=0 not clamped to 1" severity failure;
+
         -- Статус: CDC обратно в NIOS-домен
         for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
         assert pio_status(0) = '1' report "FAIL: status.playing" severity failure;

@@ -193,6 +193,8 @@ interface LegionStore {
   fpgaArmed: boolean;
   fpgaBusy: boolean;
   fpgaStatus: FpgaStatus | null;
+  /** Токен шлюза (LEGION_FPGA_TOKEN на агенте); пустой = открытая LAN стенда. */
+  fpgaToken: string;
   // журнал
   log: LogEntry[];
 
@@ -262,6 +264,7 @@ interface LegionStore {
   signalFlash(): Promise<void>;
   disarmTxWave(): void;
   setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
+  setFpgaToken(v: string): void;
   fpgaArm(): Promise<void>;
   fpgaDisarm(): Promise<void>;
   fpgaPollStatus(): Promise<void>;
@@ -620,6 +623,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaArmed: false,
     fpgaBusy: false,
     fpgaStatus: null,
+    fpgaToken: "",
     log: [],
 
     setTransportKind: (k) =>
@@ -1214,6 +1218,8 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setFpgaMode: (m) => set({ fpgaMode: m }),
 
+    setFpgaToken: (v) => set({ fpgaToken: v }),
+
     fpgaArm: async () => {
       const s = get();
       if (s.fpgaBusy) return;
@@ -1227,7 +1233,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       set({ fpgaBusy: true });
       try {
-        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true }, get().sdrGateway);
+        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true, token: get().fpgaToken }, get().sdrGateway);
         pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) {
           set({ fpgaArmed: true });
@@ -1235,7 +1241,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           // Замерло любое звено (app/TCP/шлюз/USB) → watchdog в FPGA гасит TX.
           stopFpgaKick();
           gFpgaKick = setInterval(() => {
-            void hostFpga({ op: "kick" }, get().sdrGateway).then((kr) => {
+            void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
               if (!kr.ok) {
                 pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
                 stopFpgaKick();
@@ -1253,7 +1259,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopFpgaKick();
       set({ fpgaBusy: true });
       try {
-        const r = await hostFpga({ op: "disarm" }, get().sdrGateway);
+        const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
         pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) set({ fpgaArmed: false });
       } finally {
@@ -1262,7 +1268,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     fpgaPollStatus: async () => {
-      const r = await hostFpga({ op: "status" }, get().sdrGateway);
+      const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
       if (r.ok && r.wd_fired && get().fpgaArmed) {
