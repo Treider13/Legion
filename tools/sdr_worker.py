@@ -652,6 +652,14 @@ class Radio:
         self.full_duplex = True
         self.analog_bw = 20.0
         self._rx_on = False
+        # Кэш применённых RX-параметров: SoapyBladeRF setSampleRate при КАЖДОМ
+        # вызове перепрограммирует clock chain AD9361 (libbladeRF не кэширует)
+        # и сбрасывает hardware-time — на живом потоке это роняет RX
+        # (buf_ready timeout 1000 ms на стенде 2026-08-27). Перестраиваем
+        # только при реальной смене fs/bw/center.
+        self._rx_fs: float | None = None
+        self._rx_bw: float | None = None
+        self._rx_center: float | None = None
         self._tone = None
         self.tx_error: str | None = None
         self.tx_fail = 0
@@ -689,6 +697,9 @@ class Radio:
             self.rx = None
             self.tx = None
             self._rx_on = False
+            self._rx_fs = None
+            self._rx_bw = None
+            self._rx_center = None
             self.args = ""
             self.tx_error = None
         # Soapy-Device держит USB-handle до GC: без принудительного сбора
@@ -744,12 +755,28 @@ class Radio:
 
     def _ensure_rx(self, fs: float, center_hz: float) -> None:
         assert self.dev is not None
-        self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
-        try:
-            self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(fs, self.analog_bw * 1e6))
-        except Exception:
-            pass
-        self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
+        bw = min(fs, self.analog_bw * 1e6)
+        rate_changed = self._rx_fs != fs or self._rx_bw != bw
+        # bladeRF2: смена rate на живом потоке валит streamer — чистая
+        # остановка перед перестройкой, запуск после (паттерн libbladeRF).
+        if rate_changed and self.rx is not None and self._rx_on:
+            try:
+                self.dev.deactivateStream(self.rx)
+            except Exception:
+                pass
+            self._rx_on = False
+        if rate_changed:
+            self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
+            try:
+                self.dev.setBandwidth(SOAPY_SDR_RX, 0, bw)
+            except Exception:
+                pass
+            self._rx_fs = fs
+            self._rx_bw = bw
+        if self._rx_center != center_hz:
+            # LO retune на живом потоке безопасен (datapath не сбрасывается).
+            self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
+            self._rx_center = center_hz
         if self.rx is None:
             self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
             self.dev.activateStream(self.rx)
