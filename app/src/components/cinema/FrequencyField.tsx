@@ -88,7 +88,7 @@ export function FrequencyField() {
       const bins = st.scanBins;
       const xOf = (mhz: number) => pad + ((mhz - lo) / span) * plotW;
       const yOf = (dbm: number) => {
-        const n = Math.min(1, Math.max(0, (dbm + 105) / 75));
+        const n = Math.min(1, Math.max(0, (dbm + 100) / 58));
         return baseY - n * plotH;
       };
 

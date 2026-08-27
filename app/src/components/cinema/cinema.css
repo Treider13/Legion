@@ -83,7 +83,7 @@
   gap: 8px;
 }
 
-.cinema-mode {
+button.cinema-mode {
   appearance: none;
   cursor: pointer;
   background: transparent;
@@ -94,6 +94,8 @@
   text-align: left;
   font: inherit;
   font-size: 13px;
+  letter-spacing: 0.02em;
+  border-radius: 2px;
 }
 
 .cinema-mode span {
@@ -113,7 +115,7 @@
   cursor: not-allowed;
 }
 
-.cinema-go {
+button.cinema-go {
   appearance: none;
   cursor: pointer;
   min-width: 168px;
@@ -124,14 +126,17 @@
   color: #111318;
   font: inherit;
   font-size: 15px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
+  border-radius: 2px;
 }
 
-.cinema-go:hover {
+button.cinema-go:hover:not(:disabled) {
   background: #fff7ea;
+  border-color: #fff7ea;
 }
 
-.cinema-go.stop {
+button.cinema-go.stop,
+button.cinema-go.stop:hover:not(:disabled) {
   background: transparent;
   color: #ffb4a8;
   border-color: rgba(255, 180, 168, 0.7);
@@ -156,30 +161,38 @@
   -webkit-box-orient: vertical;
 }
 
-.cinema-btn {
+button.cinema-btn {
   appearance: none;
   cursor: pointer;
   min-height: 44px;
   padding: 0 16px;
   font: inherit;
   font-size: 13px;
+  letter-spacing: 0.04em;
+  border-radius: 2px;
 }
 
-.cinema-btn.ghost {
+button.cinema-btn.ghost {
   background: transparent;
   border: 1px solid rgba(232, 228, 220, 0.18);
   color: rgba(232, 228, 220, 0.78);
 }
 
-.cinema-btn.ghost:hover:not(:disabled) {
+button.cinema-btn.ghost:hover:not(:disabled) {
+  background: transparent;
   border-color: rgba(232, 228, 220, 0.4);
   color: #efe8dc;
 }
 
-.cinema-btn.solid {
+button.cinema-btn.solid {
   background: #efe8dc;
   border: 1px solid #efe8dc;
   color: #111318;
+}
+
+button.cinema-btn.solid:hover:not(:disabled) {
+  background: #fff7ea;
+  border-color: #fff7ea;
 }
 
 .cinema-btn:disabled {
@@ -253,6 +266,14 @@
   min-height: 44px;
   padding: 0 12px;
   font: inherit;
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.cinema-gate-card input:not([type="checkbox"]):focus {
+  border-color: rgba(232, 228, 220, 0.55);
+  box-shadow: none;
+  outline: 1px solid rgba(232, 228, 220, 0.35);
 }
 
 .cinema-waves-title {
@@ -270,7 +291,7 @@
   margin-bottom: 10px;
 }
 
-.cinema-wave {
+button.cinema-wave {
   appearance: none;
   cursor: pointer;
   background: transparent;
@@ -279,9 +300,17 @@
   padding: 7px 10px;
   font: inherit;
   font-size: 11px;
+  letter-spacing: 0.02em;
+  border-radius: 2px;
 }
 
-.cinema-wave.on {
+button.cinema-wave:hover:not(:disabled) {
+  background: transparent;
+  border-color: rgba(232, 228, 220, 0.35);
+}
+
+button.cinema-wave.on,
+button.cinema-wave.on:hover:not(:disabled) {
   border-color: #efe8dc;
   color: #111318;
   background: #efe8dc;
