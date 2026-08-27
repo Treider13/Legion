@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import gc
 import os
 import sys
 import threading
@@ -674,6 +675,9 @@ class Radio:
             self._rx_on = False
             self.args = ""
             self.tx_error = None
+        # Soapy-Device держит USB-handle до GC: без принудительного сбора
+        # быстрый re-open ловит -7 NODEV (поймано на стенде 2026-08-27).
+        gc.collect()
 
     def open(self, args: str, analog_bw: float, can_tx: bool, full_duplex: bool) -> dict[str, Any]:
         self.close()
@@ -701,11 +705,20 @@ class Radio:
             if not found:
                 return {"ok": False, "reason": "Soapy не видит устройств — укажите IP шлюза/платы"}
             kw = {str(k): str(v) for k, v in dict(found[0]).items()}
-        try:
-            self.dev = SoapySDR.Device(kw)
-            _setup_front_end(self.dev, self.can_tx)
-        except Exception as e:
-            return {"ok": False, "reason": f"Soapy Device(): {e}"}
+        last_err: Exception | None = None
+        for _ in range(4):
+            try:
+                self.dev = SoapySDR.Device(kw)
+                _setup_front_end(self.dev, self.can_tx)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                self.dev = None  # если Device() успел создаться — отпустить до retry
+                gc.collect()
+                time.sleep(0.4)
+        if self.dev is None:
+            return {"ok": False, "reason": f"Soapy Device(): {last_err}"}
         return {"ok": True, "reason": f"открыт Soapy {kw}", "fake": False}
 
     def _ensure_rx(self, fs: float, center_hz: float) -> None:
