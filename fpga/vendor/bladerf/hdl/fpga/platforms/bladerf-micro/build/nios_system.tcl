@@ -697,16 +697,15 @@ if { $platform_revision == "foxhunt" } {
     set_connection_parameter_value nios2.data_master/tone_generator_0.avalon_slave_0 defaultConnection {0}
 }
 
-save_system {nios_system.qsys}
-
 # ============================================================================
-# LEGION — добавление в nios_system.tcl (hdl/fpga/platforms/bladerf/build/).
+# LEGION — добавление в nios_system.tcl (bladerf-micro/build/).
 # Паттерн скопирован со штатных PIO (control, iq_corr_*) того же файла.
 # Три PIO: legion_wdata (32 out), legion_aws (8 out: bit7=we, 6..0=addr),
 #          legion_status (32 in).
-# Базовые адреса — в свободной области карты nios2.data_master (штатные PIO
-# занимают 0x0001_0000..0x0001_04xx; берём 0x0001_0500+ — финальную карту
-# подтвердить после регенерации по system.h, см. fpga/README.md).
+# ВАЖНО: блок обязан стоять ДО save_system — иначе PIO не попадают в
+# nios_system.qsys и BSP не получает LEGION_*_BASE (поймано сборкой 2026-08-27).
+# Адреса micro: 0x10500+ ЗАНЯТЫ под axi_ad9361_0.s_axi (0x10000..0x1ffff) —
+# берём свободное окно 0x9600+, выравнивание 16 байт (требование Qsys).
 # ============================================================================
 
 add_instance legion_wdata altera_avalon_pio
@@ -756,18 +755,29 @@ set_interface_property legion_aws EXPORT_OF legion_aws.external_connection
 add_interface legion_status conduit end
 set_interface_property legion_status EXPORT_OF legion_status.external_connection
 
+# --- clock/reset (обязательно: без них qsys-generate падает с
+#     "must be connected to a clock output / reset source") ---
+add_connection system_clock.clk legion_wdata.clk
+add_connection system_clock.clk_reset legion_wdata.reset
+add_connection system_clock.clk legion_aws.clk
+add_connection system_clock.clk_reset legion_aws.reset
+add_connection system_clock.clk legion_status.clk
+add_connection system_clock.clk_reset legion_status.reset
+
 # --- подключение к шине NIOS (паттерн: add_connection + baseAddress) ---
 add_connection nios2.data_master legion_wdata.s1
 set_connection_parameter_value nios2.data_master/legion_wdata.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/legion_wdata.s1 baseAddress {0x00010500}
+set_connection_parameter_value nios2.data_master/legion_wdata.s1 baseAddress {0x00009600}
 set_connection_parameter_value nios2.data_master/legion_wdata.s1 defaultConnection {0}
 
 add_connection nios2.data_master legion_aws.s1
 set_connection_parameter_value nios2.data_master/legion_aws.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/legion_aws.s1 baseAddress {0x00010504}
+set_connection_parameter_value nios2.data_master/legion_aws.s1 baseAddress {0x00009610}
 set_connection_parameter_value nios2.data_master/legion_aws.s1 defaultConnection {0}
 
 add_connection nios2.data_master legion_status.s1
 set_connection_parameter_value nios2.data_master/legion_status.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/legion_status.s1 baseAddress {0x00010508}
+set_connection_parameter_value nios2.data_master/legion_status.s1 baseAddress {0x00009620}
 set_connection_parameter_value nios2.data_master/legion_status.s1 defaultConnection {0}
+
+save_system {nios_system.qsys}
