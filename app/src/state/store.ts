@@ -14,7 +14,7 @@ import {
   type Esp32FlashResult,
 } from "../flash/esp32";
 import { planSdrWrite } from "../flash/sdrWrite";
-import { defaultEthHost, defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
+import { defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import { catalogById } from "../sdr/catalog";
 import { hostOpenAllowed, usableImagePath } from "../sdr/host";
 import {
@@ -580,7 +580,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     sdrHoldSince: null,
     sdrDevices: gSdr.probe(),
     sdrId: "bladerf-micro-xa4",
-    sdrGateway: "192.168.1.20",
+    // Пусто = локальный USB. Дефолт-IP шлюза — ловушка: после перезапуска
+    // поле снова полное, и open уезжает в driver=remote → "no match" (стенд 2026-08-27).
+    sdrGateway: "",
     sdrOpened: null,
     sdrRemote: "",
     sdrFlashName: "hostedxA4.rbf",
@@ -654,7 +656,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({
         sdrId: id,
         sdrFlashName: defaultFlashName(id) || get().sdrFlashName,
-        sdrGateway: defaultEthHost(id),
+        // Не перезаполняем IP шлюза при смене устройства: пустое = локальный USB,
+        // подсказка-IP видна в placeholder поля. Иначе молча уезжаем в remote.
+        sdrGateway: get().sdrGateway,
         sdrFlashConfirm: false,
       }),
     setSdrGateway: (v) => set({ sdrGateway: v }),
