@@ -261,6 +261,8 @@ interface LegionStore {
   setSignalKind(k: WaveKind): void;
   setSignalParam(key: string, v: number): void;
   setSignalFreqMhz(v: string): void;
+  /** Выбрать волну для всех TX-путей, не начиная эфир (в отличие от signalFlash). */
+  armTxWave(kind: WaveKind): void;
   signalFlash(): Promise<void>;
   disarmTxWave(): void;
   setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
@@ -563,7 +565,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     corridorRunning: false,
     telemFreq: null,
     telemLock: null,
-    workspace: "synth",
+    workspace: "scan",
     allowBands: [],
     allowF1: "2400",
     allowF2: "2500",
@@ -1128,6 +1130,21 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setSignalKind: (k) => set({ signalKind: k, signalParams: defaultParams(k) }),
+
+    armTxWave: (kind) => {
+      if (get().signalTxActive) {
+        pushLog("sys", "ВОЛНА: идёт TX зашитого сигнала — сначала СТОП");
+        return;
+      }
+      const params = defaultParams(kind);
+      set({
+        signalKind: kind,
+        signalParams: params,
+        txWaveKind: kind,
+        txWaveParams: params,
+      });
+      pushLog("sys", `TX-волна выбрана: ${kind} (в эфир не уходит до ПЕРЕДАТЬ)`);
+    },
 
     setSignalParam: (key, v) =>
       set((s) => ({ signalParams: { ...s.signalParams, [key]: v } })),
