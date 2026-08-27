@@ -81,6 +81,16 @@ def parse_args(s: str) -> dict[str, str]:
     return out
 
 
+def kwargs_str(kw: dict[str, str]) -> str:
+    """SoapySDR issue #472: на новых SWIG (Python 3.13+) Device(dict) путает
+    перегрузку make(Kwargs) с make(KwargsList) — dict не маршалится в C++,
+    итог: конструктор открывает плату, а make бросает "no match" (поймано на
+    стенде 2026-08-27, Ubuntu 26.04, Python 3.14, soapysdr 0.8.1-7build1).
+    Строковая форма make(string) перегрузкой не затронута. enumerate(dict)
+    багу не подвержен (у него нет перегрузки list) — probe не трогаем."""
+    return ",".join(f"{k}={v}" for k, v in kw.items())
+
+
 TX_FS = 2.0e6
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
@@ -719,7 +729,7 @@ class Radio:
         last_err: Exception | None = None
         for _ in range(4):
             try:
-                self.dev = SoapySDR.Device(kw)
+                self.dev = SoapySDR.Device(kwargs_str(kw))
                 _setup_front_end(self.dev, self.can_tx)
                 last_err = None
                 break
