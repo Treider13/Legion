@@ -710,7 +710,12 @@ class Radio:
                 return {"ok": False, "reason": f"enumerate: {e}"}
             if not found:
                 return {"ok": False, "reason": "Soapy не видит устройств — укажите IP шлюза/платы"}
-            kw = {str(k): str(v) for k, v in dict(found[0]).items()}
+            full = {str(k): str(v) for k, v in dict(found[0]).items()}
+            # Ключ device=bus:addr меняется при каждом переподключении USB —
+            # Device::make() с ним ловит "no match". Стабильный селектор: driver+serial.
+            kw = {k: full[k] for k in ("driver", "serial") if k in full}
+            if not kw:
+                kw = full
         last_err: Exception | None = None
         for _ in range(4):
             try:
