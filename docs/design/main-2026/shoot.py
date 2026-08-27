@@ -11,19 +11,20 @@ SRC = (HERE / "index.html").read_text(encoding="utf-8")
 CHROME = "/usr/local/bin/google-chrome"
 
 SHOTS = [
-    ("v1 still", "v1-ion-lattice.png"),
-    ("v1 sheet still", "v1-start-sheet.png"),
-    ("v2 still", "v2-phosphor-ribbon.png"),
-    ("v3 still", "v3-amber-reticle.png"),
-    ("v4 still", "v4-void-glass.png"),
-    ("v5 still", "v5-chrome-bezel.png"),
+    ("v1 still", "v1-sitroom.png"),
+    ("v1 sheet still", "v1-sitroom-briefing.png"),
+    ("v2 still", "v2-norad.png"),
+    ("v3 still", "v3-houston.png"),
 ]
 
 
 def shoot(body_class: str, name: str) -> None:
     html = SRC.replace('<body class="v1">', f'<body class="{body_class}">', 1)
     if "sheet" in body_class:
-        html = html.replace("display: none; position: absolute; inset: 0; z-index: 10;", "display: grid; position: absolute; inset: 0; z-index: 10;")
+        html = html.replace(
+            "display: none; position: absolute; inset: 46px 0; z-index: 12;",
+            "display: grid; position: absolute; inset: 46px 0; z-index: 12;",
+        )
     tmp = pathlib.Path("/tmp") / f"legion-{name}.html"
     tmp.write_text(html, encoding="utf-8")
     out = HERE / name
