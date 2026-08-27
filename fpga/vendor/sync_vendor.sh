@@ -26,12 +26,20 @@ git sparse-checkout set \
   firmware_common \
   host/libraries/libbladeRF/include \
   host/libraries/libbladeRF/src/backend/usb \
+  host/libraries/libbladeRF/src/board \
+  host/common \
+  host/cmake \
+  thirdparty/analogdevicesinc/no-OS_local \
   COPYING LICENSE
+
+# Сабмодуль no-OS (драйвер AD9361) обязателен для сборки bladeRF-micro:
+# без него NIOS-make падает с "No rule to make target .../no-OS/ad9361/sw/*"
+git submodule update --init --depth 1 thirdparty/analogdevicesinc/no-OS
 
 DEST="$(cd .. && pwd)/bladerf"
 rm -rf "$DEST"
 mkdir -p "$DEST"
-for p in hdl fpga_common firmware_common host; do
+for p in hdl fpga_common firmware_common host thirdparty; do
   [ -e "$p" ] && cp -a "$p" "$DEST/"
 done
 for f in COPYING LICENSE COPYING.LESSER; do
