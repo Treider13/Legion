@@ -14,10 +14,11 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const signalTxActive = useLegion((s) => s.signalTxActive);
+  const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const lastCue = useLegion((s) => s.lastCueReason);
   const lastLog = useLegion((s) => s.log[s.log.length - 1]?.text ?? "");
   const workspace = useLegion((s) => s.workspace);
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive });
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed });
 
   return (
     <footer className="cinema-dock">
@@ -54,7 +55,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={lastCue || lastLog}>
-          {lastCue || lastLog || "Коридор и тип сигнала — после Запустить. FPGA — в настройках."}
+          {lastCue || lastLog || "Запустить → коридор и волна → эфир+FPGA или только FPGA."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

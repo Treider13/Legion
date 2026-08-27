@@ -32,6 +32,8 @@ export function FrequencyField() {
   const center = useLegion((s) => s.scanCenterMhz);
   const hostUs = useLegion((s) => s.lastSdrTxUs);
   const telem = useLegion((s) => s.telemFreq);
+  const fpgaArmed = useLegion((s) => s.fpgaArmed);
+  const fpgaPath = useLegion((s) => s.fpgaPath);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -178,7 +180,7 @@ export function FrequencyField() {
     };
   }, []);
 
-  const live = scanRunning || transmitArmed || corridorRunning;
+  const live = scanRunning || transmitArmed || corridorRunning || fpgaArmed;
   const read =
     lastForward != null
       ? `${lastForward.toFixed(3)} МГц`
@@ -197,9 +199,11 @@ export function FrequencyField() {
         <span>{f1.toFixed(0)}</span>
         <span className={live ? "cinema-field-read live" : "cinema-field-read"}>
           {read}
+          {fpgaArmed && fpgaPath === "air" ? " · эфир+FPGA" : ""}
+          {fpgaArmed && fpgaPath === "solo" ? " · FPGA" : ""}
           {transmitArmed && hostUs != null ? ` · ${hostUs} µs host` : ""}
-          {scanRunning && !transmitArmed ? " · слушает" : ""}
-          {transmitArmed ? " · на усилитель" : ""}
+          {scanRunning && !transmitArmed && !fpgaArmed ? " · слушает" : ""}
+          {transmitArmed && !fpgaArmed ? " · на усилитель" : ""}
           {corridorRunning ? " · коридор" : ""}
         </span>
         <span>{f2.toFixed(0)}</span>
