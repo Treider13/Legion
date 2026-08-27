@@ -669,6 +669,12 @@ class Radio:
                         self.dev.closeStream(self.tx)
                 except Exception:
                     pass
+                # Детерминированный unmake USB-handle (SoapySDR issue #225:
+                # иначе устройство занято до сборки мусора → -7 при re-open).
+                try:
+                    self.dev.close()
+                except Exception:
+                    pass
             self.dev = None
             self.rx = None
             self.tx = None
