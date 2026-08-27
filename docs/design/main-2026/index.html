@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<!--
+  LEGION — макеты ГЛАВНОГО ОКНА (на утверждение).
+  3D-глаз здесь ПЛЕЙСХОЛДЕР. Исходники CyborgEye / Scene не копируем и не трогаем.
+  Данные сетки — модель существующих scanBins / detections / lastForwardMhz / lastSdrTxUs.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEGION — главное окно 2026</title>
+<style>
+  :root {
+    --bg: #060911; --ink: #05070d; --text: #e9eef7; --dim: #93a0b8; --faint: #5c6780;
+    --accent: #2dd4bf; --hot: #ff6b73; --lock: #5ef2a0;
+    --glass: rgba(255,255,255,.05); --line: rgba(255,255,255,.12);
+    --font: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+    --display: ui-sans-serif, "Saira Stencil One", system-ui, sans-serif;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: var(--font); }
+  body { min-height: 100vh; }
+
+  /* ===== V1 ION LATTICE ===== */
+  body.v1 {
+    --bg: #04060b; --accent: #2dd4bf; --hot: #ff6b73; --lock: #7dffa8;
+    --glass: rgba(45,212,191,.06); --line: rgba(45,212,191,.18);
+    --display: "Saira Stencil One", sans-serif;
+  }
+  body.v1 .stage {
+    background:
+      radial-gradient(70% 50% at 50% 18%, rgba(45,212,191,.12), transparent 55%),
+      radial-gradient(40% 30% at 80% 90%, rgba(124,108,240,.08), transparent 50%),
+      #04060b;
+  }
+
+  /* ===== V2 PHOSPHOR RIBBON ===== */
+  body.v2 {
+    --bg: #070b06; --text: #d8ffd8; --dim: #7fa06f; --faint: #4a6340;
+    --accent: #78ff8c; --hot: #ffd76a; --lock: #b8ff6a;
+    --glass: rgba(120,255,140,.06); --line: #2a3a24;
+    --display: "JetBrains Mono", monospace; --radius: 4px;
+  }
+  body.v2 .stage {
+    background:
+      repeating-linear-gradient(0deg, transparent 0 23px, rgba(120,255,140,.04) 23px 24px),
+      repeating-linear-gradient(90deg, transparent 0 23px, rgba(120,255,140,.04) 23px 24px),
+      #070b06;
+  }
+  body.v2 .eye { border-radius: 50%; border-width: 3px; border-style: double; }
+  body.v2 .btn-go { border-radius: 4px; letter-spacing: .28em; }
+
+  /* ===== V3 AMBER RETICLE ===== */
+  body.v3 {
+    --bg: #0a0c05; --text: #ffe9b0; --dim: #9a8a55; --faint: #5c5330;
+    --accent: #ffb000; --hot: #ff5533; --lock: #ffe08a;
+    --glass: rgba(255,176,0,.07); --line: rgba(255,176,0,.28);
+    --display: "Saira Stencil One", sans-serif; --radius: 2px;
+  }
+  body.v3 .stage {
+    background: linear-gradient(180deg, rgba(255,176,0,.07), transparent 40%), #0a0c05;
+  }
+  body.v3 .stage::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.16) 2px 4px);
+  }
+  body.v3 .eye { border-radius: 50%; box-shadow: 0 0 0 1px var(--accent), 0 0 40px rgba(255,176,0,.35); }
+  body.v3 .btn-go { clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
+
+  /* ===== V4 VOID GLASS ===== */
+  body.v4 {
+    --bg: #030712; --text: #e8eefc; --dim: #7b8bb0; --faint: #4a5570;
+    --accent: #8eb6ff; --hot: #f472b6; --lock: #a5f3c4;
+    --glass: rgba(20,35,70,.45); --line: rgba(142,182,255,.22);
+    --display: Georgia, "Times New Roman", serif; --radius: 22px;
+  }
+  body.v4 .stage {
+    background:
+      radial-gradient(80% 60% at 50% 0%, rgba(96,165,250,.16), transparent 60%),
+      #030712;
+  }
+  body.v4 .logo { font-family: Georgia, serif; letter-spacing: .18em; font-weight: 400; }
+  body.v4 .btn-go { border-radius: 999px; font-family: var(--font); }
+
+  /* ===== V5 CHROME BEZEL ===== */
+  body.v5 {
+    --bg: #0c0d10; --text: #f2f0ea; --dim: #9a9588; --faint: #5c5850;
+    --accent: #c9c4b8; --hot: #e8a87c; --lock: #d4af77;
+    --glass: rgba(255,255,255,.04); --line: rgba(201,196,184,.28);
+    --display: "Saira Stencil One", sans-serif; --radius: 8px;
+  }
+  body.v5 .stage {
+    background:
+      radial-gradient(50% 40% at 50% 20%, rgba(255,255,255,.05), transparent 55%),
+      #0c0d10;
+  }
+  body.v5 .grid-shell {
+    border: 8px solid #2a2b30;
+    box-shadow: inset 0 0 0 1px #6a675e, 0 20px 50px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.15);
+    background: #050506;
+    border-radius: 10px;
+  }
+  body.v5 .btn-go {
+    background: linear-gradient(180deg, #ece8de, #9a9588);
+    color: #1a1814; border-color: #d4af77;
+  }
+
+  .stage {
+    position: relative; height: 100vh; display: flex; flex-direction: column;
+    padding: 16px 22px 16px; overflow: hidden;
+  }
+  .top {
+    display: flex; align-items: center; justify-content: space-between; z-index: 3;
+  }
+  .logo { font-family: var(--display); letter-spacing: .38em; font-size: 18px; }
+  .modes { display: flex; gap: 6px; background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
+  .modes button {
+    border: 0; background: transparent; color: var(--dim); font: inherit; font-size: 10px;
+    letter-spacing: .16em; padding: 8px 14px; border-radius: 999px; cursor: default;
+  }
+  .modes button.on { background: var(--accent); color: #04120f; font-weight: 700; }
+  body.v3 .modes button.on, body.v5 .modes button.on { color: #1a1000; }
+  body.v4 .modes button.on { color: #04122b; }
+  .gear {
+    border: 1px solid var(--line); background: var(--glass); color: var(--dim);
+    font: inherit; font-size: 10px; letter-spacing: .16em; padding: 8px 14px; border-radius: 999px;
+  }
+
+  .hero {
+    flex: 0 0 auto; height: 28vh; min-height: 168px; position: relative;
+    display: grid; place-items: center;
+  }
+  .eye {
+    width: min(168px, 22vw); aspect-ratio: 1; border-radius: 50%;
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 50px color-mix(in srgb, var(--accent) 45%, transparent),
+                inset 0 0 40px color-mix(in srgb, var(--accent) 25%, transparent);
+    position: relative;
+  }
+  .eye::before {
+    content: ""; position: absolute; inset: 28%; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 30px var(--accent);
+  }
+  .eye::after {
+    content: ""; position: absolute; inset: -16px; border-radius: 50%;
+    border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+    animation: spin 16s linear infinite;
+  }
+  .eye-cap {
+    position: absolute; bottom: 8px; font-size: 9px; letter-spacing: .2em; color: var(--faint);
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  body.still .eye::after { animation: none; }
+
+  .status {
+    text-align: center; font-size: 11px; letter-spacing: .18em; color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .status.tx { color: var(--hot); }
+
+  .grid-shell {
+    position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid var(--line);
+    border-radius: var(--radius); background: rgba(0,0,0,.35); overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .axis {
+    position: absolute; left: 12px; right: 12px; bottom: 8px;
+    display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); letter-spacing: .08em;
+  }
+  .axis .cur { color: var(--hot); }
+
+  .dock {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-top: 12px; z-index: 3; flex: 0 0 auto;
+  }
+  .readouts { display: flex; gap: 18px; }
+  .k { font-size: 9px; letter-spacing: .18em; color: var(--dim); }
+  .v { font-size: 20px; margin-top: 2px; }
+  .v.hot { color: var(--hot); }
+  .btn-go {
+    border: 1px solid var(--accent); background: var(--accent); color: #04211d;
+    font: inherit; font-weight: 700; letter-spacing: .22em; padding: 14px 36px;
+    border-radius: 14px; font-size: 13px;
+  }
+  .btn-stop {
+    border: 1px solid var(--hot); background: transparent; color: var(--hot);
+    font: inherit; letter-spacing: .18em; padding: 14px 22px; border-radius: 14px;
+  }
+
+  /* sheet */
+  .sheet {
+    display: none; position: absolute; inset: 0; z-index: 10;
+    background: rgba(4,6,11,.62); backdrop-filter: blur(14px);
+    place-items: center; padding: 24px;
+  }
+  body.sheet .sheet { display: grid; }
+  .card {
+    width: min(720px, 100%); background: color-mix(in srgb, var(--bg) 70%, #000);
+    border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px); padding: 22px 24px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.5);
+  }
+  .card h2 { font-size: 11px; letter-spacing: .22em; color: var(--dim); margin-bottom: 14px; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field label { display: block; font-size: 9px; letter-spacing: .16em; color: var(--dim); margin-bottom: 4px; }
+  .field .box { border: 1px solid var(--line); padding: 9px 12px; border-radius: 10px; background: #05070d; }
+  .waves { margin-top: 14px; display: grid; gap: 8px; max-height: 220px; overflow: hidden; }
+  .wave { border: 1px solid var(--line); padding: 10px 12px; border-radius: 12px; }
+  .wave.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .wave b { display: block; font-size: 12px; letter-spacing: .1em; }
+  .wave span { display: block; font-size: 11px; color: var(--dim); margin-top: 4px; line-height: 1.45; }
+  .check { margin: 14px 0; font-size: 12px; color: var(--dim); }
+  .actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .ghost { border: 1px solid var(--line); background: transparent; color: var(--dim);
+    font: inherit; letter-spacing: .14em; padding: 12px 18px; border-radius: 12px; }
+
+  .badge {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20;
+    font-size: 10px; letter-spacing: .16em; color: var(--faint); pointer-events: none;
+  }
+</style>
+</head>
+<body class="v1">
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  if (![...q.keys()].length) return;
+  var v = ["v1","v2","v3","v4","v5"].indexOf(q.get("v")) >= 0 ? q.get("v") : "v1";
+  document.body.className = [v, q.get("sheet") === "1" ? "sheet" : "", q.get("still") === "1" ? "still" : ""].filter(Boolean).join(" ");
+})();
+</script>
+<div class="badge" id="badge"></div>
+<div class="stage">
+  <header class="top">
+    <div class="logo">LEGION</div>
+    <div class="modes">
+      <button class="on" type="button">УМНЫЙ · SDR</button>
+      <button type="button">ПРОСТОЙ · ESP32</button>
+    </div>
+    <button class="gear" type="button">НАСТРОЙКИ</button>
+  </header>
+
+  <div class="hero">
+    <div class="eye" title="3D-глаз (плейсхолдер, не трогаем)"></div>
+    <div class="eye-cap">3D-ГЛАЗ · ПЛЕЙСХОЛДЕР · НЕ ТРОГАЕМ</div>
+  </div>
+  <div class="status tx" id="st">РЕЖИМ SDR · СКАН → TX · 200 µs HOST · QPSK</div>
+
+  <div class="grid-shell">
+    <canvas id="grid"></canvas>
+    <div class="axis">
+      <span>2400</span>
+      <span class="cur">2449.841 МГц · НА TX · 200 µs host</span>
+      <span>2500</span>
+    </div>
+  </div>
+
+  <div class="dock">
+    <div class="readouts">
+      <div><div class="k">ПЕРЕХВАЧЕНА</div><div class="v">2449.841</div></div>
+      <div><div class="k">НА TX SDR</div><div class="v hot">2449.841</div></div>
+      <div><div class="k">ВОЛНА</div><div class="v">QPSK</div></div>
+    </div>
+    <div>
+      <button class="btn-stop" type="button">СТОП</button>
+      <button class="btn-go" type="button">ЗАПУСТИТЬ</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet">
+  <div class="card">
+    <h2>СТАРТ · УМНЫЙ РЕЖИМ</h2>
+    <div class="fields">
+      <div class="field"><label>КОРИДОР F1 МГц</label><div class="box">2400.000</div></div>
+      <div class="field"><label>КОРИДОР F2 МГц</label><div class="box">2500.000</div></div>
+    </div>
+    <div class="waves">
+      <div class="wave on">
+        <b>QPSK + RRC</b>
+        <span>M=4, Gray, сдвиг π/4, дифф. кодирование, 4 sps, RRC α=0.035 — как generic_mod в GNU Radio. Факт из WAVE_CATALOG, не новый текст.</span>
+      </div>
+      <div class="wave">
+        <b>GFSK (BLE)</b>
+        <span>Гауссов FSK: BT=0.5, h=0.5 — Bluetooth LE и простые IoT-радио.</span>
+      </div>
+      <div class="wave">
+        <b>CSS (LoRa-подобный)</b>
+        <span>Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов на символ.</span>
+      </div>
+    </div>
+    <div class="check">☑ Нагрузка 50 Ом на выходе усилителя SDR — без галочки ПРОДОЛЖИТЬ не живёт (sdrLoadOk).</div>
+    <div class="actions">
+      <button class="ghost" type="button">ОТМЕНА</button>
+      <button class="btn-go" type="button">ПРОДОЛЖИТЬ</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const NAMES = {
+  v1: "V1 · ION LATTICE — 3D-сетка частот (рекомендую)",
+  v2: "V2 · PHOSPHOR RIBBON — прибор / водопад",
+  v3: "V3 · AMBER RETICLE — тактический HUD",
+  v4: "V4 · VOID GLASS — cinematic midnight glass",
+  v5: "V5 · CHROME BEZEL — металл / приборная рамка",
+};
+const q = new URLSearchParams(location.search);
+const fromBody = ["v1","v2","v3","v4","v5"].find((k) => document.body.classList.contains(k));
+const v = ["v1","v2","v3","v4","v5"].includes(q.get("v")) ? q.get("v") : (fromBody || "v1");
+document.getElementById("badge").textContent = NAMES[v];
+
+const canvas = document.getElementById("grid");
+const ctx = canvas.getContext("2d");
+const acc = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+const hot = getComputedStyle(document.body).getPropertyValue("--hot").trim();
+const dim = getComputedStyle(document.body).getPropertyValue("--dim").trim();
+
+function bins() {
+  const out = [];
+  for (let i = 0; i < 160; i++) {
+    const f = 2400 + (i / 159) * 100;
+    let p = 0.08 + 0.04 * Math.sin(i * 0.37);
+    if (Math.abs(f - 2442) < 1.2) p = 0.92;
+    if (Math.abs(f - 2449.841) < 0.8) p = 1;
+    if (Math.abs(f - 2475) < 0.6) p = 0.55;
+    out.push({ f, p });
+  }
+  return out;
+}
+const data = bins();
+
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  canvas.width = Math.floor(r.width * 2);
+  canvas.height = Math.floor(r.height * 2);
+}
+resize();
+
+function draw(t) {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const walk = (t * 0.00008) % 1;
+  const cursorF = 2400 + walk * 100;
+
+  if (v === "v1" || v === "v4") {
+    // перспектива: ряды «решётки» уходят вдаль — то, чего нет у GQRX/SDR++
+    const rows = 18;
+    for (let r = 0; r < rows; r++) {
+      const z = r / (rows - 1);
+      const y = h * 0.18 + z * h * 0.72;
+      const scale = 0.35 + z * 0.65;
+      const x0 = w * (0.5 - 0.48 * scale);
+      const x1 = w * (0.5 + 0.48 * scale);
+      ctx.globalAlpha = 0.15 + z * 0.55;
+      ctx.beginPath();
+      data.forEach((b, i) => {
+        const x = x0 + (x1 - x0) * (i / (data.length - 1));
+        const decay = Math.max(0, 1 - Math.abs(r - walk * rows));
+        const yy = y - b.p * h * 0.22 * scale * (0.35 + decay);
+        i === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+      });
+      ctx.strokeStyle = acc;
+      ctx.lineWidth = z > 0.85 ? 3 : 1.2;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    const cx = w * (0.5 + ((cursorF - 2450) / 100) * 0.9);
+    ctx.strokeStyle = hot; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx, h * 0.12); ctx.lineTo(cx, h * 0.92); ctx.stroke();
+  } else if (v === "v2") {
+    // спектр сверху + водопад снизу (как пишут операторы GQRX/SDR#)
+    const mid = h * 0.42;
+    ctx.strokeStyle = "rgba(120,255,140,.12)";
+    for (let i = 1; i < 6; i++) { ctx.beginPath(); ctx.moveTo(0, mid * i / 6); ctx.lineTo(w, mid * i / 6); ctx.stroke(); }
+    ctx.beginPath();
+    data.forEach((b, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = mid - b.p * (mid - 16);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = acc; ctx.lineWidth = 2.5; ctx.stroke();
+    const rows = 40;
+    for (let r = 0; r < rows; r++) {
+      for (let i = 0; i < data.length; i++) {
+        const flicker = 0.55 + 0.45 * Math.sin((r + i) * 0.2 + t * 0.002);
+        const p = data[i].p * flicker;
+        ctx.fillStyle = `rgba(120,255,140,${0.05 + p * 0.55})`;
+        ctx.fillRect((i / data.length) * w, mid + 8 + r * ((h - mid - 8) / rows), w / data.length + 1, (h - mid) / rows);
+      }
+    }
+  } else if (v === "v3") {
+    ctx.strokeStyle = "rgba(255,176,0,.15)";
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath(); ctx.moveTo((i / 11) * w, 0); ctx.lineTo((i / 11) * w, h); ctx.stroke();
+    }
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath(); ctx.moveTo(0, (i / 5) * h); ctx.lineTo(w, (i / 5) * h); ctx.stroke();
+    }
+    data.forEach((b, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const hh = b.p * h * 0.7;
+      ctx.fillStyle = Math.abs(b.f - 2449.841) < 0.8 ? hot : acc;
+      ctx.globalAlpha = 0.25 + b.p * 0.75;
+      ctx.fillRect(x, h - hh - 20, Math.max(2, w / data.length - 1), hh);
+    });
+    ctx.globalAlpha = 1;
+    const cx = ((2449.841 - 2400) / 100) * w;
+    ctx.strokeStyle = hot; ctx.lineWidth = 1.5;
+    ctx.strokeRect(cx - 28, 24, 56, h - 48);
+    ctx.beginPath(); ctx.moveTo(cx, 10); ctx.lineTo(cx, h - 10); ctx.stroke();
+  } else {
+    // chrome / default bars
+    data.forEach((b, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const hh = b.p * (h - 40);
+      ctx.fillStyle = Math.abs(b.f - 2449.841) < 0.8 ? hot : acc;
+      ctx.globalAlpha = 0.22 + b.p * 0.7;
+      ctx.fillRect(x, h - hh - 18, Math.max(2, w / data.length - 0.8), hh);
+    });
+    ctx.globalAlpha = 1;
+  }
+}
+
+const still = q.get("still") === "1" || document.body.classList.contains("still");
+function paint(t) {
+  resize();
+  draw(t);
+}
+paint(still ? 4200 : 0);
+if (!still) {
+  const t0 = performance.now();
+  function loop(now) {
+    paint(now - t0);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+} else {
+  requestAnimationFrame(() => paint(4200));
+}
+</script>
+</body>
+</html>
