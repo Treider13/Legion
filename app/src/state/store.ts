@@ -308,7 +308,10 @@ function stopFpgaKick(): void {
   }
 }
 
-const LEGION_FPGA_BOARDS = new Set(["bladerf-x40", "bladerf-micro-xa4", "bladerf-micro-xa9"]);
+/** Ревизия legion есть и на micro, но analog enable здесь — LMS6002D CONTROL
+ *  (bladerf_p.vhd bit1/2). micro = AD9361, те биты не поднимают эфир. */
+const FPGA_LMS_BOARD = "bladerf-x40";
+const LEGION_FPGA_BOARDS = new Set([FPGA_LMS_BOARD, "bladerf-micro-xa4", "bladerf-micro-xa9"]);
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
 const FPGA_DET_SHIFT_FAST = 4;
 /** Сырой порог энергии (не дБ). 0 открывает гейт на шум. */
@@ -623,6 +626,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const pk = await hostPark(opts.midMhz, win, opts.fsHz, opts.rx, true);
       pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
       if (!pk.ok) return { ok: false, fsHz };
+      if (pk.fake) {
+        pushLog("sys", "FPGA: FAKE park — не эфир, ARM нельзя");
+        return { ok: false, fsHz };
+      }
       if (pk.fsHz && pk.fsHz > 0) fsHz = pk.fsHz;
       parked = true;
     } finally {
@@ -1348,10 +1355,16 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
       }
-      if (!LEGION_FPGA_BOARDS.has(s.sdrId)) {
-        pushLog("sys", "FPGA ARM: ревизия legion — bladeRF 1 x40 или micro (вкладка SDR)");
-        return;
+      if (s.sdrId !== FPGA_LMS_BOARD) {
+        if (!LEGION_FPGA_BOARDS.has(s.sdrId)) {
+          pushLog("sys", "FPGA ARM: нужен bladeRF 1 x40 (LMS6002D CONTROL bit1/2, не AD9361)");
+          return;
+        }
+        get().setSdrId(FPGA_LMS_BOARD);
+        pushLog("sys", "FPGA ARM: micro/AD9361 этот CONTROL не кормит — выбран bladeRF 1 x40");
       }
+      get().stopScan();
+      if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
       if (!ensureSdrBand()) return;
       const bands = get().sdrBands;
       const f1 = bands.length ? Math.min(...bands.map((b) => b.f1Mhz)) : parseFloat(get().sdrF1);
@@ -1392,6 +1405,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (r.ok) {
           set({
             fpgaArmed: true,
+            fpgaPath: air ? "air" : "solo",
             lastForwardMhz: mid,
             lastCueReason: air
               ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
@@ -1411,9 +1425,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: подтвердите нагрузку 50 Ом на выходе усилителя");
         return false;
       }
-      if (!LEGION_FPGA_BOARDS.has(s0.sdrId)) {
-        get().setSdrId("bladerf-x40");
-        pushLog("sys", "FPGA: выбран bladeRF 1 x40 (ревизия legion)");
+      if (s0.sdrId !== FPGA_LMS_BOARD) {
+        get().setSdrId(FPGA_LMS_BOARD);
+        pushLog(
+          "sys",
+          s0.sdrId.startsWith("bladerf-micro")
+            ? "FPGA: micro = AD9361, analog enable этого тракта — LMS6002D. Выбран bladeRF 1 x40"
+            : "FPGA: выбран bladeRF 1 x40 (ревизия legion, LMS CONTROL)",
+        );
       }
       if (!ensureSdrBand()) return false;
 

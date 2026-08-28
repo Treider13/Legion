@@ -89,7 +89,7 @@ export async function hostPark(
   fsHz: number,
   rx: boolean,
   tx: boolean,
-): Promise<{ ok: boolean; reason: string; freqMhz?: number; fsHz?: number }> {
+): Promise<{ ok: boolean; reason: string; freqMhz?: number; fsHz?: number; fake?: boolean }> {
   if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
   try {
     const r = await hostRpc<{
@@ -97,12 +97,14 @@ export async function hostPark(
       reason?: string;
       freqMhz?: number;
       fsHz?: number;
+      fake?: boolean;
     }>({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
     return {
       ok: !!r.ok,
       reason: r.reason ?? "",
       freqMhz: r.freqMhz,
       fsHz: r.fsHz,
+      fake: !!r.fake,
     };
   } catch (e) {
     return { ok: false, reason: String(e) };

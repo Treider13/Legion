@@ -111,11 +111,11 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   выключен. HDL держит цифровой RX, пока analog RX (CONTROL bit1) жив, и
   цифровой TX, пока FPGA ARM. `fifo_reader`/`fifo_writer` остаются на FX3:
   USB FIFO может overflow/underflow (косметика), тап детектора и mux — до них.
-- **Эфир+FPGA:** Soapy паркует RX и TX LO на одну частоту при fs = analog BW
-  платы (x40: 28 MSPS, не хостовый скан 40 MSPS и не 2 MSPS NCO). Окно
-  детектора = 16/fs (≈ 0.57 мкс на 28 MSPS). Без успешного park ARM не
-  включаем. На усилитель идёт тот же RX IQ, что с антенны, когда энергия
-  выше порога. NCO/player паркуют 2 MSPS — под FTW.
+- **Эфир+FPGA — только bladeRF 1 x40 (LMS6002D).** Analog RX/TX = CONTROL
+  bit1/2 (`bladerf_p.vhd`). micro AD9361 этими битами не кормится — ARM
+  эфира на micro не включаем. Soapy паркует RX и TX LO на одну частоту
+  при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
+  FAKE park и сбой park → ARM нет. NCO/player паркуют 2 MSPS — под FTW.
 - **Усиление loopback** — грубый сдвиг `lb_shift` (0..8): переполнение 16 бит
   заворачивает знак (wrap), насыщения (saturation) в этой ревизии нет.
   Подбирать с осциллографом/сканом на стенде, начиная с 0.

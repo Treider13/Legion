@@ -234,6 +234,7 @@ def main() -> int:
     check("FPGA park default = 2e6 (NCO)", w.FPGA_PARK_FS_HZ == 2e6)
     pk = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 20, "fsHz": 2e6, "rx": True, "tx": True})
     check("park RX+TX fake", pk.get("ok") is True and pk.get("freqMhz") == 2442)
+    check("park fake помечен (ARM это отвергнет)", pk.get("fake") is True)
     check("park fs 2 MSPS", pk.get("fsHz") == 2e6)
     air = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 28, "fsHz": 28e6, "rx": True, "tx": True})
     check("park эфир 28 MSPS", air.get("ok") is True and air.get("fsHz") == 28e6)

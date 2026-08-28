@@ -108,7 +108,8 @@ export function StartGate({ mode, onClose }: Props) {
                 <span>
                   Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов;
                   время = 16/fs, на x40 при 28 MSPS ≈ 0.57 мкс). Есть энергия — тот же RX IQ на TX SMA
-                  / усилитель. Видно analog-окно платы вокруг центра, не весь коридор F1–F2.
+                  / усилитель. Только bladeRF 1 x40 (LMS6002D). Видно analog-окно ~28 МГц
+                  вокруг центра, не весь коридор F1–F2.
                 </span>
               </button>
               <button
