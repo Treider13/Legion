@@ -189,6 +189,11 @@ nios2_command_shell, bladeRF-cli, pyusb (честные FAIL с инструкц
 `freq_mhz` (LO для AD9361); первый ARM после питания длиннее (полный
 ad9361_init в NIOS при AIR_PREP). Остальные этапы те же.
 
+Сборка micro: AIR_PREP живёт в NIOS и требует `BLADERF_NIOS_LIBAD936X`
+(RAM_SPAN ≥ 128 KiB, devices.h — как у штатного FPGA-tuning; стоковая
+nios_system micro его имеет). Без него AIR_PREP честно отказывает —
+ARM lb_* на micro не взведётся (и это видно в ответе шлюза).
+
 Автоматическая приёмка на стенде (ноутбук → Ethernet → шлюз с платой,
 на шлюзе `legion_gateway.py`; кабель TX→RX через аттенюатор для E2/E4):
 

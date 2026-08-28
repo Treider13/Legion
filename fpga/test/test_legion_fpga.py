@@ -312,6 +312,16 @@ check("x40: сбой CTRL → ARM отказ", r.get("ok") is False)
 check("x40: CONTROL bit2 откачен (TX не под током)", not (gw.fpga._t.control & 0x4))
 gw.fpga._t.fail_ctrl_write = False
 
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир предыдущего ARM.
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("x40: arm nco ok (для re-arm теста)", r.get("ok") is True and bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "player"})
+check("x40: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("x40: эфир предыдущего ARM жив (bit2 не откачен)", bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
+rpc({"op": "disarm"})
+
 srv.shutdown()
 srv.server_close()
 
@@ -357,15 +367,27 @@ check("micro: ARM nco с freq_mhz → ok", r.get("ok") is True)
 check("micro: AIR_PREP для nco = up+TX (0x5)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x5)
 r = rpcm({"op": "arm", "mode": "nco"})
 check("micro: ARM nco без freq_mhz → отказ", r.get("ok") is False)
+rpcm({"op": "disarm"})  # снять nco ARM выше: дальше тестируем откат без живого ARM
 
-# Откат эфира при сбое записи CTRL: эфир подняли, ARM не взвёлся —
-# тракт под током не оставляем (micro: AIR_PREP down; x40: CONTROL clear).
+# Откат эфира при сбое записи CTRL: эфир подняли, ARM не взвёлся, живого
+# ARM нет — тракт под током не оставляем (micro: AIR_PREP down).
 gw_m.fpga._t.fail_ctrl_write = True
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
 check("micro: сбой CTRL → ARM отказ", r.get("ok") is False)
 check("micro: эфир откачен (AIR_PREP=0)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0)
 check("micro: флаги эфира сняты", not gw_m._rx_by_us and not gw_m._tx_by_us)
 gw_m.fpga._t.fail_ctrl_write = False
+
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир — он нужен предыдущему.
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: повторный ARM lb_gated ok", r.get("ok") is True)
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("micro: эфир предыдущего ARM жив (AIR_PREP не откачен)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+gw_m.fpga._t.fail_ctrl_write = False
+rpcm({"op": "disarm"})
 
 srv_m.shutdown()
 srv_m.server_close()

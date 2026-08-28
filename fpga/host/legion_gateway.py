@@ -188,6 +188,7 @@ class LegionGateway:
         self.det_thr_set = False  # порог детектора записывался в этой сессии
         self._rx_by_us = False    # analog RX включён нами — снять при disarm
         self._tx_by_us = False    # analog TX включён нами — снять при disarm
+        self._armed = False       # CTRL.ARM записан и не снят (по нашим командам)
 
     # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
     # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
@@ -293,10 +294,14 @@ class LegionGateway:
             if not air_ok:
                 return {"ok": False, "reason": air_why}
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
-            if not ok and (self._rx_by_us or self._tx_by_us):
-                # Откат: эфир подняли, а ARM не взвёлся — тракт под током не
-                # оставляем: на micro PASS-мукс отдал бы DAC статику (несущая
-                # LO на усилитель), на x40 — LMS TX под CONTROL битом.
+            if ok:
+                self._armed = True
+            elif (self._rx_by_us or self._tx_by_us) and not self._armed:
+                # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
+                # подняли, а ARM не взвёлся — тракт под током не оставляем
+                # (на micro PASS-мукс отдал бы DAC статику = несущая LO на
+                # усилитель, на x40 — LMS TX под CONTROL битом). При живом
+                # предыдущем ARM откат снял бы эфир у него — нельзя.
                 if self.board == "bladerf2":
                     self.fpga.air_prepare(False, rx=False, tx=False)
                 else:
@@ -312,6 +317,8 @@ class LegionGateway:
             }
         if op == "disarm":
             ok = self.fpga.disarm()
+            if ok:
+                self._armed = False
             # micro: NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c),
             # флаги там информационные. x40: CONTROL снимаем как раньше —
             # при сбое флаги держим, следующий disarm повторит.
