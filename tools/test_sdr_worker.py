@@ -251,6 +251,24 @@ def main() -> int:
         iq_neg = np.tile(np.array([-100, 100], dtype=np.int16), win * 64)
         thr_neg, _, med_neg = w.det_thr_from_iq(iq_neg, 4, 2.0)
         check("det_thr: I²+Q² со знаком", med_neg == 20000 and thr_neg == 40000)
+        # shift=8: окно 256, та же формула avg = Σ>>shift
+        iq8 = np.tile(np.array([100, 0], dtype=np.int16), 256 * 64)
+        thr8, n8, med8 = w.det_thr_from_iq(iq8, 8, 2.0)
+        check("det_thr: shift=8, avg = Σ(I²+Q²)>>8", med8 == 10000 and n8 == 64 and thr8 == 20000)
+        # K=1 не принимаем в RPC (дефолт K), но функция честно считает любой K>0
+        thr_k1, _, _ = w.det_thr_from_iq(iq_flat, 4, 1.0)
+        check("det_thr: K=1 → порог = медиана", thr_k1 == 10000)
+
+    # det_probe при живом TX — честный отказ (TX-петля держит _lock на writeStream)
+    r_tx = w.Radio()
+    r_tx.fake = False
+    r_tx.dev = object()
+    r_tx.tx_live = lambda: True  # type: ignore[method-assign]
+    dp_tx = r_tx.det_probe(4, 64, 4.0)
+    check("det_probe при живом TX → отказ", dp_tx.get("ok") is False and "TX" in str(dp_tx.get("reason")))
+    r_tx.dev = None
+    dp_nod = r_tx.det_probe(4, 64, 4.0)
+    check("det_probe без устройства → отказ", dp_nod.get("ok") is False)
 
     check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
     check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")
@@ -365,12 +383,21 @@ def main() -> int:
     check("park без getFrequency → отказ", pk_deaf.get("ok") is False)
     micro = _Dev()
     micro.hw = "bladerf2"
-    pk_micro = _radio(micro).park(2442, 2, 2e6, True, True)
+    pk_micro = _radio(micro).park(2442, 56, 2e6, True, True)
     check(
         "park micro/AD9361 → ok (2 MSPS, readback)",
         pk_micro.get("ok") is True
         and pk_micro.get("rxLo") == 2442e6
         and pk_micro.get("txFs") == 2e6,
+    )
+    check(
+        "park micro: BW клампится к fs (56 МГц запрос → 2 МГц)",
+        micro._set.get((w.SOAPY_SDR_RX, "bw")) == 2e6,
+    )
+    check(
+        "park micro: fs=2 MSPS записана на RX и TX",
+        micro._set.get((w.SOAPY_SDR_RX, "fs")) == 2e6
+        and micro._set.get((w.SOAPY_SDR_TX, "fs")) == 2e6,
     )
     unknown = _Dev()
     unknown.hw = ""

@@ -1342,6 +1342,10 @@ class Radio:
             return {"ok": False, "reason": "det_probe: SDR не открыт", **base}
         if not NUMPY:
             return {"ok": False, "reason": "det_probe: нужен numpy", **base}
+        if self.tx_live():
+            # TX-петля держит self._lock на writeStream — захват под тем же
+            # локом встал бы надолго; и RX на живом TX мерить бессмысленно.
+            return {"ok": False, "reason": "det_probe: TX жив — сначала tx_off", **base}
         win_shift = max(4, min(12, int(win_shift)))
         windows = max(64, min(16384, int(windows)))
         k = float(k) if k and k > 1.0 else DET_PROBE_K
