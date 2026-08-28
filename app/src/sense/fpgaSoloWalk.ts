@@ -227,3 +227,12 @@ export function soloHopBlockedReason(sdrId: string, hop: boolean): string | null
   if (!hop || soloHopAllowed(sdrId)) return null;
   return `${SOLO_HOP_MICRO_ONLY}. На этой плате окно ≥ коридора — одна стоянка.`;
 }
+
+export const AIR_HOP_MICRO_ONLY =
+  "FPGA эфир: прыжки только на bladeRF 2.0 micro (tune LO без USB)";
+
+/** Эфир-обход с ретрансляцией: тот же tune на шлюзе → тот же micro-потолок. */
+export function airHopBlockedReason(sdrId: string, hop: boolean): string | null {
+  if (!hop || soloHopAllowed(sdrId)) return null;
+  return `${AIR_HOP_MICRO_ONLY}. На этой плате канал ≥ коридора — одна стоянка.`;
+}

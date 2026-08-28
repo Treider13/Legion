@@ -2,8 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, detectorWindowUs, fpgaAirSupported } from "../../sense/fpgaFastpath";
-import { planFpgaSoloWalk, soloHopBlockedReason, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, clampAirBwMhz, detectorWindowUs, fpgaAirSupported } from "../../sense/fpgaFastpath";
+import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -26,15 +26,19 @@ export function StartGate({ mode, onClose }: Props) {
   const storedWindow = useLegion((s) => s.fpgaSoloWindowMhz);
   const storedDwell = useLegion((s) => s.fpgaSoloDwellMs);
   const storedPattern = useLegion((s) => s.fpgaSoloPattern);
+  const storedAirBw = useLegion((s) => s.fpgaAirBwMhz);
+  const storedAirDwell = useLegion((s) => s.fpgaAirDwellMs);
+  const storedAirPattern = useLegion((s) => s.fpgaAirWalkPattern);
   const [step, setStep] = useState<"band" | "path" | "walk">(mode === "sdr" ? "band" : "band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("air");
-  const [windowMhz, setWindowMhz] = useState(storedWindow);
-  const [dwellMs, setDwellMs] = useState(storedDwell);
-  const [pattern, setPattern] = useState<FpgaSoloPattern>(storedPattern);
+  // У эфира окно шага = канал подавления — свои сохранённые значения.
+  const [windowMhz, setWindowMhz] = useState(path === "air" ? storedAirBw : storedWindow);
+  const [dwellMs, setDwellMs] = useState(path === "air" ? storedAirDwell : storedDwell);
+  const [pattern, setPattern] = useState<FpgaSoloPattern>(path === "air" ? storedAirPattern : storedPattern);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -46,19 +50,39 @@ export function StartGate({ mode, onClose }: Props) {
       planFpgaSoloWalk({
         f1Mhz: parseFloat(f1),
         f2Mhz: parseFloat(f2),
-        windowMhz: parseFloat(windowMhz),
+        // Эфир: предпросмотр сетки по реальному каналу (урезан фильтром платы),
+        // чтобы совпасть с тем, что посчитает startFpgaPath.
+        windowMhz: path === "air" ? clampAirBwMhz(parseFloat(windowMhz), analogMax) : parseFloat(windowMhz),
         analogMaxMhz: analogMax,
         dwellMs: parseFloat(dwellMs),
         pattern,
         wave,
       }),
-    [f1, f2, windowMhz, dwellMs, pattern, wave, analogMax],
+    [f1, f2, windowMhz, dwellMs, pattern, wave, analogMax, path],
   );
-  const hopNo = walkPlan.ok ? soloHopBlockedReason(sdrId, walkPlan.hop) : null;
+  const hopNo = walkPlan.ok
+    ? path === "air"
+      ? airHopBlockedReason(sdrId, walkPlan.hop)
+      : soloHopBlockedReason(sdrId, walkPlan.hop)
+    : null;
+  const airWalkReason = walkPlan.ok
+    ? `коридор ${walkPlan.spanMhz} МГц · канал ${walkPlan.hopWindowMhz} МГц → ${walkPlan.hops} ${standingWordRu(walkPlan.hops)} · ${
+        walkPlan.hop ? (pattern === "hop" ? "случайно" : "туда-сюда") : "без прыжков"
+      } · ретрансляция эфира на каждой стоянке`
+    : walkPlan.reason;
 
   useEffect(() => {
     firstRef.current?.focus();
   }, [step]);
+
+  // Поля шага walk у путей разные (канал эфира ≠ окно solo) — при смене
+  // пути подставляем сохранённые значения этого пути.
+  useEffect(() => {
+    setWindowMhz(path === "air" ? storedAirBw : storedWindow);
+    setDwellMs(path === "air" ? storedAirDwell : storedDwell);
+    setPattern(path === "air" ? storedAirPattern : storedPattern);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -123,10 +147,7 @@ export function StartGate({ mode, onClose }: Props) {
       return;
     }
     if (step === "path") {
-      if (path === "air") {
-        await startSmart();
-        return;
-      }
+      // Оба пути проходят шаг walk: у эфира это канал/выдержка/порядок обхода.
       setStep("walk");
       return;
     }
@@ -153,15 +174,16 @@ export function StartGate({ mode, onClose }: Props) {
       <div className="cinema-gate-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         {mode === "sdr" && step === "walk" ? (
           <>
-            <p className="cinema-kicker">Умный · Только FPGA</p>
-            <h2 id={titleId}>Окно на усилитель</h2>
+            <p className="cinema-kicker">{path === "air" ? "Умный · Эфир + FPGA" : "Умный · Только FPGA"}</p>
+            <h2 id={titleId}>{path === "air" ? "Канал и обход" : "Окно на усилитель"}</h2>
             <p className="cinema-gate-lead">
-              Число — ширина пятна на усилителе. Коридор ÷ окно = стоянки. Окно ≥ коридора — одна точка, без
-              прыжков. Тон остаётся палочкой.
+              {path === "air"
+                ? "Канал — ширина ретрансляции на стоянке: вся мощность усилителя идёт в него. Коридор ÷ канал = стоянки. На каждой детектор и RX→TX по энергии; пороги меряются калибровкой при старте."
+                : "Число — ширина пятна на усилителе. Коридор ÷ окно = стоянки. Окно ≥ коридора — одна точка, без прыжков. Тон остаётся палочкой."}
             </p>
             <div className="cinema-gate-row">
               <label>
-                Окно, МГц
+                {path === "air" ? "Канал, МГц" : "Окно, МГц"}
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
               <label>
@@ -191,7 +213,7 @@ export function StartGate({ mode, onClose }: Props) {
                 <span>Следующая стоянка из коридора наугад. Волну в RAM не переснимаем.</span>
               </button>
             </div>
-            <p className="cinema-gate-lead">{hopNo ?? walkPlan.reason}</p>
+            <p className="cinema-gate-lead">{hopNo ?? (path === "air" ? airWalkReason : walkPlan.reason)}</p>
           </>
         ) : mode === "sdr" && step === "path" ? (
           <>
@@ -210,13 +232,12 @@ export function StartGate({ mode, onClose }: Props) {
               >
                 <strong>Эфир + FPGA</strong>
                 <span>
-                  Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов @{" "}
-                  {LEGION_FPGA_FS_HZ / 1e6} МГц ≈ {airDetUs} мкс — не analog платы). Есть энергия —
-                  тот же RX IQ на TX SMA / усилитель.{" "}
+                  Антенна на RX SMA. Детектор в FPGA (I²+Q², 16 сэмплов @ {LEGION_FPGA_FS_HZ / 1e6} МГц ≈{" "}
+                  {airDetUs} мкс на канале 2 МГц). Есть энергия — тот же RX IQ на TX SMA / усилитель.{" "}
                   {fpgaAirSupported(sdrId)
                     ? "Эта плата в ревизии legion."
                     : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}{" "}
-                  Видно analog-окно ~{analogMax} МГц вокруг центра, не весь коридор F1–F2.
+                  Канал, выдержка и обход коридора — следующий шаг.
                 </span>
               </button>
               <button

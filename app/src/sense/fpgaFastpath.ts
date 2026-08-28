@@ -91,6 +91,17 @@ export function detCaptureWindows(detShift: number): number {
   return Math.min(FPGA_DET_WINDOWS, Math.max(64, Math.floor(131072 / win)));
 }
 
+/** Таблица порогов air-обхода: thr_i = полка_i × K. Стоянка без живого
+ *  захвата (мёртвый поток/отказ park) получает медиану успешных — не ноль
+ *  (гейт на шум). Все упали → null: ARM без порога честно отказываем. */
+export function airThrTable(medians: readonly (number | null)[], k = FPGA_DET_THR_K): number[] | null {
+  const thrs = medians.map((m) => (m == null ? 0 : detThrFromMedian(m, k)));
+  const ok = thrs.filter((t) => t > 0).sort((a, b) => a - b);
+  if (ok.length === 0) return null;
+  const fallback = ok[Math.floor(ok.length / 2)];
+  return thrs.map((t) => (t > 0 ? t : fallback));
+}
+
 /** Пол порога: ниже — захват деградировал (мёртвый поток/ADC в нулях дают
  *  медиану 0..единицы; живая полка при MGC — сотни, фикстура воркера 400–2000).
  *  ARM с thr < floor = гейт на шум. 64 = медиана 16 при K=4: в 6 раз ниже

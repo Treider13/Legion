@@ -23,9 +23,16 @@ export async function runSmartStart(opts: {
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
   s.armTxWave(opts.wave);
-  if (opts.windowMhz !== undefined) s.setFpgaSoloWindowMhz(opts.windowMhz);
-  if (opts.dwellMs !== undefined) s.setFpgaSoloDwellMs(opts.dwellMs);
-  if (opts.pattern !== undefined) s.setFpgaSoloPattern(opts.pattern);
+  if (opts.path === "air") {
+    // Эфир-обход: окно шага = канал подавления; выдержка/порядок — свои поля.
+    if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
+    if (opts.dwellMs !== undefined) s.setFpgaAirDwellMs(opts.dwellMs);
+    if (opts.pattern !== undefined) s.setFpgaAirWalkPattern(opts.pattern);
+  } else {
+    if (opts.windowMhz !== undefined) s.setFpgaSoloWindowMhz(opts.windowMhz);
+    if (opts.dwellMs !== undefined) s.setFpgaSoloDwellMs(opts.dwellMs);
+    if (opts.pattern !== undefined) s.setFpgaSoloPattern(opts.pattern);
+  }
   return s.startFpgaPath(opts.path);
 }
 

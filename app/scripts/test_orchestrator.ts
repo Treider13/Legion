@@ -40,6 +40,7 @@ import {
   FPGA_TURN_DWELL_DEFAULT_MS,
   airTractParams,
   airFsHz,
+  airThrTable,
   captureParkMhz,
   clampAirBwMhz,
   detCaptureWindows,
@@ -53,6 +54,7 @@ import {
 import {
   FPGA_SOLO_FS_MIN_HZ,
   FPGA_SOLO_MICRO_ANALOG_MHZ,
+  airHopBlockedReason,
   clampSoloAnalogMhz,
   clampSoloDwellMs,
   makeSoloWalker,
@@ -1224,6 +1226,18 @@ async function main(): Promise<void> {
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
     loadOk: true, detThr: 5000, detShift: 4, bwMhz: 20,
   }).fsHz === 20_000_000);
+  check("air-таблица: полка × K по стоянкам", (() => {
+    const t = airThrTable([1000, 2000, 3000]);
+    return t !== null && t.join(",") === "4000,8000,12000";
+  })());
+  check("air-таблица: упавший захват → медиана успешных, не 0", (() => {
+    const t = airThrTable([1000, null, 3000]);
+    return t !== null && t.join(",") === "4000,12000,12000";
+  })());
+  check("air-таблица: все упали → null (честный отказ)", airThrTable([null, 10, null]) === null);
+  check("air-обход: x40 с прыжками отказан", (airHopBlockedReason("bladerf-x40", true) ?? "").includes("micro"));
+  check("air-обход: micro можно, одна стоянка можно",
+    airHopBlockedReason("bladerf-micro-xa4", true) === null && airHopBlockedReason("bladerf-x40", false) === null);
   check("handoff skip на 3-м страйке", !handoffSkipAfter(2) && handoffSkipAfter(3));
   check("handoff таймлайн: этапы с dt",
     handoffTimeline(1000, [["park_полки", 1070], ["arm", 1540]]) === "park_полки +70мс · arm +540мс");
@@ -1438,6 +1452,14 @@ async function main(): Promise<void> {
     storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
   check("захват полки с отстройкой под ширину канала",
     storeSrc.includes("captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70, tract.bwMhz)"));
+  check("air-обход: калибровочная таблица порогов", storeSrc.includes("airThrTable(medians)"));
+  check("air-обход: таймер beginAirWalk после ARM",
+    storeSrc.includes("beginAirWalk(walker, walk, tract, thrTable, walk.centers, gw)"));
+  check("air-обход: порог стоянки едет внутри tune", storeSrc.includes("det_thr: thr,"));
+  check("air-обход: время калибровки логируется", storeSrc.includes("мс/стоянка"));
+  check("air-обход: micro-only честно", storeSrc.includes("airHopBlockedReason(get().sdrId, walk.hop)"));
+  check("автовозврат в скан — только авто-цикл сканера (gFpgaAirAutoCycle)",
+    storeSrc.includes("gFpgaAirAutoCycle = true") && storeSrc.includes("&& gFpgaAirAutoCycle"));
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
   check("air gen после ensureSdrBand, не до валидации",
@@ -1459,7 +1481,8 @@ async function main(): Promise<void> {
   const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
   check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
-  check("cinema: air стартует сразу после path", gateSrc.includes('if (path === "air")') && gateSrc.includes("await startSmart()"));
+  check("cinema: air проходит шаг walk (канал/выдержка/порядок)",
+    gateSrc.includes("Канал, МГц") && gateSrc.includes("airHopBlockedReason") && gateSrc.includes("airWalkReason"));
   check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
   check("cinema walk режет hops на x40 до старта", gateSrc.includes("soloHopBlockedReason") && gateSrc.includes("if (hopNo)"));
   check("cinema эфир не врёт 28 MSPS", !gateSrc.includes("28 MSPS") && !gateSrc.includes("0.57"));
@@ -1471,6 +1494,11 @@ async function main(): Promise<void> {
   check("шлюз tune без ARM отказывает", gwSrc.includes('tune: нет ARM'));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
+  check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
+  check("cinema air: выдержка/порядок — свои поля",
+    runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
+  check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",
+    gwSrc.includes('thr = msg.get("det_thr")') && gwSrc.includes("tune: запись DET_THR не удалась"));
   check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));

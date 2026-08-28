@@ -582,6 +582,16 @@ class LegionGateway:
             # Без ARM — отказ: иначе hop после watchdog снова жжёт AIR_PREP/TX.
             if not self._armed:
                 return {"ok": False, "reason": "tune: нет ARM"}
+            # Порог стоянки (air-обход с ретрансляцией) едет в том же tune:
+            # запись DET_THR — один 16-байтный USB-пакет внутри этой операции,
+            # отдельный round-trip на шаг не нужен (скорость обхода не режем).
+            thr = msg.get("det_thr")
+            if thr is not None:
+                if int(thr) < DET_THR_FLOOR:
+                    return {"ok": False,
+                            "reason": f"tune: det_thr {thr} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                if not self.fpga.write_reg(lf.REG_DET_THR, int(thr)):
+                    return {"ok": False, "reason": "tune: запись DET_THR не удалась"}
             freq = msg.get("freq_mhz")
             if freq is None:
                 return {"ok": False, "reason": "tune: нужен freq_mhz"}
