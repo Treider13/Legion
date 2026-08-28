@@ -12,6 +12,8 @@
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
   {"op":"set", "reg":"nco_ftw"|..., "value":int}
+  {"op":"usb", "action":"release"|"acquire"}  — один владелец USB
+  {"op":"tune", "freq_mhz":float, ...}  — LO-hop на живом ARM (только micro)
   {"op":"ping"}
 
 Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
@@ -19,7 +21,16 @@ bit1/2, bladerf_p.vhd), 0x5250 = micro (эфир через AIR-регистры
 AD9361 поднимает прошивка — хост при close гасит RFIC, факт из
 libbladeRF rfic_host.c/bladerf2.c).
 
-LEGION_FPGA_FAKE=1 — проверка протокола без железа (не эфир).
+Deadman слои: FPGA гасит цифру (~1 с без kick) → NIOS (legion_work)
+снимает ARM и эфир → сторож kick_age шлюза делает DISARM → USB release.
+SIGTERM/SIGINT/atexit → DISARM + release (wiki Nuand: kill без
+libusb_close роняет Intel XHCI).
+
+Переменные: LEGION_FPGA_FAKE=1 — проверка протокола без железа (не эфир);
+LEGION_FPGA_TOKEN — токен доступа; LEGION_FPGA_PORT (5531);
+LEGION_KICK_TIMEOUT_S (2.5) — сторож kick_age; LEGION_DET_THR_FLOOR (1) —
+пол порога lb_gated; LEGION_FPGA_RBF — образ для автозагрузки, если FPGA
+пустая после re-enumerate (питание xA4 — от USB).
 """
 from __future__ import annotations
 

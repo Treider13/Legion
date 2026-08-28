@@ -344,6 +344,17 @@ _time.sleep(2.2)
 check("сторож: wd=false → нет само-DISARM (решение оператора)",
       gw._armed is True and gw.fpga._t.released is False)
 rpc({"op": "disarm"})
+
+# Нормальный путь: kicks идут каждые 0.4 с → сторож обязан молчать
+# (ранее покрыт только на уровне FPGA, E5; теперь и на уровне шлюза)
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm для живых kicks", r.get("ok") is True)
+for _ in range(4):
+    rpc({"op": "kick"})
+    _time.sleep(0.4)
+check("сторож: живые kicks → ARM жив, USB не тронут",
+      gw._armed is True and gw.fpga._t.released is False)
+rpc({"op": "disarm"})
 lg.KICK_TIMEOUT_S = 3600.0
 
 # ---------------------------------------------------------------------------
@@ -363,6 +374,22 @@ check("a4: после cleanup USB занимается", r.get("ok") is True)
 lg.gateway_cleanup(gw)
 check("a4: cleanup без ARM — release без DISARM", gw.fpga._t.released is True)
 rpc({"op": "usb", "action": "acquire"})
+
+# Повторный сигнал во время cleanup: threading.Lock нереентерабелен —
+# acquire(timeout=2) отваливается без дедлока, DISARM честно пропущен,
+# USB release всё равно выполняется.
+r = rpc({"op": "arm", "mode": "player"})
+check("a4: arm для cleanup под локом", r.get("ok") is True)
+gw._op_lock.acquire()
+_t0 = _time.monotonic()
+lg.gateway_cleanup(gw)
+_dt = _time.monotonic() - _t0
+gw._op_lock.release()
+check("a4: cleanup при занятом локе — без дедлока (~2 с), release прошёл",
+      _dt < 3.0 and gw.fpga._t.released is True)
+check("a4: DISARM при занятом локе честно пропущен", gw._armed is True)
+rpc({"op": "usb", "action": "acquire"})
+rpc({"op": "disarm"})
 
 # ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
