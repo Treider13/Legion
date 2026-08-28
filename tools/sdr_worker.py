@@ -1138,7 +1138,6 @@ class Radio:
 
     def scan(self, center_mhz: float, bw_mhz: float, bins: int) -> dict[str, Any]:
         n = max(8, min(int(bins), 4096))
-        bw = max(0.2, float(bw_mhz))
         extra = self._scan_extra()
         if not self.full_duplex and self.tx_mhz is not None:
             # GSG HackRF — half-duplex. RX+TX сразу ломает тракт (каталог fullDuplex: false).
@@ -1150,7 +1149,9 @@ class Radio:
                 **extra,
             }
         if self.fake:
-            return {"ok": True, "bins": _fake_bins(center_mhz, bw, n), "centerMhz": center_mhz, **extra}
+            # Живой scan() игнорирует bw: ось = fs = 40 MSPS. FAKE не должен врать 20 МГц.
+            adc_mhz = DIO_SAMPLE_RATE_HZ / 1e6
+            return {"ok": True, "bins": _fake_bins(center_mhz, adc_mhz, n), "centerMhz": center_mhz, **extra}
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:

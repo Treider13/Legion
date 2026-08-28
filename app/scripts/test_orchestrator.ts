@@ -3,7 +3,7 @@
 // Запуск: npx tsx scripts/test_orchestrator.ts
 // ============================================================================
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
-import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
+import { detectFromBins, estimateNoiseFloor, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
@@ -25,6 +25,17 @@ import { FPGA_LMS_BOARD, fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } fr
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
+  FPGA_DEFAULT_DET_THR,
+  FPGA_US_DET_SHIFT,
+  clampDetShift,
+  detectorWindowUs,
+  fpgaArmCmd,
+  fpgaObserveLine,
+  ncoFtwFromFrac,
+  parkSpanMhz,
+  planFpgaAir,
+} from "../src/sense/fpgaFastpath";
+import {
   heldHitAlive,
   nextAfterOperatorReset,
   pickArmedAutoTarget,
@@ -42,6 +53,10 @@ import {
   autoDispatchOptionRu,
   autoForwardAllowed,
   bandListFor,
+  isFpgaAirLive,
+  isFpgaAirPattern,
+  isFpgaTaskLive,
+  isFpgaTaskMode,
   modeConflict,
   modeOf,
   patternLabelRu,
@@ -260,6 +275,18 @@ function main(): void {
   const bins = sdr.scanWindow(2442, 20, 64);
   const dets = detectFromBins(bins, 12);
   check("energy detection ловит несущую", dets.some((d) => Math.abs(d.freqMhz - 2442) < 0.5));
+  check(
+    "пол = медиана нижних 60%",
+    estimateNoiseFloor([
+      { freqMhz: 1, powerDbm: -90 },
+      { freqMhz: 2, powerDbm: -88 },
+      { freqMhz: 3, powerDbm: -86 },
+      { freqMhz: 4, powerDbm: -84 },
+      { freqMhz: 5, powerDbm: -10 },
+    ]) === -88,
+  );
+  check("хост FFT span = ADC 40, не analog 28", hostScanSpanMhz(28) === 40);
+  check("хост FFT span xa4 тоже 40", hostScanSpanMhz(56) === 40);
 
   const centers = planCenters(ism, 20);
   check("план скана непустой", centers.length >= 5);
@@ -377,6 +404,8 @@ function main(): void {
   check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
   check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
   check("нет конфликта", modeConflict("sdr", false, false) === null);
+  check("конфликт: ESP32 при FPGA ARM", modeConflict("esp32", false, false, true) !== null);
+  check("конфликт FPGA: текст про ОСТАНОВИТЬ FPGA", (modeConflict("esp32", false, false, true) ?? "").includes("FPGA"));
   check("обход полосы сам TX не включает", walkPatternArmsTx() === false);
   check("авто — сканер участвует", scannerParticipates("auto") === true);
   check("случайная — сканер не участвует", scannerParticipates("hop") === false);
@@ -388,6 +417,19 @@ function main(): void {
   check("имя sweep = КАЧАНИЕ, не туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ");
   check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
+  check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
+  check("FPGA+сканер — не хост-сканер", scannerParticipates("fpga") === false);
+  check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
+  check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
+  check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
+  check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
+  check("меню FPGA+СКАНЕР ≠ живой конвейер", isFpgaAirLive(false, "lb_gated") === false);
+  check("живой конвейер только lb_gated+ARM", isFpgaAirLive(true, "lb_gated") && !isFpgaAirLive(true, "player"));
+  check("PLAYER+ARM = задача, не сканер", isFpgaTaskLive(true, "player") && !isFpgaAirLive(true, "player"));
+  check("без ARM нет живой задачи", isFpgaTaskLive(false, "player") === false);
+  const fpgaWork = planSdrWork("fpga");
+  check("planSdrWork FPGA: конвейер на SDR", fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
+  check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));
   check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
   check(
     "пустой эфир не стопает АВТО",
@@ -1072,6 +1114,63 @@ function main(): void {
   mockX40.open("bladerf-x40");
   check("x40 мок TX в диапазоне", mockX40.txWave(2450, "otfs").ok === true);
   check("x40 мок TX 100 МГц вне диапазона", mockX40.txWave(100, "otfs").ok === false);
+
+  // --- FPGA эфир: микросекунды только внутри чипа, не хост-скан ---
+  check("shift=4 @ 2 МГц = 8 µs", detectorWindowUs(4) === 8);
+  check("shift=8 @ 2 МГц = 128 µs", detectorWindowUs(8) === 128);
+  check("дефолт окна = 8 µs", FPGA_US_DET_SHIFT === 4 && detectorWindowUs(FPGA_US_DET_SHIFT) === 8);
+  check("кламп shift 3→4, 15→12", clampDetShift(3) === 4 && clampDetShift(15) === 12);
+  check("span 2400–2500 = 100", parkSpanMhz([{ f1Mhz: 2400, f2Mhz: 2500 }]) === 100);
+  const airOk = planFpgaAir({
+    sdrId: "bladerf-x40",
+    analogBwMhz: 28,
+    bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true,
+    detThr: FPGA_DEFAULT_DET_THR,
+    detShift: FPGA_US_DET_SHIFT,
+  });
+  check("FPGA эфир в 28 МГц окне ok", airOk.ok && airOk.windowUs === 8);
+  const airWide = planFpgaAir({
+    sdrId: "bladerf-x40",
+    analogBwMhz: 28,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    loadOk: true,
+    detThr: FPGA_DEFAULT_DET_THR,
+    detShift: FPGA_US_DET_SHIFT,
+  });
+  check(
+    "FPGA эфир 100 МГц: ARM ок, честно про hop",
+    airWide.ok === true && airWide.reason.includes("не сканируется"),
+  );
+  check("FPGA эфир без нагрузки отказ", planFpgaAir({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: false, detThr: 5000, detShift: 4,
+  }).ok === false);
+  check("FPGA эфир порог 0 отказ", planFpgaAir({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true, detThr: 0, detShift: 4,
+  }).ok === false);
+  check("FPGA эфир не x40 отказ", planFpgaAir({
+    sdrId: "hackrf-one", analogBwMhz: 20, bands: [{ f1Mhz: 2436, f2Mhz: 2450 }],
+    loadOk: true, detThr: 5000, detShift: 4,
+  }).ok === false);
+  const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
+  check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
+  const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
+  check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
+  const ncoZero = fpgaArmCmd("nco", { detThr: 5000, detShift: 4, token: "", ncoFtw: ncoFtwFromFrac(0) });
+  check("ARM nco шлёт FTW", typeof ncoZero.nco_ftw === "number");
+  check("fj=0 → fs/8, не DC", ncoZero.nco_ftw === ncoFtwFromFrac(0.125) && ncoZero.nco_ftw !== 0);
+  check("ARM nco без det_thr", ncoZero.det_thr === undefined);
+  check(
+    "наблюдение: тишина",
+    fpgaObserveLine({ ok: true, det_active: false, det_count: 0 }).includes("тишина"),
+  );
+  check(
+    "наблюдение: энергия на усилитель",
+    fpgaObserveLine({ ok: true, det_active: true, det_count: 3 }).includes("RX→TX"),
+  );
+  check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

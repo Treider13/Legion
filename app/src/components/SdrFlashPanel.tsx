@@ -31,7 +31,7 @@ export function SdrFlashPanel() {
       }),
     [s.sdrOpened?.id, s.sdrId, imagePath, s.sdrFlashName, s.sdrImageBytes, s.sdrFlashAction, s.sdrGateway],
   );
-  const canWrite = inspect.ok && s.sdrFlashConfirm && !s.flashBusy;
+  const canWrite = inspect.ok && s.sdrFlashConfirm && !s.flashBusy && !s.fpgaArmed;
 
   return (
     <section className="panel">
@@ -146,6 +146,9 @@ export function SdrFlashPanel() {
         >
           {s.flashBusy ? "ПИШЕМ…" : "ЗАПИСАТЬ В SDR"}
         </button>
+        {s.fpgaArmed && (
+          <p className="panel-warn">сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB</p>
+        )}
       </div>
       {s.lastFlash && (
         <p className={s.lastFlash.written ? "status-line" : "panel-warn"}>

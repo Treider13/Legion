@@ -36,11 +36,20 @@ import {
   markCatalogPresent,
   type FpgaStatus,
 } from "../sdr/hostClient";
-import { detectFromBins } from "../sdr/backend";
+import { detectFromBins, hostScanSpanMhz } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
+import {
+  FPGA_DEFAULT_DET_THR,
+  FPGA_US_DET_SHIFT,
+  clampDetShift,
+  fpgaArmCmd,
+  fpgaObserveLine,
+  ncoFtwFromFrac,
+  planFpgaAir,
+} from "../sense/fpgaFastpath";
 import {
   heldHitAlive,
   pickArmedAutoTarget,
@@ -49,6 +58,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  isFpgaAirPattern,
   modeConflict,
   modeOf,
   planSdrWork,
@@ -196,6 +206,10 @@ interface LegionStore {
   fpgaStatus: FpgaStatus | null;
   /** Токен шлюза (LEGION_FPGA_TOKEN на агенте); пустой = открытая LAN стенда. */
   fpgaToken: string;
+  /** Порог средней энергии I²+Q² для lb_gated. 0 шлюз отвергает. */
+  fpgaDetThr: number;
+  /** win_shift 4..12. По умолчанию 4 → 16 сэмплов @ 2 МГц = 8 µs. */
+  fpgaDetShift: number;
   /** Главный старт: только FPGA или эфир+FPGA. null — не с главного кадра. */
   fpgaPath: "solo" | "air" | null;
   // журнал
@@ -270,6 +284,8 @@ interface LegionStore {
   disarmTxWave(): void;
   setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
   setFpgaToken(v: string): void;
+  setFpgaDetThr(v: number): void;
+  setFpgaDetShift(v: number): void;
   fpgaArm(): Promise<void>;
   /** Главный кадр: ARM ревизии legion. air = lb_gated, solo = nco/player. */
   startFpgaPath(path: "solo" | "air"): Promise<boolean>;
@@ -297,6 +313,8 @@ function stopTxWalk(): void {
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
 /** Heartbeat ноутбука → FPGA watchdog (deadman end-to-end, 2 Гц). */
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
+/** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
+let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
@@ -305,6 +323,13 @@ function stopFpgaKick(): void {
   if (gFpgaKick) {
     clearInterval(gFpgaKick);
     gFpgaKick = null;
+  }
+}
+
+function stopFpgaObserve(): void {
+  if (gFpgaObserve) {
+    clearInterval(gFpgaObserve);
+    gFpgaObserve = null;
   }
 }
 
@@ -363,18 +388,12 @@ export function fpgaPlayerReady(st: {
 }
 
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
-const FPGA_DET_SHIFT_FAST = 4;
-/** Сырой порог энергии (не дБ). 0 открывает гейт на шум. */
-const FPGA_DET_THR_DEFAULT = 5000;
+const FPGA_DET_SHIFT_FAST = FPGA_US_DET_SHIFT;
 /** NCO FTW и solo-park. Эфир+FPGA паркует fs = analog BW платы. */
 const FPGA_FS_HZ = 2_000_000;
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function ncoFtw(freqHz: number, fsHz = FPGA_FS_HZ): number {
-  return (Math.round((freqHz / Math.max(fsHz, 1)) * 2 ** 32) >>> 0);
 }
 
 function detWindowUs(fsHz: number, shift = FPGA_DET_SHIFT_FAST): number {
@@ -417,15 +436,19 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   const beginFpgaKick = (): void => {
     stopFpgaKick();
+    stopFpgaObserve();
     gFpgaKick = setInterval(() => {
       void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
         if (!kr.ok) {
-          pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
-          stopFpgaKick();
-          set({ fpgaArmed: false, fpgaPath: null });
+          pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
+          void get().fpgaDisarm();
         }
       });
     }, 500);
+    gFpgaObserve = setInterval(() => {
+      void get().fpgaPollStatus();
+    }, 400);
+    void get().fpgaPollStatus();
   };
 
   // Троттлинг телеметрии: прошивка шлёт до ~100 строк/с, а каждый set()
@@ -536,7 +559,6 @@ export const useLegion = create<LegionStore>((set, get) => {
   /** Свой CW маскирует бин. Гасим тон, смотрим эфир, возвращаем если жива. */
   const resenseHeld = async (
     heldMhz: number,
-    windowMhz: number,
     nBins: number,
   ): Promise<"alive" | "gone" | "error" | "switch"> => {
     const gen = gTxGen;
@@ -546,7 +568,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       else gSdr.txOff();
       let bins: ScanBin[] = [];
       if (gLive) {
-        const win = await hostScan(heldMhz, windowMhz, nBins);
+        const win = await hostScan(heldMhz, hostScanSpanMhz(catalogCaps(get().sdrId).analogBwMhz), nBins);
         if (!win.ok) {
           pushLog("sys", win.reason || "re-sense fail — возвращаем TX");
           await restoreHeldTx(heldMhz);
@@ -554,7 +576,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         bins = win.bins;
       } else {
-        bins = gSdr.scanWindow(heldMhz, windowMhz, nBins);
+        bins = gSdr.scanWindow(heldMhz, hostScanSpanMhz(gSdr.analogBwMhz()), nBins);
       }
       // Стоп/сброс/закрытие, пока летал hostScan: ничего не восстанавливаем.
       if (gen !== gTxGen) return "gone";
@@ -621,6 +643,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     };
     stepTx();
     gTxWalk = setInterval(stepTx, walker.tickMs);
+  };
+
+  const bandsForFpgaAir = (): AllowBand[] => {
+    const s = get();
+    if (s.sdrBands.length > 0) return s.sdrBands;
+    const band = parseBand(s.sdrF1, s.sdrF2);
+    return band ? [band] : [];
   };
 
   const ensureSdrBand = (): boolean => {
@@ -784,6 +813,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaBusy: false,
     fpgaStatus: null,
     fpgaToken: "",
+    fpgaDetThr: FPGA_DEFAULT_DET_THR,
+    fpgaDetShift: FPGA_US_DET_SHIFT,
     fpgaPath: null,
     log: [],
 
@@ -800,6 +831,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (prev !== next) {
         if (next === "esp32") {
           get().stopScan();
+          // stopTransmit шлёт DISARM, если FPGA играет. Не дублировать fpgaDisarm —
+          // два параллельных DISARM по одному USB/шлюзу.
           void get().stopTransmit();
         } else if (get().corridorRunning) {
           void get().corridorStop();
@@ -837,34 +870,40 @@ export const useLegion = create<LegionStore>((set, get) => {
       }),
     setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
     setSdrEmulation: (v) => {
-      // Смена бэкенда = новая эпоха: скан и TX-arm старого бэкенда гасим,
-      // иначе таймер скана продолжал молотить по мёртвому/переключённому пути.
-      gTxGen += 1;
-      stopTxWatch();
-      stopTxWalk();
-      stopFpgaKick();
-      set({ fpgaArmed: false });
-      get().stopScan();
-      gGate.reset();
-      if (gLive) {
-        void hostTxOff();
-        void hostClose();
-      }
-      gLive = false;
-      gSdr.setEmulation(v);
-      set({
-        sdrEmulation: v,
-        sdrDevices: gSdr.probe(),
-        sdrOpened: gSdr.opened(),
-        sdrRemote: gSdr.remoteArgs(),
-        transmitArmed: false,
-        signalTxActive: false,
-        lastForwardMhz: null,
-        lastSdrTxUs: null,
-        lastForwardPowerDbm: null,
-        sdrHoldSince: null,
-      });
-      pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+      // Смена бэкенда = новая эпоха. DISARM дожидаемся: иначе Soapy/мок
+      // переключаются, а FPGA ещё держит TX до watchdog.
+      void (async () => {
+        gTxGen += 1;
+        stopTxWatch();
+        stopTxWalk();
+        if (get().fpgaArmed) await get().fpgaDisarm();
+        else {
+          stopFpgaKick();
+          stopFpgaObserve();
+          set({ fpgaArmed: false });
+        }
+        get().stopScan();
+        gGate.reset();
+        if (gLive) {
+          void hostTxOff();
+          void hostClose();
+        }
+        gLive = false;
+        gSdr.setEmulation(v);
+        set({
+          sdrEmulation: v,
+          sdrDevices: gSdr.probe(),
+          sdrOpened: gSdr.opened(),
+          sdrRemote: gSdr.remoteArgs(),
+          transmitArmed: false,
+          signalTxActive: false,
+          lastForwardMhz: null,
+          lastSdrTxUs: null,
+          lastForwardPowerDbm: null,
+          sdrHoldSince: null,
+        });
+        pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+      })();
     },
     setSdrImageFile: (name, byteLength, path) =>
       set({
@@ -1016,7 +1055,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setFrequency: async () => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -1037,6 +1076,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setPower: async (dbm) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", `SET POWER ${dbm}`);
       const r = await gClient.setPower(dbm);
@@ -1044,6 +1088,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setAtt: async (db) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", `SET ATT ${db.toFixed(2)}`);
       const r = await gClient.setAtt(db);
@@ -1051,7 +1100,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setRf: async (on) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -1099,7 +1148,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     corridorStart: async () => {
       if (!gClient) return;
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -1226,6 +1275,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gGate.reset();
         if (gLive) void hostTxOff();
         else gSdr.txOff();
+        if (get().fpgaArmed) void get().fpgaDisarm();
         set({
           lastForwardMhz: null,
           lastForwardPowerDbm: null,
@@ -1241,6 +1291,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     applyPaCurrent: async () => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const ma = get().paMa;
       if (!gClient) return;
       pushLog("tx", `PA SET I ${Math.round(ma)}`);
@@ -1249,6 +1304,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setPaEnabled: async (on) => {
+      if (on) {
+        const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+        if (blocked) {
+          pushLog("sys", blocked);
+          return;
+        }
+      }
       if (!gClient) return;
       if (on && !get().loadOk) {
         pushLog("sys", "PA ON запрещён: нет нагрузки 50 Ом");
@@ -1261,6 +1323,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     cueTo: async (mhz) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const s = get();
       if (!cueFreqAllowed(mhz, s.allowBands)) {
         set({ lastCueReason: "частота вне allowlist" });
@@ -1318,6 +1385,14 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "ЗАШИТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+        return;
+      }
+      if (s.fpgaArmed) {
+        pushLog("sys", "ЗАШИТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
         return;
       }
       if (s.scanRunning) {
@@ -1398,9 +1473,21 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setFpgaToken: (v) => set({ fpgaToken: v }),
 
+    setFpgaDetThr: (v) => set({ fpgaDetThr: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 }),
+
+    setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
+
     fpgaArm: async () => {
       const s = get();
       if (s.fpgaBusy) return;
+      if (s.fpgaArmed) {
+        pushLog("sys", "FPGA ARM: уже играет — сначала ОСТАНОВИТЬ FPGA");
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "FPGA ARM: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+        return;
+      }
       if (!s.sdrLoadOk) {
         pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
@@ -1410,9 +1497,28 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", board.reason);
         return;
       }
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (board.switched) {
         get().setSdrId(board.sdrId);
         pushLog("sys", board.reason);
+      }
+      if (get().fpgaMode === "lb_gated") {
+        const airPlan = planFpgaAir({
+          sdrId: get().sdrId,
+          analogBwMhz: catalogCaps(get().sdrId).analogBwMhz,
+          bands: bandsForFpgaAir(),
+          loadOk: get().sdrLoadOk,
+          detThr: get().fpgaDetThr,
+          detShift: get().fpgaDetShift,
+        });
+        if (!airPlan.ok) {
+          pushLog("sys", airPlan.reason);
+          return;
+        }
       }
       get().stopScan();
       if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
@@ -1455,26 +1561,33 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", "FPGA ARM: без park LO не включаем — иначе IQ уйдёт на чужую частоту");
           return;
         }
-        const cmd: Record<string, unknown> = {
-          op: "arm",
-          mode,
-          wd: true,
+        const cmd = fpgaArmCmd(mode, {
+          detThr: get().fpgaDetThr,
+          detShift: get().fpgaDetShift,
           token: get().fpgaToken,
-        };
-        if (mode === "lb_gated") {
-          cmd.det_thr = FPGA_DET_THR_DEFAULT;
-          cmd.det_shift = FPGA_DET_SHIFT_FAST;
-        }
+          ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
+        });
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) {
+          const cue =
+            mode === "lb_gated"
+              ? planFpgaAir({
+                  sdrId: get().sdrId,
+                  analogBwMhz: analog,
+                  bands: bandsForFpgaAir(),
+                  loadOk: get().sdrLoadOk,
+                  detThr: get().fpgaDetThr,
+                  detShift: get().fpgaDetShift,
+                }).reason
+              : air
+                ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
+                : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
             fpgaPath: air ? "air" : "solo",
             lastForwardMhz: mid,
-            lastCueReason: air
-              ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
-              : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`,
+            lastCueReason: cue,
           });
           beginFpgaKick();
         }
@@ -1486,6 +1599,15 @@ export const useLegion = create<LegionStore>((set, get) => {
     startFpgaPath: async (path) => {
       const s0 = get();
       if (s0.fpgaBusy) return false;
+      if (s0.rfOn || s0.paOn) {
+        pushLog("sys", "FPGA: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+        return false;
+      }
+      const blocked = modeConflict("sdr", s0.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return false;
+      }
       if (!s0.sdrLoadOk) {
         pushLog("sys", "FPGA: подтвердите нагрузку 50 Ом на выходе усилителя");
         return false;
@@ -1531,6 +1653,19 @@ export const useLegion = create<LegionStore>((set, get) => {
       try {
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });
+          const airPlan = planFpgaAir({
+            sdrId: get().sdrId,
+            analogBwMhz: analog,
+            bands: bandsForFpgaAir(),
+            loadOk: get().sdrLoadOk,
+            detThr: get().fpgaDetThr,
+            detShift: get().fpgaDetShift,
+          });
+          if (!airPlan.ok) {
+            pushLog("sys", airPlan.reason);
+            set({ fpgaPath: null });
+            return false;
+          }
           const pk = await parkFpgaLo({
             midMhz: mid,
             analogMhz: analog,
@@ -1547,8 +1682,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             op: "arm",
             mode: "lb_gated",
             wd: true,
-            det_thr: FPGA_DET_THR_DEFAULT,
-            det_shift: FPGA_DET_SHIFT_FAST,
+            det_thr: get().fpgaDetThr,
+            det_shift: get().fpgaDetShift,
           });
           pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (!r.ok) {
@@ -1559,7 +1694,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mid,
             lastSdrTxUs: null,
-            lastCueReason: `эфир+FPGA · антенна→усилитель · ${mid.toFixed(3)} МГц · порог ${FPGA_DET_THR_DEFAULT} · ${formatDetWindow(pk.fsHz)}`,
+            lastCueReason: `${airPlan.reason} · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`,
           });
           beginFpgaKick();
           return true;
@@ -1581,9 +1716,9 @@ export const useLegion = create<LegionStore>((set, get) => {
             set({ fpgaPath: null });
             return false;
           }
-          const fj = Number(get().signalParams.fj) || 0;
-          await gw({ op: "set", reg: "nco_ftw", value: ncoFtw(Math.abs(fj) * pk.fsHz, pk.fsHz) });
-          const r = await gw({ op: "arm", mode: "nco", wd: true });
+          const ftw = ncoFtwFromFrac(Number(get().signalParams.fj));
+          await gw({ op: "set", reg: "nco_ftw", value: ftw });
+          const r = await gw({ op: "arm", mode: "nco", wd: true, nco_ftw: ftw });
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (!r.ok) {
             set({ fpgaPath: null });
@@ -1675,6 +1810,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     fpgaDisarm: async () => {
       stopFpgaKick();
+      stopFpgaObserve();
       set({ fpgaBusy: true });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
@@ -1689,9 +1825,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
+      if (r.ok && get().fpgaArmed && get().fpgaMode === "lb_gated") {
+        set({ lastCueReason: fpgaObserveLine(r) });
+      }
       if (r.ok && r.wd_fired && get().fpgaArmed) {
         stopFpgaKick();
-        set({ fpgaArmed: false });
+        stopFpgaObserve();
+        set({ fpgaArmed: false, fpgaPath: null });
         pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
       }
     },
@@ -1721,6 +1861,10 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: async (opts) => {
       const s = get();
+      if (s.fpgaArmed) {
+        pushLog("sys", "ОТКРЫТЬ SDR: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
+        return;
+      }
       if (s.flashBusy) {
         // Иначе Soapy откроет USB-устройство посередине записи bladeRF-cli.
         pushLog("sys", "ОТКРЫТЬ SDR: идёт прошивка — дождитесь конца записи");
@@ -1782,7 +1926,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWatch();
       stopTxWalk();
       stopFpgaKick();
-      set({ fpgaArmed: false });
+      stopFpgaObserve();
+      if (get().fpgaArmed) await get().fpgaDisarm();
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -1803,6 +1948,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     flashSdr: async (action) => {
       if (get().flashBusy) {
         pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      if (get().fpgaArmed) {
+        pushLog("sys", "прошивка SDR: сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB");
         return;
       }
       const s = get();
@@ -1927,9 +2076,23 @@ export const useLegion = create<LegionStore>((set, get) => {
     startScan: () => {
       void (async () => {
         const s = get();
+        if (isFpgaAirPattern(s.scanPattern)) {
+          if (s.fpgaArmed || s.fpgaBusy) return;
+          set({ fpgaMode: "lb_gated" });
+          await get().fpgaArm();
+          return;
+        }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
           pushLog("sys", blocked);
+          return;
+        }
+        if (s.rfOn || s.paOn) {
+          pushLog("sys", "СКАНИРОВАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+          return;
+        }
+        if (s.fpgaArmed) {
+          pushLog("sys", "СКАНИРОВАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Хост-скан = мс, не µs");
           return;
         }
         if (s.signalTxActive) {
@@ -1980,7 +2143,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ scanRunning: true, scanCenterMhz: null });
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 · RX energy · окно ${walker.windowMhz} МГц`,
+          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 · ADC 40 MSPS · окно LO ${walker.windowMhz} МГц`,
         );
         let inflight = false;
         let lastResenseAt = 0;
@@ -1991,10 +2154,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           let detections: Detection[] = [];
           const step = gWalker?.next();
           if (!step?.centerMhz) return;
-          const winMhz = step.windowMhz;
+          const spanMhz = hostScanSpanMhz(analog);
           centerMhz = step.centerMhz;
           if (gLive) {
-            const win = await hostScan(centerMhz, winMhz, nBins);
+            const win = await hostScan(centerMhz, spanMhz, nBins);
             if (!get().scanRunning || get().flashBusy) return;
             if (win.txError) {
               pushLog("sys", win.txError);
@@ -2006,7 +2169,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             }
             bins = win.bins;
           } else {
-            bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
+            bins = gSdr.scanWindow(centerMhz, spanMhz, nBins);
           }
           const now = Date.now();
           const raw = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
@@ -2026,7 +2189,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (bins.length > 0) set({ scanBins: bins });
           const cur = get();
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
-          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, winMhz, bins.length > 0);
+          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
           const held = gGate.lastCuedMhz;
           if (
             cur.autoDispatch === "priority" &&
@@ -2036,7 +2199,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             Date.now() - lastResenseAt >= RESENSE_MS
           ) {
             lastResenseAt = Date.now();
-            const rs = await resenseHeld(held, winMhz, nBins);
+            const rs = await resenseHeld(held, nBins);
             if (!shouldContinuePriorityTick(rs)) return;
           }
           if (!get().scanRunning || get().flashBusy || !get().transmitArmed) return;
@@ -2075,6 +2238,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gWalker = null;
       if (get().scanRunning) set({ scanRunning: false });
+      // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
+      // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
+      // что в меню остался пункт «FPGA+СКАНЕР».
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).
@@ -2084,6 +2250,12 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startTransmit: async () => {
       const s = get();
+      if (isFpgaAirPattern(s.scanPattern)) {
+        if (s.fpgaArmed || s.fpgaBusy) return;
+        set({ fpgaMode: "lb_gated" });
+        await get().fpgaArm();
+        return;
+      }
       if (s.flashBusy) {
         pushLog("sys", "ПЕРЕДАТЬ: идёт прошивка — сначала дождитесь");
         return;
@@ -2091,6 +2263,14 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "ПЕРЕДАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+        return;
+      }
+      if (s.fpgaArmed) {
+        pushLog("sys", "ПЕРЕДАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Это хост-путь (мс), не µs");
         return;
       }
       if (s.signalTxActive) {
@@ -2168,6 +2348,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSkipMhz = null;
       set({ transmitArmed: false, signalTxActive: false });
       gGate.reset();
+      if (get().fpgaArmed) await get().fpgaDisarm();
       if (gLive) await hostTxOff();
       gSdr.txOff();
       set({ lastSdrTxUs: null, lastForwardMhz: null, lastForwardPowerDbm: null, sdrHoldSince: null, lastCueReason: "SDR TX остановлен" });

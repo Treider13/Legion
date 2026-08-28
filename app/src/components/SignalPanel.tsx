@@ -16,6 +16,7 @@ import {
   waveMeta,
   type WaveKind,
 } from "../sdr/waveforms";
+import { isFpgaAirLive } from "../sense/modes";
 import { useLegion } from "../state/store";
 
 const ACCENT = "#2dd4bf";
@@ -137,7 +138,7 @@ export function SignalPanel() {
     }
   }, [s.signalKind, params, constellation]);
 
-  const busy = s.transmitArmed || s.scanRunning;
+  const busy = s.transmitArmed || s.scanRunning || s.fpgaArmed;
 
   return (
     <section className="panel">
@@ -247,31 +248,32 @@ export function SignalPanel() {
       {s.lastCueReason && <p className="sens-hint">{s.lastCueReason}</p>}
 
       <div className="fpga-block">
-        <span className="panel-title">FPGA (bladeRF 1 x40) // АВТОНОМНЫЙ ТРАКТ</span>
-        <p className="panel-note">
-          Ревизия legion: волна/тон/loopback играют ВНУТРИ FPGA (ноутбук не в тракте
-          данных). Управление и мониторинг — по Ethernet через агент шлюза
-          (legion_gateway.py). Watchdog: пропал heartbeat ~1 с → TX гаснет сам.
-          Требует прошивки ревизии legion (fpga/README.md). Пока FPGA в режиме
-          PLAYER/NCO/LOOPBACK, мультиплексор FPGA перекрывает хост-стрим
-          (стрим идёт в режиме PASS). Загрузка волны в RAM: режим PASS +
-          capture_arm + обычная ЗАШИТЬ (стрим и capture одновременно).
-          ARM сначала паркует RX/TX LO (иначе loopback на чужой частоте). Без park — отказ.
-          PLAYER без capture_done не стартует (в RAM нули, не волна).
-        </p>
-        <div className="corr-grid">
+        <span className="panel-title">FPGA (bladeRF 1 x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
+        {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
+          <p className="panel-note">
+            Сейчас жив FPGA+СКАНЕР (I²+Q² → RX→TX на SDR). Эта вкладка задачу не
+            ставит и не притворяется PLAYER. Стоп — кнопка ниже или вкладка СКАН.
+          </p>
+        ) : (
+          <p className="panel-note">
+            Ноутбук ставит задачу (PLAYER / NCO / loopback всегда). Сканер и
+            I²+Q²-гейт сюда не входят. ARM паркует LO; PLAYER без capture_done
+            не стартует. Watchdog ~1 с. NCO — TX DDS, FTW с fj (0 → fs/8, не DC).
+          </p>
+        )}
+        {!isFpgaAirLive(s.fpgaArmed, s.fpgaMode) && (
+          <div className="corr-grid">
           <label>
             РЕЖИМ FPGA
             <select
               aria-label="Режим FPGA"
-              value={s.fpgaMode}
+              value={s.fpgaMode === "lb_gated" ? "player" : s.fpgaMode}
               onChange={(e) => s.setFpgaMode(e.target.value as typeof s.fpgaMode)}
               disabled={s.fpgaArmed || s.fpgaBusy}
             >
               <option value="player">PLAYER — волна из RAM FPGA</option>
-              <option value="nco">NCO — тон DDS из FPGA</option>
-              <option value="lb_gated">LOOPBACK по детектору (антенна→усилитель)</option>
-              <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
+              <option value="nco">NCO — тон DDS из FPGA (FTW с fj, не DC)</option>
+              <option value="lb_always">LOOPBACK постоянный (RX→TX, без детектора)</option>
             </select>
           </label>
           <label>
@@ -285,15 +287,23 @@ export function SignalPanel() {
               spellCheck={false}
               placeholder="LEGION_FPGA_TOKEN"
             />
-          </label>
-        </div>
+            </label>
+          </div>
+        )}
         <div className="power-row">
           {s.fpgaArmed ? (
             <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
               ОСТАНОВИТЬ FPGA
             </button>
           ) : (
-            <button className="btn-primary" disabled={s.fpgaBusy} onClick={() => void s.fpgaArm()}>
+            <button
+              className="btn-primary"
+              disabled={s.fpgaBusy}
+              onClick={() => {
+                if (s.fpgaMode === "lb_gated") s.setFpgaMode("player");
+                void s.fpgaArm();
+              }}
+            >
               ЗАПУСТИТЬ FPGA
             </button>
           )}

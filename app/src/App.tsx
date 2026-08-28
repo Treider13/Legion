@@ -46,6 +46,11 @@ function App() {
     const t = setTimeout(() => setMount3d(true), 300);
     return () => clearTimeout(t);
   }, [booted]);
+  const corridorRunning = useLegion((s) => s.corridorRunning);
+  const scanRunning = useLegion((s) => s.scanRunning);
+  const transmitArmed = useLegion((s) => s.transmitArmed);
+  const fpgaArmed = useLegion((s) => s.fpgaArmed);
+  const fpgaMode = useLegion((s) => s.fpgaMode);
 
   useEffect(() => {
     return useLegion.subscribe((s) => {
@@ -59,9 +64,13 @@ function App() {
       rfVisual.corrF1 = parseFloat(s.corrF1) || 2400;
       rfVisual.corrF2 = parseFloat(s.corrF2) || 2500;
       rfVisual.telemFreqMhz = s.telemFreq;
-      rfVisual.sdrTransmit = s.transmitArmed;
-      rfVisual.sdrHitMhz = s.lastInterceptMhz;
-      rfVisual.sdrTxMhz = s.lastForwardMhz;
+      rfVisual.sdrTransmit = s.transmitArmed || s.fpgaArmed;
+      rfVisual.sdrHitMhz = s.fpgaArmed ? null : s.lastInterceptMhz;
+      rfVisual.sdrTxMhz = s.fpgaArmed ? null : s.lastForwardMhz;
+      if (s.fpgaArmed) {
+        // Не host-FFT. Показать припаркованный LO, не дефолт 2475.
+        rfVisual.freqMhz = s.lastForwardMhz ?? (parseFloat(s.signalFreqMhz) || 2475);
+      }
     });
   }, []);
 
@@ -98,6 +107,19 @@ function App() {
                   : "ESP32 · USB"}
             </span>
           </header>
+          <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning || fpgaArmed ? "alert" : ""}`}>
+            {fpgaArmed
+              ? fpgaMode === "lb_gated"
+                ? "РЕЖИМ SDR · FPGA+СКАНЕР · НАБЛЮДЕНИЕ"
+                : "РЕЖИМ SDR · FPGA · ЗАДАЧА С НОУТБУКА"
+              : transmitArmed
+                ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"
+                : scanRunning
+                  ? "РЕЖИМ SDR · СКАН"
+                  : corridorRunning
+                    ? "РЕЖИМ ESP32 · КОРИДОР"
+                    : "ОЖИДАНИЕ"}
+          </div>
         </div>
       </section>
 

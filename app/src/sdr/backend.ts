@@ -197,7 +197,12 @@ export class MockSdrBackend implements SdrBackend {
   }
 }
 
-/** DIO-sys/spectrum_analyzer psd_plot.estimate_noise_floor: медиана нижних 60%. */
+/** Хост-FFT как DIO-sys: 40 MSPS. analog BW — фильтр LMS, не ось спектра. */
+export function hostScanSpanMhz(_analogBwMhz?: number): number {
+  return 40;
+}
+
+/** DIO-sys/spectrum_analyzer: медиана нижних 60%. */
 export function estimateNoiseFloor(bins: readonly ScanBin[]): number {
   if (bins.length === 0) return 0;
   const sorted = [...bins].map((b) => b.powerDbm).sort((a, b) => a - b);

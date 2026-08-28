@@ -216,6 +216,13 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
+            if msg.get("nco_ftw") is not None:
+                if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
+                    return {"ok": False, "reason": "запись NCO_FTW не удалась"}
+            elif mode == lf.MODE_NCO:
+                # Панель без FTW = DC. Шлюз ставит fs/8, не ноль.
+                if not self.fpga.set_nco_freq(2.0e6 / 8.0):
+                    return {"ok": False, "reason": "NCO FTW по умолчанию (fs/8) не записался"}
             # Analog LMS: lb_* = антенна + усилитель (бит1 RX, бит2 TX).
             # nco/player = только TX. Цифровой IQ после close Soapy держит HDL.
             if mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS):

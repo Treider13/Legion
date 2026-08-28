@@ -228,6 +228,13 @@ r = rpc({"op": "set", "reg": "nco_ftw", "value": 12345678})
 check("gateway set nco_ftw", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_NCO_FTW) == 12345678)
 
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("arm nco пишет FTW", r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_NCO_FTW) == 0x20000000)
+r = rpc({"op": "arm", "mode": "nco"})
+ftw_default = gw.fpga._t.regs.get(lf.REG_NCO_FTW)
+check("arm nco без FTW → fs/8, не DC", r.get("ok") is True and ftw_default not in (None, 0))
+
 r = rpc({"op": "set", "reg": "nope", "value": 1})
 check("gateway set неизвестного reg → отказ", r.get("ok") is False)
 
@@ -237,9 +244,11 @@ check("gateway arm неизвестного mode → отказ", r.get("ok") is
 # lb_gated без порога → честный отказ (порог 0 = гейт на шум)
 r = rpc({"op": "arm", "mode": "lb_gated"})
 check("lb_gated без det_thr → отказ", r.get("ok") is False)
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
+check("det_shift=4 (окно 16 сэмплов = 8 µs @ 2 МГц)",
+      gw.fpga._t.regs.get(lf.REG_DET_SHIFT) == 4)
 # Analog RX+TX штатным CONTROL (бит1 lms_rx_enable, бит2 lms_tx_enable)
 check("lb_gated: RX включён через CONTROL RMW (бит1)",
       bool(gw.fpga._t.control & 0x2))

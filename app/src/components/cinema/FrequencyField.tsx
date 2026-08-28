@@ -182,8 +182,11 @@ export function FrequencyField() {
   }, []);
 
   const live = scanRunning || transmitArmed || corridorRunning || fpgaArmed;
-  const read =
-    lastForward != null
+  const read = fpgaArmed
+    ? lastForward != null
+      ? `${lastForward.toFixed(3)} МГц`
+      : "—"
+    : lastForward != null
       ? `${lastForward.toFixed(3)} МГц`
       : lastHit != null
         ? `${lastHit.toFixed(3)} МГц`

@@ -77,6 +77,11 @@ def main() -> int:
         pooled = w._pool_bins(freqs, db, 64)
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
+        check("scan() не зовёт _read_fft", not hasattr(w, "_read_fft"))
+        check("AGC в коде выкл", "setGainMode(SOAPY_SDR_RX, 0, False)" in open(WORKER).read())
+        check("AGC True не пишем", "setGainMode(SOAPY_SDR_RX, 0, True)" not in open(WORKER).read())
+        check("нет SCAN_FS_HZ — ось = DIO 40e6", not hasattr(w, "SCAN_FS_HZ") and w.DIO_SAMPLE_RATE_HZ == 40e6)
+        check("нет scan_fs_hz(analog) — analog не задаёт ADC", not hasattr(w, "scan_fs_hz"))
 
         ring = w.IqRing(16)
         ring.push_block(np.arange(10, dtype=np.complex64))
@@ -248,6 +253,10 @@ def main() -> int:
     scan = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
     check("scan bins", scan.get("ok") is True and len(scan.get("bins") or []) == 32)
     check("scan freqs", abs(scan["bins"][16]["freqMhz"] - 2442) < 2)
+    check("fake span = ADC 40 МГц, не окно 20", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 40) < 1.5)
+
+    # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
+    check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())
 
     check("FPGA park default = 2e6 (NCO)", w.FPGA_PARK_FS_HZ == 2e6)
     pk = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 20, "fsHz": 2e6, "rx": True, "tx": True})
