@@ -52,6 +52,12 @@ EP_IN = 0x82   # PERIPHERAL_EP_IN
 TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 
 
+# Пол порога детектора: lb_gated с det_thr ниже floor = гейт на шум.
+# Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
+# на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
+DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+
+
 class UsbTransport:
     """pyusb bulk-передачи 16-байтных NIOS-пакетов."""
 
@@ -288,6 +294,12 @@ class LegionGateway:
             if mode == lf.MODE_LB_GATED and msg.get("det_thr") is None and not self.det_thr_set:
                 return {"ok": False, "reason": "lb_gated: сначала det_thr (порог детектора)"}
             if msg.get("det_thr") is not None:
+                # Явный порог ниже floor (в т.ч. 0) = гейт на шум. Раньше 0
+                # проходил — документация («0 шлюз отвергает») расходилась
+                # с кодом; floor по умолчанию 1, поднимается LEGION_DET_THR_FLOOR.
+                if mode == lf.MODE_LB_GATED and int(msg["det_thr"]) < DET_THR_FLOOR:
+                    return {"ok": False,
+                            "reason": f"lb_gated: det_thr {msg['det_thr']} < floor {DET_THR_FLOOR} (гейт на шум)"}
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
@@ -405,6 +417,11 @@ class LegionGateway:
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}
+            # Тот же floor, что в ARM: иначе «set det_thr 0» взводил бы
+            # det_thr_set, и lb_gated без det_thr армировался с гейтом на шум.
+            if reg == "det_thr" and val < DET_THR_FLOOR:
+                return {"ok": False,
+                        "reason": f"det_thr {val} < floor {DET_THR_FLOOR} (гейт на шум)"}
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True

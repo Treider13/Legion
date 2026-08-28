@@ -249,6 +249,22 @@ check("gateway arm неизвестного mode → отказ", r.get("ok") is
 # lb_gated без порога → честный отказ (порог 0 = гейт на шум)
 r = rpc({"op": "arm", "mode": "lb_gated"})
 check("lb_gated без det_thr → отказ", r.get("ok") is False)
+# Явный 0 — та же дыра: раньше проходил (документация «0 шлюз отвергает»
+# расходилась с кодом). floor по умолчанию 1 → 0 отвергается.
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 0})
+check("lb_gated с det_thr=0 → отказ (floor)", r.get("ok") is False)
+check("det_thr=0 не взводит det_thr_set", gw.det_thr_set is False)
+# Поднятый floor (LEGION_DET_THR_FLOOR на стенде): ниже него — отказ
+lg.DET_THR_FLOOR = 100
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 50})
+check("lb_gated det_thr=50 < floor=100 → отказ", r.get("ok") is False)
+lg.DET_THR_FLOOR = 1
+# Тот же floor на низкоуровневом set: иначе «set det_thr 0» взводил бы
+# det_thr_set и lb_gated без det_thr армировался с гейтом на шум (дыра
+# найдена углублённой проверкой B1).
+r = rpc({"op": "set", "reg": "det_thr", "value": 0})
+check("set det_thr=0 → отказ (floor), det_thr_set не взведён",
+      r.get("ok") is False and gw.det_thr_set is False)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)

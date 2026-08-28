@@ -922,7 +922,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const cap = await hostDetCapture(FPGA_DET_WIN_SAMPLES, FPGA_DET_WINDOWS);
       const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
       if (!cap.ok || !(detThr > 0)) {
-        await fail(cap.ok ? `порог 0 (медиана полки ${cap.medianEnergy})` : cap.reason);
+        // detThrFromMedian режет и ноль, и деградированный захват ниже floor —
+        // в обоих случаях ARM = гейт на шум.
+        await fail(cap.ok ? `порог ниже floor/0 (медиана полки ${cap.medianEnergy})` : cap.reason);
         return;
       }
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro

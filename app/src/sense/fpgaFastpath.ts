@@ -35,11 +35,18 @@ export const FPGA_DET_WINDOWS = 512;
 export const FPGA_DET_THR_K = 4;
 /** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
 export const FPGA_AIR_GONE_POLLS = 3;
+/** Пол порога: ниже — захват деградировал (мёртвый поток/ADC в нулях дают
+ *  медиану 0..единицы; живая полка при MGC — сотни, фикстура воркера 400–2000).
+ *  ARM с thr < floor = гейт на шум. 64 = медиана 16 при K=4: в 6 раз ниже
+ *  нижней границы фикстуры, в разы выше деградированного захвата. */
+export const FPGA_DET_THR_FLOOR = 64;
 
-/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра. */
+/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра.
+ *  Ниже FPGA_DET_THR_FLOOR → 0 (отказ ARM, как при нулевой медиане). */
 export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): number {
   if (!Number.isFinite(medianEnergy) || medianEnergy <= 0) return 0;
   const thr = Math.round(medianEnergy * k);
+  if (thr < FPGA_DET_THR_FLOOR) return 0;
   return Math.min(0xffffffff, Math.max(0, thr));
 }
 

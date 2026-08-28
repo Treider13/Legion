@@ -29,6 +29,7 @@ import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
+  FPGA_DET_THR_FLOOR,
   FPGA_US_DET_SHIFT,
   clampDetShift,
   detThrFromMedian,
@@ -1181,6 +1182,10 @@ async function main(): Promise<void> {
   }).ok === true);
   check("detThrFromMedian: полка × K", detThrFromMedian(1200, 4) === 4800);
   check("detThrFromMedian: ноль/мусор → 0 (шлюз откажет)", detThrFromMedian(0) === 0 && detThrFromMedian(Number.NaN) === 0);
+  check("detThrFromMedian: ниже floor → 0 (деградированный захват, гейт на шум)",
+    detThrFromMedian(10) === 0 && detThrFromMedian(15) === 0);
+  check("detThrFromMedian: на floor живёт (16×4=64)", detThrFromMedian(16) === 64);
+  check("floor pinned (порядок от фикстуры полки 400–2000)", FPGA_DET_THR_FLOOR === 64);
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
