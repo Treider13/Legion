@@ -349,6 +349,11 @@ def main() -> int:
                 raise RuntimeError("setGainMode нет")
             self.gain_mode = (d, ch, automatic)
 
+        def getGainMode(self, d, ch):
+            if getattr(self, "gm_read_fail", False):
+                raise RuntimeError("getGainMode нет")
+            return getattr(self, "gm_agc", False)
+
         def getGain(self, d, ch):
             return 42.0
 
@@ -395,6 +400,17 @@ def main() -> int:
     micro_gm.gm_fail = True
     pk_gm = _radio(micro_gm).park(2442, 28, 28e6, True, True)
     check("park micro: AGC не выключается → отказ (порог уплыл бы)", pk_gm.get("ok") is False)
+    # Readback режима: «записал MGC» без подтверждения — вайб. AGC жив → отказ.
+    micro_agc = _Dev()
+    micro_agc.hw = "bladerf2"
+    micro_agc.gm_agc = True
+    pk_agc = _radio(micro_agc).park(2442, 28, 28e6, True, True)
+    check("park micro: getGainMode=True после setGainMode(False) → отказ", pk_agc.get("ok") is False)
+    micro_gmr = _Dev()
+    micro_gmr.hw = "bladerf2"
+    micro_gmr.gm_read_fail = True
+    pk_gmr = _radio(micro_gmr).park(2442, 28, 28e6, True, True)
+    check("park micro: getGainMode не ответил → отказ", pk_gmr.get("ok") is False)
     unknown = _Dev()
     unknown.hw = ""
     pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)

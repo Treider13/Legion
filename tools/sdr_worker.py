@@ -1314,6 +1314,14 @@ class Radio:
                             self.dev.setGainMode(SOAPY_SDR_RX, 0, False)
                         except Exception as e:
                             return _fail(f"park: AGC не выключается (setGainMode): {e}")
+                        # Readback режима, не только gain: «записал» без
+                        # подтверждения — вайб (та же философия, что LO/fs).
+                        try:
+                            gm = self.dev.getGainMode(SOAPY_SDR_RX, 0)
+                        except Exception as e:
+                            return _fail(f"park: getGainMode не ответил: {e}")
+                        if bool(gm):
+                            return _fail("park: AGC остался включённым после setGainMode(False)")
                         try:
                             # NIOS при ARM ставит ровно это усиление (gain_db в
                             # команде ARM) — полка измерена и применяется на
