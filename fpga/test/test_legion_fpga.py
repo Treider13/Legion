@@ -410,6 +410,45 @@ check("после ARM wd_fired чист", r.get("wd_fired") is False)
 rpc({"op": "disarm"})
 
 # ---------------------------------------------------------------------------
+# op flash (async): валидация имени/платы/пути/ARM, старт, flash_status.
+# FAKE: без CLI и без железа — проверяется протокол, не прошивка.
+# ---------------------------------------------------------------------------
+r = rpc({"op": "flash_status"})
+check("flash_status до старта — честный отказ", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/hostedxA4.rbf", "action": "load"})
+check("flash hosted-имя → отказ (не артефакт legion)", r.get("ok") is False and r.get("started") is not True)
+r = rpc({"op": "flash", "path": "/tmp/bladeRF_fw_latest.img", "action": "load"})
+check("flash FX3 → отказ", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "legionx40.rbf", "action": "load"})
+check("flash относительный путь → отказ (cwd CLI)", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/legionxA4.rbf", "action": "load"})
+check("flash A4 на bladeRF 1 → отказ (нужен x40)", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "nope"})
+check("flash неизвестный action → отказ", r.get("ok") is False)
+r = rpc({"op": "arm", "mode": "player"})
+check("flash: arm для проверки отказа при ARM", r.get("ok") is True)
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("flash при ARM → отказ (CLI и агент не делят USB)", r.get("ok") is False)
+rpc({"op": "disarm"})
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("flash legionx40 (fake) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpc({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash_status: done + ok", r.get("done") is True and r.get("ok") is True)
+check("flash fake честно помечен (не железо)", "FAKE" in str(r.get("log")))
+r = rpc({"op": "flash", "path": "/tmp/legion_x40.rbf", "action": "store"})
+check("flash алиас legion_x40 (старые docs) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpc({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash store (-L) тоже ok", r.get("done") is True and r.get("ok") is True and r.get("action") == "store")
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).
@@ -687,6 +726,19 @@ r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2442.5, "fs_hz": 20_000_000, "
 check("micro: ARM nco с fs/bw → ok", r.get("ok") is True)
 check("micro: nco AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
 rpcm({"op": "disarm"})
+
+# op flash на micro: семейство A-серии, x40 отвергается (PID общий 0x5250,
+# A4/A9 по USB не различить — size на операторе, как в docs Nuand).
+r = rpcm({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("micro: flash x40 → отказ (нужен A4/A9)", r.get("ok") is False)
+r = rpcm({"op": "flash", "path": "/tmp/legionxA4.rbf", "action": "load"})
+check("micro: flash legionxA4 (fake) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpcm({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("micro: flash_status done ok", r.get("done") is True and r.get("ok") is True)
 
 srv_m.shutdown()
 srv_m.server_close()

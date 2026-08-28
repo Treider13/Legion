@@ -14,6 +14,10 @@
   {"op":"set", "reg":"nco_ftw"|..., "value":int}
   {"op":"usb", "action":"release"|"acquire"}  — один владелец USB
   {"op":"tune", "freq_mhz":float, ...}  — LO-hop на живом ARM (только micro)
+  {"op":"flash", "path":"/abs/legionxA4.rbf", "action":"load"|"store"}
+      — запись ревизии legion на ЭТОМ шлюзе: release USB → bladeRF-cli -l/-L
+      → acquire обратно. Async (CLI дольше 12-с релея воркера): старт сразу,
+      результат — {"op":"flash_status"}. Только legionx*.rbf, не hosted/FX3.
   {"op":"ping"}
 
 Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
@@ -36,8 +40,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -69,6 +75,11 @@ TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 # Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
 # на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
 DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+
+# Артефакт ревизии legion из build_bladerf.sh (BUILD_NAME="$rev"x"$size"):
+# legionx40.rbf / legionxA4.rbf / legionxA9.rbf (+ алиас с подчёркиванием
+# из старых docs). hosted/FX3/чужие имена op flash не принимает.
+LEGION_RBF_RE = re.compile(r"^legion_?x(40|a4|a9)\.rbf$", re.IGNORECASE)
 
 # Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
 # сам DISARM → USB release (именно в этом порядке: release без DISARM
@@ -131,7 +142,6 @@ class UsbTransport:
                 "LEGION_FPGA_RBF для автозагрузки или bladeRF-cli -l/-L вручную")
         if not os.path.isfile(rbf):
             raise RuntimeError(f"LEGION_FPGA_RBF: файл не найден: {rbf}")
-        import subprocess
         try:
             cp = subprocess.run(["bladeRF-cli", "-l", rbf],
                                 capture_output=True, text=True, timeout=60)
@@ -288,6 +298,10 @@ class LegionGateway:
         self._armed_at = 0.0      # monotonic ARM (сторож: ARM без единого kick)
         self._wd_en = True        # ARM с wd=false — оператор отказался от deadman
         self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
+        # Async flash (op flash): bladeRF-cli -l/-L дольше 12-с релея воркера,
+        # поэтому старт сразу, результат — op flash_status.
+        self._flash: dict = {"running": False, "done": False, "ok": False,
+                             "log": "", "action": "", "path": ""}
         # Операции и сторож сериализуются: ThreadingTCPServer гоняет handle()
         # в потоках, а xfer — это пара write/read 16-байтных пакетов, которую
         # нельзя перемежать с DISARM сторожа (иначе ответ уедет не тому).
@@ -416,10 +430,93 @@ class LegionGateway:
             self._tx_by_us = True
         return True, ""
 
+    def _flash_validate(self, path: str, action: str) -> tuple[bool, str]:
+        """op flash: только артефакт legion этой платы, без ARM, по одному."""
+        if action not in ("load", "store"):
+            return False, f"flash: неизвестный action {action} (load|store)"
+        path = path.strip()
+        if not os.path.isabs(path):
+            return False, "flash: нужен абсолютный путь на шлюзе — CLI ищет файл от cwd"
+        base = os.path.basename(path)
+        m = LEGION_RBF_RE.match(base)
+        if not m:
+            return False, ("flash: имя не артефакт legion (legionx40/xA4/xA9.rbf) — "
+                           "hosted/FX3/чужое сюда не шьём")
+        size = m.group(1).lower()
+        if self.board == "bladerf1" and size != "40":
+            return False, "flash: плата bladeRF 1 — нужен legionx40.rbf"
+        if self.board == "bladerf2" and size == "40":
+            return False, "flash: плата micro — нужен legionxA4/xA9.rbf"
+        # A4/A9 по USB PID не различить (оба 0x5250) — size на операторе,
+        # как и в docs Nuand («образ A9 на A4 не ставить»).
+        if self._armed:
+            return False, "flash: сначала DISARM — CLI и агент не делят USB"
+        if self._flash.get("running"):
+            return False, "flash: уже идёт"
+        if not self.fake and not os.path.isfile(path):
+            return False, f"flash: файл не найден на шлюзе: {path}"
+        return True, ""
+
+    def _flash_run(self, path: str, action: str) -> None:
+        """Поток flash: release USB → bladeRF-cli → acquire обратно.
+        _op_lock на время CLI не держим: ping живёт, регистровые операции
+        при отпущенном USB честно падают (устройство не наше)."""
+        log = ""
+        ok = False
+        try:
+            if self.fake:
+                time.sleep(0.2)  # протокол без железа: имитация длительности
+                ok, log = True, "FAKE flash (не железо)"
+                return
+            t = self.fpga._t
+            if hasattr(t, "release"):
+                t.release()
+            flag = "-l" if action == "load" else "-L"
+            try:
+                cp = subprocess.run(["bladeRF-cli", flag, path],
+                                    capture_output=True, text=True, timeout=180)
+                log = (cp.stdout + cp.stderr).strip()[-800:]
+                ok = cp.returncode == 0
+            except FileNotFoundError:
+                log = "bladeRF-cli не найден на шлюзе"
+            except subprocess.TimeoutExpired:
+                log = "bladeRF-cli: timeout 180 с"
+            time.sleep(0.5)  # re-enumerate после -l (как в _load_fpga)
+            try:
+                if hasattr(t, "acquire"):
+                    t.acquire()
+            except Exception as e:
+                # Неверный size (A9 на A4): FPGA не конфигурируется, acquire
+                # честно падает — откат hostedx*.rbf с ноутбука.
+                log = f"{log} · re-acquire: {e}".strip(" ·")
+                ok = False
+        finally:
+            self._flash.update({"running": False, "done": True, "ok": ok, "log": log})
+
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
         if op == "ping":
             return {"ok": True, "fake": self.fake}
+        if op == "flash":
+            path = str(msg.get("path") or "")
+            action = str(msg.get("action") or "")
+            ok, why = self._flash_validate(path, action)
+            if not ok:
+                return {"ok": False, "reason": why}
+            self._flash = {"running": True, "done": False, "ok": False,
+                           "log": "", "action": action, "path": path}
+            threading.Thread(target=self._flash_run, args=(path, action), daemon=True).start()
+            return {"ok": True, "started": True, "reason": f"flash {action}: {path}"}
+        if op == "flash_status":
+            f = self._flash
+            if not f.get("action"):
+                return {"ok": False, "reason": "flash не запускался"}
+            if f["running"]:
+                return {"ok": True, "running": True, "action": f["action"]}
+            return {"ok": bool(f["ok"]), "running": False, "done": True,
+                    "action": f["action"],
+                    "reason": ("bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"),
+                    "log": f["log"]}
         if op == "arm":
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
