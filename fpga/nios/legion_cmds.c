@@ -27,6 +27,7 @@
 #include <altera_avalon_pio_regs.h>
 
 #include "debug.h"
+#include "devices.h"  /* control_reg_read/write — x40: снять lms_*_enable при deadman */
 
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 #include "devices_rfic.h"
@@ -48,6 +49,14 @@ static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
 static uint32_t legion_air_fs_hz;
 static uint32_t legion_air_bw_hz;
 static bool     legion_air_is_up;
+/* CTRL.ARM, как записан хостом (нужен legion_work: в STATUS бита armed нет —
+ * там playing/cap_done/det_active/wd_fired, legion_regs.vhd). */
+static bool     legion_armed;
+/* Липкий «deadman сработал»: HDL-бит wd_fired (STATUS.3) после нашего
+ * CTRL=0 гаснет за микросекунды (enable=0 сбрасывает expired,
+ * legion_watchdog.vhd) — хост читал бы пульс никогда. Держим латч до
+ * следующего ARM и подмешиваем в чтение STATUS битом 4 (HDL 7..4 = 0). */
+static bool     legion_wd_latch;
 
 bool legion_air_up(bool rx, bool tx)
 {
@@ -68,6 +77,19 @@ bool legion_air_up(bool rx, bool tx)
         return false;
     }
 
+    /* TX глушим сразу после INIT, ДО любых перестроек. Раньше нельзя:
+     * TXMUTE требует init_state==ON (RFIC_CMD_INIT_REQD, devices_rfic.c).
+     * RFIC-апдейты (FREQUENCY/SAMPLERATE) могут перезапускать
+     * TX-калибровку — апстрим Nuand позже ввёл для этого guard TX_RECAL;
+     * в нашем дереве его нет, держим mute сами до конца последовательности.
+     * (INIT из OFF сам кратко отмыкает TX на attenuation из init-params —
+     * 10 дБ, ad936x_params.c — это поведение апстрима, не нашего тракта.) */
+    if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                        BLADERF_CHANNEL_TX(0), 1)) {
+        DBG("LEGION: RFIC TX mute — отказ\n");
+        return false;
+    }
+
     uint32_t const fs_hz = legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
     uint32_t const bw_hz = legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
 
@@ -85,6 +107,15 @@ bool legion_air_up(bool rx, bool tx)
             DBG("LEGION: RFIC RX cfg — отказ\n");
             return false;
         }
+        /* Readback GAINMODE: записанный MGC без подтверждения — вайб (как
+         * readback LO/fs в park). Молча живой AGC уплыл бы после ARM. */
+        uint64_t gm = 0;
+        if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_GAINMODE,
+                                     BLADERF_CHANNEL_RX(0), &gm) ||
+            gm != BLADERF_GAIN_MGC) {
+            DBG("LEGION: RFIC GAINMODE readback != MGC — отказ\n");
+            return false;
+        }
         /* Усиление — ровно то, при котором хост мерил шумовую полку:
          * парк пиннит MGC, читает gain и шлёт его в ARM (gain_db).
          * На проводе — смещение +1000 (сентинел 0xFFFFFFFF = «не задан»). */
@@ -100,14 +131,13 @@ bool legion_air_up(bool rx, bool tx)
     }
 
     if (tx) {
+        /* TX уже заглушён (сразу после INIT). Unmute — после ENABLE. */
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
                                       BLADERF_CHANNEL_TX(0), freq_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
                                       BLADERF_CHANNEL_TX(0), fs_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
-                                      BLADERF_CHANNEL_TX(0), bw_hz) ||
-            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
-                                      BLADERF_CHANNEL_TX(0), 0)) {
+                                      BLADERF_CHANNEL_TX(0), bw_hz)) {
             DBG("LEGION: RFIC TX cfg — отказ\n");
             return false;
         }
@@ -123,6 +153,14 @@ bool legion_air_up(bool rx, bool tx)
     if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_ENABLE,
                                         BLADERF_CHANNEL_TX(0), 1)) {
         DBG("LEGION: RFIC TX enable — отказ\n");
+        return false;
+    }
+
+    /* Unmute последним: вся перестройка (и возможная TX-cal внутри неё)
+     * прошла при заглушённом TX. */
+    if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                        BLADERF_CHANNEL_TX(0), 0)) {
+        DBG("LEGION: RFIC TX unmute — отказ\n");
         return false;
     }
 
@@ -211,6 +249,11 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 }
             }
 #endif
+            legion_armed = (data & 0x1) != 0;
+            if ((data & 0x1) != 0) {
+                /* Новый ARM — латч deadman прошлой сессии снять */
+                legion_wd_latch = false;
+            }
             if ((data & 0x1) == 0 && legion_air_is_up) {
                 /* DISARM: эфир гасим сами — шлюз про RFIC не знает */
                 legion_air_down();
@@ -237,5 +280,36 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
+    /* Бит 4 — не из HDL (там 7..4 = 0): липкий латч NIOS «deadman сработал»,
+     * иначе wd_fired после автономного DISARM — микросекундный пульс. */
+    if (legion_wd_latch) {
+        *data |= LEGION_STATUS_WD_LATCH;
+    }
     return true;
+}
+
+void legion_work(void)
+{
+    /* Deadman без хоста: watchdog в FPGA сработал (heartbeat пропал), а ARM
+     * жив → сам DISARM. Цифру mux уже заглушил (нули с каденсом); здесь
+     * гасим остальное: CTRL=0 снимает ARM (expired липкий — без этого
+     * следующий ARM молчал бы навсегда), на micro тот же CTRL=0 уводит
+     * RFIC в standby (case LEGION_REG_CTRL выше), на x40 снимаем
+     * lms_rx_enable|lms_tx_enable в CONTROL (NIOS — хозяин этого PIO,
+     * devices_inline.h; шлюз ходит в него через NIOS-пакеты target 0x01).
+     * USB NIOS не отпускает — он не хозяин линка; release делает шлюз
+     * (сторож по kick_age), а при живом ноутбуке — приложение. */
+    if (!legion_armed) {
+        return;
+    }
+    if ((IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE) &
+         LEGION_STATUS_WD_FIRED) == 0) {
+        return;
+    }
+    DBG("LEGION: wd_fired при живом ARM — автономный DISARM\n");
+    legion_wd_latch = true;
+    legion_reg_write(LEGION_REG_CTRL, 0);
+#if !defined(BOARD_BLADERF_MICRO)
+    control_reg_write(control_reg_read() & ~0x6u);
+#endif
 }

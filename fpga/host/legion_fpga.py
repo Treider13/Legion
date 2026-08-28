@@ -122,7 +122,10 @@ class LegionFpga:
             "playing": bool(data & (1 << 0)),
             "capture_done": bool(data & (1 << 1)),
             "det_active": bool(data & (1 << 2)),
-            "wd_fired": bool(data & (1 << 3)),
+            # bit3 — HDL (живой expired), bit4 — липкий латч NIOS: после
+            # автономного DISARM (legion_work) HDL-бит гаснет за мкс
+            # (enable=0 сбрасывает expired), хост читает латч.
+            "wd_fired": bool(data & 0x18),
             "lb_level": (data >> 8) & 0xFF,
             "det_count": (data >> 16) & 0xFFFF,
         }

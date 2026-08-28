@@ -29,14 +29,16 @@ import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
-  FPGA_DET_MEDIAN_MIN,
+  FPGA_DET_THR_FLOOR,
   FPGA_US_DET_SHIFT,
   clampDetShift,
-  detMedianRefusal,
   detThrFromMedian,
   detectorWindowUs,
   fpgaArmCmd,
   fpgaObserveLine,
+  handoffRetryMs,
+  handoffSkipAfter,
+  handoffTimeline,
   ncoFtwFromFrac,
   parkSpanMhz,
   planFpgaAir,
@@ -1183,19 +1185,16 @@ async function main(): Promise<void> {
   }).ok === true);
   check("detThrFromMedian: полка × K", detThrFromMedian(1200, 4) === 4800);
   check("detThrFromMedian: ноль/мусор → 0 (шлюз откажет)", detThrFromMedian(0) === 0 && detThrFromMedian(Number.NaN) === 0);
-  // Floor полки: крошечная медиана = RX глухой (тракт/антенна). Порог из неё
-  // лёг бы под шум → гейт открыт всегда → det_count растёт вечно → автовозврат
-  // «энергия пропала» не сработает никогда. Только отказ, не clamp.
-  check("detMedianRefusal: живая полка → можно ARM", detMedianRefusal(1200) === null);
-  check("detMedianRefusal: ровно MIN → можно ARM", detMedianRefusal(FPGA_DET_MEDIAN_MIN) === null);
-  check(
-    "detMedianRefusal: ниже MIN → RX глухой, отказ",
-    (detMedianRefusal(FPGA_DET_MEDIAN_MIN - 1) ?? "").includes("RX глухой"),
-  );
-  check(
-    "detMedianRefusal: ноль/мусор → порог 0, отказ",
-    (detMedianRefusal(0) ?? "").includes("порог 0") && (detMedianRefusal(undefined) ?? "").includes("порог 0"),
-  );
+  check("detThrFromMedian: ниже floor → 0 (деградированный захват, гейт на шум)",
+    detThrFromMedian(10) === 0 && detThrFromMedian(15) === 0);
+  check("detThrFromMedian: на floor живёт (16×4=64)", detThrFromMedian(16) === 64);
+  check("floor pinned (порядок от фикстуры полки 400–2000)", FPGA_DET_THR_FLOOR === 64);
+  check("handoff backoff: 10→20→40 с", handoffRetryMs(1) === 10_000 && handoffRetryMs(2) === 20_000 && handoffRetryMs(3) === 40_000);
+  check("handoff backoff: страйк 0/мусор → базовые 10 с", handoffRetryMs(0) === 10_000);
+  check("handoff skip на 3-м страйке", !handoffSkipAfter(2) && handoffSkipAfter(3));
+  check("handoff таймлайн: этапы с dt",
+    handoffTimeline(1000, [["park_полки", 1070], ["arm", 1540]]) === "park_полки +70мс · arm +540мс");
+  check("handoff таймлайн пустой → пустая строка", handoffTimeline(1000, []) === "");
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);

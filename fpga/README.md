@@ -36,8 +36,19 @@ watchdog (1 с без kick) или СТОП оператора → DISARM, USB �
    каденс valid каждый 2-й такт — контракт LMS6002D, тишина-с-каденсом до
    capture), NCO (частота по нулям Q, амплитуда), watchdog (expiry/heartbeat),
    dcfifo (CDC, порядок), мультиплексор (PASS/тишина-с-каденсом/гейтинг/
-   watchdog/голодание FIFO), регистры (CDC, heartbeat-toggle, кламп WD_LIMIT,
+   ramp-down на спаде det_active/отмена рампы/watchdog посреди рампы/
+   голодание FIFO), регистры (CDC, heartbeat-toggle, кламп WD_LIMIT,
    статус), интеграция dcfifo+mux (два домена, порядок 16/16).
+2. **NIOS C — синтаксис и поведение на ПК** (`fpga/test/check_nios_syntax.sh`
+   + `fpga/test/run_nios_work_test.sh`, оба в CI): `legion_cmds.c` (мастер и
+   вендоренная копия) и main-loop обеих платформ компилируются gcc против
+   реальных заголовков Nuand в трёх конфигах (x40 / micro без libad936x /
+   micro+RFIC); зонд `nios_probe_rfic.c` доказывает, что RFIC-ветка активна
+   ровно в micro-rfic (без `#include "devices.h"` она была мёртва и в
+   реальной сборке — Makefile micro не задаёт `-DBLADERF_NIOS_LIBAD936X`).
+   Поведенческий тест с записывающими стабами PIO/RFIC: deadman
+   (`legion_work` по wd_fired → CTRL=0 + standby/CONTROL, однократность),
+   порядок TXMUTE в AIR_PREP, readback GAINMODE≠MGC → отказ.
 2. **Топ-левели обеих платформ проанализированы GHDL**: bladeRF 1
    (`bladerf-legion.vhd`) и micro (`platforms/bladerf-micro/vhdl/bladerf-legion.vhd`)
    — все legion-юниты привязались, порты инстансов сверены с сущностями;
@@ -133,8 +144,11 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
     шлюз пишет AIR_FREQ_KHZ (+AIR_GAIN_DB) и AIR_PREP → `legion_cmds.c`
     через штатный RFIC-интерфейс Nuand для FPGA-tuning
     (`rfic_command_write_immed`, devices_rfic.c) делает INIT(ON) →
-    LO/fs/BW → GAINMODE=MGC + GAIN (ровно то усиление, при котором хост
-    мерил полку) → TX unmute → ENABLE. DISARM (CTRL=0) уводит RFIC в
+    **TX mute** → LO/fs/BW → GAINMODE=MGC + **readback** + GAIN (ровно то
+    усиление, при котором хост мерил полку) → ENABLE → **TX unmute
+    последним**. Mute на всю перестройку — потому что RFIC-апдейты могут
+    перезапускать TX-калибровку (апстрим позже ввёл guard TX_RECAL; в
+    нашем дереве его нет). DISARM (CTRL=0) уводит RFIC в
     STANDBY сам. ARM lb_* без AIR_PREP на micro — отказ в NIOS.
     Первый AIR_PREP после питания — полный ad9361_init (сотни мс, длинный
     таймаут у шлюза); дальше — тёплый рестор из standby.
@@ -167,12 +181,32 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   2 Гц → запас 2× к таймауту 1 с по умолчанию. На micro tx_clock =
   ad9361.clock (2R2T DDR → DATA_CLK = 2×fs = 4 МГц при 2 MSPS — тот же
   юнит; стенд E5 подтверждает: wd_fired ≤ ~1.5 с после потери kick).
-- **Deadman end-to-end:** heartbeat генерирует ПРИЛОЖЕНИЕ на ноутбуке
+- **Deadman end-to-end, слои:** heartbeat генерирует ПРИЛОЖЕНИЕ на ноутбуке
   (500 мс, пока ARM), агент шлюза только релеит. Замерло любое звено
-  (app/TCP/агент/USB) → kicks прекращаются → watchdog в FPGA гасит TX сам.
-  Агент НЕ генерирует heartbeat сам — иначе TX жил бы после смерти ноутбука.
+  (app/TCP/агент/USB) → kicks прекращаются → **FPGA** гасит цифру сам
+  (~1 с, нули с каденсом) → **NIOS** (`legion_work` в main-loop) видит
+  wd_fired при живом ARM и сам делает DISARM: CTRL=0 (на micro тот же
+  CTRL=0 уводит RFIC в standby), на x40 снимает lms_rx/tx_enable в CONTROL
+  (NIOS — хозяин этого PIO). HDL-бит wd_fired после CTRL=0 гаснет за
+  микросекунды (enable=0 сбрасывает expired) — поэтому NIOS держит
+  **липкий латч в STATUS bit4** до следующего ARM, иначе хост читал бы
+  пульс никогда (E5 и fpgaPollStatus смотрят именно wd_fired) →
+  **шлюз** по `kick_age` (`LEGION_KICK_TIMEOUT_S`, дефолт 2.5 с) делает
+  DISARM → USB release (именно в этом порядке) — сканер/ожившая панель
+  снова открывают Soapy.
+  Агент НЕ генерирует heartbeat сам — иначе TX жил бы после смерти
+  ноутбука. Тихий выход агента: SIGTERM/SIGINT/atexit → DISARM + release
+  (wiki Nuand: kill без libusb_close роняет Intel XHCI); systemd unit —
+  `fpga/systemd/legion-gateway.service` (Restart=on-failure).
+  USB re-enumerate: acquire проверяет FPGA (`QUERY_FPGA_STATUS`, как
+  `usb_is_fpga_configured` в libbladeRF) — пустая (питание xA4 от USB!) →
+  автозагрузка `LEGION_FPGA_RBF` или честный отказ; сбой xfer → один
+  ретрай с re-acquire.
 - **lb_gated требует явного порога:** `arm` без `det_thr` в этой сессии →
-  отказ (порог 0 = гейт открывается на шум).
+  отказ (порог 0 = гейт открывается на шум). Явный `det_thr` ниже floor
+  (`LEGION_DET_THR_FLOOR`, дефолт 1) → отказ; приложение считает свой пол
+  из полки (`FPGA_DET_THR_FLOOR=64`: медиана 16 при K=4 — деградированный
+  захват, ARM не даёт).
 - **det_active — уровень, det_count — каждое окно с детектом** (не фронт!).
   Автовозврат хоста — по stagnation det_count: не растёт N опросов подряд
   (~1.2 с при опросе 400 мс) = ни одного окна с энергией = «пропала».
