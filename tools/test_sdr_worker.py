@@ -417,6 +417,24 @@ def main() -> int:
             "det_capture: сигнал в 25% окон не поднимает полку (нижние 60%)",
             abs(med_hot - med_noise) / med_noise < 0.5,
         )
+        # Локстеп с legion_detector_tb.vhd: константная энергия проходит
+        # нижние 60% без изменений → avg окна в единицах шины (SC16Q11)
+        # численно равен avg HDL (Σ(I²+Q²)>>shift): I=100,Q=0 → 10000
+        # (в TB ≥ порога 1000 = детект), I=20,Q=20 → 800 (в TB — тишина).
+        tb1 = np.full(16 * 64, complex(100 / w.CF32_FULL_SCALE, 0), dtype=np.complex64)
+        check(
+            "det_capture ≡ TB детектора: I=100,Q=0 → avg 10000",
+            abs(w.window_energy_median(tb1, 16) - 10000) < 1e-6,
+        )
+        tb2 = np.full(
+            16 * 64,
+            complex(20 / w.CF32_FULL_SCALE, 20 / w.CF32_FULL_SCALE),
+            dtype=np.complex64,
+        )
+        check(
+            "det_capture ≡ TB детектора: I=20,Q=20 → avg 800",
+            abs(w.window_energy_median(tb2, 16) - 800) < 1e-6,
+        )
     else:
         check("det_capture: numpy есть (CI ставит tools/requirements.txt)", False)
 
