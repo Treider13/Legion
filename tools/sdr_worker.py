@@ -1814,6 +1814,10 @@ def fpga_rpc(host: str, msg: dict[str, Any]) -> dict[str, Any]:
     try:
         with _socket.create_connection((host, FPGA_GW_PORT), timeout=3.0) as s:
             s.sendall((json.dumps(msg) + "\n").encode())
+            # readline без таймаута вис бы вечно при мёртвом шлюзе, а Rust
+            # убивает воркер на 15 с. 12 с: больше 10-с AIR_PREP шлюза (полный
+            # ad9361_init на NIOS при первом подъёме), меньше убийства.
+            s.settimeout(12.0)
             f = s.makefile("rb")
             line = f.readline()
         if not line:
