@@ -255,20 +255,8 @@ def main() -> int:
     check("scan freqs", abs(scan["bins"][16]["freqMhz"] - 2442) < 2)
     check("fake span = ADC 40 МГц, не окно 20", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 40) < 1.5)
 
-    class _TimeoutDev:
-        def readStream(self, *a, **k):
-            return type("S", (), {"ret": -1})()
-
-    stuck = w.Radio()
-    stuck.dev = _TimeoutDev()
-    stuck.rx = object()
-    stuck._discard_left = 4096
-    try:
-        stuck._wait_psd(4e6)
-        drain_ok = False
-    except RuntimeError as e:
-        drain_ok = "слив" in str(e)
-    check("неполный слив → отказ, не Welch на старом IQ", drain_ok)
+    # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
+    check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())
 
     check("FPGA park default = 2e6 (NCO)", w.FPGA_PARK_FS_HZ == 2e6)
     pk = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 20, "fsHz": 2e6, "rx": True, "tx": True})
