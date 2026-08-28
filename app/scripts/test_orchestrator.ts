@@ -1557,6 +1557,9 @@ async function main(): Promise<void> {
     gwSrc.includes('"warn": warn') && gwSrc.includes("ВНИМАНИЕ"));
   check("store: подсказка «перезанял USB» только без warn шлюза",
     storeSrc.includes("!st.ok || st.warn"));
+  const buildDone = storeSrc.slice(storeSrc.indexOf('legionBuildPhase: "done"'), storeSrc.indexOf('legionBuildPhase: "done"') + 700);
+  check("сборка legion: новый артефакт сбрасывает галочку (паттерн setSdrFlashName)",
+    buildDone.includes("legionFlashPath: art.path") && buildDone.includes("legionFlashConfirm: false"));
   check("rust: один лок на проверку+spawn (нет TOCTOU двойного старта)",
     legionRust.includes("Один лок на проверку «уже идёт» + spawn + запись"));
 

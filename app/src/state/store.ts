@@ -2705,6 +2705,9 @@ export const useLegion = create<LegionStore>((set, get) => {
             legionArtifactPath: art.path,
             legionArtifactSha256: art.sha256 ?? "",
             legionFlashPath: art.path,
+            // Новый артефакт = новый вход: галочка от старого файла не
+            // переносится (тот же паттерн, что setSdrFlashName → confirm false).
+            legionFlashConfirm: false,
           });
           pushLog(
             "sys",
