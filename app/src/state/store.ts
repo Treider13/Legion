@@ -46,6 +46,7 @@ import {
   clampDetShift,
   fpgaArmCmd,
   fpgaObserveLine,
+  ncoFtwFromFrac,
   planFpgaAir,
 } from "../sense/fpgaFastpath";
 import {
@@ -1353,6 +1354,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           detThr: get().fpgaDetThr,
           detShift: get().fpgaDetShift,
           token: get().fpgaToken,
+          ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
         });
         const r = await hostFpga(cmd, get().sdrGateway);
         pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -1717,11 +1719,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           seed: Date.now() & 0xffffffff,
         });
         gWalker = walker;
-        const nBins = walker.windowMhz >= 40 ? 256 : 64;
+        const nBins = 1024;
         set({ scanRunning: true, scanCenterMhz: null });
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: авто · RX energy · окно ${walker.windowMhz} МГц`,
+          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: авто · Welch-8 · 1024 бин · ADC ${Math.min(40, analog)} MSPS · окно LO ${walker.windowMhz} МГц`,
         );
         let inflight = false;
         let lastResenseAt = 0;

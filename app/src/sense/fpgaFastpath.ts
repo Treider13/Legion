@@ -105,10 +105,21 @@ export function fpgaObserveLine(st: {
   return `наблюдение: ${gate} · детектов ${st.det_count ?? 0}`;
 }
 
-/** Команда ARM для шлюза. det_thr/shift — только lb_gated. */
+/**
+ * FTW NCO: fj·2³². fj=0 → fs/8, не DC (панель без cinema иначе ставила 0).
+ * NCO — TX DDS, не анализатор.
+ */
+export function ncoFtwFromFrac(fj: number, _fsHz = LEGION_FPGA_FS_HZ): number {
+  let frac = Number.isFinite(fj) ? fj : 0.125;
+  if (frac === 0) frac = 0.125;
+  frac = Math.min(0.45, Math.max(-0.45, frac));
+  return Math.round(frac * 2 ** 32) >>> 0;
+}
+
+/** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco. */
 export function fpgaArmCmd(
   mode: "player" | "nco" | "lb_gated" | "lb_always",
-  opts: { detThr: number; detShift: number; token: string; wd?: boolean },
+  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
     op: "arm",
@@ -119,6 +130,9 @@ export function fpgaArmCmd(
   if (mode === "lb_gated") {
     cmd.det_thr = opts.detThr;
     cmd.det_shift = clampDetShift(opts.detShift);
+  }
+  if (mode === "nco") {
+    cmd.nco_ftw = opts.ncoFtw ?? ncoFtwFromFrac(0.125);
   }
   return cmd;
 }

@@ -74,6 +74,25 @@ def main() -> int:
         pooled = w._pool_bins(freqs, db, 64)
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
+        check("scan() не зовёт _read_fft", not hasattr(w, "_read_fft"))
+        check("AGC в коде выкл", "setGainMode(SOAPY_SDR_RX, 0, False)" in open(WORKER).read())
+        check("AGC True не пишем", "setGainMode(SOAPY_SDR_RX, 0, True)" not in open(WORKER).read())
+        check("fs скана 40e6", w.SCAN_FS_HZ == 40e6 and w.WELCH_FRAMES == 8)
+        check("x40 fs ≤ 28 МГц", w.scan_fs_hz(28) == 28e6)
+        check("xa4 fs = 40 МГц", w.scan_fs_hz(56) == 40e6)
+        nfft = 64
+        t = np.arange(nfft)
+        tone = np.exp(1j * 2 * np.pi * 8 * t / nfft)
+        frames = [tone] * w.WELCH_FRAMES
+        spec = w.welch_dbm(frames, 40e6, 2442.0)
+        check("welch полный FFT, не pool", len(spec) == nfft)
+        mid = nfft // 2
+        check("DC-бин = среднее соседей", abs(spec[mid]["powerDbm"] - 0.5 * (spec[mid - 1]["powerDbm"] + spec[mid + 1]["powerDbm"])) < 1e-9)
+        check("ось частот: центр после fftshift", abs(spec[mid]["freqMhz"] - 2442.0) < 40e6 / nfft / 1e6 + 1e-6)
+        win = w.hann_window(8)
+        expect = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.arange(8) / 7))
+        check("Hann 0.5·(1−cos)", np.allclose(win, expect))
+        check("слив 32×4096", w.DISCARD_CHUNKS * w.RING_CHUNK == 32 * 4096)
 
         # --- ТИП СИГНАЛА: синтез всех волн ---
         all_ok = True

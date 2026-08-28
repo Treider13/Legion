@@ -3,7 +3,7 @@
 // Запуск: npx tsx scripts/test_orchestrator.ts
 // ============================================================================
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
-import { detectFromBins, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
+import { detectFromBins, estimateNoiseFloor, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
@@ -30,6 +30,7 @@ import {
   detectorWindowUs,
   fpgaArmCmd,
   fpgaObserveLine,
+  ncoFtwFromFrac,
   parkSpanMhz,
   planFpgaAir,
 } from "../src/sense/fpgaFastpath";
@@ -260,6 +261,7 @@ function main(): void {
   const bins = sdr.scanWindow(2442, 20, 64);
   const dets = detectFromBins(bins, 12);
   check("energy detection ловит несущую", dets.some((d) => Math.abs(d.freqMhz - 2442) < 0.5));
+  check("пол = медиана нижних 60%", estimateNoiseFloor([-90, -88, -86, -84, -10]) === -88);
 
   const centers = planCenters(ism, 20);
   check("план скана непустой", centers.length >= 5);
@@ -1131,6 +1133,10 @@ function main(): void {
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
   check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
+  const ncoZero = fpgaArmCmd("nco", { detThr: 5000, detShift: 4, token: "", ncoFtw: ncoFtwFromFrac(0) });
+  check("ARM nco шлёт FTW", typeof ncoZero.nco_ftw === "number");
+  check("fj=0 → fs/8, не DC", ncoZero.nco_ftw === ncoFtwFromFrac(0.125) && ncoZero.nco_ftw !== 0);
+  check("ARM nco без det_thr", ncoZero.det_thr === undefined);
   check(
     "наблюдение: тишина",
     fpgaObserveLine({ ok: true, det_active: false, det_count: 0 }).includes("тишина"),

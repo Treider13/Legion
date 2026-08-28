@@ -228,6 +228,13 @@ r = rpc({"op": "set", "reg": "nco_ftw", "value": 12345678})
 check("gateway set nco_ftw", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_NCO_FTW) == 12345678)
 
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("arm nco пишет FTW", r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_NCO_FTW) == 0x20000000)
+r = rpc({"op": "arm", "mode": "nco"})
+ftw_default = gw.fpga._t.regs.get(lf.REG_NCO_FTW)
+check("arm nco без FTW → fs/8, не DC", r.get("ok") is True and ftw_default not in (None, 0))
+
 r = rpc({"op": "set", "reg": "nope", "value": 1})
 check("gateway set неизвестного reg → отказ", r.get("ok") is False)
 

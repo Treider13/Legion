@@ -95,6 +95,12 @@ TX_FS = 2.0e6
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
 FFT_MIN = 1024  # wiki PythonSupport: буфер 1024, не 64 бина UI
+# Хост-анализатор: фиксированный ADC, не окно Walker. Кепка — analog BW платы.
+SCAN_FS_HZ = 40e6
+SCAN_FFT_N = 1024
+WELCH_FRAMES = 8
+RING_CHUNK = 4096
+DISCARD_CHUNKS = 32  # 32×4096 ≈ 3.28 мс @ 40 MSPS — слив USB, не ФАПЧ
 
 
 def cw_lo_hz(rf_hz: float, fs: float = TX_FS) -> float:
@@ -663,6 +669,9 @@ class Radio:
         self._tone = None
         self.tx_error: str | None = None
         self.tx_fail = 0
+        self._discard_left = 0
+        self._ring_gen = 0
+        self._psd_gen = 0
 
     def tx_live(self) -> bool:
         if self.tx_mhz is None or self.tx_error:
@@ -700,6 +709,9 @@ class Radio:
             self._rx_fs = None
             self._rx_bw = None
             self._rx_center = None
+            self._discard_left = 0
+            self._ring_gen = 0
+            self._psd_gen = 0
             self.args = ""
             self.tx_error = None
         # Soapy-Device держит USB-handle до GC: без принудительного сбора
@@ -757,6 +769,7 @@ class Radio:
         assert self.dev is not None
         bw = min(fs, self.analog_bw * 1e6)
         rate_changed = self._rx_fs != fs or self._rx_bw != bw
+        lo_changed = self._rx_center != center_hz
         # bladeRF2: смена rate на живом потоке валит streamer — чистая
         # остановка перед перестройкой, запуск после (паттерн libbladeRF).
         if rate_changed and self.rx is not None and self._rx_on:
@@ -773,7 +786,7 @@ class Radio:
                 pass
             self._rx_fs = fs
             self._rx_bw = bw
-        if self._rx_center != center_hz:
+        if lo_changed:
             # LO retune на живом потоке безопасен (datapath не сбрасывается).
             self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
             self._rx_center = center_hz
@@ -785,9 +798,13 @@ class Radio:
             # half-duplex: после TX поток есть, но deactivate — wiki: activate снова
             self.dev.activateStream(self.rx)
             self._rx_on = True
+        if rate_changed or lo_changed:
+            # Слив USB-кольца. Аналоговый хвост ФАПЧ здесь не моделируется.
+            self._ring_gen += 1
+            self._discard_left = DISCARD_CHUNKS * RING_CHUNK
 
     def scan(self, center_mhz: float, bw_mhz: float, bins: int) -> dict[str, Any]:
-        n = max(8, min(int(bins), 4096))
+        n = max(8, min(int(bins) if bins else SCAN_FFT_N, 4096))
         bw = max(0.2, float(bw_mhz))
         extra = self._scan_extra()
         if not self.full_duplex and self.tx_mhz is not None:
@@ -805,17 +822,51 @@ class Radio:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
-        # Кепка только по аналоговой BW устройства. Был ещё потолок 40 МГц:
-        # при окне 56 МГц (bladeRF) walker шагал на 56, а скан покрывал ±20 —
-        # 16 МГц между окнами не сканировались никогда (аудит N1).
-        fs = min(max(bw * 1e6, 1e6), self.analog_bw * 1e6)
+        # ADC 40 MSPS / фильтр 40 МГц, не ширина окна Walker. Кепка — analog BW.
+        fs = scan_fs_hz(self.analog_bw)
         with self._lock:
             try:
                 self._ensure_rx(fs, center_mhz * 1e6)
-                spec = _read_fft(self.dev, self.rx, n, fs, center_mhz)
+                spec = self._psd_from_ring(n, fs, center_mhz)
             except Exception as e:
                 return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
+
+    def _wait_psd(self, fs: float) -> None:
+        """Дождаться слива после смены LO/fs. USB-буферы, не ФАПЧ."""
+        tries = 0
+        while self._discard_left > 0 and tries < DISCARD_CHUNKS * 4:
+            want = min(RING_CHUNK, self._discard_left)
+            got = _read_iq(self.dev, self.rx, want, fs)
+            if got is None:
+                tries += 1
+                continue
+            self._discard_left -= len(got)
+            tries = 0
+
+    def _psd_from_ring(self, nfft: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
+        self._wait_psd(fs)
+        frames = [self._read_exact(nfft, fs) for _ in range(WELCH_FRAMES)]
+        self._psd_gen = self._ring_gen
+        return welch_dbm(frames, fs, center_mhz)
+
+    def _read_exact(self, n: int, fs: float) -> Any:
+        acc: list[Any] = []
+        need = n
+        for _ in range(24):
+            chunk = _read_iq(self.dev, self.rx, min(need, RING_CHUNK), fs)
+            if chunk is None:
+                continue
+            acc.append(chunk)
+            need -= len(chunk)
+            if need <= 0:
+                break
+        if not acc:
+            raise RuntimeError("readStream: нет сэмплов (шлюз/кабель/прошивка?)")
+        x = np.concatenate(acc)[:n]
+        if len(x) < n:
+            raise RuntimeError("readStream: мало сэмплов для Welch")
+        return x
 
     def _scan_extra(self) -> dict[str, Any]:
         out: dict[str, Any] = {"txLive": self.tx_live()}
@@ -1028,7 +1079,9 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
 
 
 def _setup_front_end(dev: Any, can_tx: bool) -> None:
-    """Антенна/gain — как в wiki listAntennas + Deepwave setGain. Иначе TX часто в 0."""
+    """Антенна + фиксированный RX gain. AGC не включаем (setGainMode False).
+    Если драйвер проглотил False — железо может остаться в AGC; в коде True нет.
+    cal lms / cal dc / rxvga2 отсюда не вызываются."""
     try:
         rx_ants = list(dev.listAntennas(SOAPY_SDR_RX, 0) or [])
         pick = next((a for a in rx_ants if str(a).upper() in ("RX", "RX1", "RX2", "LNAL", "LNAH")), None)
@@ -1037,12 +1090,23 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
     except Exception:
         pass
     try:
-        dev.setGainMode(SOAPY_SDR_RX, 0, True)
+        dev.setGainMode(SOAPY_SDR_RX, 0, False)
     except Exception:
-        try:
-            dev.setGain(SOAPY_SDR_RX, 0, 30)
-        except Exception:
-            pass
+        pass
+    try:
+        dev.setGain(SOAPY_SDR_RX, 0, 30)
+    except Exception:
+        pass
+    try:
+        if hasattr(dev, "setDCOffsetMode"):
+            dev.setDCOffsetMode(SOAPY_SDR_RX, 0, False)
+    except Exception:
+        pass
+    try:
+        if hasattr(dev, "setDCOffset"):
+            dev.setDCOffset(SOAPY_SDR_RX, 0, 0.0)
+    except Exception:
+        pass
     if not can_tx:
         return
     try:
@@ -1063,18 +1127,57 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
             pass
 
 
-def _read_size(dev: Any, rx: Any, n: int) -> int:
-    want = max(int(n), FFT_MIN)
-    try:
-        mtu = int(dev.getStreamMTU(rx))
-        if mtu > 0:
-            want = max(want, min(mtu, 4096))
-    except Exception:
-        pass
-    return min(max(want, FFT_MIN), 4096)
+def scan_fs_hz(analog_bw_mhz: float) -> float:
+    """40 MSPS, но не шире analog BW платы (x40 = 28 МГц)."""
+    cap = max(float(analog_bw_mhz) * 1e6, 1e6)
+    return min(SCAN_FS_HZ, cap)
+
+
+def hann_window(n: int) -> Any:
+    """0.5·(1−cos(2πn/(N−1))) — то же, что np.hanning для N>1."""
+    if n <= 1:
+        return np.ones(n, dtype=np.float64)
+    k = np.arange(n, dtype=np.float64)
+    return 0.5 * (1.0 - np.cos(2.0 * np.pi * k / (n - 1)))
+
+
+def welch_dbm(frames: list[Any], fs: float, center_mhz: float) -> list[dict[str, float]]:
+    """Welch-8, |X|²/N², fftshift, DC-бин = среднее соседей.
+    Имя powerDbm — ярлык: нет dBFS→дБм и нет учёта gain."""
+    if not frames:
+        raise RuntimeError("welch: нет кадров")
+    n = int(len(frames[0]))
+    win = hann_window(n)
+    acc = None
+    for x in frames:
+        spec = np.fft.fftshift(np.fft.fft(np.asarray(x) * win))
+        p = (np.abs(spec) ** 2) / float(n * n)
+        acc = p if acc is None else acc + p
+    acc = acc / float(len(frames))
+    db = 10.0 * np.log10(acc + 1e-12)
+    mid = n // 2
+    if n >= 3:
+        db[mid] = 0.5 * (db[mid - 1] + db[mid + 1])
+    # (center − fs/2) + k·(fs/N) после fftshift
+    freqs = (center_mhz - (fs / 2.0) / 1e6) + np.arange(n) * ((fs / n) / 1e6)
+    return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
+
+
+def _read_iq(dev: Any, rx: Any, n: int, fs: float) -> Any:
+    buf = np.zeros(int(n), dtype=np.complex64)
+    timeout = stream_timeout_us(len(buf), fs)
+    sr = dev.readStream(rx, [buf], len(buf), timeoutUs=timeout)
+    ret = stream_ret(sr)
+    kind = stream_kind(ret)
+    if kind == "error":
+        raise RuntimeError(f"readStream {kind} ret={ret}")
+    if ret <= 0:
+        return None
+    return buf[:ret].copy()
 
 
 def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
+    """Только тесты. scan() полный FFT не пулит — max-pool врал центр окна в LO."""
     if len(db) <= n:
         return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
     edges = np.linspace(0, len(db), n + 1, dtype=int)
@@ -1086,51 +1189,6 @@ def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
         j = int(a + np.argmax(db[a:b]))
         out.append({"freqMhz": float(freqs[j]), "powerDbm": float(db[j])})
     return out
-
-
-def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-    """Усредняем |FFT|², не IQ (когерентная сумма фаз гасит тон).
-    Wiki: readStream возвращает StreamResult; timeoutUs не дефолт 100ms."""
-    if not NUMPY:
-        raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
-    nread = _read_size(dev, rx, n)
-    buf = np.zeros(nread, dtype=np.complex64)
-    timeout = stream_timeout_us(nread, fs)
-    ps = None
-    got = 0
-    used = nread
-    fatal = None
-    for _ in range(12):
-        sr = dev.readStream(rx, [buf], nread, timeoutUs=timeout)
-        ret = stream_ret(sr)
-        kind = stream_kind(ret)
-        if kind == "error":
-            fatal = f"readStream {kind} ret={ret}"
-            break
-        if ret <= 0:
-            continue
-        x = buf[:ret]
-        if len(x) < 8:
-            continue
-        # нули в хвосте размазывают спектр (sinc). Только одинаковая длина.
-        if ps is not None and len(x) != used:
-            continue
-        used = len(x)
-        win = np.hanning(len(x))
-        spec = np.fft.fftshift(np.fft.fft(x * win))
-        p = (np.abs(spec) ** 2) / len(x)
-        ps = p if ps is None else ps + p
-        got += 1
-        if got >= 2:
-            break
-    if fatal:
-        raise RuntimeError(fatal)
-    if ps is None or got == 0:
-        raise RuntimeError("readStream: нет сэмплов (шлюз/кабель/прошивка?)")
-    ps = ps / got
-    db = 10.0 * np.log10(ps + 1e-12)
-    freqs = np.fft.fftshift(np.fft.fftfreq(used, 1.0 / fs)) / 1e6 + center_mhz
-    return _pool_bins(freqs, db, n)
 
 
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
@@ -1206,7 +1264,7 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             bool(msg.get("fullDuplex", True)),
         )
     if op == "scan":
-        return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
+        return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or SCAN_FFT_N))
     if op == "tx":
         return radio.tx_cue(float(msg["freqMhz"]))
     if op == "tx_wave":

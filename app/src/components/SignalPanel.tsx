@@ -273,7 +273,7 @@ export function SignalPanel() {
               disabled={s.fpgaArmed || s.fpgaBusy}
             >
               <option value="player">PLAYER — волна из RAM FPGA</option>
-              <option value="nco">NCO — тон DDS из FPGA</option>
+              <option value="nco">NCO — тон DDS из FPGA (FTW с fj, не DC)</option>
               <option value="lb_always">LOOPBACK постоянный (RX→TX, без детектора)</option>
             </select>
           </label>

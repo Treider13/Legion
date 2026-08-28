@@ -197,13 +197,23 @@ export class MockSdrBackend implements SdrBackend {
   }
 }
 
+/** Медиана нижних 60% мощности — пол окна. Не 20-й перцентиль. */
+export function estimateNoiseFloor(powers: readonly number[]): number {
+  if (powers.length === 0) return 0;
+  const sorted = [...powers].sort((a, b) => a - b);
+  const n = Math.max(1, Math.floor(sorted.length * 0.6));
+  const slice = sorted.slice(0, n);
+  const mid = Math.floor(slice.length / 2);
+  if (slice.length % 2 === 0) return (slice[mid - 1] + slice[mid]) / 2;
+  return slice[mid];
+}
+
 export function detectFromBins(
   bins: readonly ScanBin[],
   thresholdDb: number,
 ): Detection[] {
   if (bins.length === 0) return [];
-  const sorted = [...bins].map((b) => b.powerDbm).sort((a, b) => a - b);
-  const noiseDbm = sorted[Math.floor(sorted.length * 0.2)] ?? sorted[0];
+  const noiseDbm = estimateNoiseFloor(bins.map((b) => b.powerDbm));
   const hits: Detection[] = [];
   for (const b of bins) {
     const snr = b.powerDbm - noiseDbm;

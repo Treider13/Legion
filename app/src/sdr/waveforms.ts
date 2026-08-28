@@ -304,7 +304,7 @@ export function spectrumDb(re: Float64Array, im: Float64Array, fftN = 1024): Flo
   const n = Math.min(re.length, fftN);
   const pre = new Float64Array(fftN);
   const pim = new Float64Array(fftN);
-  // Окно Ханна — как в _read_fft воркера.
+  // Окно Ханна — как в welch_dbm воркера: 0.5·(1−cos(2πn/(N−1))).
   for (let i = 0; i < n; i++) {
     const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
     pre[i] = re[i] * w;
