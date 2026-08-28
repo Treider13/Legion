@@ -1371,9 +1371,9 @@ async function main(): Promise<void> {
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
   check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
-  const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат"));
+  const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат «энергия"));
   check("watchdog solo зовёт fpgaDisarm (стопает hop)", wdSolo.includes("fpgaDisarm()") && !wdSolo.includes("hostFpga({ op: \"disarm\""));
-  const disarmBlock = storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir:"));
+  const disarmBlock = storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async ()"), storeSrc.indexOf("stopFpgaAir: async ()"));
   check("DISARM отдаёт USB хосту", disarmBlock.includes('action: "release"'));
   const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
   check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
