@@ -90,6 +90,106 @@ else:
           f"не найдено: {hdr} — задайте BLADERF_TREE")
 
 # ---------------------------------------------------------------------------
+# 1б. Золотой тест 16x64 (RFIC на micro) против реального nios_pkt_16x64.h
+# ---------------------------------------------------------------------------
+C_SRC_16x64 = r"""
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include "nios_pkt_16x64.h"
+
+int main(void) {
+    uint8_t buf[16];
+    uint8_t targets[] = {NIOS_PKT_16x64_TARGET_RFIC, 0x80};
+    uint16_t addrs[] = {0x0000, 0x0102, 0xFFFF};
+    uint64_t datas[] = {0, 1, 0xDEADBEEFCAFEBABEULL, 0xFFFFFFFFFFFFFFFFULL};
+    for (int t = 0; t < 2; t++)
+        for (int w = 0; w < 2; w++)
+            for (int a = 0; a < 3; a++)
+                for (int d = 0; d < 4; d++) {
+                    nios_pkt_16x64_pack(buf, targets[t], w, addrs[a], datas[d]);
+                    for (int i = 0; i < 16; i++) printf("%02x", buf[i]);
+                    printf("\n");
+                }
+    return 0;
+}
+"""
+
+hdr16 = os.path.join(NUAND, "fpga_common", "include", "nios_pkt_16x64.h")
+if os.path.isfile(hdr16):
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "ref16.c")
+        exe = os.path.join(td, "ref16")
+        with open(src, "w") as f:
+            f.write(C_SRC_16x64)
+        cc = subprocess.run(["gcc", "-I", os.path.dirname(hdr16), src, "-o", exe],
+                            capture_output=True, text=True)
+        check("gcc собрал реальный nios_pkt_16x64.h", cc.returncode == 0, cc.stderr[-200:])
+        if cc.returncode == 0:
+            ref = subprocess.run([exe], capture_output=True, text=True).stdout.strip().split("\n")
+            mine = []
+            for t in (lf.NIOS_PKT_16x64_TARGET_RFIC, 0x80):
+                for w in (False, True):
+                    for a in (0x0000, 0x0102, 0xFFFF):
+                        for d in (0, 1, 0xDEADBEEFCAFEBABE, 0xFFFFFFFFFFFFFFFF):
+                            mine.append(lf.pack_16x64(t, w, a, d).hex())
+            check(f"16x64 байт-в-байт совпадение с Nuand C ({len(ref)} векторов)",
+                  ref == mine, f"ref={len(ref)} mine={len(mine)}")
+else:
+    check("дерево Nuand (fpga_common/include/nios_pkt_16x64.h)", False,
+          f"не найдено: {hdr16}")
+
+# ---------------------------------------------------------------------------
+# 1в. RFIC-константы против вендоренного bladerf2_common.h / libbladeRF.h
+# ---------------------------------------------------------------------------
+b2c = os.path.join(NUAND, "fpga_common", "include", "bladerf2_common.h")
+if os.path.isfile(b2c):
+    src = open(b2c, encoding="utf-8").read()
+
+    def enum_val(name: str) -> int | None:
+        m = re.search(rf"{name}\s*=\s*0x([0-9A-Fa-f]+)", src)
+        return int(m.group(1), 16) if m else None
+
+    for name, py in (("BLADERF_RFIC_COMMAND_STATUS", lf.RFIC_CMD_STATUS),
+                     ("BLADERF_RFIC_COMMAND_INIT", lf.RFIC_CMD_INIT),
+                     ("BLADERF_RFIC_COMMAND_ENABLE", lf.RFIC_CMD_ENABLE),
+                     ("BLADERF_RFIC_COMMAND_SAMPLERATE", lf.RFIC_CMD_SAMPLERATE),
+                     ("BLADERF_RFIC_COMMAND_FREQUENCY", lf.RFIC_CMD_FREQUENCY),
+                     ("BLADERF_RFIC_COMMAND_BANDWIDTH", lf.RFIC_CMD_BANDWIDTH)):
+        check(f"RFIC {name} == py", enum_val(name) == py,
+              f"nuand={enum_val(name)} py={py}")
+    # INIT-state — enum без явных значений: порядок OFF, ON, STANDBY = 0,1,2
+    m = re.search(r"typedef\s+enum\s*\{([^}]*BLADERF_RFIC_INIT_STATE_OFF[^}]*)\}", src)
+    order = re.findall(r"(BLADERF_RFIC_INIT_STATE_\w+)", m.group(1)) if m else []
+    check("RFIC INIT_STATE порядок OFF,ON,STANDBY = 0,1,2",
+          order == ["BLADERF_RFIC_INIT_STATE_OFF", "BLADERF_RFIC_INIT_STATE_ON",
+                    "BLADERF_RFIC_INIT_STATE_STANDBY"]
+          and lf.RFIC_INIT_ON == 1 and lf.RFIC_INIT_STANDBY == 2)
+
+    def define_val(src_text: str, name: str) -> int | None:
+        m = re.search(rf"#define\s+{name}\s+0x([0-9A-Fa-f]+)", src_text)
+        if m:
+            return int(m.group(1), 16)
+        m = re.search(rf"#define\s+{name}\s+(\d+)\s*$", src_text, re.M)
+        return int(m.group(1)) if m else None
+
+    check("RFIC STATUS WQLEN shift/mask",
+          define_val(src, "BLADERF_RFIC_STATUS_WQLEN_SHIFT") == lf.RFIC_STATUS_WQLEN_SHIFT
+          and define_val(src, "BLADERF_RFIC_STATUS_WQLEN_MASK") == lf.RFIC_STATUS_WQLEN_MASK)
+else:
+    check("дерево Nuand (fpga_common/include/bladerf2_common.h)", False, f"нет {b2c}")
+
+lbrf = os.path.join(NUAND, "host", "libraries", "libbladeRF", "include", "libbladeRF.h")
+if os.path.isfile(lbrf):
+    lsrc = open(lbrf, encoding="utf-8").read()
+    check("каналы RX=(ch<<1), TX=(ch<<1)|1 (libbladeRF.h)",
+          "(((ch) << 1) | 0x0)" in lsrc and "(((ch) << 1) | 0x1)" in lsrc
+          and lf.RFIC_CH_RX0 == 0 and lf.RFIC_CH_TX0 == 1)
+else:
+    check("libbladeRF.h (каналы RX/TX)", False, f"нет {lbrf}")
+
+# ---------------------------------------------------------------------------
 # 2. Зеркало регистровой карты: Python vs VHDL vs NIOS-C
 # ---------------------------------------------------------------------------
 def vhdl_consts() -> dict:
@@ -299,6 +399,47 @@ r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
 check("CONTROL read fail → arm отказ", r.get("ok") is False)
 check("CONTROL не затёрт в 0 при сбое чтения", gw.fpga._t.control == 0x1)
 gw.fpga._t.fail_control_read = False
+
+# ---------------------------------------------------------------------------
+# 4б. micro (AD9361): эфир через RFIC 16x64, CONTROL (пины RFFE) не трогаем
+# ---------------------------------------------------------------------------
+gw.fpga._t.board = "bladerf2"
+gw.fpga._t.rfic_on = False  # как после close Soapy: RFIC в standby
+gw.fpga._t.rfic_enabled = set()
+gw.fpga._t.rfic_freq = {}
+gw.fpga._t.control = 0
+gw._rx_by_us = False
+gw._tx_by_us = False
+
+r = rpc({"op": "ping"})
+check("ping несёт board", r.get("board") == "bladerf2")
+
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "park_mhz": 2442.0})
+check("micro: ARM без припаркованного LO → отказ", r.get("ok") is False)
+check("micro: отказ честно про LO", "RFIC" in str(r.get("reason")))
+check("micro: каналы не включены при отказе", gw.fpga._t.rfic_enabled == set())
+check("micro: CONTROL (RFFE AD9361) не тронут", gw.fpga._t.control == 0)
+
+# Эмулируем park: RFIC стоит на 2442 МГц (Soapy поставил, close → standby)
+gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2442e6)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "park_mhz": 2442.0})
+check("micro: ARM с припаркованным LO → ok", r.get("ok") is True)
+check("micro: RFIC поднят из standby (INIT=ON)", gw.fpga._t.rfic_on is True)
+check("micro: ENABLE RX0+TX0", gw.fpga._t.rfic_enabled == {lf.RFIC_CH_RX0, lf.RFIC_CH_TX0})
+check("micro: CTRL ARM|LB_GATED|WD", gw.fpga._t.regs.get(lf.REG_CTRL) ==
+      lf.CTRL_ARM | (lf.MODE_LB_GATED << 1) | lf.CTRL_WD_EN)
+check("micro: CONTROL по-прежнему не тронут", gw.fpga._t.control == 0)
+
+r = rpc({"op": "disarm"})
+check("micro: disarm ok", r.get("ok") is True)
+check("micro: disarm снял ENABLE RX/TX", gw.fpga._t.rfic_enabled == set())
+
+# LO уехал от park (чужая частота) — честный отказ
+gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2400e6)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.0})
+check("micro: LO ≠ park → отказ", r.get("ok") is False)
+
+gw.fpga._t.board = "bladerf1"  # вернуть для чистоты завершения
 
 srv.shutdown()
 srv.server_close()
