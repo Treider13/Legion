@@ -61,6 +61,17 @@ begin
         assert det_active = '1' report "FAIL: no detect at energy" severity failure;
         assert det_count = 1 report "FAIL: count not incremented" severity failure;
 
+        -- Второе окно энергии ПОДРЯД (непрерывная цель): счётчик обязан
+        -- расти на каждом окне, не по фронту — иначе хост по stagnation
+        -- det_count ошибочно снимает ARM при живой ретрансляции.
+        for k in 0 to 15 loop
+            send_sample(100, 0);
+        end loop;
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        assert det_active = '1' report "FAIL: detect dropped on continuous signal" severity failure;
+        assert det_count = 2 report "FAIL: count by edge, not per window (continuous target freezes)" severity failure;
+
         -- Снова тишина → det_active снимается, счётчик не растёт
         for k in 0 to 15 loop
             send_sample(0, 0);
@@ -68,7 +79,7 @@ begin
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         assert det_active = '0' report "FAIL: detect not cleared" severity failure;
-        assert det_count = 1 report "FAIL: count grew on silence" severity failure;
+        assert det_count = 2 report "FAIL: count grew on silence" severity failure;
 
         -- Подпороговая энергия: I=20,Q=20 → 800 < 1000 → нет детекта
         for k in 0 to 15 loop
@@ -85,7 +96,7 @@ begin
             send_sample(100, 0);
         end loop;
         wait until rising_edge(clock);
-        assert det_count = 1 report "FAIL: shift=15 early detect (window overflow)" severity failure;
+        assert det_count = 2 report "FAIL: shift=15 early detect (window overflow)" severity failure;
         win_shift <= to_unsigned(4, 4);
 
         report "legion_detector_tb: PASS" severity note;

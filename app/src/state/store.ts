@@ -750,7 +750,7 @@ export const useLegion = create<LegionStore>((set, get) => {
    *  skipMhz — частота, которую сканер пропускает (энергия пропала: не
    *  цепляемся за мёртвую; refreshSkipMhz снимет skip, когда она замолчит
    *  окончательно и оживёт вновь). null — без skip (watchdog/оператор). */
-  const fpgaReturnToScan = async (skipMhz: number | null): Promise<void> => {
+  const fpgaReturnToScan = async (skipMhz: number | null, restart = true): Promise<void> => {
     if (gFpgaReturnBusy) return; // два опроса подряд — один возврат
     gFpgaReturnBusy = true;
     try {
@@ -766,7 +766,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
       await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
       gSkipMhz = skipMhz;
-      if (isFpgaAirPattern(get().scanPattern)) {
+      // restart=false: оператор стопнул в полёте — чистимся, но скан не
+      // рестартим (его решение, не таймаут).
+      if (restart && isFpgaAirPattern(get().scanPattern)) {
         // Отложенно: из fpgaHandoff.fail мы ещё внутри handoff (gFpgaHandoffBusy),
         // и startScan честно отказал бы — пусть finally сначала снимет флаги.
         setTimeout(() => {
@@ -796,7 +798,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `FPGA handoff ${mhz.toFixed(3)} МГц: ${why} — возврат к скану`);
       gHandoffFailMhz = mhz;
       gHandoffFailAt = Date.now();
-      await fpgaReturnToScan(null);
+      // Отозванный в полёте handoff (СТОП/closeSdr/…): чистимся, но скан
+      // не рестартим — оператор уже решил (ревью 2026-08-28).
+      await fpgaReturnToScan(null, !revoked());
     };
     // Отзыв намерения в полёте (паттерн gTxGen из runHandoffAsync): СТОП
     // (gFpgaAirGen) или closeSdr/stopTransmit/снятие нагрузки (gTxGen).

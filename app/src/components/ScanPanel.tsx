@@ -407,7 +407,7 @@ export function ScanPanel() {
         <div className="sdr-facts">
           <div>
             {s.fpgaStatus.ok
-              ? `наблюдение · det=${s.fpgaStatus.det_active ? "энергия" : "тишина"} · детектов=${s.fpgaStatus.det_count ?? 0} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
+              ? `наблюдение · det=${s.fpgaStatus.det_active ? "энергия" : "тишина"} · окон с энергией=${s.fpgaStatus.det_count ?? 0} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
               : `наблюдение недоступно: ${s.fpgaStatus.reason ?? "?"}`}
           </div>
         </div>

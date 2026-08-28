@@ -135,7 +135,9 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   };
 }
 
-/** Строка наблюдения: ноутбук не в тракте, только телеметрия. */
+/** Строка наблюдения: ноутбук не в тракте, только телеметрия.
+ *  det_count — счётчик КАЖДОГО окна с детектом (HDL, не фронт): рост =
+ *  энергия жива; стагнация N опросов = «пропала» → автовозврат к скану. */
 export function fpgaObserveLine(st: {
   ok?: boolean;
   det_active?: boolean;
@@ -145,7 +147,7 @@ export function fpgaObserveLine(st: {
   if (!st?.ok) return "ноутбук наблюдает · статус FPGA недоступен";
   if (st.wd_fired) return "watchdog погасил TX — конвейер на SDR остановлен";
   const gate = st.det_active ? "энергия → RX→TX на усилитель" : "тишина, гейт закрыт";
-  return `наблюдение: ${gate} · детектов ${st.det_count ?? 0}`;
+  return `наблюдение: ${gate} · окон с энергией ${st.det_count ?? 0}`;
 }
 
 /**
