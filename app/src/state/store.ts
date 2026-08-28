@@ -2008,7 +2008,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Авто-рестарта скана нет — решение оператора, не таймаут.
       gFpgaAirGen += 1; // handoff в полёте увидит смену поколения и откачет ARM
       get().stopScan();
-      if (get().fpgaArmed || get().fpgaBusy) {
+      // Только ARM-фаза: disarm/release/reopen. Handoff в полёте (fpgaBusy
+      // без armed) дожимать не надо — уборка за его abortIfRevoked, а reopen
+      // под ним открыл бы второй Soapy-device на занятом USB.
+      if (get().fpgaArmed) {
         await get().fpgaDisarm();
         await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
         set({ lastForwardMhz: null });

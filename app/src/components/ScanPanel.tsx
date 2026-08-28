@@ -267,6 +267,12 @@ export function ScanPanel() {
             <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.stopFpgaAir()}>
               СТОП FPGA
             </button>
+          ) : fpgaAir && s.fpgaBusy ? (
+            // Handoff в полёте (парк/захват/USB/ARM — на micro до секунд на
+            // первом подъёме): отмена по поколению, handoff откатится сам.
+            <button className="btn-danger" onClick={() => void s.stopFpgaAir()}>
+              СТОП (отмена handoff)
+            </button>
           ) : s.scanRunning && fpgaAir ? (
             <button className="btn-danger" onClick={() => s.stopScan()}>
               СТОП СКАН
