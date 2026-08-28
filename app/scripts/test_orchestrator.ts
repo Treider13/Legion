@@ -1540,8 +1540,11 @@ async function main(): Promise<void> {
     && legionFlashBlock.indexOf("укажите IP шлюза") < legionFlashBlock.indexOf("closeSdr()"));
   check("сборка legion: успех = артефакт на диске, не exit код (build_bladerf.sh без set -e)",
     !storeSrc.includes("st.exit === 0 && art?.path") && storeSrc.includes("if (art?.path)"));
-  check("rust: сборка через документированный argv nios shell (auto-executing command)",
-    legionRust.includes('.arg("bash")') && legionRust.includes('.arg("-c")') && legionRust.includes(".stdin(Stdio::null())"));
+  check("rust: сборка — wrapper-скрипт одним аргументом (handbook auto-executing, безопасно при exec $@)",
+    legionRust.includes("legion-build-{size}-{ts}.sh") && legionRust.includes(".arg(&wrapper)")
+    && legionRust.includes(".stdin(Stdio::null())") && !legionRust.includes('.arg("-c")'));
+  check("rust: артефакт только этой сборки (mtime ≥ старт, не файл прошлого прогона)",
+    legionRust.includes("artifact_fresh") && legionRust.includes("find_artifact(&st.quartus_dir, &st.size, st.started)"));
   check("rust: один лок на проверку+spawn (нет TOCTOU двойного старта)",
     legionRust.includes("Один лок на проверку «уже идёт» + spawn + запись"));
 

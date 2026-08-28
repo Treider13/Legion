@@ -329,7 +329,7 @@ export function ScanPanel() {
       {fpgaAir && s.fpgaLegion === false && (
         <p className="panel-warn">
           шлюз видит hosted, не legion (0x80 молчит) — ARM не взведётся. Вкладка КАСТОМ FPGA:
-          СОБРАТЬ → ПРОШИТЬ, затем рестарт шлюза.
+          СОБРАТЬ → ПРОШИТЬ; при следующем acquire шлюз сам перечитает ревизию.
         </p>
       )}
       <ul className="allow-list">

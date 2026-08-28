@@ -210,23 +210,32 @@ fn legion_build_start_blocking(board: &str, size: &str) -> Result<serde_json::Va
     let log_out = fs::File::create(&log_path).map_err(|e| format!("лог сборки: {e}"))?;
     let log_err = log_out.try_clone().map_err(|e| format!("лог сборки: {e}"))?;
 
-    // Авто-запуск команды — документированная форма Nios II Command Shell
-    // (Nios II Software Developer's Handbook, «Auto-Executing a Command»:
-    // nios2_command_shell.sh <command>; скрипт делает exec "$@" — подтверждено
-    // и сообщением «exec: make: not found» при вызове с аргументами, Altera
-    // Community #259066). setsid: своя группа процессов — ОТМЕНА бьёт по
-    // группе (quartus_sh и nios2-make — дети build_bladerf.sh).
-    // board/size — из allowlist board_args_ok, путь — из репозитория: интерполяция
-    // в bash -c безопасна (внешних строк нет).
-    let script = format!(
-        "cd \"{}\" && ./build_bladerf.sh -b {board} -s {size} -r legion; ec=$?; echo LEGION_BUILD_EXIT=$ec; exit $ec",
-        quartus.to_string_lossy()
-    );
+    // Авто-запуск — документированная форма Nios II Command Shell (Nios II
+    // Software Developer's Handbook, «Auto-Executing a Command»:
+    // `nios2_command_shell.sh custom_build.sh` — ОДИН аргумент, путь к
+    // скрипту). Именно путь, не `bash -c "…"`: старые ревизии скрипта делают
+    // `exec $@` без кавычек (исходник 15.1), и многословная команда там
+    // развалилась бы на слова. Файл-обёртка не зависит от формы exec.
+    // setsid: своя группа процессов — ОТМЕНА бьёт по группе (quartus_sh и
+    // nios2-make — дети build_bladerf.sh). board/size — из allowlist
+    // board_args_ok, путь — из репозитория: внешних строк в скрипте нет.
+    let wrapper = std::env::temp_dir().join(format!("legion-build-{size}-{ts}.sh"));
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/bash\ncd \"{}\" || exit 1\n./build_bladerf.sh -b {board} -s {size} -r legion\nec=$?\necho LEGION_BUILD_EXIT=$ec\nexit $ec\n",
+            quartus.to_string_lossy()
+        ),
+    )
+    .map_err(|e| format!("скрипт сборки: {e}"))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod скрипта сборки: {e}"))?;
+    }
     let mut cmd = Command::new("setsid");
     cmd.arg(&shell)
-        .arg("bash")
-        .arg("-c")
-        .arg(&script)
+        .arg(&wrapper)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_out))
         .stderr(Stdio::from(log_err));
@@ -289,7 +298,13 @@ fn parse_sha256sum(text: &str) -> Option<String> {
     }
 }
 
-fn find_artifact(quartus: &Path, size: &str) -> Option<serde_json::Value> {
+/// Артефакт свежий, только если .rbf записан не раньше старта ЭТОЙ сборки —
+/// иначе проваленный прогон «успешно» поднял бы файл прошлой сборки.
+fn artifact_fresh(rbf_mtime: SystemTime, started: SystemTime) -> bool {
+    rbf_mtime >= started
+}
+
+fn find_artifact(quartus: &Path, size: &str, started: SystemTime) -> Option<serde_json::Value> {
     let base = rbf_base(size);
     let mut dirs: Vec<(SystemTime, PathBuf)> = fs::read_dir(quartus)
         .ok()?
@@ -309,7 +324,12 @@ fn find_artifact(quartus: &Path, size: &str) -> Option<serde_json::Value> {
     dirs.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, dir) in dirs {
         let rbf = dir.join(format!("{base}.rbf"));
-        if !rbf.is_file() {
+        let fresh = rbf
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|m| artifact_fresh(m, started))
+            .unwrap_or(false);
+        if !rbf.is_file() || !fresh {
             continue;
         }
         let sha = fs::read_to_string(dir.join(format!("{base}.rbf.sha256sum")))
@@ -342,10 +362,10 @@ pub fn legion_build_status() -> serde_json::Value {
         }),
         Ok(Some(status)) => {
             let code = status.code().unwrap_or(-1);
-            // Критерий успеха — сам артефакт: build_bladerf.sh без set -e
-            // возвращает 0 и при упавшем Quartus, поэтому exit код — только
-            // для информации, .rbf — единственное доказательство.
-            let artifact = find_artifact(&st.quartus_dir, &st.size);
+            // Критерий успеха — сам артефакт ЭТОЙ сборки: build_bladerf.sh
+            // без set -e возвращает 0 и при упавшем Quartus, а старый .rbf
+            // прошлого прогона отсекается по mtime (artifact_fresh).
+            let artifact = find_artifact(&st.quartus_dir, &st.size, st.started);
             let log_path = st.log_path.to_string_lossy().to_string();
             let elapsed = st.started.elapsed().map(|d| d.as_secs()).unwrap_or(0);
             *guard = None;
@@ -371,6 +391,11 @@ pub fn legion_build_cancel() -> Result<String, String> {
     let Some(st) = guard.as_mut() else {
         return Err("сборка не идёт".into());
     };
+    if let Ok(Some(status)) = st.child.try_wait() {
+        // Завершилась, но статус никто не опросил — это не отмена.
+        *guard = None;
+        return Ok(format!("сборка уже завершилась (exit {}) — статус на вкладке", status.code().unwrap_or(-1)));
+    }
     let pid = st.child.id();
     // setsid на старте: pid = pgid. TERM группе — build_bladerf.sh ловит
     // сигнал своим trap и добивает build_pids; через 3 с эскалация в KILL.
@@ -456,5 +481,14 @@ mod tests {
         ]);
         assert_eq!(got, Some(v("/home/u/intelFPGA_lite/22.1/nios2eds/nios2_command_shell.sh")));
         assert_eq!(pick_nios_shell(vec![]), None);
+    }
+
+    #[test]
+    fn artifact_freshness() {
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t1 = t0 + Duration::from_secs(10);
+        assert!(artifact_fresh(t1, t0)); // .rbf записан после старта сборки
+        assert!(artifact_fresh(t0, t0)); // граница: ровно в момент старта
+        assert!(!artifact_fresh(t0, t1)); // старый .rbf прошлого прогона — не успех
     }
 }

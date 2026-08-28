@@ -52,6 +52,7 @@ export function LegionFlashPanel() {
         <label>
           ПЛАТА
           <select aria-label="Плата bladeRF для ревизии legion" value={s.sdrId} onChange={(e) => s.setSdrId(e.target.value)}>
+            {!board && <option value={s.sdrId}>{s.sdrId} — без ревизии legion</option>}
             {LEGION_BOARDS.map((b) => (
               <option key={b.sdrId} value={b.sdrId}>
                 {b.sdrId} → {b.rbf}
@@ -73,9 +74,9 @@ export function LegionFlashPanel() {
       </div>
 
       <span className="panel-title">1 · СБОРКА (этот ПК)</span>
-      <p className={s.legionCanBuild ? "status-line" : "panel-warn"}>
+      <p className={s.legionCanBuild && buildPlan.ok ? "status-line" : "panel-warn"}>
         {s.legionEnvDetail || "среда не проверена"}
-        {board ? ` · ${buildPlan.reason}` : ""}
+        {` · ${buildPlan.reason}`}
       </p>
       <div className="power-row">
         <button
