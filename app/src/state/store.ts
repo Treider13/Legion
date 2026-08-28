@@ -2431,16 +2431,19 @@ export const useLegion = create<LegionStore>((set, get) => {
             await releaseSoapyForFpga();
           }
           const acq = await gw({ op: "usb", action: "acquire" });
+          if (calibWhy) {
+            // Первопричина — калибровка: её логируем первой, сбой acquire
+            // вторичен (но не прячем — USB так и остался у хоста).
+            pushLog("sys", calibWhy);
+            if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+            set({ fpgaPath: null });
+            return false;
+          }
           // Без USB у агента ARM ушёл бы в мёртвый транспорт и упал с
           // криптичной причиной — отказываем здесь, как handoff (и с тем же
           // чистым состоянием: USB свободен, ARM не было).
           if (!acq.ok) {
             pushLog("sys", `FPGA эфир-обход: USB обратно не занят (${acq.reason ?? "отказ"}) — ARM отменён`);
-            set({ fpgaPath: null });
-            return false;
-          }
-          if (calibWhy) {
-            pushLog("sys", calibWhy);
             set({ fpgaPath: null });
             return false;
           }

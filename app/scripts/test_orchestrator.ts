@@ -1724,6 +1724,8 @@ async function main(): Promise<void> {
   check("air-обход: сбой acquire — отказ до таблицы порогов",
     storeSrc.includes("FPGA эфир-обход: USB обратно не занят") &&
     storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят") < storeSrc.indexOf("airThrTable(medians)"));
+  check("air-обход: первопричина калибровки не маскируется сбоем acquire",
+    storeSrc.indexOf('pushLog("sys", calibWhy)') < storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят"));
   // Находка 4: оценка времени калибровки — в логе до прохода и в UI до старта.
   check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
   check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));

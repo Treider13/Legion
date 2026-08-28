@@ -885,6 +885,19 @@ r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune после re-ARM снова работает", r.get("ok") is True)
 rpcm({"op": "disarm"})
 
+# tune при мёртвом USB: STATUS не прочитать → fail-closed отказ, эфир не
+# тронут (исключение из xfer ловит _Handler и отвечает ok:false).
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: ARM nco для fail-closed теста → ok", r.get("ok") is True)
+air_before_fc = gw_m.fpga._t.regs.get(lf.REG_AIR_PREP)
+gw_m.fpga._t.released = True  # USB отпущен — любой xfer падает
+r = rpcm({"op": "tune", "freq_mhz": 2475.0})
+check("micro: tune при мёртвом USB → отказ (fail-closed)", r.get("ok") is False)
+gw_m.fpga._t.released = False
+check("micro: fail-closed tune не тронул AIR_PREP",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == air_before_fc)
+rpcm({"op": "disarm"})
+
 r = rpcm({"op": "set", "reg": "air_fs_hz", "value": 10_000_000})
 check("set air_fs_hz", r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 10_000_000)
 r = rpcm({"op": "set", "reg": "air_bw_hz", "value": 10_000_000})
