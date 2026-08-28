@@ -2526,9 +2526,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     startTransmit: async () => {
       const s = get();
       if (isFpgaAirPattern(s.scanPattern)) {
-        if (s.fpgaArmed || s.fpgaBusy) return;
-        set({ fpgaMode: "lb_gated" });
-        await get().fpgaArm();
+        // В режиме FPGA+СКАНЕР передача — автоматический цикл (СТАРТ/СТОП):
+        // ARM идёт из детекта сканера с парком на пик и порогом из полки,
+        // а не ручной ARM на середину полосы с порогом «на глаз».
+        pushLog(
+          "sys",
+          "ПЕРЕДАТЬ в режиме FPGA+СКАНЕР не участвует: цикл автономный — СТАРТ/СТОП на этой вкладке",
+        );
         return;
       }
       if (s.flashBusy) {

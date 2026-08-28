@@ -939,7 +939,10 @@ class Radio:
             if not kw:
                 kw = full
         candidates = [kw]
-        if require_hw == "bladerf1":
+        # requireHw: bladerf1 = LMS6002D (x40/x115), bladerf2 = AD9361 (micro).
+        # Проверка по getHardwareKey — драйвер bladerf общий для обеих.
+        want_class = {"bladerf1": "lms", "bladerf2": "ad9361"}.get(require_hw)
+        if want_class:
             # Soapy enumerate не пишет board name. Открываем каждую bladeRF
             # и смотрим getHardwareKey (bladerf1 vs bladerf2).
             try:
@@ -977,17 +980,17 @@ class Radio:
             snap = soapy_hw_snapshot(self.dev)
             self.hardware_key = str(snap["hardwareKey"])
             last_hw = self.hardware_key
-            if require_hw == "bladerf1" and snap["class"] != "lms":
+            if want_class and snap["class"] != want_class:
                 last_err = RuntimeError(
                     f"открыт {self.hardware_key or 'плата без hardwareKey'} — "
-                    "нужен bladerf1 (LMS6002D), не micro/AD9361"
+                    f"нужен {require_hw}, а это {snap['class'] or 'не bladeRF'}"
                 )
                 self._unmake()
                 continue
             return {
                 "ok": True,
                 "reason": f"открыт Soapy {cand}"
-                + (f" · {self.hardware_key}" if self.hardware_key else ""),
+                + (f" · {self.hardwareKey}" if self.hardware_key else ""),
                 "fake": False,
                 "hardwareKey": self.hardware_key,
             }

@@ -247,6 +247,22 @@ def main() -> int:
         },
     )
     check("FAKE open + require bladerf1 → отказ", need.get("ok") is False and need.get("fake") is True)
+    need2 = rpc(
+        proc,
+        {
+            "op": "open",
+            "args": "driver=fake",
+            "analogBwMhz": 28,
+            "canTx": True,
+            "requireHw": "bladerf2",
+        },
+    )
+    check("FAKE open + require bladerf2 → отказ", need2.get("ok") is False and need2.get("fake") is True)
+    # requireHw проверяет класс для обеих плат (не только bladerf1) — факт кода
+    check(
+        "open(): requireHw bladerf2 реально сверяет класс (не вайб)",
+        'want_class = {"bladerf1": "lms", "bladerf2": "ad9361"}.get(require_hw)' in open(WORKER).read(),
+    )
     # вернуть FAKE-открытие для последующих park/tx тестов
     rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 
