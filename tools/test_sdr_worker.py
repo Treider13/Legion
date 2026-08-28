@@ -117,6 +117,10 @@ def main() -> int:
         check("PSD с кольца: полный FFT 1024", len(spec) == 1024)
         peak_i = max(range(len(spec)), key=lambda i: spec[i]["powerDbm"])
         check("PSD с кольца: пик не на LO", abs(spec[peak_i]["freqMhz"] - 2442.0) > 0.2)
+        dc_i = 1024 // 2
+        check("ось как display.cpp: DC = center", abs(spec[dc_i]["freqMhz"] - 2442.0) < 1e-9)
+        step = spec[1]["freqMhz"] - spec[0]["freqMhz"]
+        check("ось шаг = fs/N, не fs/(N−1)", abs(step - 40.0 / 1024) < 1e-12)
 
         hann = w._hann(1024)
         check("Hann DIO: края ≈ 0", abs(float(hann[0])) < 1e-6 and abs(float(hann[-1])) < 1e-6)

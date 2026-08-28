@@ -1367,8 +1367,10 @@ def _psd_from_ring(ring: IqRing, n: int, fs: float, center_mhz: float) -> list[d
             raise RuntimeError("кольцо RX: нет полного кадра FFT")
         frames[i] = batch
     db = welch_dbm(frames)
+    # display.cpp: freq[k] = (center − fs/2) + k * (fs / N).
+    # linspace(..., N) даёт шаг fs/(N−1) — DC-бин (k=N/2) уезжает с LO.
     span = fs / 1e6
-    freqs = np.linspace(center_mhz - span / 2.0, center_mhz + span / 2.0, fft_n)
+    freqs = (center_mhz - span / 2.0) + np.arange(fft_n, dtype=np.float64) * (span / fft_n)
     return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
 
 
