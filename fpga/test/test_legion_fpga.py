@@ -481,6 +481,50 @@ st_h = gw_h.handle({"op": "status"})
 check("hosted: status несёт legion=False", st_h.get("legion") is False)
 
 # ---------------------------------------------------------------------------
+# flash: результат CLI и возврат USB — разные исходы. CLI ok + re-acquire
+# провал (Soapy держит USB) → ok=True + warn, не ложный «отказ»; CLI упал →
+# ok=False. Стабы: транспорт с падающим acquire + подмена subprocess.run.
+# ---------------------------------------------------------------------------
+import types as _types_f  # noqa: E402
+
+
+class _FlakyAcquireTransport(lg.FakeTransport):
+    def acquire(self):
+        raise RuntimeError("USB занят SoapySDRServer")
+
+
+gw_f = lg.LegionGateway(fake=True)
+gw_f.fake = False  # дальше — «реальный» путь _flash_run, но со стабами
+gw_f.fpga = lf.LegionFpga(_FlakyAcquireTransport(board="bladerf1"))
+gw_f.board = "bladerf1"
+_orig_run = lg.subprocess.run
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(returncode=0, stdout="Flashing done", stderr="")
+gw_f._flash = {"running": True, "done": False, "ok": False, "log": "",
+               "action": "load", "path": "/abs/legionx40.rbf", "warn": ""}
+gw_f._flash_run("/abs/legionx40.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash: CLI ok + re-acquire провал → ok=True (запись состоялась)",
+      gw_f._flash["ok"] is True)
+check("flash: warn про re-acquire присутствует", "re-acquire" in gw_f._flash["warn"])
+r = gw_f.handle({"op": "flash_status"})
+check("flash_status: reason несёт ВНИМАНИЕ про USB",
+      r.get("ok") is True and "ВНИМАНИЕ" in str(r.get("reason")) and bool(r.get("warn")))
+
+gw_f2 = lg.LegionGateway(fake=True)
+gw_f2.fake = False
+gw_f2.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf1"))  # acquire не падает
+gw_f2.board = "bladerf1"
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(returncode=1, stdout="", stderr="fpga not configured")
+gw_f2._flash = {"running": True, "done": False, "ok": False, "log": "",
+                "action": "load", "path": "/abs/legionx40.rbf", "warn": ""}
+gw_f2._flash_run("/abs/legionx40.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash: CLI exit≠0 → ok=False, warn пуст (acquire прошёл)",
+      gw_f2._flash["ok"] is False and not gw_f2._flash["warn"])
+r = gw_f2.handle({"op": "flash_status"})
+check("flash_status: отказ CLI без ВНИМАНИЯ", r.get("ok") is False and "отказ" in str(r.get("reason")))
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).

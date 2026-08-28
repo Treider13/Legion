@@ -236,6 +236,8 @@ export interface FpgaStatus {
   done?: boolean;
   log?: string;
   action?: string;
+  /** flash: CLI записал, но USB обратно не занялся (Soapy держит / FPGA не поднялась). */
+  warn?: string;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.
@@ -262,7 +264,8 @@ export async function hostClose(): Promise<void> {
 
 // ---------------------------------------------------------------------------
 // КАСТОМ FPGA (ревизия legion): сборка Quartus на этом ПК + запись .rbf.
-// Не hosted-вкладка: свои команды legion_build_*, не sdr_flash/sdr_rpc.
+// Сборка — свои команды legion_build_* (не sdr_rpc с его 15 с); запись —
+// существующий sdr_flash (allowlist bladeRF-cli) локально или op flash шлюза.
 // ---------------------------------------------------------------------------
 
 export interface LegionEnvInfo {

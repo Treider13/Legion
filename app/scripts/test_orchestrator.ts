@@ -1547,6 +1547,10 @@ async function main(): Promise<void> {
     legionRust.includes("artifact_fresh") && legionRust.includes("find_artifact(&st.quartus_dir, &st.size, st.started)"));
   check("сборка legion: причина сбоя опроса статуса не теряется",
     storeSrc.includes("st.reason ?? `exit ${st.exit"));
+  check("шлюз: flash ok=CLI, warn=возврат USB (раздельные исходы)",
+    gwSrc.includes('"warn": warn') && gwSrc.includes("ВНИМАНИЕ"));
+  check("store: подсказка «перезанял USB» только без warn шлюза",
+    storeSrc.includes("!st.ok || st.warn"));
   check("rust: один лок на проверку+spawn (нет TOCTOU двойного старта)",
     legionRust.includes("Один лок на проверку «уже идёт» + spawn + запись"));
 

@@ -2813,7 +2813,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         const st = finalSt ?? ({ ok: false, reason: "таймаут опроса flash_status (240 с)" } as FpgaStatus);
         const reason = st.reason ?? st.log ?? (st.ok ? "готово" : "отказ");
-        const hint = !st.ok
+        // Подсказка «перезанял USB» — только без предупреждения шлюза
+        // (warn = CLI записал, но USB обратно не занялся — это не успех тракта).
+        const hint = !st.ok || st.warn
           ? ""
           : action === "load"
             ? " · шлюз перезанял USB, ревизия в RAM"

@@ -301,8 +301,9 @@ class LegionGateway:
         self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
         # Async flash (op flash): запись flash (-L) и re-enumerate после -l
         # могут превышать 12-с релей воркера — старт сразу, результат опросом.
+        # ok = результат bladeRF-cli; warn = USB обратно не занялся (re-acquire).
         self._flash: dict = {"running": False, "done": False, "ok": False,
-                             "log": "", "action": "", "path": ""}
+                             "log": "", "action": "", "path": "", "warn": ""}
         # Ревизия legion в FPGA? True — 0x80 отвечает, False — hosted
         # (NIOS: invalid id, нет SUCCESS), None — неизвестно (USB отпущен).
         self._legion: bool | None = None
@@ -484,6 +485,7 @@ class LegionGateway:
         _op_lock на время CLI не держим: ping живёт, регистровые операции
         при отпущенном USB честно падают (устройство не наше)."""
         log = ""
+        warn = ""
         ok = False
         try:
             if self.fake:
@@ -509,12 +511,16 @@ class LegionGateway:
                     t.acquire()
                 self._detect_legion()  # после -l в FPGA новая ревизия
             except Exception as e:
-                # Неверный size (A9 на A4): FPGA не конфигурируется, acquire
-                # честно падает — откат hostedx*.rbf с ноутбука.
-                log = f"{log} · re-acquire: {e}".strip(" ·")
-                ok = False
+                # Запись CLI и возврат USB — разные исходы: -L уже во flash
+                # (питание off/on загрузит образ), поэтому ok не трогаем —
+                # это предупреждение. Частые причины: SoapySDRServer держит
+                # USB; неверный size (A9 на A4) — FPGA не конфигурируется,
+                # откат hostedx*.rbf с ноутбука.
+                warn = (f"USB обратно не занят (re-acquire: {e}) — "
+                        f"Soapy на шлюзе не остановлен или FPGA не сконфигурировалась")
         finally:
-            self._flash.update({"running": False, "done": True, "ok": ok, "log": log})
+            self._flash.update({"running": False, "done": True, "ok": ok,
+                                "log": log, "warn": warn})
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -527,7 +533,7 @@ class LegionGateway:
             if not ok:
                 return {"ok": False, "reason": why}
             self._flash = {"running": True, "done": False, "ok": False,
-                           "log": "", "action": action, "path": path}
+                           "log": "", "action": action, "path": path, "warn": ""}
             threading.Thread(target=self._flash_run, args=(path, action), daemon=True).start()
             return {"ok": True, "started": True, "reason": f"flash {action}: {path}"}
         if op == "flash_status":
@@ -536,9 +542,12 @@ class LegionGateway:
                 return {"ok": False, "reason": "flash не запускался"}
             if f["running"]:
                 return {"ok": True, "running": True, "action": f["action"]}
+            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
+            warn = f.get("warn") or ""
             return {"ok": bool(f["ok"]), "running": False, "done": True,
                     "action": f["action"],
-                    "reason": ("bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"),
+                    "reason": base + (f" · ВНИМАНИЕ: {warn}" if warn else ""),
+                    "warn": warn,
                     "log": f["log"]}
         if op == "arm":
             if self._legion is False:
