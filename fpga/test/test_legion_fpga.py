@@ -185,11 +185,15 @@ check("статус bit0=playing (VHDL)", status_bits.get("0") == "playing")
 check("статус bit1=cap_done (VHDL)", status_bits.get("1") == "cap_done")
 check("статус bit2=det_active (VHDL)", status_bits.get("2") == "det_active")
 check("статус bit3=wd_fired (VHDL)", status_bits.get("3") == "wd_fired")
-py_bits = {"playing": 0, "capture_done": 1, "det_active": 2, "wd_fired": 3}
-# Python read_status: playing=bit0, capture_done=bit1, det_active=bit2, wd_fired=bit3
+py_bits = {"playing": 0, "capture_done": 1, "det_active": 2}
+# Python read_status: playing=bit0, capture_done=bit1, det_active=bit2,
+# wd_fired = bit3 (HDL, живой expired) | bit4 (NIOS, липкий латч deadman —
+# после автономного DISARM HDL-бит гаснет за мкс, enable=0 сбрасывает expired)
 host_src = open(os.path.join(ROOT, "host", "legion_fpga.py"), encoding="utf-8").read()
 for key, bit in py_bits.items():
     check(f"py read_status {key}=bit{bit}", f'"{key}": bool(data & (1 << {bit}))' in host_src)
+check("py read_status wd_fired=bit3|bit4 (HDL|NIOS-латч)",
+      '"wd_fired": bool(data & 0x18)' in host_src)
 
 # ---------------------------------------------------------------------------
 # 4. Шлюз: TCP loopback с FAKE-транспортом (протокол без железа)
@@ -389,6 +393,20 @@ check("a4: cleanup при занятом локе — без дедлока (~2 
       _dt < 3.0 and gw.fpga._t.released is True)
 check("a4: DISARM при занятом локе честно пропущен", gw._armed is True)
 rpc({"op": "usb", "action": "acquire"})
+rpc({"op": "disarm"})
+
+# ---------------------------------------------------------------------------
+# Липкий латч deadman (NIOS, STATUS bit4): после автономного DISARM HDL-бит
+# wd_fired (bit3) гаснет за мкс — без латча E5 и fpgaPollStatus никогда
+# не увидели бы срабатывание (найдено перепроверкой A1, раунд 4).
+# ---------------------------------------------------------------------------
+gw.fpga._t.wd_latch = True
+r = rpc({"op": "status"})
+check("wd_latch (NIOS bit4) виден как wd_fired", r.get("wd_fired") is True)
+r = rpc({"op": "arm", "mode": "player"})
+check("ARM снимает латч deadman", r.get("ok") is True and gw.fpga._t.wd_latch is False)
+r = rpc({"op": "status"})
+check("после ARM wd_fired чист", r.get("wd_fired") is False)
 rpc({"op": "disarm"})
 
 # ---------------------------------------------------------------------------

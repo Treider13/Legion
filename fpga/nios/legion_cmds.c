@@ -52,6 +52,11 @@ static bool     legion_air_is_up;
 /* CTRL.ARM, как записан хостом (нужен legion_work: в STATUS бита armed нет —
  * там playing/cap_done/det_active/wd_fired, legion_regs.vhd). */
 static bool     legion_armed;
+/* Липкий «deadman сработал»: HDL-бит wd_fired (STATUS.3) после нашего
+ * CTRL=0 гаснет за микросекунды (enable=0 сбрасывает expired,
+ * legion_watchdog.vhd) — хост читал бы пульс никогда. Держим латч до
+ * следующего ARM и подмешиваем в чтение STATUS битом 4 (HDL 7..4 = 0). */
+static bool     legion_wd_latch;
 
 bool legion_air_up(bool rx, bool tx)
 {
@@ -245,6 +250,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             }
 #endif
             legion_armed = (data & 0x1) != 0;
+            if ((data & 0x1) != 0) {
+                /* Новый ARM — латч deadman прошлой сессии снять */
+                legion_wd_latch = false;
+            }
             if ((data & 0x1) == 0 && legion_air_is_up) {
                 /* DISARM: эфир гасим сами — шлюз про RFIC не знает */
                 legion_air_down();
@@ -271,6 +280,11 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
+    /* Бит 4 — не из HDL (там 7..4 = 0): липкий латч NIOS «deadman сработал»,
+     * иначе wd_fired после автономного DISARM — микросекундный пульс. */
+    if (legion_wd_latch) {
+        *data |= LEGION_STATUS_WD_LATCH;
+    }
     return true;
 }
 
@@ -293,6 +307,7 @@ void legion_work(void)
         return;
     }
     DBG("LEGION: wd_fired при живом ARM — автономный DISARM\n");
+    legion_wd_latch = true;
     legion_reg_write(LEGION_REG_CTRL, 0);
 #if !defined(BOARD_BLADERF_MICRO)
     control_reg_write(control_reg_read() & ~0x6u);

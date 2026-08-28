@@ -167,6 +167,13 @@ int main(void)
                    BLADERF_RFIC_INIT_STATE_STANDBY) >= 0);
     CHECK("A1: micro НЕ трогает CONTROL PIO (не наш регистр)",
           t_control == 0);
+    /* HDL-бит wd_fired после CTRL=0 гаснет за мкс (enable=0 сбрасывает
+     * expired, legion_watchdog.vhd) — хост читает липкий латч NIOS (bit4). */
+    t_status = 0;  /* HDL expired сброшен */
+    uint32_t st = 0;
+    legion_reg_read(0, &st);
+    CHECK("A1: латч deadman виден в STATUS (bit4) после сброса HDL-бита",
+          (st & LEGION_STATUS_WD_LATCH) != 0);
     pio_mark = pio_n; rfic_mark = rfic_n;
     legion_work();
     CHECK("A1: повторный legion_work — однократность",
@@ -175,6 +182,14 @@ int main(void)
     /* ARM lb_* без эфира — существующий guard не сломан */
     CHECK("ARM lb_gated без эфира → отказ (guard цел)",
           !legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+
+    /* re-ARM (с эфиром) снимает латч */
+    legion_reg_write(LEGION_REG_AIR_PREP, 0x7);
+    CHECK("re-ARM после deadman принимается",
+          legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    legion_reg_read(0, &st);
+    CHECK("A1: re-ARM снял латч (bit4 чист)", (st & LEGION_STATUS_WD_LATCH) == 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
 
     /* wd_fired без ARM — ничего */
     pio_mark = pio_n; rfic_mark = rfic_n;
@@ -203,13 +218,22 @@ int main(void)
           pio_wrote_reg(LEGION_REG_CTRL, 0));
     CHECK("A1: wd_fired → CONTROL lms_rx/tx_enable сняты (RMW)",
           t_control == 0);
+    /* HDL-бит гаснет за мкс после CTRL=0 — хост читает латч NIOS (bit4) */
+    t_status = 0;
+    uint32_t st = 0;
+    legion_reg_read(0, &st);
+    CHECK("A1: латч deadman виден в STATUS (bit4) после сброса HDL-бита",
+          (st & LEGION_STATUS_WD_LATCH) != 0);
     mark = pio_n;
     legion_work();
     CHECK("A1: повторный legion_work — однократность", pio_n == mark);
 
-    /* re-ARM после автономного DISARM принимается (expired снят enable=0 в HDL) */
+    /* re-ARM после автономного DISARM принимается (expired снят enable=0 в HDL)
+     * и снимает латч */
     CHECK("re-ARM после deadman принимается",
           legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_PLAYER));
+    legion_reg_read(0, &st);
+    CHECK("A1: re-ARM снял латч (bit4 чист)", (st & LEGION_STATUS_WD_LATCH) == 0);
 #endif
 
     printf(fails ? "NIOS WORK: %d FAILURES\n" : "NIOS WORK: ALL PASS\n", fails);

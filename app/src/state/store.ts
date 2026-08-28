@@ -920,7 +920,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     const revoked = (): boolean => gTxGen !== txGen || gFpgaAirGen !== airGen;
     const abortIfRevoked = async (stage: "pre" | "acquired" | "armed"): Promise<boolean> => {
       if (!revoked()) return false;
-      pushLog("sys", `FPGA handoff ${mhz.toFixed(3)} МГц: отменён оператором в полёте (${stage})`);
+      pushLog(
+        "sys",
+        `FPGA handoff ${mhz.toFixed(3)} МГц: отменён оператором в полёте (${stage})` +
+          (marks.length > 0 ? ` · ${handoffTimeline(t0, marks)}` : ""),
+      );
       if (stage === "armed") await gw({ op: "disarm" });
       if (stage !== "pre") await gw({ op: "usb", action: "release" });
       set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });

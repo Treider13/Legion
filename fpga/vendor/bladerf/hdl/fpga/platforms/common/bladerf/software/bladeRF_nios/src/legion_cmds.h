@@ -44,10 +44,14 @@
 #define LEGION_MODE_LB_ALWAYS     0x4   /* RX→TX всегда */
 
 /* Статус (STATUS-PIO, читается по read-пакету target 0x80), биты:
- *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired,
+ *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (HDL, живой),
+ *   4 wd_latch (NIOS, липкий до следующего ARM — HDL 7..4 = 0, бит
+ *   подмешивается в legion_reg_read: после автономного DISARM по deadman
+ *   HDL-бит 3 гаснет за мкс, enable=0 сбрасывает expired),
  *   15..8 lb_fifo_level, 31..16 det_count
  * (зеркало legion_regs.vhd, процесс status_tx) */
 #define LEGION_STATUS_WD_FIRED    (1u << 3)
+#define LEGION_STATUS_WD_LATCH    (1u << 4)
 
 /* Запись/чтение регистра LEGION в FPGA (через PIO legion_wdata/legion_aws).
  * Реализация — в legion_cmds.c; вызывается из pkt_8x32.c (case 0x80). */

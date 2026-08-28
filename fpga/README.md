@@ -187,9 +187,13 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   (~1 с, нули с каденсом) → **NIOS** (`legion_work` в main-loop) видит
   wd_fired при живом ARM и сам делает DISARM: CTRL=0 (на micro тот же
   CTRL=0 уводит RFIC в standby), на x40 снимает lms_rx/tx_enable в CONTROL
-  (NIOS — хозяин этого PIO) → **шлюз** по `kick_age`
-  (`LEGION_KICK_TIMEOUT_S`, дефолт 2.5 с) делает DISARM → USB release
-  (именно в этом порядке) — сканер/ожившая панель снова открывают Soapy.
+  (NIOS — хозяин этого PIO). HDL-бит wd_fired после CTRL=0 гаснет за
+  микросекунды (enable=0 сбрасывает expired) — поэтому NIOS держит
+  **липкий латч в STATUS bit4** до следующего ARM, иначе хост читал бы
+  пульс никогда (E5 и fpgaPollStatus смотрят именно wd_fired) →
+  **шлюз** по `kick_age` (`LEGION_KICK_TIMEOUT_S`, дефолт 2.5 с) делает
+  DISARM → USB release (именно в этом порядке) — сканер/ожившая панель
+  снова открывают Soapy.
   Агент НЕ генерирует heartbeat сам — иначе TX жил бы после смерти
   ноутбука. Тихий выход агента: SIGTERM/SIGINT/atexit → DISARM + release
   (wiki Nuand: kill без libusb_close роняет Intel XHCI); systemd unit —

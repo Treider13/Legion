@@ -196,6 +196,9 @@ class FakeTransport:
         self.fail_control_read = False
         self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
+        # Модель липкого латча NIOS (bit4 STATUS): deadman сработал —
+        # после автономного DISARM HDL-бит wd_fired (bit3) гаснет за мкс.
+        self.wd_latch = False
 
     def release(self) -> None:
         self.released = True
@@ -231,6 +234,9 @@ class FakeTransport:
             # Сбой записи CTRL (откат эфира в ARM проверяется этим)
             if addr == lf.REG_CTRL and self.fail_ctrl_write:
                 return bytes(16)
+            # Новый ARM снимает латч deadman (как NIOS legion_cmds.c)
+            if addr == lf.REG_CTRL and (data & lf.CTRL_ARM):
+                self.wd_latch = False
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
                 if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:
@@ -251,7 +257,8 @@ class FakeTransport:
             status |= int(armed and mode in (lf.MODE_PLAYER,)) << 0   # playing
             status |= int(self.cap_done) << 1                          # capture_done
             status |= 0 << 2  # det_active
-            status |= 0 << 3  # wd_fired
+            status |= 0 << 3  # wd_fired (HDL, живой)
+            status |= int(self.wd_latch) << 4  # wd_latch (NIOS, липкий)
             resp[5:9] = status.to_bytes(4, "little")
         return bytes(resp)
 
