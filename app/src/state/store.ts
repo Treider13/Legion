@@ -51,6 +51,7 @@ import {
   fpgaAirHw,
   fpgaAirSupported,
   fpgaArmCmd,
+  fpgaHandoffPool,
   fpgaObserveLine,
   fpgaQuietTicksNext,
   ncoFtwFromFrac,
@@ -78,7 +79,6 @@ import {
   markForwarded,
   mergeDetections,
   pickStrongest,
-  sameBin,
   withoutOwnTx,
 } from "../sense/orchestrator";
 import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
@@ -1662,6 +1662,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", pingNo);
         return;
       }
+      const hwExpect = fpgaAirHw(get().sdrId);
+      if (ping.board && hwExpect && ping.board !== hwExpect) {
+        pushLog("sys", `FPGA ARM: шлюз видит ${ping.board}, а выбран ${get().sdrId} (${hwExpect}) — отказ`);
+        return;
+      }
       if (mode === "player") {
         const st = await gw({ op: "status" });
         const noWave = fpgaPlayerReady(st);
@@ -1767,6 +1772,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       const pingNo = fpgaGatewayRefused(ping);
       if (pingNo) {
         pushLog("sys", pingNo);
+        return false;
+      }
+      const hwExpect = fpgaAirHw(get().sdrId);
+      if (ping.board && hwExpect && ping.board !== hwExpect) {
+        pushLog("sys", `FPGA: шлюз видит ${ping.board}, а выбран ${get().sdrId} (${hwExpect}) — отказ`);
         return false;
       }
 
@@ -2345,14 +2355,13 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (isFpgaAirPattern(cur.scanPattern)) {
             // Конвейер скан→FPGA: пик → handoff (парковка на пик, не на середину
             // полосы). Без живого Soapy handoff не пытаемся — честный скан.
-            gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
+            // Пул — raw, БЕЗ маски withoutOwnTx: в скан-фазе конвейера ретранслятор
+            // выключен (DISARM), lastForwardMhz — не «свой TX»; маска бы навсегда
+            // спрятала вернувшийся источник на прошлой частоте ретрансляции.
+            gSkipMhz = refreshSkipMhz(gSkipMhz, raw, centerMhz, spanMhz, bins.length > 0);
             if (!gLive || cur.fpgaBusy || cur.fpgaArmed) return;
             if (Date.now() < gFpgaHandoffRetryAfter) return;
-            const pool =
-              gSkipMhz == null
-                ? detections
-                : detections.filter((d) => !sameBin(d.freqMhz, gSkipMhz as number));
-            const hit = pickStrongest(pool);
+            const hit = pickStrongest(fpgaHandoffPool(raw, gSkipMhz));
             if (hit) void runFpgaHandoff(hit.freqMhz);
             return;
           }

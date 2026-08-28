@@ -7,6 +7,7 @@
 // RFIC-команды 16x64 (NIOS). Полоса должна влезть в analog BW: hop ФАПЧ ≠ µs.
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
+import { sameBin } from "./orchestrator";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
@@ -144,6 +145,18 @@ export function fpgaQuietTicksNext(
 ): number {
   if (!armedLive || !st.ok) return 0;
   return st.det_active === false ? prev + 1 : 0;
+}
+
+/** Пул кандидатов handoff конвейера скан→FPGA: живые детекты минус skip-лист
+ *  (частота ушедшего сигнала, пока walker её не перепроверит тишиной).
+ *  Маску withoutOwnTx сюда не применяем: в скан-фазе ретранслятор выключен,
+ *  lastForwardMhz — не «свой TX», а прошлая частота ретрансляции. */
+export function fpgaHandoffPool<T extends { freqMhz: number }>(
+  dets: readonly T[],
+  skipMhz: number | null,
+): T[] {
+  if (skipMhz == null) return [...dets];
+  return dets.filter((d) => !sameBin(d.freqMhz, skipMhz));
 }
 
 /**

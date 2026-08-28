@@ -111,6 +111,13 @@ async function main(): Promise<void> {
   );
   s().stopScan();
   check("fpga-конвейер: СТОП СКАН гасит скан-фазу", !s().scanRunning);
+
+  // ПЕРЕДАТЬ в fpga-паттерне = старт конвейера со скан-фазы, не мгновенный ARM
+  await s().startTransmit();
+  await waitFor("fpga: ПЕРЕДАТЬ запустил скан-фазу", () => s().scanRunning);
+  check("fpga: ПЕРЕДАТЬ не ARM без детекта", !s().fpgaArmed);
+  check("fpga: хост-TX (transmitArmed) не взведён", !s().transmitArmed);
+  s().stopScan();
   s().setScanPattern("auto");
 
   console.log(failures === 0 ? "\nRACE FIXES: ALL PASS" : `\nRACE FIXES: ${failures} FAILURES`);

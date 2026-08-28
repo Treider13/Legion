@@ -34,6 +34,7 @@ import {
   fpgaAirHw,
   fpgaAirSupported,
   fpgaArmCmd,
+  fpgaHandoffPool,
   fpgaObserveLine,
   fpgaQuietTicksNext,
   ncoFtwFromFrac,
@@ -1227,6 +1228,17 @@ function main(): void {
   check("N тиков гейт закрыт → выход", qt >= FPGA_QUIET_TICKS_MAX);
   check("не armed/live — счётчик в 0", fpgaQuietTicksNext(3, { ok: true, det_active: false }, false) === 0);
   check("статус не ок — счётчик в 0", fpgaQuietTicksNext(3, { ok: false }, true) === 0);
+
+  // Пул handoff конвейера: skip-лист режет частоту, остальные живы
+  const poolDets = [
+    { freqMhz: 2442.0 }, { freqMhz: 2450.0 }, { freqMhz: 2460.0 },
+  ];
+  check("handoff pool без skip — все", fpgaHandoffPool(poolDets, null).length === 3);
+  const pooled = fpgaHandoffPool(poolDets, 2450.1);
+  check("handoff pool: skip режет бин (±0.2 МГц)",
+    pooled.length === 2 && !pooled.some((d) => Math.abs(d.freqMhz - 2450.0) < 0.2));
+  check("handoff pool: skip не трогает дальние",
+    fpgaHandoffPool(poolDets, 2400.0).length === 3);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
