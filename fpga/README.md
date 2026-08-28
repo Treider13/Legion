@@ -211,7 +211,7 @@ python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--board micro] [--sk
 | E2 | NCO 250 кГц из FPGA; RX on (CONTROL bit1); det_count | растёт с кабелем (без кабеля — SKIP с подсказкой) |
 | E3 | capture_arm → usb release → стрим QPSK (воркер/SoapyRemote) → acquire → capture_done → arm player | playing=1, волна в RAM FPGA |
 | E4 | det_thr → стрим тона → det_count | вырос (гейт TX — по HDL-симуляции, на стенде вторым приёмником) |
-| E5 | перестаём слать kick → ждём ~1.6 с | wd_fired=1 (TX погашен железом) |
+| E5 | перестаём слать kick → опрос до wd_fired (дедлайн 4 с) | wd_fired=1; латентность измеряется: x40 ~1.0 с, micro ~2.0 с при дефолтном WD_LIMIT=61 |
 | E6 | оператор: `bladeRF-cli -L`, power cycle | канал жив после перезагрузки (наш образ) |
 
 Один владелец USB: скрипт сам гоняет `usb release/acquire` агента вокруг

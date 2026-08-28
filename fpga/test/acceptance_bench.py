@@ -23,7 +23,8 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
   E3 плеер: capture_arm → стрим волны (воркер через SoapyRemote) →
      capture_done → arm player → playing=1
   E4 детектор: det_thr → стрим тона → det_count вырос (гейт — по HDL-симу)
-  E5 watchdog: перестали слать kick → wd_fired=1 ≤ ~1.5 с
+  E5 watchdog: перестали слать kick → wd_fired=1 (латентность меряется:
+     x40 ~1.0 с, micro ~2.0 с при дефолтном WD_LIMIT=61 — tx_clock=fs)
   E6 autoload: операторская (power cycle), подтверждение канала после
 
 Один владелец USB на шлюзе: скрипт сам гоняет usb release/acquire
@@ -210,11 +211,24 @@ def main() -> int:
     print("== E5: watchdog (deadman) ==")
     r = gw({"op": "arm", "mode": "nco", **arm_freq})
     check("ARM для watchdog-теста", r.get("ok") is True, str(r))
-    print("  … heartbeat останавливаем — ждём срабатывания (~1.5 с)")
+    print("  … heartbeat останавливаем — ждём срабатывания")
     kick_stop.set()  # имитация смерти ноутбука/сети
-    time.sleep(1.6)
-    st = gw({"op": "status"})
-    check("watchdog сработал (wd_fired=1)", st.get("wd_fired") is True, str(st))
+    # Не спим фиксированные 1.6 с: дефолт WD_LIMIT=61 даёт на x40 ~1.0 с
+    # (tx_clock = 2×fs), на micro ~2.0 с (tx_clock = fs — см.
+    # watchdog_limit_for_fs). Опросом меряем фактическую латентность — заодно
+    # это и есть стендовое число для сверки модели тактирования watchdog.
+    t0 = time.monotonic()
+    fired_after: float | None = None
+    st: dict = {}
+    while time.monotonic() - t0 < 4.0:
+        st = gw({"op": "status"})
+        if st.get("wd_fired"):
+            fired_after = time.monotonic() - t0
+            break
+        time.sleep(0.1)
+    check("watchdog сработал (wd_fired=1)", fired_after is not None, str(st))
+    if fired_after is not None:
+        print(f"  … wd_fired через {fired_after:.1f} с после потери heartbeat")
     gw({"op": "disarm"})
 
     if not args.skip_e6:
