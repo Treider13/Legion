@@ -1,14 +1,15 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
 import {
   autoDispatchOptionRu,
+  isFpgaAirLive,
   isFpgaAirPattern,
+  isFpgaTaskLive,
   patternOptionRu,
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { fpgaObserveLine } from "../sense/fpgaFastpath";
+import { detectorWindowUs, FPGA_AIR_SDR_ID, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
-import { detectorWindowUs, parkSpanMhz } from "../sense/fpgaFastpath";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
 import { waveMeta } from "../sdr/waveforms";
@@ -22,6 +23,8 @@ export function ScanPanel() {
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
   const auto = scannerParticipates(s.scanPattern);
   const fpgaAir = isFpgaAirPattern(s.scanPattern);
+  const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
+  const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
   const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
@@ -39,61 +42,65 @@ export function ScanPanel() {
         {fpgaAir ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR" : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
       </span>
       <p className="panel-note">
-        {fpgaAir
-          ? "Конвейер I²+Q² → RX→TX крутится на SDR за микросекунды. Ноутбук только наблюдает статус и может стопнуть. Хост-FFT и ПЕРЕДАТЬ в этом режиме не участвуют."
-          : "АВТО + ПЕРЕДАТЬ — хост-скан (FFT на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР — конвейер на SDR. Хост-скан и FPGA вместе не работают (один USB)."}
+        {taskLive
+          ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (PLAYER/NCO/LOOPBACK). Это не конвейер I²+Q² и не хост-скан. Стоп — там или кнопкой ниже."
+          : fpgaAir
+            ? "Конвейер I²+Q² → RX→TX крутится на SDR за микросекунды. Ноутбук только наблюдает статус и может стопнуть. Хост-FFT и ПЕРЕДАТЬ в этом режиме не участвуют."
+            : "АВТО + ПЕРЕДАТЬ — хост-скан (FFT на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР — конвейер на SDR. Хост-скан и FPGA вместе не работают (один USB)."}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
-          <span className="freq-hud-k">{fpgaAir ? "ДЕТЕКТОР FPGA" : "ПЕРЕХВАЧЕНА"}</span>
+          <span className="freq-hud-k">{airLive ? "ДЕТЕКТОР FPGA" : taskLive ? "FPGA-ЗАДАЧА" : "ПЕРЕХВАЧЕНА"}</span>
           <span className="freq-hud-v">
-            {fpgaAir
-              ? s.fpgaArmed
-                ? s.fpgaStatus?.det_active
-                  ? "есть"
-                  : "нет"
-                : "—"
-              : s.lastInterceptMhz != null
-                ? `${s.lastInterceptMhz.toFixed(3)}`
-                : "—"}
+            {airLive
+              ? s.fpgaStatus?.det_active
+                ? "есть"
+                : "нет"
+              : taskLive
+                ? s.fpgaMode
+                : s.lastInterceptMhz != null
+                  ? `${s.lastInterceptMhz.toFixed(3)}`
+                  : "—"}
           </span>
           <span className="freq-hud-u">
-            {fpgaAir
+            {airLive
               ? s.fpgaStatus?.det_active
                 ? "энергия в окне"
                 : "окно FPGA"
-              : `МГц · ${auto ? "energy" : "сканер выкл"}`}
+              : taskLive
+                ? "не конвейер"
+                : `МГц · ${auto ? "energy" : "сканер выкл"}`}
           </span>
         </div>
-        <div className={`freq-hud-card tx ${fpgaAir ? (s.fpgaArmed && s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
-          <span className="freq-hud-k">{fpgaAir ? "КОНВЕЙЕР SDR" : "НА TX SDR"}</span>
+        <div className={`freq-hud-card tx ${airLive ? (s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
+          <span className="freq-hud-k">{airLive ? "КОНВЕЙЕР SDR" : taskLive ? "SDR ИГРАЕТ" : "НА TX SDR"}</span>
           <span className="freq-hud-v">
-            {fpgaAir
-              ? s.fpgaArmed
-                ? s.fpgaStatus?.det_active
-                  ? "TX"
-                  : "—"
+            {airLive
+              ? s.fpgaStatus?.det_active
+                ? "TX"
                 : "—"
-              : s.lastForwardMhz != null
-                ? `${s.lastForwardMhz.toFixed(3)}`
-                : "—"}
+              : taskLive
+                ? "TX"
+                : s.lastForwardMhz != null
+                  ? `${s.lastForwardMhz.toFixed(3)}`
+                  : "—"}
           </span>
           <span className="freq-hud-u">
-            {fpgaAir
-              ? s.fpgaArmed
-                ? s.fpgaStatus?.det_active
-                  ? `RX→TX · ${fpgaWindowUs.toFixed(0)} µs`
-                  : "гейт закрыт"
-                : "конвейер выкл"
-              : `МГц · ${
-                  auto
-                    ? s.autoDispatch === "priority"
-                      ? "приоритет"
-                      : "очередь"
-                    : "открытый TX"
-                }${s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}${
-                  s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""
-                }`}
+            {airLive
+              ? s.fpgaStatus?.det_active
+                ? `RX→TX · ${fpgaWindowUs.toFixed(0)} µs`
+                : "гейт закрыт"
+              : taskLive
+                ? "задача с ноутбука"
+                : `МГц · ${
+                    auto
+                      ? s.autoDispatch === "priority"
+                        ? "приоритет"
+                        : "очередь"
+                      : "открытый TX"
+                  }${s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}${
+                    s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""
+                  }`}
           </span>
         </div>
       </div>
@@ -249,15 +256,15 @@ export function ScanPanel() {
             ДЕМО-НЕСУЩАЯ
           </button>
         )}
-        {fpgaAir ? (
+        {fpgaAir || taskLive ? (
           s.fpgaArmed ? (
             <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
-              СТОП
+              СТОП FPGA
             </button>
           ) : (
             <button
               className="btn-primary"
-              disabled={s.fpgaBusy}
+              disabled={s.fpgaBusy || s.sdrId !== FPGA_AIR_SDR_ID}
               onClick={() => void s.startScan()}
             >
               СТАРТ FPGA+СКАНЕР
@@ -298,9 +305,11 @@ export function ScanPanel() {
         <p className="sens-hint">
           FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
-          {fpgaSpan > analogBw
-            ? " — F1…F2 шире analog: детектор видит только текущее LO-окно"
-            : " — конвейер на SDR, ноутбук наблюдает"}
+          {s.sdrId !== FPGA_AIR_SDR_ID
+            ? " — нужен bladeRF 1 x40 на вкладке SDR"
+            : fpgaSpan > analogBw
+              ? " — F1…F2 шире analog: детектор видит только текущее LO-окно"
+              : " — конвейер на SDR, ноутбук наблюдает"}
         </p>
       )}
       <ul className="allow-list">
@@ -358,10 +367,12 @@ export function ScanPanel() {
             : s.scanCenterMhz != null
               ? `${s.scanCenterMhz.toFixed(3)} МГц`
               : "—"}
-          {fpgaAir
-            ? s.fpgaArmed
-              ? " · FPGA конвейер · ноутбук наблюдает"
-              : " · FPGA+сканер выбран"
+          {airLive
+            ? " · FPGA конвейер · ноутбук наблюдает"
+            : taskLive
+              ? " · FPGA-задача · не конвейер"
+              : fpgaAir
+                ? " · FPGA+сканер выбран"
             : s.transmitArmed
               ? auto
                 ? " · авто TX"
@@ -373,13 +384,18 @@ export function ScanPanel() {
         <span>{f2}</span>
       </div>
       <p className="status-line">
-        {fpgaAir
-          ? s.fpgaArmed
-            ? fpgaObserveLine(s.fpgaStatus) || s.lastCueReason
-            : s.lastCueReason || "FPGA+сканер: СТАРТ — конвейер на SDR, ноутбук наблюдает"
-          : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
+        {airLive
+          ? fpgaObserveLine(s.fpgaStatus) || s.lastCueReason
+          : taskLive
+            ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер сканера"
+            : fpgaAir
+              ? s.lastCueReason ||
+                (s.sdrId !== FPGA_AIR_SDR_ID
+                  ? "FPGA+сканер: выберите bladeRF 1 x40 на вкладке SDR"
+                  : "FPGA+сканер: СТАРТ — конвейер на SDR, ноутбук наблюдает")
+              : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>
-      {fpgaAir && s.fpgaStatus && (
+      {airLive && s.fpgaStatus && (
         <div className="sdr-facts">
           <div>
             {s.fpgaStatus.ok

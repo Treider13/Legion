@@ -674,6 +674,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (prev !== next) {
         if (next === "esp32") {
           get().stopScan();
+          // stopTransmit шлёт DISARM, если FPGA играет. Не дублировать fpgaDisarm —
+          // два параллельных DISARM по одному USB/шлюзу.
           void get().stopTransmit();
         } else if (get().corridorRunning) {
           void get().corridorStop();
@@ -718,7 +720,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       stopFpgaKick();
       stopFpgaObserve();
-      set({ fpgaArmed: false });
+      if (get().fpgaArmed) void get().fpgaDisarm();
+      else set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -912,6 +915,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setPower: async (dbm) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", `SET POWER ${dbm}`);
       const r = await gClient.setPower(dbm);
@@ -919,6 +927,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setAtt: async (db) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (!gClient) return;
       pushLog("tx", `SET ATT ${db.toFixed(2)}`);
       const r = await gClient.setAtt(db);
@@ -1117,6 +1130,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     applyPaCurrent: async () => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const ma = get().paMa;
       if (!gClient) return;
       pushLog("tx", `PA SET I ${Math.round(ma)}`);
@@ -1125,6 +1143,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setPaEnabled: async (on) => {
+      if (on) {
+        const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+        if (blocked) {
+          pushLog("sys", blocked);
+          return;
+        }
+      }
       if (!gClient) return;
       if (on && !get().loadOk) {
         pushLog("sys", "PA ON запрещён: нет нагрузки 50 Ом");
@@ -1137,6 +1162,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     cueTo: async (mhz) => {
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       const s = get();
       if (!cueFreqAllowed(mhz, s.allowBands)) {
         set({ lastCueReason: "частота вне allowlist" });
@@ -1179,6 +1209,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "ЗАШИТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
         return;
       }
       if (s.fpgaArmed) {
@@ -1270,6 +1304,14 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaArm: async () => {
       const s = get();
       if (s.fpgaBusy) return;
+      if (s.fpgaArmed) {
+        pushLog("sys", "FPGA ARM: уже играет — сначала ОСТАНОВИТЬ FPGA");
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "FPGA ARM: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+        return;
+      }
       if (!s.sdrLoadOk) {
         pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
@@ -1399,6 +1441,10 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: async () => {
       const s = get();
+      if (s.fpgaArmed) {
+        pushLog("sys", "ОТКРЫТЬ SDR: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
+        return;
+      }
       if (s.flashBusy) {
         // Иначе Soapy откроет USB-устройство посередине записи bladeRF-cli.
         pushLog("sys", "ОТКРЫТЬ SDR: идёт прошивка — дождитесь конца записи");
@@ -1456,7 +1502,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       stopFpgaKick();
       stopFpgaObserve();
-      set({ fpgaArmed: false });
+      if (get().fpgaArmed) await get().fpgaDisarm();
       get().stopScan();
       gGate.reset();
       if (gLive) {
@@ -1612,6 +1658,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", blocked);
           return;
         }
+        if (s.rfOn || s.paOn) {
+          pushLog("sys", "СКАНИРОВАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+          return;
+        }
         if (s.fpgaArmed) {
           pushLog("sys", "СКАНИРОВАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Хост-скан = мс, не µs");
           return;
@@ -1759,10 +1809,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gWalker = null;
       if (get().scanRunning) set({ scanRunning: false });
-      if (get().fpgaArmed && isFpgaAirPattern(get().scanPattern)) {
-        void get().fpgaDisarm();
-        return;
-      }
+      // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
+      // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
+      // что в меню остался пункт «FPGA+СКАНЕР».
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).
@@ -1785,6 +1834,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.rfOn || s.paOn) {
+        pushLog("sys", "ПЕРЕДАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
         return;
       }
       if (s.fpgaArmed) {

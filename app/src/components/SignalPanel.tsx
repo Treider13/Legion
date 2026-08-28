@@ -16,6 +16,7 @@ import {
   waveMeta,
   type WaveKind,
 } from "../sdr/waveforms";
+import { isFpgaAirLive } from "../sense/modes";
 import { useLegion } from "../state/store";
 
 const ACCENT = "#2dd4bf";
@@ -248,13 +249,21 @@ export function SignalPanel() {
 
       <div className="fpga-block">
         <span className="panel-title">FPGA (bladeRF 1 x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
-        <p className="panel-note">
-          Ноутбук ставит задачу (волна из RAM, тон NCO или постоянный RX→TX),
-          SDR играет сам. Сканер и I²+Q²-гейт сюда не входят — это режим
-          FPGA+СКАНЕР на вкладке СКАН. Watchdog: пропал heartbeat ~1 с → TX
-          гаснет. Требует ревизии legion. PLAYER/NCO/LOOPBACK перекрывают хост-стрим.
-        </p>
-        <div className="corr-grid">
+        {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
+          <p className="panel-note">
+            Сейчас жив FPGA+СКАНЕР (I²+Q² → RX→TX на SDR). Эта вкладка задачу не
+            ставит и не притворяется PLAYER. Стоп — кнопка ниже или вкладка СКАН.
+          </p>
+        ) : (
+          <p className="panel-note">
+            Ноутбук ставит задачу (волна из RAM, тон NCO или постоянный RX→TX),
+            SDR играет сам. Сканер и I²+Q²-гейт сюда не входят — это режим
+            FPGA+СКАНЕР на вкладке СКАН. Watchdog: пропал heartbeat ~1 с → TX
+            гаснет. Требует ревизии legion. PLAYER/NCO/LOOPBACK перекрывают хост-стрим.
+          </p>
+        )}
+        {!isFpgaAirLive(s.fpgaArmed, s.fpgaMode) && (
+          <div className="corr-grid">
           <label>
             РЕЖИМ FPGA
             <select
@@ -279,8 +288,9 @@ export function SignalPanel() {
               spellCheck={false}
               placeholder="LEGION_FPGA_TOKEN"
             />
-          </label>
-        </div>
+            </label>
+          </div>
+        )}
         <div className="power-row">
           {s.fpgaArmed ? (
             <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>

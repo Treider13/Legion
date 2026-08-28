@@ -26,7 +26,12 @@ export function SdrPanel() {
       <div className="corr-grid">
         <label>
           УСТРОЙСТВО
-          <select aria-label="Тип SDR" value={s.sdrId} onChange={(e) => s.setSdrId(e.target.value)}>
+          <select
+            aria-label="Тип SDR"
+            value={s.sdrId}
+            onChange={(e) => s.setSdrId(e.target.value)}
+            disabled={s.fpgaArmed}
+          >
             {s.sdrDevices.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}
@@ -81,7 +86,7 @@ export function SdrPanel() {
             ЗАКРЫТЬ SDR
           </button>
         ) : (
-          <button className="btn-primary" onClick={() => s.openSdr()}>
+          <button className="btn-primary" onClick={() => s.openSdr()} disabled={s.fpgaArmed}>
             ОТКРЫТЬ SDR
           </button>
         )}

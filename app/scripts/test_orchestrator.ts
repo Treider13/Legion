@@ -51,7 +51,9 @@ import {
   autoDispatchOptionRu,
   autoForwardAllowed,
   bandListFor,
+  isFpgaAirLive,
   isFpgaAirPattern,
+  isFpgaTaskLive,
   isFpgaTaskMode,
   modeConflict,
   modeOf,
@@ -394,6 +396,10 @@ function main(): void {
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
+  check("меню FPGA+СКАНЕР ≠ живой конвейер", isFpgaAirLive(false, "lb_gated") === false);
+  check("живой конвейер только lb_gated+ARM", isFpgaAirLive(true, "lb_gated") && !isFpgaAirLive(true, "player"));
+  check("PLAYER+ARM = задача, не сканер", isFpgaTaskLive(true, "player") && !isFpgaAirLive(true, "player"));
+  check("без ARM нет живой задачи", isFpgaTaskLive(false, "player") === false);
   const fpgaWork = planSdrWork("fpga");
   check("planSdrWork FPGA: конвейер на SDR", fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));

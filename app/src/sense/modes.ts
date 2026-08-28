@@ -160,7 +160,19 @@ export function modeConflict(
   return null;
 }
 
+export type FpgaRunMode = "player" | "nco" | "lb_gated" | "lb_always";
+
 /** FPGA без сканера: ноутбук ставит контент, SDR играет. Не lb_gated. */
-export function isFpgaTaskMode(mode: "player" | "nco" | "lb_gated" | "lb_always"): boolean {
+export function isFpgaTaskMode(mode: FpgaRunMode): boolean {
   return mode === "player" || mode === "nco" || mode === "lb_always";
+}
+
+/** Живой конвейер FPGA+сканер. Не путать с выбранным пунктом меню «FPGA+СКАНЕР». */
+export function isFpgaAirLive(armed: boolean, mode: FpgaRunMode): boolean {
+  return armed && mode === "lb_gated";
+}
+
+/** Живая задача с ноутбука. Не конвейер I²+Q². */
+export function isFpgaTaskLive(armed: boolean, mode: FpgaRunMode): boolean {
+  return armed && isFpgaTaskMode(mode);
 }
