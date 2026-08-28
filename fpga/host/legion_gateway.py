@@ -14,6 +14,11 @@
   {"op":"set", "reg":"nco_ftw"|..., "value":int}
   {"op":"usb", "action":"release"|"acquire"}  — один владелец USB
   {"op":"tune", "freq_mhz":float, ...}  — LO-hop на живом ARM (только micro)
+  {"op":"flash", "path":"/abs/legionxA4.rbf", "action":"load"|"store"}
+      — запись ревизии legion на ЭТОМ шлюзе: release USB → bladeRF-cli -l/-L
+      → acquire обратно. Async (запись flash и re-enumerate после -l могут
+      превышать 12-с релей воркера): старт сразу, результат — flash_status.
+      Только legionx*.rbf, не hosted/FX3.
   {"op":"ping"}
 
 Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
@@ -36,8 +41,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -69,6 +76,11 @@ TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 # Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
 # на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
 DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+
+# Артефакт ревизии legion из build_bladerf.sh (BUILD_NAME="$rev"x"$size"):
+# legionx40.rbf / legionxA4.rbf / legionxA9.rbf (+ алиас с подчёркиванием
+# из старых docs). hosted/FX3/чужие имена op flash не принимает.
+LEGION_RBF_RE = re.compile(r"^legion_?x(40|a4|a9)\.rbf$", re.IGNORECASE)
 
 # Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
 # сам DISARM → USB release (именно в этом порядке: release без DISARM
@@ -131,7 +143,6 @@ class UsbTransport:
                 "LEGION_FPGA_RBF для автозагрузки или bladeRF-cli -l/-L вручную")
         if not os.path.isfile(rbf):
             raise RuntimeError(f"LEGION_FPGA_RBF: файл не найден: {rbf}")
-        import subprocess
         try:
             cp = subprocess.run(["bladeRF-cli", "-l", rbf],
                                 capture_output=True, text=True, timeout=60)
@@ -288,6 +299,18 @@ class LegionGateway:
         self._armed_at = 0.0      # monotonic ARM (сторож: ARM без единого kick)
         self._wd_en = True        # ARM с wd=false — оператор отказался от deadman
         self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
+        # Async flash (op flash): запись flash (-L) и re-enumerate после -l
+        # могут превышать 12-с релей воркера — старт сразу, результат опросом.
+        # ok = результат bladeRF-cli; warn = USB обратно не занялся (re-acquire).
+        self._flash: dict = {"running": False, "done": False, "ok": False,
+                             "log": "", "action": "", "path": "", "warn": ""}
+        # Ревизия legion в FPGA? True — 0x80 отвечает, False — hosted
+        # (NIOS: invalid id, нет SUCCESS), None — неизвестно (USB отпущен).
+        self._legion: bool | None = None
+        if fake:
+            self._legion = True
+        else:
+            self._detect_legion()
         # Операции и сторож сериализуются: ThreadingTCPServer гоняет handle()
         # в потоках, а xfer — это пара write/read 16-байтных пакетов, которую
         # нельзя перемежать с DISARM сторожа (иначе ответ уедет не тому).
@@ -329,6 +352,7 @@ class LegionGateway:
                     t = self.fpga._t
                     if hasattr(t, "release"):
                         t.release()
+                    self._legion = None  # USB не наш — ревизия неизвестна
                 except Exception as e:
                     print(f"legion-gateway: сторож USB release: {e}", flush=True)
 
@@ -422,13 +446,135 @@ class LegionGateway:
             self._tx_by_us = True
         return True, ""
 
+    def _detect_legion(self) -> None:
+        """Ревизия legion? Чтение target 0x80: на hosted NIOS отвечает
+        invalid id (perform_read default → нет SUCCESS, pkt_8x32.c стока),
+        на legion — STATUS (legion_reg_read). None = неизвестно (шина/USB)."""
+        try:
+            ok, _ = self.fpga.read_reg(lf.REG_CTRL)
+            self._legion = bool(ok)
+        except Exception:
+            self._legion = None
+        if self._legion is False:
+            print("legion-gateway: FPGA отвечает, но 0x80 нет — это hosted, "
+                  "не legion (ARM откажет; прошивка — op flash / КАСТОМ FPGA)",
+                  flush=True)
+
+    def _flash_validate(self, path: str, action: str) -> tuple[bool, str]:
+        """op flash: только артефакт legion этой платы, без ARM, по одному."""
+        if action not in ("load", "store"):
+            return False, f"flash: неизвестный action {action} (load|store)"
+        path = path.strip()
+        if not os.path.isabs(path):
+            return False, "flash: нужен абсолютный путь на шлюзе — CLI ищет файл от cwd"
+        base = os.path.basename(path)
+        m = LEGION_RBF_RE.match(base)
+        if not m:
+            return False, ("flash: имя не артефакт legion (legionx40/xA4/xA9.rbf) — "
+                           "hosted/FX3/чужое сюда не шьём")
+        size = m.group(1).lower()
+        if self.board == "bladerf1" and size != "40":
+            return False, "flash: плата bladeRF 1 — нужен legionx40.rbf"
+        if self.board == "bladerf2" and size == "40":
+            return False, "flash: плата micro — нужен legionxA4/xA9.rbf"
+        # A4/A9 по USB PID не различить (оба 0x5250) — size на операторе,
+        # как и в docs Nuand («образ A9 на A4 не ставить»).
+        if self._armed:
+            return False, "flash: сначала DISARM — CLI и агент не делят USB"
+        if self._flash.get("running"):
+            return False, "flash: уже идёт"
+        if not self.fake and not os.path.isfile(path):
+            return False, f"flash: файл не найден на шлюзе: {path}"
+        return True, ""
+
+    def _flash_run(self, path: str, action: str) -> None:
+        """Поток flash: release USB → bladeRF-cli → acquire обратно.
+        _op_lock на время CLI не держим: ping живёт, регистровые операции
+        при отпущенном USB честно падают (устройство не наше)."""
+        log = ""
+        warn = ""
+        ok = False
+        try:
+            if self.fake:
+                time.sleep(0.2)  # протокол без железа: имитация длительности
+                ok, log = True, "FAKE flash (не железо)"
+                return
+            t = self.fpga._t
+            if hasattr(t, "release"):
+                t.release()
+            # Как в op usb release: пока USB не наш, ревизия неизвестна —
+            # иначе ping рапортовал бы протухшее значение (напр. hosted=False
+            # после прошивки legion при провале re-acquire).
+            self._legion = None
+            flag = "-l" if action == "load" else "-L"
+            try:
+                cp = subprocess.run(["bladeRF-cli", flag, path],
+                                    capture_output=True, text=True, timeout=180)
+                log = (cp.stdout + cp.stderr).strip()[-800:]
+                ok = cp.returncode == 0
+            except FileNotFoundError:
+                log = "bladeRF-cli не найден на шлюзе"
+            except subprocess.TimeoutExpired:
+                log = "bladeRF-cli: timeout 180 с"
+            time.sleep(0.5)  # re-enumerate после -l (как в _load_fpga)
+            try:
+                if hasattr(t, "acquire"):
+                    t.acquire()
+                self._detect_legion()  # после -l в FPGA новая ревизия
+            except Exception as e:
+                # Запись CLI и возврат USB — разные исходы: -L уже во flash
+                # (питание off/on загрузит образ), поэтому ok не трогаем —
+                # это предупреждение. Частые причины: SoapySDRServer держит
+                # USB; неверный size (A9 на A4) — FPGA не конфигурируется,
+                # откат hostedx*.rbf с ноутбука.
+                warn = (f"USB обратно не занят (re-acquire: {e}) — "
+                        f"Soapy на шлюзе не остановлен или FPGA не сконфигурировалась")
+        finally:
+            self._flash.update({"running": False, "done": True, "ok": ok,
+                                "log": log, "warn": warn})
+
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
         if op == "ping":
             # board — для авто-детекта приёмки (acceptance_bench): x40 и micro
-            # имеют разные сценарии (CONTROL vs AIR-регистры).
-            return {"ok": True, "fake": self.fake, "board": self.board}
+            # имеют разные сценарии (CONTROL vs AIR-регистры). legion —
+            # ревизия в FPGA (0x80 отвечает), None — неизвестно (USB отпущен).
+            return {"ok": True, "fake": self.fake, "board": self.board, "legion": self._legion}
+        if op == "flash":
+            path = str(msg.get("path") or "")
+            action = str(msg.get("action") or "")
+            ok, why = self._flash_validate(path, action)
+            if not ok:
+                return {"ok": False, "reason": why}
+            self._flash = {"running": True, "done": False, "ok": False,
+                           "log": "", "action": action, "path": path, "warn": ""}
+            try:
+                threading.Thread(target=self._flash_run, args=(path, action), daemon=True).start()
+            except Exception as e:
+                # Без отката running залип бы True — все следующие flash отказывали.
+                self._flash = {"running": False, "done": False, "ok": False,
+                               "log": "", "action": "", "path": "", "warn": ""}
+                return {"ok": False, "reason": f"flash: поток не стартовал: {e}"}
+            return {"ok": True, "started": True, "reason": f"flash {action}: {path}"}
+        if op == "flash_status":
+            f = self._flash
+            if not f.get("action"):
+                return {"ok": False, "reason": "flash не запускался"}
+            if f["running"]:
+                return {"ok": True, "running": True, "action": f["action"]}
+            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
+            warn = f.get("warn") or ""
+            return {"ok": bool(f["ok"]), "running": False, "done": True,
+                    "action": f["action"],
+                    "reason": base + (f" · ВНИМАНИЕ: {warn}" if warn else ""),
+                    "warn": warn,
+                    "log": f["log"]}
         if op == "arm":
+            if self._legion is False:
+                # hosted в FPGA: 0x80 не обслуживается — ARM ушёл бы в пустоту.
+                return {"ok": False,
+                        "reason": "в FPGA нет ревизии legion (0x80 не отвечает, прошит hosted?) — "
+                                  "прошивка: op flash или вкладка КАСТОМ FPGA"}
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
                     "lb_gated": lf.MODE_LB_GATED, "lb_always": lf.MODE_LB_ALWAYS}.get(mode_name)
@@ -513,6 +659,7 @@ class LegionGateway:
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
+            st["legion"] = self._legion
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
@@ -542,6 +689,7 @@ class LegionGateway:
             if action == "release":
                 if hasattr(t, "release"):
                     t.release()
+                self._legion = None  # пока USB у хоста, ревизия неизвестна
                 return {"ok": True, "reason": "USB отпущен (стрим-сервер может занять)"}
             if action == "acquire":
                 if hasattr(t, "acquire"):
@@ -549,6 +697,7 @@ class LegionGateway:
                         t.acquire()
                     except Exception as e:
                         return {"ok": False, "reason": f"USB занять не удалось: {e}"}
+                    self._detect_legion()
                 return {"ok": True, "reason": "USB занят агентом"}
             return {"ok": False, "reason": f"usb: неизвестный action {action}"}
         if op == "set":

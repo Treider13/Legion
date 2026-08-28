@@ -233,7 +233,9 @@ def main() -> int:
 
     if not args.skip_e6:
         print("== E6: autoload (оператор) ==")
-        rbf = "legion_xA4.rbf" if board == "micro" else "legion_x40.rbf"
+        # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf), плата —
+        # из ping.board (авто-детект приёмки, PR #22).
+        rbf = "legionxA4.rbf" if board == "micro" else "legionx40.rbf"
         print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
         input()
         r = gw({"op": "ping"})

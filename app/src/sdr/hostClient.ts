@@ -228,6 +228,16 @@ export interface FpgaStatus {
   lb_level?: number;
   det_count?: number;
   fake?: boolean;
+  /** Шлюз распознал ревизию legion (0x80 отвечает). null/undefined — неизвестно. */
+  legion?: boolean | null;
+  /** op flash (async): started — процесс пошёл; running/done/log — flash_status. */
+  started?: boolean;
+  running?: boolean;
+  done?: boolean;
+  log?: string;
+  action?: string;
+  /** flash: CLI записал, но USB обратно не занялся (Soapy держит / FPGA не поднялась). */
+  warn?: string;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.
@@ -249,6 +259,81 @@ export async function hostClose(): Promise<void> {
     await hostRpc({ op: "close" });
   } catch {
     /* worker мог уже выйти */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// КАСТОМ FPGA (ревизия legion): сборка Quartus на этом ПК + запись .rbf.
+// Сборка — свои команды legion_build_* (не sdr_rpc с его 15 с); запись —
+// существующий sdr_flash (allowlist bladeRF-cli) локально или op flash шлюза.
+// ---------------------------------------------------------------------------
+
+export interface LegionEnvInfo {
+  os: string;
+  repoRoot?: string | null;
+  quartusDir?: string | null;
+  niosShell?: string | null;
+  canBuild: boolean;
+  reason: string;
+}
+
+export interface LegionBuildStatus {
+  running: boolean;
+  exit?: number;
+  tail?: string;
+  logPath?: string;
+  elapsedSec?: number;
+  artifact?: { path: string; sha256?: string | null; dir?: string } | null;
+  reason?: string;
+}
+
+export async function hostLegionEnvInfo(): Promise<{ ok: boolean; info?: LegionEnvInfo; reason: string }> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  try {
+    const info = await invoke<LegionEnvInfo>("legion_env_info", {});
+    return { ok: true, info, reason: info.reason };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+export async function hostLegionToolchain(): Promise<{ ok: boolean; text: string }> {
+  if (!hostSdrAvailable()) return { ok: false, text: "нужен desktop LEGION (Tauri), не браузер" };
+  try {
+    const text = await invoke<string>("legion_toolchain_check", {});
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, text: String(e) };
+  }
+}
+
+export async function hostLegionBuildStart(
+  board: string,
+  size: string,
+): Promise<{ ok: boolean; reason: string; logPath?: string }> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  try {
+    const r = await invoke<{ logPath?: string }>("legion_build_start", { board, size });
+    return { ok: true, reason: "сборка пошла", logPath: r.logPath };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+export async function hostLegionBuildStatus(): Promise<LegionBuildStatus> {
+  try {
+    return await invoke<LegionBuildStatus>("legion_build_status", {});
+  } catch (e) {
+    return { running: false, reason: String(e) };
+  }
+}
+
+export async function hostLegionBuildCancel(): Promise<{ ok: boolean; reason: string }> {
+  try {
+    const reason = await invoke<string>("legion_build_cancel", {});
+    return { ok: true, reason };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
   }
 }
 

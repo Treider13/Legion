@@ -410,6 +410,152 @@ check("после ARM wd_fired чист", r.get("wd_fired") is False)
 rpc({"op": "disarm"})
 
 # ---------------------------------------------------------------------------
+# op flash (async): валидация имени/платы/пути/ARM, старт, flash_status.
+# FAKE: без CLI и без железа — проверяется протокол, не прошивка.
+# ---------------------------------------------------------------------------
+r = rpc({"op": "flash_status"})
+check("flash_status до старта — честный отказ", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/hostedxA4.rbf", "action": "load"})
+check("flash hosted-имя → отказ (не артефакт legion)", r.get("ok") is False and r.get("started") is not True)
+r = rpc({"op": "flash", "path": "/tmp/bladeRF_fw_latest.img", "action": "load"})
+check("flash FX3 → отказ", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "legionx40.rbf", "action": "load"})
+check("flash относительный путь → отказ (cwd CLI)", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/legionxA4.rbf", "action": "load"})
+check("flash A4 на bladeRF 1 → отказ (нужен x40)", r.get("ok") is False)
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "nope"})
+check("flash неизвестный action → отказ", r.get("ok") is False)
+r = rpc({"op": "arm", "mode": "player"})
+check("flash: arm для проверки отказа при ARM", r.get("ok") is True)
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("flash при ARM → отказ (CLI и агент не делят USB)", r.get("ok") is False)
+rpc({"op": "disarm"})
+r = rpc({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("flash legionx40 (fake) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpc({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash_status: done + ok", r.get("done") is True and r.get("ok") is True)
+check("flash fake честно помечен (не железо)", "FAKE" in str(r.get("log")))
+r = rpc({"op": "flash", "path": "/tmp/legion_x40.rbf", "action": "store"})
+check("flash алиас legion_x40 (старые docs) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpc({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash store (-L) тоже ok", r.get("done") is True and r.get("ok") is True and r.get("action") == "store")
+
+# ---------------------------------------------------------------------------
+# Детект ревизии legion: hosted NIOS не обслуживает 0x80 → ping legion=False,
+# ARM честно отказывает (иначе команда ушла бы в пустоту).
+# ---------------------------------------------------------------------------
+check("fake: ping несёт legion=True", rpc({"op": "ping"}).get("legion") is True)
+
+
+class _HostedTransport(lg.FakeTransport):
+    """Стоковый NIOS: target 0x80 → invalid id, ответ без SUCCESS
+    (default в perform_read/perform_write, pkt_8x32.c hosted-ревизии)."""
+
+    def xfer(self, req, timeout_ms=None):
+        if len(req) == lf.NIOS_PKT_LEN and req[1] == 0x80:
+            return bytes(16)
+        return super().xfer(req, timeout_ms)
+
+
+gw_h = lg.LegionGateway(fake=True)
+gw_h.fpga = lf.LegionFpga(_HostedTransport(board="bladerf1"))
+gw_h._detect_legion()
+check("hosted: 0x80 без SUCCESS → legion=False", gw_h._legion is False)
+r = gw_h.handle({"op": "ping"})
+check("hosted: ping legion=False", r.get("legion") is False)
+r = gw_h.handle({"op": "arm", "mode": "player"})
+check("hosted: ARM отказ с причиной про ревизию", r.get("ok") is False and "legion" in str(r.get("reason")))
+gw_h.handle({"op": "usb", "action": "release"})
+check("hosted: после release ревизия неизвестна (None, не False)", gw_h._legion is None)
+r = gw_h.handle({"op": "usb", "action": "acquire"})
+check("hosted: re-acquire снова детектит hosted", r.get("ok") is True and gw_h._legion is False)
+st_h = gw_h.handle({"op": "status"})
+check("hosted: status несёт legion=False", st_h.get("legion") is False)
+
+# ---------------------------------------------------------------------------
+# flash: результат CLI и возврат USB — разные исходы. CLI ok + re-acquire
+# провал (Soapy держит USB) → ok=True + warn, не ложный «отказ»; CLI упал →
+# ok=False. Стабы: транспорт с падающим acquire + подмена subprocess.run.
+# ---------------------------------------------------------------------------
+import types as _types_f  # noqa: E402
+
+
+class _FlakyAcquireTransport(lg.FakeTransport):
+    def acquire(self):
+        raise RuntimeError("USB занят SoapySDRServer")
+
+
+gw_f = lg.LegionGateway(fake=True)
+gw_f.fake = False  # дальше — «реальный» путь _flash_run, но со стабами
+gw_f.fpga = lf.LegionFpga(_FlakyAcquireTransport(board="bladerf1"))
+gw_f.board = "bladerf1"
+_orig_run = lg.subprocess.run
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(returncode=0, stdout="Flashing done", stderr="")
+gw_f._flash = {"running": True, "done": False, "ok": False, "log": "",
+               "action": "load", "path": "/abs/legionx40.rbf", "warn": ""}
+gw_f._flash_run("/abs/legionx40.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash: CLI ok + re-acquire провал → ok=True (запись состоялась)",
+      gw_f._flash["ok"] is True)
+check("flash: warn про re-acquire присутствует", "re-acquire" in gw_f._flash["warn"])
+check("flash: _legion обнулён при release (не протухшее True из fake-init)",
+      gw_f._legion is None)
+r = gw_f.handle({"op": "flash_status"})
+check("flash_status: reason несёт ВНИМАНИЕ про USB",
+      r.get("ok") is True and "ВНИМАНИЕ" in str(r.get("reason")) and bool(r.get("warn")))
+
+gw_f2 = lg.LegionGateway(fake=True)
+gw_f2.fake = False
+gw_f2.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf1"))  # acquire не падает
+gw_f2.board = "bladerf1"
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(returncode=1, stdout="", stderr="fpga not configured")
+gw_f2._flash = {"running": True, "done": False, "ok": False, "log": "",
+                "action": "load", "path": "/abs/legionx40.rbf", "warn": ""}
+gw_f2._flash_run("/abs/legionx40.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash: CLI exit≠0 → ok=False, warn пуст (acquire прошёл)",
+      gw_f2._flash["ok"] is False and not gw_f2._flash["warn"])
+check("flash: после удачного acquire ревизия перечитана (fake-транспорт = legion)",
+      gw_f2._legion is True)
+r = gw_f2.handle({"op": "flash_status"})
+check("flash_status: отказ CLI без ВНИМАНИЯ", r.get("ok") is False and "отказ" in str(r.get("reason")))
+
+# Сбой старта потока: running откатывается, следующий flash доступен.
+gw_t = lg.LegionGateway(fake=True)
+
+
+class _BoomThread:
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        raise RuntimeError("no threads")
+
+
+_orig_thread = lg.threading.Thread
+lg.threading.Thread = _BoomThread
+r = gw_t.handle({"op": "flash", "path": "/abs/legionx40.rbf", "action": "load"})
+lg.threading.Thread = _orig_thread
+check("flash: поток не стартовал → честный отказ", r.get("ok") is False and "поток" in str(r.get("reason")))
+check("flash: running не залип после сбоя потока", gw_t._flash["running"] is False)
+r = gw_t.handle({"op": "flash", "path": "/abs/legionx40.rbf", "action": "load"})
+check("flash после сбоя потока снова доступен", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = gw_t.handle({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash после сбоя потока доезжает (fake)", r.get("done") is True and r.get("ok") is True)
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).
@@ -509,7 +655,7 @@ try:
         check("d1: FPGA пустая → честный отказ", False)
     except RuntimeError as e:
         check("d1: FPGA пустая → честный отказ", "FPGA не загружена" in str(e))
-    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legion_xA4.rbf"
+    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legionxA4.rbf"
     try:
         lg.UsbTransport()
         check("d1: LEGION_FPGA_RBF не найден → отказ с причиной", False)
@@ -691,6 +837,19 @@ r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2442.5, "fs_hz": 20_000_000, "
 check("micro: ARM nco с fs/bw → ok", r.get("ok") is True)
 check("micro: nco AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
 rpcm({"op": "disarm"})
+
+# op flash на micro: семейство A-серии, x40 отвергается (PID общий 0x5250,
+# A4/A9 по USB не различить — size на операторе, как в docs Nuand).
+r = rpcm({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
+check("micro: flash x40 → отказ (нужен A4/A9)", r.get("ok") is False)
+r = rpcm({"op": "flash", "path": "/tmp/legionxA4.rbf", "action": "load"})
+check("micro: flash legionxA4 (fake) → started", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = rpcm({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("micro: flash_status done ok", r.get("done") is True and r.get("ok") is True)
 
 # Defense-in-depth: _lms_enable на micro — no-op True, CONTROL не трогаем
 # (там питание/клоки по bladerf2_common.h, не LMS-биты; аналог = AIR_PREP).

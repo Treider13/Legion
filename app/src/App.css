@@ -976,6 +976,23 @@ button:disabled {
 .log-rx { color: var(--lg-text); }
 .log-sys { color: var(--lg-dim); }
 
+/* Хвост лога сборки Quartus (вкладка КАСТОМ FPGA) */
+.build-log {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--lg-border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--lg-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--lg-dim);
+}
+
 .app-footer {
   margin-top: 30px;
   padding-top: 16px;

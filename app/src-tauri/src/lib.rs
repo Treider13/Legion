@@ -1,4 +1,5 @@
 mod esp32_flash;
+mod legion_build;
 mod sdr;
 
 /// LEGION: начальный serial-порт из переменной окружения LEGION_PORT.
@@ -22,7 +23,12 @@ pub fn run() {
       sdr::sdr_flash,
       sdr::sdr_host_info,
       esp32_flash::esp32_chip_id,
-      esp32_flash::esp32_flash
+      esp32_flash::esp32_flash,
+      legion_build::legion_env_info,
+      legion_build::legion_toolchain_check,
+      legion_build::legion_build_start,
+      legion_build::legion_build_status,
+      legion_build::legion_build_cancel
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

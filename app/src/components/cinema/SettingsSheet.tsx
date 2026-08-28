@@ -5,6 +5,7 @@ import { CorridorPanel } from "../CorridorPanel";
 import { LogPanel } from "../LogPanel";
 import { PaPanel } from "../PaPanel";
 import { Esp32FlashPanel } from "../Esp32FlashPanel";
+import { LegionFlashPanel } from "../LegionFlashPanel";
 import { ScanPanel } from "../ScanPanel";
 import { SdrFlashPanel } from "../SdrFlashPanel";
 import { SignalPanel } from "../SignalPanel";
@@ -57,6 +58,7 @@ export function SettingsSheet({ onClose }: Props) {
             {workspace === "corridor" && <CorridorPanel />}
             {workspace === "sdr" && <SdrPanel />}
             {workspace === "sdrFlash" && <SdrFlashPanel />}
+            {workspace === "sdrCustom" && <LegionFlashPanel />}
             {workspace === "scan" && <ScanPanel />}
             {workspace === "signal" && <SignalPanel />}
             {workspace === "pa" && <PaPanel />}
