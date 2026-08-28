@@ -153,13 +153,20 @@ class UsbTransport:
                 f"bladeRF-cli -l: {(cp.stderr or cp.stdout).strip()[:200]}")
 
     def _acquire(self) -> None:
-        self._find()
-        if not self._fpga_configured():
-            self._load_fpga()
-            time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+        try:
             self._find()
             if not self._fpga_configured():
-                raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+                self._load_fpga()
+                time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+                self._find()
+                if not self._fpga_configured():
+                    raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+        except Exception:
+            # Полуоткрытый handle не оставляем: иначе следующий acquire()
+            # сочтётся no-op «успехом» по непустому _dev (плата найдена,
+            # но FPGA пуста и LEGION_FPGA_RBF не задан — тот случай).
+            self._dev = None
+            raise
 
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
@@ -183,6 +190,10 @@ class UsbTransport:
         self._acquire()
 
     def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
+        if self._dev is None:
+            # Честная причина вместо AttributeError о NoneType (release или
+            # провалившийся acquire) — такую строку не стыдно показать в логе.
+            raise RuntimeError("USB не занят агентом (release или сбой acquire)")
         t = TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
         try:
             self._dev.write(EP_OUT, req, timeout=t)
@@ -731,6 +742,20 @@ class LegionGateway:
             # Без ARM — отказ: иначе hop после watchdog снова жжёт AIR_PREP/TX.
             if not self._armed:
                 return {"ok": False, "reason": "tune: нет ARM"}
+            # Наш _armed отстаёт от автономного DISARM в NIOS (deadman сработал
+            # на железе, а ноутбук ещё не прислал disarm — голодание event loop
+            # или шторм на релее): латч wd_fired в STATUS авторитетнее. Иначе
+            # tune поднял бы AIR_PREP (TX unmute) поверх погашенного тракта.
+            # Цена — один 16-байтный пакет на шаг обхода (dwell ≥ 200 мс).
+            # Остаточное окно (WD между чтением STATUS и AIR_PREP, ~мс)
+            # закрывает сторож kick_age: его DISARM (CTRL=0) уводит RFIC в
+            # standby через NIOS.
+            st = self.fpga.read_status()
+            if not st.get("ok"):
+                return {"ok": False, "reason": "tune: STATUS не читается — эфир не трогаем"}
+            if st.get("wd_fired"):
+                return {"ok": False,
+                        "reason": "tune: deadman сработал (wd_fired) — эфир в standby, нужен новый ARM"}
             # Порог стоянки (air-обход с ретрансляцией) едет в том же tune:
             # запись DET_THR — один 16-байтный USB-пакет внутри этой операции,
             # отдельный round-trip на шаг не нужен (скорость обхода не режем).

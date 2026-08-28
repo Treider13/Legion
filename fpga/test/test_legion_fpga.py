@@ -666,6 +666,32 @@ try:
 finally:
     _restore_usb(_old_usb2)
 
+# D3: провалившийся _acquire не оставляет полуоткрытый handle (_dev=None) —
+# иначе следующий acquire() считался бы no-op «успехом» по непустому _dev.
+# И xfer без устройства — честная причина вместо AttributeError о NoneType.
+_dev3 = _FakeUsbDev()
+_old_usb3 = _stub_usb(_dev3)
+try:
+    t3 = lg.UsbTransport()  # плата найдена, FPGA загружена
+    _dev3.configured = 0    # образ потерян (питание xA4 — от USB)
+    os.environ.pop("LEGION_FPGA_RBF", None)
+    try:
+        t3._acquire()
+        check("d3: _acquire с пустой FPGA → отказ", False)
+    except RuntimeError:
+        check("d3: _acquire с пустой FPGA → отказ", True)
+    check("d3: провалившийся _acquire не держит handle (_dev None)", t3._dev is None)
+    try:
+        t3.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+        check("d3: xfer без устройства → честная причина", False)
+    except RuntimeError as e:
+        check("d3: xfer без устройства → честная причина", "USB не занят" in str(e))
+    _dev3.configured = 1    # образ вернули — acquire снова работает
+    t3.acquire()
+    check("d3: после восстановления FPGA acquire занимает USB", t3._dev is _dev3)
+finally:
+    _restore_usb(_old_usb3)
+
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.
 r = rpc({"op": "usb", "action": "release"})
@@ -835,6 +861,30 @@ check("micro: tune без freq_mhz → отказ", r.get("ok") is False)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune после DISARM → отказ (не поднимаем TX)", r.get("ok") is False and "ARM" in (r.get("reason") or ""))
+
+# tune при латче deadman: автономный DISARM в NIOS (wd_fired) до шлюза не
+# дошёл — _armed ещё True, но STATUS авторитетнее: отказ ДО записей,
+# иначе AIR_PREP поднял бы TX поверх погашенного deadman'ом тракта.
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: ARM nco для wd-tune теста → ok", r.get("ok") is True)
+freq_before = gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ)
+thr_before = gw_m.fpga._t.regs.get(lf.REG_DET_THR)
+air_before = gw_m.fpga._t.regs.get(lf.REG_AIR_PREP)
+gw_m.fpga._t.wd_latch = True  # как NIOS после deadman (bit4 в STATUS)
+r = rpcm({"op": "tune", "freq_mhz": 2475.0, "det_thr": 4800})
+check("micro: tune при wd-латче → отказ (deadman)",
+      r.get("ok") is False and "deadman" in str(r.get("reason")))
+check("micro: отказной tune не тронул AIR_FREQ", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == freq_before)
+check("micro: отказной tune не тронул DET_THR", gw_m.fpga._t.regs.get(lf.REG_DET_THR) == thr_before)
+check("micro: отказной tune не тронул AIR_PREP", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == air_before)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: re-ARM после deadman-отказа → ok", r.get("ok") is True)
+check("micro: re-ARM снял wd-латч (как NIOS)", gw_m.fpga._t.wd_latch is False)
+r = rpcm({"op": "tune", "freq_mhz": 2475.0})
+check("micro: tune после re-ARM снова работает", r.get("ok") is True)
+rpcm({"op": "disarm"})
+
 r = rpcm({"op": "set", "reg": "air_fs_hz", "value": 10_000_000})
 check("set air_fs_hz", r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 10_000_000)
 r = rpcm({"op": "set", "reg": "air_bw_hz", "value": 10_000_000})
