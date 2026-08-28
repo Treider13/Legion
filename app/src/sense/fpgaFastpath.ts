@@ -157,6 +157,27 @@ export function fpgaObserveLine(st: {
   return `наблюдение: ${gate} · окон с энергией ${st.det_count ?? 0}`;
 }
 
+/** Пауза перед повторным handoff на частоту, где он упал: 1-й страйк 10 с,
+ *  дальше ×2 (10/20/40…). На 3-м страйке подряд — skip частоты (как у
+ *  пропавшей энергии): не долбим мёртвый/недостижный ARM каждым циклом. */
+export const FPGA_HANDOFF_RETRY_MS = 10_000;
+export const FPGA_HANDOFF_MAX_STRIKES = 3;
+
+export function handoffRetryMs(strikes: number): number {
+  const s = Math.max(1, Math.round(strikes));
+  return FPGA_HANDOFF_RETRY_MS * 2 ** (s - 1);
+}
+
+/** true — частоту пора пропускать (страйков ≥ MAX), а не ретраить. */
+export function handoffSkipAfter(strikes: number): boolean {
+  return strikes >= FPGA_HANDOFF_MAX_STRIKES;
+}
+
+/** Таймлайн handoff для лога: [имя, ts] → "park_полки +70мс · arm +540мс". */
+export function handoffTimeline(t0: number, marks: Array<readonly [string, number]>): string {
+  return marks.map(([n, t]) => `${n} +${t - t0}мс`).join(" · ");
+}
+
 /**
  * FTW NCO: fj·2³². fj=0 → fs/8, не DC (панель без cinema иначе ставила 0).
  * NCO — TX DDS, не анализатор.

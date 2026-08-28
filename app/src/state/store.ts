@@ -56,6 +56,9 @@ import {
   fpgaAirSupported,
   fpgaArmCmd,
   fpgaObserveLine,
+  handoffRetryMs,
+  handoffSkipAfter,
+  handoffTimeline,
   ncoFtwFromFrac,
   planFpgaAir,
 } from "../sense/fpgaFastpath";
@@ -467,11 +470,11 @@ let gFpgaHandoffBusy = false;
 /** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
 let gHandoffFailMhz: number | null = null;
 let gHandoffFailAt = 0;
+/** Страйки подряд на той же частоте: пауза 10→20→40 с, на 3-й — skip. */
+let gHandoffStrikes = 0;
 /** Автовозврат из ARM: det_count не растёт N опросов подряд = энергия пропала. */
 let gLastDetCount: number | null = null;
 let gDetStagnantPolls = 0;
-/** Пауза перед повторным handoff на частоту, где он упал (мс). */
-const FPGA_HANDOFF_RETRY_MS = 10_000;
 /** Поколение авто-цикла FPGA+сканер: инкрементит операторский СТОП.
  *  Handoff сверяет поколение после await ARM — сменилось, значит оператор
  *  стопнул в полёте: не коммитим ARM, откатываемся (паттерн gTxGen). */
@@ -870,8 +873,8 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   /** Handoff скан→FPGA: парковка LO на пик (2 MSPS, BW 2 МГц) → порог из
    *  шумовой полки (медиана нижних 60% окон × K) → USB агенту → ARM lb_gated.
-   *  Отказ на любом шаге → возврат к скану (частота помечается для ретрая
-   *  через FPGA_HANDOFF_RETRY_MS, не вплотную). */
+   *  Отказ на любом шаге → возврат к скану (страйк: ретрай через backoff
+   *  handoffRetryMs, на 3-м подряд — skip частоты, не вплотную). */
   const fpgaHandoff = async (mhz: number, powerDbm: number): Promise<void> => {
     if (gFpgaHandoffBusy) return;
     gFpgaHandoffBusy = true;
@@ -880,10 +883,33 @@ export const useLegion = create<LegionStore>((set, get) => {
     set({ fpgaBusy: true });
     const gw = (cmd: Record<string, unknown>) =>
       hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+    // Таймлайн этапов: при сбое видно, где именно умер handoff и сколько
+    // занял каждый шаг (ревью: «на каком шаге» было не видно).
+    const t0 = Date.now();
+    const marks: Array<readonly [string, number]> = [];
+    const mark = (name: string): void => {
+      marks.push([name, Date.now()] as const);
+    };
     const fail = async (why: string): Promise<void> => {
-      pushLog("sys", `FPGA handoff ${mhz.toFixed(3)} МГц: ${why} — возврат к скану`);
-      gHandoffFailMhz = mhz;
+      // Страйки подряд на одной частоте: backoff 10→20→40 с; на 3-м — skip
+      // (как у пропавшей энергии): недостижимый ARM не долбим каждым циклом.
+      gHandoffStrikes =
+        gHandoffFailMhz != null && sameBin(mhz, gHandoffFailMhz) ? gHandoffStrikes + 1 : 1;
+      const skip = handoffSkipAfter(gHandoffStrikes);
+      pushLog(
+        "sys",
+        `FPGA handoff ${mhz.toFixed(3)} МГц: ${why} — возврат к скану ` +
+          `(страйк ${gHandoffStrikes}${
+            skip ? " → skip частоты" : `, ретрай через ${handoffRetryMs(gHandoffStrikes) / 1000} с`
+          })` +
+          (marks.length > 0 ? ` · ${handoffTimeline(t0, marks)}` : ""),
+      );
+      gHandoffFailMhz = skip ? null : mhz;
       gHandoffFailAt = Date.now();
+      if (skip) {
+        gHandoffStrikes = 0;
+        gSkipMhz = mhz; // refreshSkipMhz снимет, когда частота замолчит и оживёт
+      }
       // Отозванный в полёте handoff (СТОП/closeSdr/…): чистимся, но скан
       // не рестартим — оператор уже решил (ревью 2026-08-28).
       await fpgaReturnToScan(null, !revoked());
@@ -918,6 +944,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(pkCap.fake ? "FAKE park — не эфир, ARM нельзя" : `park захвата: ${pkCap.reason}`);
         return;
       }
+      mark("park_полки");
       if (await abortIfRevoked("pre")) return;
       const cap = await hostDetCapture(FPGA_DET_WIN_SAMPLES, FPGA_DET_WINDOWS);
       const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
@@ -927,6 +954,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(cap.ok ? `порог ниже floor/0 (медиана полки ${cap.medianEnergy})` : cap.reason);
         return;
       }
+      mark(`det_thr=${detThr}`);
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro
       // LO при ARM выставит NIOS по freq_mhz — парк тут для readback-честности).
       const pk = await hostPark(mhz, 2, FPGA_FS_HZ, true, true);
@@ -934,6 +962,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(pk.fake ? "FAKE park — не эфир, ARM нельзя" : pk.reason || "park не удался");
         return;
       }
+      mark("park_пик");
       if (await abortIfRevoked("pre")) return;
       await releaseSoapyForFpga();
       const acq = await gw({ op: "usb", action: "acquire" });
@@ -941,6 +970,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(`USB acquire: ${acq.reason ?? "отказ"}`);
         return;
       }
+      mark("usb");
       if (await abortIfRevoked("acquired")) return;
       const armCmd = fpgaArmCmd("lb_gated", {
         detThr,
@@ -958,9 +988,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(r.reason ?? "ARM отказ");
         return;
       }
+      mark("arm");
       if (await abortIfRevoked("armed")) return;
       gSkipMhz = null;
       gHandoffFailMhz = null;
+      gHandoffStrikes = 0;
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       set({
@@ -973,7 +1005,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       });
       pushLog(
         "sys",
-        `FPGA+сканер: ARM lb_gated ${mhz.toFixed(3)} МГц · det_thr=${detThr} · конвейер на SDR, ноутбук наблюдает`,
+        `FPGA+сканер: ARM lb_gated ${mhz.toFixed(3)} МГц · det_thr=${detThr} · конвейер на SDR, ноутбук наблюдает` +
+          ` · ${handoffTimeline(t0, marks)}`,
       );
       beginFpgaKick();
     } finally {
@@ -2314,6 +2347,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       gHandoffFailMhz = null;
+      gHandoffStrikes = 0;
     },
 
     fpgaPollStatus: async () => {
@@ -2753,7 +2787,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             // нагрузки 50 Ом ARM не ставим (снятие галки гасит и будущие ARM).
             if (!cur.sdrLoadOk) return;
             const failActive =
-              gHandoffFailMhz != null && Date.now() - gHandoffFailAt < FPGA_HANDOFF_RETRY_MS;
+              gHandoffFailMhz != null &&
+              Date.now() - gHandoffFailAt < handoffRetryMs(gHandoffStrikes);
             const pool = detections.filter((d) => {
               if (gSkipMhz != null && sameBin(d.freqMhz, gSkipMhz)) return false;
               if (failActive && gHandoffFailMhz != null && sameBin(d.freqMhz, gHandoffFailMhz)) {

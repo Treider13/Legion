@@ -36,6 +36,9 @@ import {
   detectorWindowUs,
   fpgaArmCmd,
   fpgaObserveLine,
+  handoffRetryMs,
+  handoffSkipAfter,
+  handoffTimeline,
   ncoFtwFromFrac,
   parkSpanMhz,
   planFpgaAir,
@@ -1186,6 +1189,12 @@ async function main(): Promise<void> {
     detThrFromMedian(10) === 0 && detThrFromMedian(15) === 0);
   check("detThrFromMedian: на floor живёт (16×4=64)", detThrFromMedian(16) === 64);
   check("floor pinned (порядок от фикстуры полки 400–2000)", FPGA_DET_THR_FLOOR === 64);
+  check("handoff backoff: 10→20→40 с", handoffRetryMs(1) === 10_000 && handoffRetryMs(2) === 20_000 && handoffRetryMs(3) === 40_000);
+  check("handoff backoff: страйк 0/мусор → базовые 10 с", handoffRetryMs(0) === 10_000);
+  check("handoff skip на 3-м страйке", !handoffSkipAfter(2) && handoffSkipAfter(3));
+  check("handoff таймлайн: этапы с dt",
+    handoffTimeline(1000, [["park_полки", 1070], ["arm", 1540]]) === "park_полки +70мс · arm +540мс");
+  check("handoff таймлайн пустой → пустая строка", handoffTimeline(1000, []) === "");
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
