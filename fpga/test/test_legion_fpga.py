@@ -509,7 +509,7 @@ try:
         check("d1: FPGA пустая → честный отказ", False)
     except RuntimeError as e:
         check("d1: FPGA пустая → честный отказ", "FPGA не загружена" in str(e))
-    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legion_xA4.rbf"
+    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legionxA4.rbf"
     try:
         lg.UsbTransport()
         check("d1: LEGION_FPGA_RBF не найден → отказ с причиной", False)

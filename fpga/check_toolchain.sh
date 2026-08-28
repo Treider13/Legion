@@ -1,6 +1,8 @@
 #!/bin/bash
 # LEGION FPGA — проверка тулчейна сборки перед build_bladerf.sh.
-# Факты-пины: Quartus Prime Lite 20.1.1 (README Nuand для bladeRF 1/NIOS II),
+# Факты-пины: Quartus Prime Lite 23.1.1 (вендоренный README Nuand в
+# fpga/vendor/bladerf/hdl/README.md: «version 23.1.1, which the bladeRF
+# project files are based upon», путь nios2eds ~/intelFPGA_lite/23.1std),
 # bladeRF-cli (прошивка), nios2_command_shell (сборка NIOS BSP).
 set -u
 FAIL=0
@@ -9,14 +11,14 @@ echo "== Quartus =="
 if command -v quartus_sh >/dev/null 2>&1; then
   V=$(quartus_sh --version 2>/dev/null | grep -oE "Version [0-9]+\.[0-9]+(\.[0-9]+)?" | head -1 | grep -oE "[0-9.]+")
   echo "  найден: $V"
-  if [ "$V" = "20.1.1" ] || [ "$V" = "20.1" ]; then
-    echo "  OK: версия совпадает с пином Nuand (20.1.1)"
+  if [ "$V" = "23.1.1" ] || [ "$V" = "23.1" ]; then
+    echo "  OK: версия совпадает с пином Nuand (23.1.1, README вендоренного дерева)"
   else
-    echo "  ВНИМАНИЕ: пин Nuand — 20.1.1 (новее/старше — на свой риск: README bladeRF)"
+    echo "  ВНИМАНИЕ: пин Nuand — 23.1.1 (новее/старше — на свой риск: hdl/README.md bladeRF)"
     FAIL=1
   fi
 else
-  echo "  FAIL: quartus_sh не найден (поставьте Quartus Prime Lite 20.1.1, Intel)"
+  echo "  FAIL: quartus_sh не найден (поставьте Quartus Prime Lite 23.1.1, Intel)"
   FAIL=1
 fi
 

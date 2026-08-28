@@ -73,17 +73,22 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 Интеграция legion **уже применена** к дереву (обе платформы: bladeRF 1 x40
 и bladeRF 2.0 micro). Внешний инструмент ровно один — Quartus.
 
-1. Установить **Quartus Prime Lite 20.1.1** (README Nuand прямо фиксирует эту
-   версию для bladeRF 1; более новые не гарантируют поддержку Cyclone IV/NIOS II).
+1. Установить **Quartus Prime Lite 23.1.1** (вендоренный
+   `fpga/vendor/bladerf/hdl/README.md` фиксирует эту версию: «version 23.1.1,
+   which the bladeRF project files are based upon»; пакеты Cyclone IV для
+   bladeRF 1 / Cyclone V для micro ставятся отдельно, NIOS II там же —
+   `~/intelFPGA_lite/23.1std/nios2eds/`).
 2. Сборка (из nios2_command_shell):
    ```bash
    cd fpga/vendor/bladerf/hdl/quartus
    ./build_bladerf.sh -b bladeRF -s 40 -r legion        # bladeRF 1 x40
    ./build_bladerf.sh -b bladeRF-micro -s A4 -r legion  # bladeRF 2.0 micro xA4
    ```
-3. Загрузка **в RAM** (разработка, ноль риска): `bladeRF-cli -l legion_x40.rbf`.
-   После приёмки — во flash: `bladeRF-cli -L legion_x40.rbf` (autoload).
+3. Загрузка **в RAM** (разработка, ноль риска): `bladeRF-cli -l legionx40.rbf`.
+   После приёмки — во flash: `bladeRF-cli -L legionx40.rbf` (autoload).
    Откат: питание off/on (при `-l`) или прошить официальный `hostedx40.rbf`.
+   Имя артефакта — из `build_bladerf.sh` (`$rev"x"$size.rbf`): `legionx40.rbf`,
+   `legionxA4.rbf`, `legionxA9.rbf` в каталоге `legionx<size>-<дата>/`.
    **Грабля из wiki Nuand:** `.sof` через JTAG (USB Blaster) работает только
    ПОСЛЕ инициализации платы штатным `.rbf` через bladeRF-cli — сначала `-l`,
    потом JTAG, не наоборот.
@@ -215,7 +220,7 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 
 ## Этапы приёмки на железе (runbook)
 
-Перед сборкой: `fpga/check_toolchain.sh` — проверит Quartus 20.1.1,
+Перед сборкой: `fpga/check_toolchain.sh` — проверит Quartus 23.1.1,
 nios2_command_shell, bladeRF-cli, pyusb (честные FAIL с инструкциями).
 
 Отличия micro (xA4/xA9) от x40 при приёмке: `{"op":"rx"}` на micro честно

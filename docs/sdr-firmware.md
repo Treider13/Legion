@@ -55,7 +55,7 @@ SoapySDRServer --bind
 
 Нужен **hosted** bitstream: RX (energy detect по allowlist) +
 TX LO на RF out → усилитель; для конвейера «скан → FPGA-ретрансляция»
-— ревизия legion поверх hosted (`bladeRF-cli -l/-L legion_xA4.rbf`,
+— ревизия legion поверх hosted (`bladeRF-cli -l/-L legionxA4.rbf`,
 сборка `fpga/vendor/bladerf/hdl/quartus/build_bladerf.sh -b bladeRF-micro -s A4 -r legion`).
 FX3 `.img` без FPGA задачу не закрывает.
 Имена вроде RF-Clown / BlueJammer / nRF24 отклоняются на хосте.

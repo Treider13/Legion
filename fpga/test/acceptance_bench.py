@@ -200,7 +200,7 @@ def main() -> int:
 
     if not args.skip_e6:
         print("== E6: autoload (оператор) ==")
-        print("  … на шлюзе: bladeRF-cli -L legion_x40.rbf; питание off/on; Enter")
+        print("  … на шлюзе: bladeRF-cli -L legionx40.rbf; питание off/on; Enter")
         input()
         r = gw({"op": "ping"})
         check("канал жив после power cycle (наш образ autoload)", r.get("ok") is True, str(r))
