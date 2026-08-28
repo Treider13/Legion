@@ -92,6 +92,19 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   };
 }
 
+/** Строка наблюдения: ноутбук не в тракте, только телеметрия. */
+export function fpgaObserveLine(st: {
+  ok?: boolean;
+  det_active?: boolean;
+  det_count?: number;
+  wd_fired?: boolean;
+} | null): string {
+  if (!st?.ok) return "ноутбук наблюдает · статус FPGA недоступен";
+  if (st.wd_fired) return "watchdog погасил TX — конвейер на SDR остановлен";
+  const gate = st.det_active ? "энергия → RX→TX на усилитель" : "тишина, гейт закрыт";
+  return `наблюдение: ${gate} · детектов ${st.det_count ?? 0}`;
+}
+
 /** Команда ARM для шлюза. det_thr/shift — только lb_gated. */
 export function fpgaArmCmd(
   mode: "player" | "nco" | "lb_gated" | "lb_always",

@@ -1,10 +1,12 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
 import {
   autoDispatchOptionRu,
+  isFpgaAirPattern,
   patternOptionRu,
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
+import { fpgaObserveLine } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { detectorWindowUs, parkSpanMhz } from "../sense/fpgaFastpath";
 import { catalogCaps } from "../sdr/hostClient";
@@ -19,7 +21,8 @@ export function ScanPanel() {
   const span = Math.max(f2 - f1, 1e-6);
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
   const auto = scannerParticipates(s.scanPattern);
-  const busy = s.scanRunning || s.transmitArmed;
+  const fpgaAir = isFpgaAirPattern(s.scanPattern);
+  const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
     ? s.sdrBands
@@ -32,30 +35,61 @@ export function ScanPanel() {
 
   return (
     <section className="panel">
-      <span className="panel-title">РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА</span>
+      <span className="panel-title">
+        {fpgaAir ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR" : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
+      </span>
       <p className="panel-note">
-        АВТО + ПЕРЕДАТЬ — хост-скан (FFT на ноутбуке), задержка миллисекунды.
-        Микросекунды: FPGA ЭФИР — детектор I²+Q² внутри чипа, RX→TX на усилитель.
-        Полоса должна влезть в analog BW (x40 = 28 МГц). Хост-скан и FPGA
-        вместе не работают (один USB). СБРОСИТЬ — оператор. ESP32 сюда не входит.
+        {fpgaAir
+          ? "Конвейер I²+Q² → RX→TX крутится на SDR за микросекунды. Ноутбук только наблюдает статус и может стопнуть. Хост-FFT и ПЕРЕДАТЬ в этом режиме не участвуют."
+          : "АВТО + ПЕРЕДАТЬ — хост-скан (FFT на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР — конвейер на SDR. Хост-скан и FPGA вместе не работают (один USB)."}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
-          <span className="freq-hud-k">ПЕРЕХВАЧЕНА</span>
+          <span className="freq-hud-k">{fpgaAir ? "ДЕТЕКТОР FPGA" : "ПЕРЕХВАЧЕНА"}</span>
           <span className="freq-hud-v">
-            {s.lastInterceptMhz != null ? `${s.lastInterceptMhz.toFixed(3)}` : "—"}
-          </span>
-          <span className="freq-hud-u">МГц · {auto ? "energy" : "сканер выкл"}</span>
-        </div>
-        <div className={`freq-hud-card tx ${s.lastForwardMhz != null ? "live" : ""}`}>
-          <span className="freq-hud-k">НА TX SDR</span>
-          <span className="freq-hud-v">
-            {s.lastForwardMhz != null ? `${s.lastForwardMhz.toFixed(3)}` : "—"}
+            {fpgaAir
+              ? s.fpgaArmed
+                ? s.fpgaStatus?.det_active
+                  ? "есть"
+                  : "нет"
+                : "—"
+              : s.lastInterceptMhz != null
+                ? `${s.lastInterceptMhz.toFixed(3)}`
+                : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц · {auto ? (s.autoDispatch === "priority" ? "приоритет" : "очередь") : "открытый TX"}
-            {s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
-            {s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
+            МГц · {fpgaAir ? (s.fpgaStatus?.det_active ? "энергия FPGA" : "окно FPGA") : auto ? "energy" : "сканер выкл"}
+          </span>
+        </div>
+        <div className={`freq-hud-card tx ${s.lastForwardMhz != null ? "live" : ""}`}>
+          <span className="freq-hud-k">{fpgaAir ? "КОНВЕЙЕР SDR" : "НА TX SDR"}</span>
+          <span className="freq-hud-v">
+            {fpgaAir
+              ? s.fpgaArmed
+                ? s.fpgaStatus?.det_active
+                  ? "TX"
+                  : "—"
+                : "—"
+              : s.lastForwardMhz != null
+                ? `${s.lastForwardMhz.toFixed(3)}`
+                : "—"}
+          </span>
+          <span className="freq-hud-u">
+            МГц ·{" "}
+            {fpgaAir
+              ? s.fpgaArmed
+                ? s.fpgaStatus?.det_active
+                  ? "RX→TX на усилитель"
+                  : "гейт закрыт"
+                : "конвейер выкл"
+              : auto
+                ? s.autoDispatch === "priority"
+                  ? "приоритет"
+                  : "очередь"
+                : "открытый TX"}
+            {!fpgaAir && s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
+            {fpgaAir && s.fpgaArmed ? ` · ${fpgaWindowUs.toFixed(0)} µs FPGA` : ""}
+            {!fpgaAir && s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
           </span>
         </div>
       </div>
@@ -69,11 +103,41 @@ export function ScanPanel() {
             disabled={busy}
           >
             <option value="auto">{patternOptionRu("auto")}</option>
+            <option value="fpga">{patternOptionRu("fpga")}</option>
             <option value="sweep">{patternOptionRu("sweep")}</option>
             <option value="band">{patternOptionRu("band")}</option>
             <option value="hop">{patternOptionRu("hop")}</option>
           </select>
         </label>
+        {fpgaAir && (
+          <>
+            <label>
+              ПОРОГ DET
+              <input
+                aria-label="Порог детектора FPGA"
+                type="number"
+                min={1}
+                step={100}
+                value={s.fpgaDetThr}
+                onChange={(e) => s.setFpgaDetThr(parseFloat(e.target.value))}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label>
+              ОКНО SHIFT
+              <input
+                aria-label="Окно детектора FPGA"
+                type="number"
+                min={4}
+                max={12}
+                step={1}
+                value={s.fpgaDetShift}
+                onChange={(e) => s.setFpgaDetShift(parseFloat(e.target.value))}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+          </>
+        )}
         {auto && (
           <label>
             АВТО
@@ -122,11 +186,13 @@ export function ScanPanel() {
         </label>
       </div>
       <p className="sens-hint">
-        {auto
-          ? s.autoDispatch === "priority"
-            ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
-            : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
-          : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
+        {fpgaAir
+          ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает`
+          : auto
+            ? s.autoDispatch === "priority"
+              ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
+              : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
+            : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
       <p className="sens-hint">
         TX-контент:{" "}
@@ -173,47 +239,66 @@ export function ScanPanel() {
             ДЕМО-НЕСУЩАЯ
           </button>
         )}
-        {auto &&
-          (s.scanRunning ? (
-            <button className="btn-danger" onClick={() => s.stopScan()}>
-              СТОП СКАН
+        {fpgaAir ? (
+          s.fpgaArmed ? (
+            <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+              СТОП
             </button>
           ) : (
-            <button className="btn-primary" onClick={() => s.startScan()}>
-              СКАНИРОВАТЬ
+            <button
+              className="btn-primary"
+              disabled={s.fpgaBusy}
+              onClick={() => void s.startScan()}
+            >
+              СТАРТ FPGA+СКАНЕР
             </button>
-          ))}
-        {s.transmitArmed ? (
-          <button className="btn-danger" onClick={() => void s.stopTransmit()}>
-            СТОП ПЕРЕДАЧУ
-          </button>
+          )
         ) : (
-          <button className="btn-primary" onClick={() => void s.startTransmit()}>
-            ПЕРЕДАТЬ
-          </button>
-        )}
-        <button
-          className="btn-ghost"
-          disabled={s.lastForwardMhz == null}
-          onClick={() => void s.resetSdrLock()}
-        >
-          СБРОСИТЬ
-        </button>
-        {s.fpgaArmed ? (
-          <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
-            СТОП FPGA ЭФИР
-          </button>
-        ) : (
-          <button
-            className="btn-primary"
-            disabled={s.fpgaBusy}
-            onClick={() => {
-              s.setFpgaMode("lb_gated");
-              void s.fpgaArm();
-            }}
-          >
-            FPGA ЭФИР ({fpgaWindowUs.toFixed(0)} µs)
-          </button>
+          <>
+            {auto &&
+              (s.scanRunning ? (
+                <button className="btn-danger" onClick={() => s.stopScan()}>
+                  СТОП СКАН
+                </button>
+              ) : (
+                <button className="btn-primary" onClick={() => s.startScan()}>
+                  СКАНИРОВАТЬ
+                </button>
+              ))}
+            {s.transmitArmed ? (
+              <button className="btn-danger" onClick={() => void s.stopTransmit()}>
+                СТОП ПЕРЕДАЧУ
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={() => void s.startTransmit()}>
+                ПЕРЕДАТЬ
+              </button>
+            )}
+            <button
+              className="btn-ghost"
+              disabled={s.lastForwardMhz == null}
+              onClick={() => void s.resetSdrLock()}
+            >
+              СБРОСИТЬ
+            </button>
+            {s.fpgaArmed ? (
+              <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+                СТОП FPGA ЭФИР
+              </button>
+            ) : (
+              <button
+                className="btn-primary"
+                disabled={s.fpgaBusy}
+                onClick={() => {
+                  s.setScanPattern("fpga");
+                  s.setFpgaMode("lb_gated");
+                  void s.fpgaArm();
+                }}
+              >
+                FPGA ЭФИР ({fpgaWindowUs.toFixed(0)} µs)
+              </button>
+            )}
+          </>
         )}
       </div>
       <p className="sens-hint">
@@ -278,11 +363,36 @@ export function ScanPanel() {
             : s.scanCenterMhz != null
               ? `${s.scanCenterMhz.toFixed(3)} МГц`
               : "—"}
-          {s.transmitArmed ? (auto ? " · авто TX" : " · TX с ноутбука") : auto && s.scanRunning ? " · слушает" : ""}
+          {fpgaAir
+            ? s.fpgaArmed
+              ? " · FPGA конвейер · ноутбук наблюдает"
+              : " · FPGA+сканер выбран"
+            : s.transmitArmed
+              ? auto
+                ? " · авто TX"
+                : " · TX с ноутбука"
+              : auto && s.scanRunning
+                ? " · слушает"
+                : ""}
         </span>
         <span>{f2}</span>
       </div>
-      <p className="status-line">{s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}</p>
+      <p className="status-line">
+        {fpgaAir
+          ? s.fpgaArmed
+            ? fpgaObserveLine(s.fpgaStatus) || s.lastCueReason
+            : s.lastCueReason || "FPGA+сканер: СТАРТ — конвейер на SDR, ноутбук наблюдает"
+          : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
+      </p>
+      {fpgaAir && s.fpgaStatus && (
+        <div className="sdr-facts">
+          <div>
+            {s.fpgaStatus.ok
+              ? `наблюдение · det=${s.fpgaStatus.det_active ? "энергия" : "тишина"} · детектов=${s.fpgaStatus.det_count ?? 0} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
+              : `наблюдение недоступно: ${s.fpgaStatus.reason ?? "?"}`}
+          </div>
+        </div>
+      )}
       {auto && (
         <table className="det-table">
           <thead>

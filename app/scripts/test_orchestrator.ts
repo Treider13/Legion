@@ -29,6 +29,7 @@ import {
   clampDetShift,
   detectorWindowUs,
   fpgaArmCmd,
+  fpgaObserveLine,
   parkSpanMhz,
   planFpgaAir,
 } from "../src/sense/fpgaFastpath";
@@ -50,6 +51,7 @@ import {
   autoDispatchOptionRu,
   autoForwardAllowed,
   bandListFor,
+  isFpgaAirPattern,
   modeConflict,
   modeOf,
   patternLabelRu,
@@ -383,6 +385,13 @@ function main(): void {
   check("имя sweep = КАЧАНИЕ, не туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ");
   check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
+  check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
+  check("FPGA+сканер — не хост-сканер", scannerParticipates("fpga") === false);
+  check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
+  check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
+  const fpgaWork = planSdrWork("fpga");
+  check("planSdrWork FPGA: конвейер на SDR", fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
+  check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));
   check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
   check(
     "пустой эфир не стопает АВТО",
@@ -1111,6 +1120,15 @@ function main(): void {
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
   check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
+  check(
+    "наблюдение: тишина",
+    fpgaObserveLine({ ok: true, det_active: false, det_count: 0 }).includes("тишина"),
+  );
+  check(
+    "наблюдение: энергия на усилитель",
+    fpgaObserveLine({ ok: true, det_active: true, det_count: 3 }).includes("RX→TX"),
+  );
+  check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

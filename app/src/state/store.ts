@@ -45,6 +45,7 @@ import {
   FPGA_US_DET_SHIFT,
   clampDetShift,
   fpgaArmCmd,
+  fpgaObserveLine,
   planFpgaAir,
 } from "../sense/fpgaFastpath";
 import {
@@ -55,6 +56,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  isFpgaAirPattern,
   modeConflict,
   modeOf,
   planSdrWork,
@@ -303,6 +305,8 @@ function stopTxWalk(): void {
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
 /** Heartbeat ноутбука → FPGA watchdog (deadman end-to-end, 2 Гц). */
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
+/** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
+let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
@@ -311,6 +315,13 @@ function stopFpgaKick(): void {
   if (gFpgaKick) {
     clearInterval(gFpgaKick);
     gFpgaKick = null;
+  }
+}
+
+function stopFpgaObserve(): void {
+  if (gFpgaObserve) {
+    clearInterval(gFpgaObserve);
+    gFpgaObserve = null;
   }
 }
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
@@ -706,6 +717,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWatch();
       stopTxWalk();
       stopFpgaKick();
+      stopFpgaObserve();
       set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
@@ -1307,15 +1319,21 @@ export const useLegion = create<LegionStore>((set, get) => {
           // Deadman end-to-end: heartbeat с ЭТОГО ноутбука, 2 Гц.
           // Замерло любое звено (app/TCP/шлюз/USB) → watchdog в FPGA гасит TX.
           stopFpgaKick();
+          stopFpgaObserve();
           gFpgaKick = setInterval(() => {
             void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
               if (!kr.ok) {
                 pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
                 stopFpgaKick();
+                stopFpgaObserve();
                 set({ fpgaArmed: false });
               }
             });
           }, 500);
+          gFpgaObserve = setInterval(() => {
+            void get().fpgaPollStatus();
+          }, 400);
+          void get().fpgaPollStatus();
         }
       } finally {
         set({ fpgaBusy: false });
@@ -1324,6 +1342,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     fpgaDisarm: async () => {
       stopFpgaKick();
+      stopFpgaObserve();
       set({ fpgaBusy: true });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
@@ -1338,8 +1357,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
+      if (r.ok && get().fpgaArmed) {
+        set({ lastCueReason: fpgaObserveLine(r) });
+      }
       if (r.ok && r.wd_fired && get().fpgaArmed) {
         stopFpgaKick();
+        stopFpgaObserve();
         set({ fpgaArmed: false });
         pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
       }
@@ -1426,6 +1449,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWatch();
       stopTxWalk();
       stopFpgaKick();
+      stopFpgaObserve();
       set({ fpgaArmed: false });
       get().stopScan();
       gGate.reset();
@@ -1571,6 +1595,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     startScan: () => {
       void (async () => {
         const s = get();
+        if (isFpgaAirPattern(s.scanPattern)) {
+          if (s.fpgaArmed || s.fpgaBusy) return;
+          set({ fpgaMode: "lb_gated" });
+          await get().fpgaArm();
+          return;
+        }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
           pushLog("sys", blocked);
@@ -1723,6 +1753,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gWalker = null;
       if (get().scanRunning) set({ scanRunning: false });
+      if (get().fpgaArmed && isFpgaAirPattern(get().scanPattern)) {
+        void get().fpgaDisarm();
+        return;
+      }
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).
@@ -1732,6 +1766,12 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startTransmit: async () => {
       const s = get();
+      if (isFpgaAirPattern(s.scanPattern)) {
+        if (s.fpgaArmed || s.fpgaBusy) return;
+        set({ fpgaMode: "lb_gated" });
+        await get().fpgaArm();
+        return;
+      }
       if (s.flashBusy) {
         pushLog("sys", "ПЕРЕДАТЬ: идёт прошивка — сначала дождитесь");
         return;
@@ -1820,6 +1860,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSkipMhz = null;
       set({ transmitArmed: false, signalTxActive: false });
       gGate.reset();
+      if (get().fpgaArmed) await get().fpgaDisarm();
       if (gLive) await hostTxOff();
       gSdr.txOff();
       set({ lastSdrTxUs: null, lastForwardMhz: null, lastForwardPowerDbm: null, sdrHoldSince: null, lastCueReason: "SDR TX остановлен" });

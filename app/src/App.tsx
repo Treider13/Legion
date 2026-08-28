@@ -57,6 +57,7 @@ function App() {
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
+  const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const workspace = useLegion((s) => s.workspace);
   const transportKind = useLegion((s) => s.transportKind);
   const sl22 = transportKind === "htool-sl22";
@@ -74,7 +75,7 @@ function App() {
         rfVisual.corrF1 = parseFloat(s.corrF1) || 2400;
         rfVisual.corrF2 = parseFloat(s.corrF2) || 2500;
         rfVisual.telemFreqMhz = s.telemFreq;
-        rfVisual.sdrTransmit = s.transmitArmed;
+        rfVisual.sdrTransmit = s.transmitArmed || s.fpgaArmed;
         rfVisual.sdrHitMhz = s.lastInterceptMhz;
         rfVisual.sdrTxMhz = s.lastForwardMhz;
       });
@@ -131,14 +132,16 @@ function App() {
                 : "УПРАВЛЕНИЕ СИНТЕЗАТОРОМ РЧ // ADF4351"}
             </span>
           </header>
-          <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning ? "alert" : ""}`}>
-            {transmitArmed
-              ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"
-              : scanRunning
-                ? "РЕЖИМ SDR · СКАН"
-                : corridorRunning
-                  ? "РЕЖИМ ESP32 · КОРИДОР"
-                  : "ОЖИДАНИЕ"}
+          <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning || fpgaArmed ? "alert" : ""}`}>
+            {fpgaArmed
+              ? "РЕЖИМ SDR · FPGA+СКАНЕР · НАБЛЮДЕНИЕ"
+              : transmitArmed
+                ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"
+                : scanRunning
+                  ? "РЕЖИМ SDR · СКАН"
+                  : corridorRunning
+                    ? "РЕЖИМ ESP32 · КОРИДОР"
+                    : "ОЖИДАНИЕ"}
           </div>
         </div>
       </section>

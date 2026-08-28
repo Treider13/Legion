@@ -22,8 +22,12 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Нельзя крутить коридор ESP32 и TX SDR одновременно — разные тракты. */
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
-export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop";
+export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop" | "fpga";
 export type AutoDispatch = "priority" | "turn";
+
+export function isFpgaAirPattern(pattern: SdrWalkPattern): boolean {
+  return pattern === "fpga";
+}
 
 export function runIntentArmsTx(intent: SdrRunIntent): boolean {
   return intent === "transmit";
@@ -49,6 +53,8 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
       return "СПЛОШНАЯ";
     case "hop":
       return "СЛУЧАЙНАЯ";
+    case "fpga":
+      return "FPGA+СКАНЕР";
   }
 }
 
@@ -62,11 +68,13 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
       return "СПЛОШНАЯ TX (по кругу, без сканера)";
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
+    case "fpga":
+      return "FPGA+СКАНЕР (конвейер на SDR, µs · ноутбук наблюдает)";
   }
 }
 
 export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
-  if (scannerParticipates(pattern)) return null;
+  if (scannerParticipates(pattern) || isFpgaAirPattern(pattern)) return null;
   return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите АВТО`;
 }
 
@@ -83,8 +91,17 @@ export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
 export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "turn"): {
   useScanner: boolean;
   openLoopTx: boolean;
+  useFpgaAir: boolean;
   reason: string;
 } {
+  if (pattern === "fpga") {
+    return {
+      useScanner: false,
+      openLoopTx: false,
+      useFpgaAir: true,
+      reason: "FPGA+сканер: конвейер I²+Q²→RX→TX на SDR (µs). Ноутбук только наблюдает и может стопнуть",
+    };
+  }
   if (pattern === "auto") {
     const how =
       dispatch === "turn"
@@ -93,12 +110,14 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
     return {
       useScanner: true,
       openLoopTx: false,
+      useFpgaAir: false,
       reason: `сканер RX → ${how}, пока оператор не стопнет`,
     };
   }
   return {
     useScanner: false,
     openLoopTx: true,
+    useFpgaAir: false,
     reason: `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер не участвует, пока оператор не стопнет`,
   };
 }
