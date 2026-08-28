@@ -248,7 +248,7 @@ export function SignalPanel() {
       {s.lastCueReason && <p className="sens-hint">{s.lastCueReason}</p>}
 
       <div className="fpga-block">
-        <span className="panel-title">FPGA (bladeRF 1 x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
+        <span className="panel-title">FPGA (bladeRF micro / x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
         {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
           <p className="panel-note">
             Сейчас жив FPGA+СКАНЕР (I²+Q² → RX→TX на SDR). Эта вкладка задачу не

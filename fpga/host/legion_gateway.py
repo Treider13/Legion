@@ -282,7 +282,23 @@ class LegionGateway:
             if not air_ok:
                 return {"ok": False, "reason": air_why}
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
-            return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась"}
+            if not ok and (self._rx_by_us or self._tx_by_us):
+                # Откат: эфир подняли, а ARM не взвёлся — тракт под током не
+                # оставляем: на micro PASS-мукс отдал бы DAC статику (несущая
+                # LO на усилитель), на x40 — LMS TX под CONTROL битом.
+                if self.board == "bladerf2":
+                    self.fpga.air_prepare(False, rx=False, tx=False)
+                else:
+                    self._lms_enable(
+                        rx=False if self._rx_by_us else None,
+                        tx=False if self._tx_by_us else None,
+                    )
+                self._rx_by_us = False
+                self._tx_by_us = False
+            return {
+                "ok": ok,
+                "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась — эфир откачен",
+            }
         if op == "disarm":
             ok = self.fpga.disarm()
             # micro: NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c),
