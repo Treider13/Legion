@@ -209,6 +209,12 @@ class LegionGateway:
         return ok
 
     def _lms_enable(self, rx: bool | None = None, tx: bool | None = None) -> bool:
+        # Defense-in-depth: на micro CONTROL bit1/2 не существует — там этот
+        # регистр держит питание/клоки (bladerf2_common.h: POWERSOURCE/PLL_EN/
+        # CLOCK_*), аналог поднимает AIR_PREP. True, не отказ: вызов по ошибке
+        # не должен валить ARM. Все текущие вызовы и так за board-ветками.
+        if self.board == "bladerf2":
+            return True
         ctrl = self._control_read()
         if ctrl is None:
             return False
@@ -277,7 +283,9 @@ class LegionGateway:
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
         if op == "ping":
-            return {"ok": True, "fake": self.fake}
+            # board — для авто-детекта приёмки (acceptance_bench): x40 и micro
+            # имеют разные сценарии (CONTROL vs AIR-регистры).
+            return {"ok": True, "fake": self.fake, "board": self.board}
         if op == "arm":
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
