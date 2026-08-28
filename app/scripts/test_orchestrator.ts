@@ -37,6 +37,14 @@ import {
   planFpgaAir,
 } from "../src/sense/fpgaFastpath";
 import {
+  FPGA_SOLO_MICRO_ANALOG_MHZ,
+  clampSoloAnalogMhz,
+  clampSoloDwellMs,
+  planFpgaSoloWalk,
+  soloWalkLineRu,
+  waveFillsSoloWindow,
+} from "../src/sense/fpgaSoloWalk";
+import {
   heldHitAlive,
   nextAfterOperatorReset,
   pickArmedAutoTarget,
@@ -1179,6 +1187,39 @@ function main(): void {
     fpgaObserveLine({ ok: true, det_active: true, det_count: 3 }).includes("RX→TX"),
   );
   check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
+
+  // --- FPGA solo: сетка стоянок (не эфир, не хост-скан) ---
+  const w100 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 100, analogMaxMhz: 56, wave: "awgn" });
+  check("100 МГц окно на 100 МГц коридоре → 1 стоянка", w100.ok && w100.hops === 1 && w100.hop === false);
+  check("100 без прыжков: центр середины", w100.centers.length === 1 && Math.abs(w100.centers[0] - 2450) < 1e-6);
+  check("100 без прыжков: analog clamped к 56", w100.analogClamped && w100.analogMhz === 56 && w100.fsHz === 56e6);
+  const w50 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 50, analogMaxMhz: 56, wave: "awgn" });
+  check("50 МГц на 100 → 2 стоянки", w50.ok && w50.hops === 2 && w50.hop === true);
+  check("50 МГц: центры 2425 и 2475", w50.centers[0] === 2425 && w50.centers[1] === 2475);
+  check("50 МГц влезает в 56: analog=50", w50.analogMhz === 50 && !w50.analogClamped && w50.fsHz === 50e6);
+  const w20 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20 });
+  check("20 МГц на 100 → 5 стоянок", w20.hops === 5);
+  const w10 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 10 });
+  check("10 МГц на 100 → 10 стоянок", w10.hops === 10);
+  const w2 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 2, pattern: "hop" });
+  check("2 МГц: много стоянок и hop", w2.hops === 50 && w2.pattern === "hop");
+  const w3 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 3, pattern: "sweep" });
+  check("3 МГц: ceil(100/3)=34 стоянки", w3.hops === 34 && w3.pattern === "sweep");
+  const narrow = planFpgaSoloWalk({ f1Mhz: 2440, f2Mhz: 2450, windowMhz: 50 });
+  check("окно шире коридора → 1 стоянка", narrow.hops === 1 && narrow.hop === false);
+  check("дефолт analog micro = 56", FPGA_SOLO_MICRO_ANALOG_MHZ === 56);
+  check("analog 30 не клипается к 56", clampSoloAnalogMhz(30, 56) === 30);
+  check("analog 100 клипается к 56", clampSoloAnalogMhz(100, 56) === 56);
+  check("выдержка 10 мс → минимум 200", clampSoloDwellMs(10) === 200);
+  check("выдержка 800 без клипа", clampSoloDwellMs(800) === 800);
+  check("тон не заполняет окно", waveFillsSoloWindow("sine") === false && waveFillsSoloWindow("tone") === false);
+  check("AWGN заполняет окно", waveFillsSoloWindow("awgn") === true);
+  check("план тона пишет «палочка»", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, wave: "sine" }).reason.includes("палочка"));
+  check("план AWGN пишет «заполнит»", w50.reason.includes("заполнит"));
+  check("строка стоянки 1/2", soloWalkLineRu(w50, 0).includes("1/2") && soloWalkLineRu(w50, 0).includes("2425"));
+  check("пустой коридор отказ", planFpgaSoloWalk({ f1Mhz: 2500, f2Mhz: 2400, windowMhz: 10 }).ok === false);
+  check("окно 0 отказ", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 0 }).ok === false);
+  check("сетка не вылезает за F2", w50.centers.every((c) => c >= 2400 && c <= 2500));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
