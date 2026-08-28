@@ -75,6 +75,34 @@ def main() -> int:
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
 
+        ring = w.IqRing(16)
+        ring.push_block(np.arange(10, dtype=np.complex64))
+        check("кольцо: available 10", ring.available() == 10)
+        batch = ring.pop_batch(8)
+        check("кольцо: pop 8", batch is not None and len(batch) == 8)
+        check("кольцо: осталось 2", ring.available() == 2)
+        ring.push_block(np.ones(20, dtype=np.complex64))
+        check("кольцо: затирает при переполнении", ring.available() == 16)
+        full = ring.pop_batch(16)
+        check("кольцо: pop после overwrite", full is not None and float(np.max(np.abs(full))) == 1.0)
+
+        check("DIO rate x40 = 28e6", w.dio_rx_rate(28) == 28e6)
+        check("DIO rate micro = 40e6", w.dio_rx_rate(56) == 40e6)
+        check("DIO rate HackRF = 20e6", w.dio_rx_rate(20) == 20e6)
+        check("settle ≥ 32×4096", w.settle_samples(40e6) >= 32 * 4096)
+        check("settle = pipeline + 2 мс", w.settle_samples(40e6) == 32 * 4096 + int(0.002 * 40e6))
+
+        frames_n = w.WELCH_FRAMES * 1024
+        src = (0.05 + 0.2 * np.exp(1j * 2 * np.pi * 80 * np.arange(frames_n) / 1024)).astype(np.complex64)
+        src = src.reshape(w.WELCH_FRAMES, 1024)
+        live = w.IqRing(1 << 14)
+        for fr in src:
+            live.push_block(fr)
+        spec = w._psd_from_ring(live, 64, 40e6, 2442.0)
+        check("PSD с кольца: полный FFT 1024", len(spec) == 1024)
+        peak_i = max(range(len(spec)), key=lambda i: spec[i]["powerDbm"])
+        check("PSD с кольца: пик не на LO", abs(spec[peak_i]["freqMhz"] - 2442.0) > 0.2)
+
         hann = w._hann(1024)
         check("Hann DIO: края ≈ 0", abs(float(hann[0])) < 1e-6 and abs(float(hann[-1])) < 1e-6)
         check("Hann DIO: середина ≈ 1", abs(float(hann[512]) - 1.0) < 1e-5)

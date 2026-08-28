@@ -1766,11 +1766,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           seed: Date.now() & 0xffffffff,
         });
         gWalker = walker;
-        const nBins = walker.windowMhz >= 40 ? 256 : 64;
+        const nBins = 1024;
         set({ scanRunning: true, scanCenterMhz: null });
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN Soapy" : "SDR SCAN эмуляция"}: авто · RX energy · окно ${walker.windowMhz} МГц`,
+          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 · RX energy · окно ${walker.windowMhz} МГц`,
         );
         let inflight = false;
         let lastResenseAt = 0;

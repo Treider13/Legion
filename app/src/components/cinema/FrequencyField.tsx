@@ -95,7 +95,8 @@ export function FrequencyField() {
       };
 
       if (st.scanCenterMhz != null && st.scanRunning) {
-        const half = (parseFloat(st.scanWindowMhz) || 20) / 2;
+        const fromBins = bins.length >= 2 ? (bins[bins.length - 1].freqMhz - bins[0].freqMhz) / 2 : 0;
+        const half = fromBins > 0 ? fromBins : (parseFloat(st.scanWindowMhz) || 20) / 2;
         const x0 = Math.max(pad, xOf(st.scanCenterMhz - half));
         const x1 = Math.min(pad + plotW, xOf(st.scanCenterMhz + half));
         ctx.fillStyle = "rgba(232, 228, 220, 0.045)";
