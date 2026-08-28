@@ -717,6 +717,10 @@ rpc({"op": "disarm"})
 r = rpc({"op": "tune", "freq_mhz": 2475.0})
 check("x40: tune → отказ (нет AIR, hop только Soapy)", r.get("ok") is False)
 
+r = rpc({"op": "ping"})
+check("x40: ping несёт board=bladerf1 (авто-детект приёмки)",
+      r.get("ok") is True and r.get("board") == "bladerf1")
+
 srv.shutdown()
 srv.server_close()
 
@@ -846,6 +850,15 @@ for _ in range(30):
         break
     _time.sleep(0.1)
 check("micro: flash_status done ok", r.get("done") is True and r.get("ok") is True)
+
+# Defense-in-depth: _lms_enable на micro — no-op True, CONTROL не трогаем
+# (там питание/клоки по bladerf2_common.h, не LMS-биты; аналог = AIR_PREP).
+check("micro: _lms_enable no-op True, CONTROL не тронут",
+      gw_m._lms_enable(rx=True, tx=True) is True and gw_m.fpga._t.control == 0)
+
+r = rpcm({"op": "ping"})
+check("micro: ping несёт board=bladerf2 (авто-детект приёмки)",
+      r.get("ok") is True and r.get("board") == "bladerf2")
 
 srv_m.shutdown()
 srv_m.server_close()
