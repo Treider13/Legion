@@ -329,6 +329,24 @@ check("сторож: wd=false → нет само-DISARM (решение опе�
 rpc({"op": "disarm"})
 lg.KICK_TIMEOUT_S = 3600.0
 
+# ---------------------------------------------------------------------------
+# A4: тихий выход (SIGTERM/SIGINT/atexit → gateway_cleanup): DISARM если
+# ARM + USB release; идемпотентно (atexit после сигнала повторяет).
+# ---------------------------------------------------------------------------
+r = rpc({"op": "arm", "mode": "player"})
+check("a4: arm player", r.get("ok") is True)
+lg.gateway_cleanup(gw)
+check("a4: cleanup снял ARM", gw._armed is False)
+check("a4: cleanup отпустил USB", gw.fpga._t.released is True)
+lg.gateway_cleanup(gw)
+check("a4: cleanup идемпотентен (повтор без ошибок)", gw.fpga._t.released is True)
+r = rpc({"op": "usb", "action": "acquire"})
+check("a4: после cleanup USB занимается", r.get("ok") is True)
+# cleanup без ARM: просто release, без ошибок
+lg.gateway_cleanup(gw)
+check("a4: cleanup без ARM — release без DISARM", gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.
 r = rpc({"op": "usb", "action": "release"})

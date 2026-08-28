@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socketserver
 import sys
 import threading
@@ -542,9 +543,44 @@ class _Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def gateway_cleanup(gw: LegionGateway) -> None:
+    """Тихий выход агента (SIGTERM/SIGINT/atexit): DISARM если ARM, затем
+    USB release. Факт из wiki Nuand (Troubleshooting): завершение процесса
+    без libusb_close на Intel XHCI роняет контроллер («not enough bandwidth
+    for altsetting», нужен power-on reset) — поэтому закрываемся явно,
+    а не полагаемся на ОС. Идемпотентно: atexit после сигнала повторит. """
+    try:
+        got = gw._op_lock.acquire(timeout=2.0)
+        try:
+            if got and gw._armed:
+                gw.handle({"op": "disarm"})
+        finally:
+            if got:
+                gw._op_lock.release()
+    except Exception as e:
+        print(f"legion-gateway: cleanup DISARM: {e}", flush=True)
+    try:
+        t = gw.fpga._t
+        if hasattr(t, "release"):
+            t.release()
+    except Exception as e:
+        print(f"legion-gateway: cleanup USB release: {e}", flush=True)
+
+
 def main() -> int:
     port = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
     gw = LegionGateway(FAKE)
+
+    def _on_signal(signum, frame) -> None:
+        print(f"legion-gateway: сигнал {signum} — DISARM + USB release", flush=True)
+        gateway_cleanup(gw)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+    import atexit
+    atexit.register(gateway_cleanup, gw)
+
     with _Server(("0.0.0.0", port), _Handler) as srv:
         srv.gw = gw  # type: ignore[attr-defined]
         mode = "FAKE (не эфир)" if FAKE else f"USB {gw.board}"
