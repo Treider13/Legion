@@ -326,6 +326,12 @@ export function ScanPanel() {
             : " — скан → парковка пика → ARM lb_gated · пропала энергия/watchdog → возврат к скану"}
         </p>
       )}
+      {fpgaAir && s.fpgaLegion === false && (
+        <p className="panel-warn">
+          шлюз видит hosted, не legion (0x80 молчит) — ARM не взведётся. Вкладка КАСТОМ FPGA:
+          СОБРАТЬ → ПРОШИТЬ, затем рестарт шлюза.
+        </p>
+      )}
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полоса из F1…F2 при старте, либо добавьте вручную</li>}
         {s.sdrBands.map((b, i) => (

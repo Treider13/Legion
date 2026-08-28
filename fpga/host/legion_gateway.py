@@ -302,6 +302,13 @@ class LegionGateway:
         # поэтому старт сразу, результат — op flash_status.
         self._flash: dict = {"running": False, "done": False, "ok": False,
                              "log": "", "action": "", "path": ""}
+        # Ревизия legion в FPGA? True — 0x80 отвечает, False — hosted
+        # (NIOS: invalid id, нет SUCCESS), None — неизвестно (USB отпущен).
+        self._legion: bool | None = None
+        if fake:
+            self._legion = True
+        else:
+            self._detect_legion()
         # Операции и сторож сериализуются: ThreadingTCPServer гоняет handle()
         # в потоках, а xfer — это пара write/read 16-байтных пакетов, которую
         # нельзя перемежать с DISARM сторожа (иначе ответ уедет не тому).
@@ -430,6 +437,20 @@ class LegionGateway:
             self._tx_by_us = True
         return True, ""
 
+    def _detect_legion(self) -> None:
+        """Ревизия legion? Чтение target 0x80: на hosted NIOS отвечает
+        invalid id (perform_read default → нет SUCCESS, pkt_8x32.c стока),
+        на legion — STATUS (legion_reg_read). None = неизвестно (шина/USB)."""
+        try:
+            ok, _ = self.fpga.read_reg(lf.REG_CTRL)
+            self._legion = bool(ok)
+        except Exception:
+            self._legion = None
+        if self._legion is False:
+            print("legion-gateway: FPGA отвечает, но 0x80 нет — это hosted, "
+                  "не legion (ARM откажет; прошивка — op flash / КАСТОМ FPGA)",
+                  flush=True)
+
     def _flash_validate(self, path: str, action: str) -> tuple[bool, str]:
         """op flash: только артефакт legion этой платы, без ARM, по одному."""
         if action not in ("load", "store"):
@@ -485,6 +506,7 @@ class LegionGateway:
             try:
                 if hasattr(t, "acquire"):
                     t.acquire()
+                self._detect_legion()  # после -l в FPGA новая ревизия
             except Exception as e:
                 # Неверный size (A9 на A4): FPGA не конфигурируется, acquire
                 # честно падает — откат hostedx*.rbf с ноутбука.
@@ -496,7 +518,7 @@ class LegionGateway:
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
         if op == "ping":
-            return {"ok": True, "fake": self.fake}
+            return {"ok": True, "fake": self.fake, "legion": self._legion}
         if op == "flash":
             path = str(msg.get("path") or "")
             action = str(msg.get("action") or "")
@@ -518,6 +540,11 @@ class LegionGateway:
                     "reason": ("bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"),
                     "log": f["log"]}
         if op == "arm":
+            if self._legion is False:
+                # hosted в FPGA: 0x80 не обслуживается — ARM ушёл бы в пустоту.
+                return {"ok": False,
+                        "reason": "в FPGA нет ревизии legion (0x80 не отвечает, прошит hosted?) — "
+                                  "прошивка: op flash или вкладка КАСТОМ FPGA"}
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
                     "lb_gated": lf.MODE_LB_GATED, "lb_always": lf.MODE_LB_ALWAYS}.get(mode_name)
@@ -602,6 +629,7 @@ class LegionGateway:
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
+            st["legion"] = self._legion
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
@@ -631,6 +659,7 @@ class LegionGateway:
             if action == "release":
                 if hasattr(t, "release"):
                     t.release()
+                self._legion = None  # пока USB у хоста, ревизия неизвестна
                 return {"ok": True, "reason": "USB отпущен (стрим-сервер может занять)"}
             if action == "acquire":
                 if hasattr(t, "acquire"):
@@ -638,6 +667,7 @@ class LegionGateway:
                         t.acquire()
                     except Exception as e:
                         return {"ok": False, "reason": f"USB занять не удалось: {e}"}
+                    self._detect_legion()
                 return {"ok": True, "reason": "USB занят агентом"}
             return {"ok": False, "reason": f"usb: неизвестный action {action}"}
         if op == "set":

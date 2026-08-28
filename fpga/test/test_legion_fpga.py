@@ -449,6 +449,38 @@ for _ in range(30):
 check("flash store (-L) тоже ok", r.get("done") is True and r.get("ok") is True and r.get("action") == "store")
 
 # ---------------------------------------------------------------------------
+# Детект ревизии legion: hosted NIOS не обслуживает 0x80 → ping legion=False,
+# ARM честно отказывает (иначе команда ушла бы в пустоту).
+# ---------------------------------------------------------------------------
+check("fake: ping несёт legion=True", rpc({"op": "ping"}).get("legion") is True)
+
+
+class _HostedTransport(lg.FakeTransport):
+    """Стоковый NIOS: target 0x80 → invalid id, ответ без SUCCESS
+    (default в perform_read/perform_write, pkt_8x32.c hosted-ревизии)."""
+
+    def xfer(self, req, timeout_ms=None):
+        if len(req) == lf.NIOS_PKT_LEN and req[1] == 0x80:
+            return bytes(16)
+        return super().xfer(req, timeout_ms)
+
+
+gw_h = lg.LegionGateway(fake=True)
+gw_h.fpga = lf.LegionFpga(_HostedTransport(board="bladerf1"))
+gw_h._detect_legion()
+check("hosted: 0x80 без SUCCESS → legion=False", gw_h._legion is False)
+r = gw_h.handle({"op": "ping"})
+check("hosted: ping legion=False", r.get("legion") is False)
+r = gw_h.handle({"op": "arm", "mode": "player"})
+check("hosted: ARM отказ с причиной про ревизию", r.get("ok") is False and "legion" in str(r.get("reason")))
+gw_h.handle({"op": "usb", "action": "release"})
+check("hosted: после release ревизия неизвестна (None, не False)", gw_h._legion is None)
+r = gw_h.handle({"op": "usb", "action": "acquire"})
+check("hosted: re-acquire снова детектит hosted", r.get("ok") is True and gw_h._legion is False)
+st_h = gw_h.handle({"op": "status"})
+check("hosted: status несёт legion=False", st_h.get("legion") is False)
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).

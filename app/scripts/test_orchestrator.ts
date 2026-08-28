@@ -32,7 +32,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, useLegion } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -1522,6 +1522,16 @@ async function main(): Promise<void> {
     && storeSrc.includes("planLegionFlashLocal"));
   check("store: flash legion при ARM отказ", storeSrc.includes("прошивка legion: сначала ОСТАНОВИТЬ FPGA"));
   check("store: опрос сборки по поколению", storeSrc.includes("gLegionBuildGen"));
+  check("legion missing: hosted → причина", fpgaLegionMissing({ ok: true, legion: false }) !== null);
+  check("legion missing: legion → null", fpgaLegionMissing({ ok: true, legion: true }) === null);
+  check("legion missing: неизвестно → null (не режем)", fpgaLegionMissing({ ok: true }) === null
+    && fpgaLegionMissing({ ok: true, legion: null }) === null);
+  check("legion missing: шлюз мёртв → null (это зона fpgaGatewayRefused)", fpgaLegionMissing({ ok: false }) === null);
+  check("шлюз: детект legion на acquire и в ping", gwSrc.includes("_detect_legion") && gwSrc.includes('"legion": self._legion'));
+  check("шлюз: ARM на hosted отказ", gwSrc.includes("в FPGA нет ревизии legion"));
+  check("шлюз: release обнуляет знание ревизии", gwSrc.includes("self._legion = None"));
+  check("store: ARM проверяет legion до парковки", storeSrc.includes("fpgaLegionMissing(ping)"));
+  check("store: статус обновляет fpgaLegion", storeSrc.includes("fpgaLegion: r.legion"));
   const buildFn = storeSrc.slice(storeSrc.indexOf("legionBuildStart: async"), storeSrc.indexOf("legionBuildCancel: async"));
   check("сборка legion НЕ занимает flashBusy (часовой синтез не глушит скан)",
     !buildFn.includes("flashBusy: true") && !buildFn.includes("flashBusy: false"));

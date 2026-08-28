@@ -249,6 +249,8 @@ interface LegionStore {
   fpgaArmed: boolean;
   fpgaBusy: boolean;
   fpgaStatus: FpgaStatus | null;
+  /** Шлюз распознал ревизию legion в FPGA. null — неизвестно (старый шлюз/USB у хоста). */
+  fpgaLegion: boolean | null;
   /** Токен шлюза (LEGION_FPGA_TOKEN на агенте); пустой = открытая LAN стенда. */
   fpgaToken: string;
   /** Порог средней энергии I²+Q² для lb_gated. 0 шлюз отвергает. */
@@ -458,6 +460,18 @@ export function fpgaGatewayRefused(ping: {
 }): string | null {
   if (!ping.ok) return ping.reason ?? "FPGA шлюз не отвечает (нужен desktop + legion_gateway)";
   if (ping.fake) return "FPGA: шлюз в FAKE — регистры не железо, ARM нельзя";
+  return null;
+}
+
+/** Шлюз жив, но FPGA — hosted (0x80 не отвечает): ARM ушёл бы в пустоту.
+ *  false — точно hosted; null/undefined — неизвестно (USB у хоста), не режем. */
+export function fpgaLegionMissing(ping: {
+  ok?: boolean;
+  legion?: boolean | null;
+}): string | null {
+  if (ping.ok && ping.legion === false) {
+    return "в FPGA нет ревизии legion (прошит hosted?) — ARM невозможен. Вкладка КАСТОМ FPGA: СОБРАТЬ → ПРОШИТЬ";
+  }
   return null;
 }
 
@@ -1155,6 +1169,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaArmed: false,
     fpgaBusy: false,
     fpgaStatus: null,
+    fpgaLegion: null,
     fpgaToken: "",
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
@@ -1906,6 +1921,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", pingNo);
           return;
         }
+        const noLegionArm = fpgaLegionMissing(ping);
+        if (noLegionArm) {
+          pushLog("sys", noLegionArm);
+          return;
+        }
         if (mode === "player") {
           const st = await gw({ op: "status" });
           if (armRevoked()) {
@@ -2102,6 +2122,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       const pingNo = fpgaGatewayRefused(ping);
       if (pingNo) {
         pushLog("sys", pingNo);
+        return false;
+      }
+      const noLegionPath = fpgaLegionMissing(ping);
+      if (noLegionPath) {
+        pushLog("sys", noLegionPath);
         return false;
       }
 
@@ -2403,6 +2428,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaPollStatus: async () => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
+      if (r.legion !== undefined) set({ fpgaLegion: r.legion });
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
       if (r.ok && get().fpgaArmed && get().fpgaMode === "lb_gated") {
         set({ lastCueReason: fpgaObserveLine(r) });
@@ -2879,6 +2905,10 @@ export const useLegion = create<LegionStore>((set, get) => {
             if (no) {
               pushLog("sys", `FPGA+сканер: ${no} — сканируем, ARM начнётся когда шлюз оживёт`);
             } else {
+              const noLegion = fpgaLegionMissing(ping);
+              if (noLegion) {
+                pushLog("sys", `FPGA+сканер: ${noLegion} — сканируем, ARM начнётся после прошивки legion`);
+              }
               // Скан-фаза: USB у хоста (агент держит его с момента старта —
               // без release openSdr ниже словил бы занятое устройство).
               await hostFpga({ op: "usb", action: "release", token: s.fpgaToken }, s.sdrGateway);
