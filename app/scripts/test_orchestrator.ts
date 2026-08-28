@@ -24,7 +24,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, useLegion } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, peekFpgaSoloGen, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -40,18 +40,20 @@ import {
   planFpgaAir,
 } from "../src/sense/fpgaFastpath";
 import {
+  FPGA_SOLO_FS_MIN_HZ,
   FPGA_SOLO_MICRO_ANALOG_MHZ,
   clampSoloAnalogMhz,
   clampSoloDwellMs,
   makeSoloWalker,
   planFpgaSoloWalk,
+  soloFsHz,
   soloHopAllowed,
   soloParkOpts,
   soloTuneCmd,
   soloWalkLineRu,
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
-import { runSmartStart } from "../src/components/cinema/run";
+import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -1205,6 +1207,13 @@ async function main(): Promise<void> {
   check("50 МГц на 100 → 2 стоянки", w50.ok && w50.hops === 2 && w50.hop === true);
   check("50 МГц: центры 2425 и 2475", w50.centers[0] === 2425 && w50.centers[1] === 2475);
   check("50 МГц влезает в 56: analog=50", w50.analogMhz === 50 && !w50.analogClamped && w50.fsHz === 50e6);
+  check("Nuand sample-rate min = 520834", FPGA_SOLO_FS_MIN_HZ === 520834);
+  check("soloFsHz(10) = 10e6 (выше пола)", soloFsHz(10) === 10e6);
+  check("soloFsHz(0.2) = пол AD9361, не 200000", soloFsHz(0.2) === FPGA_SOLO_FS_MIN_HZ);
+  const w02 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2400.2, windowMhz: 0.2, analogMaxMhz: 56, wave: "awgn" });
+  check("окно 0.2: analog 0.2 (BW min), fs = 520834", w02.ok && w02.analogMhz === 0.2 && w02.fsHz === 520834 && !w02.analogClamped);
+  check("окно 0.2: одна стоянка", w02.hops === 1 && w02.hop === false);
+  check("окно 1.0: fs = analog×1e6", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2410, windowMhz: 1 }).fsHz === 1e6);
   const w20 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20 });
   check("20 МГц на 100 → 5 стоянок", w20.hops === 5);
   const w10 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 10 });
@@ -1314,9 +1323,28 @@ async function main(): Promise<void> {
   const lowAirLog = useLegion.getState().log.at(-1)?.text ?? "";
   check("air 20–80 по-прежнему parseBand", lowAir === false && lowAirLog.includes("задайте начало и конец полосы"));
 
+  const idleLive = {
+    scanRunning: false, transmitArmed: false, corridorRunning: false,
+    signalTxActive: false, fpgaArmed: false, fpgaBusy: false,
+  };
+  check("cinema idle не live", cinemaIsLive(idleLive) === false);
+  check("cinema live при capture (busy, не armed)", cinemaIsLive({ ...idleLive, fpgaBusy: true }) === true);
+  check("cinema live при ARM", cinemaIsLive({ ...idleLive, fpgaArmed: true }) === true);
+
+  const genBeforeAbort = peekFpgaSoloGen();
+  useLegion.getState().abortFpgaSolo();
+  check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
+  const genBeforeCinema = peekFpgaSoloGen();
+  check("кино СТОП при !armed не требует DISARM чтобы бампнуть", useLegion.getState().fpgaArmed === false);
+  await runCinemaStop();
+  check("cinema СТОП бампает solo gen без ARM", peekFpgaSoloGen() === genBeforeCinema + 1);
+  check("cinema СТОП без ARM не ставит armed", useLegion.getState().fpgaArmed === false);
+
   const here = dirname(fileURLToPath(import.meta.url));
   const storeSrc = readFileSync(join(here, "../src/state/store.ts"), "utf8");
   const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
+  const dockSrc = readFileSync(join(here, "../src/components/cinema/CinemaDock.tsx"), "utf8");
+  const nuandHdr = readFileSync(join(here, "../../fpga/vendor/bladerf/fpga_common/include/bladerf2_common.h"), "utf8");
   check("эфир park остаётся FPGA_FS_HZ", storeSrc.includes("fsHz: FPGA_FS_HZ"));
   const airBlock = storeSrc.slice(storeSrc.indexOf('if (path === "air")'), storeSrc.indexOf("const kind = get().txWaveKind"));
   check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
@@ -1331,6 +1359,12 @@ async function main(): Promise<void> {
   check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
+  check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
+  check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
+  check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
+  check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
+  check("Nuand header: bandwidth min 200000", /bladerf2_bandwidth_range = \{[\s\S]*?200000/.test(nuandHdr));
   check("solo start не зовёт ensureSdrBand", storeSrc.includes('if (path === "air" && !ensureSdrBand())'));
   check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
 

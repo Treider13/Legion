@@ -1,8 +1,9 @@
 // ============================================================================
 // LEGION — FPGA без сканера: сетка стоянок.
 // Коридор ÷ окно (вверх). Окно ≥ коридора → одна стоянка, без прыжков.
-// analog/fs на чипе = min(окно, analog платы). Сетка hop считает окно
+// analog на чипе = min(окно, analog платы). Сетка hop считает окно
 // оператора, не потолок фильтра: «100 без прыжков» остаётся одной точкой.
+// fs = max(analog×1e6, 520834): BW min 200 кГц ≠ sample-rate min AD9361.
 // Эфир + сканер сюда не входят.
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
@@ -10,7 +11,10 @@ import { mulberry32, planCenters } from "./scan";
 
 /** Nuand bladeRF 2.0 micro: RF Bandwidth Filter max 56 MHz (IBW). */
 export const FPGA_SOLO_MICRO_ANALOG_MHZ = 56;
+/** Analog BW min (Nuand `bladerf2_bandwidth_range.min` = 200000). */
 export const FPGA_SOLO_WINDOW_MIN_MHZ = 0.2;
+/** Sample-rate min (Nuand `bladerf2_sample_rate_range.min`). Не 200 кГц. */
+export const FPGA_SOLO_FS_MIN_HZ = 520834;
 export const FPGA_SOLO_DWELL_MIN_MS = 200;
 export const FPGA_SOLO_DWELL_MAX_MS = 5000;
 export const FPGA_SOLO_DWELL_DEFAULT_MS = 500;
@@ -27,11 +31,18 @@ export function clampSoloHopWindowMhz(want: number): number {
   return Math.round(Math.max(w, FPGA_SOLO_WINDOW_MIN_MHZ) * 1000) / 1000;
 }
 
-/** Фильтр и fs чипа: не шире analog платы (micro 56 МГц). */
+/** Фильтр чипа: не шире analog платы (micro 56 МГц). Не sample-rate. */
 export function clampSoloAnalogMhz(windowMhz: number, analogMaxMhz: number): number {
   const cap = analogMaxMhz > 0 ? analogMaxMhz : FPGA_SOLO_MICRO_ANALOG_MHZ;
   const w = clampSoloHopWindowMhz(windowMhz);
   return Math.round(Math.min(w, cap) * 1000) / 1000;
+}
+
+/** fs для AIR_FS / Soapy TX. Analog 0.2 МГц законен; 200 kS/s — нет. */
+export function soloFsHz(analogMhz: number): number {
+  const hz = analogMhz * 1e6;
+  if (!Number.isFinite(hz) || hz <= 0) return FPGA_SOLO_FS_MIN_HZ;
+  return Math.max(Math.round(hz), FPGA_SOLO_FS_MIN_HZ);
 }
 
 /** Волна, которая при синтезе на fs окна занимает почти всё Nyquist. Тон — нет. */
@@ -91,7 +102,7 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     spanMhz: 0,
     hopWindowMhz,
     analogMhz,
-    fsHz: analogMhz * 1e6,
+    fsHz: soloFsHz(analogMhz),
     centers: [],
     hops: 0,
     dwellMs,
@@ -127,7 +138,7 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     spanMhz,
     hopWindowMhz,
     analogMhz,
-    fsHz: analogMhz * 1e6,
+    fsHz: soloFsHz(analogMhz),
     centers,
     hops,
     dwellMs,

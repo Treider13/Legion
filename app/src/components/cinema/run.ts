@@ -42,6 +42,9 @@ export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boo
 
 export async function runCinemaStop(): Promise<void> {
   const s = useLegion.getState();
+  // Solo-старт в полёте (capture/park): fpgaArmed ещё false — DISARM не зовём,
+  // но поколение бампаем, иначе ARM и hop-таймер всё равно встанут.
+  s.abortFpgaSolo();
   if (s.fpgaArmed) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
   if (s.scanRunning) s.stopScan();
@@ -54,6 +57,7 @@ export function cinemaIsLive(s: {
   corridorRunning: boolean;
   signalTxActive: boolean;
   fpgaArmed: boolean;
+  fpgaBusy: boolean;
 }): boolean {
-  return s.scanRunning || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed;
+  return s.scanRunning || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy;
 }
