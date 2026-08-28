@@ -446,6 +446,27 @@ let gTxWatch: ReturnType<typeof setInterval> | null = null;
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
 /** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
 let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
+/** Момент, когда deadman железа последний раз был доказанно сброшен: ARM
+ *  (enable 0→1 обнуляет счётчик watchdog, legion_watchdog.vhd) или успешный
+ *  kick. Status-опрос сюда НЕ входит: чтение STATUS не кормит watchdog —
+ *  при полудуплексном отказе USB (запись мертва, чтение живо) опросы
+ *  продлевали бы доказательство вечно, хотя FPGA уже погасила TX.
+ *  Тишина дольше FPGA_DEADMAN_PROOF_MS — железо погашено своими слоями
+ *  (FPGA ~1 с независимо от ноутбука и шлюза; сторож шлюза 2.5 с), и
+ *  зависший локальный fpgaArmed можно снять честно (см. fpgaDisarm). */
+let gLastKickOkMs: number | null = null;
+/** > FPGA watchdog (~1 с при любом fs — watchdog_limit_for_fs) + сторож шлюза
+ *  (KICK_TIMEOUT_S, дефолт 2.5 с). */
+const FPGA_DEADMAN_PROOF_MS = 3000;
+
+export function peekLastKickOkMs(): number | null {
+  return gLastKickOkMs;
+}
+
+/** Тесты: подделать давность последнего kick (deadman-доказательство). */
+export function pokeLastKickOkMs(v: number | null): void {
+  gLastKickOkMs = v;
+}
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
@@ -678,16 +699,21 @@ export const useLegion = create<LegionStore>((set, get) => {
   const beginFpgaKick = (): void => {
     stopFpgaKick();
     stopFpgaObserve();
+    // ARM только что подтвердился ответом шлюза, а enable 0→1 сбросил
+    // счётчик watchdog в железе — это точка отсчёта deadman-доказательства.
+    gLastKickOkMs = Date.now();
     gFpgaKick = setInterval(() => {
       void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
-        if (!kr.ok) {
-          pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
-          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
-            // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
-            void fpgaReturnToScan(null);
-          } else {
-            void get().fpgaDisarm();
-          }
+        if (kr.ok) {
+          gLastKickOkMs = Date.now();
+          return;
+        }
+        pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
+        if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
+          // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
+          void fpgaReturnToScan(null);
+        } else {
+          void get().fpgaDisarm();
         }
       });
     }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
@@ -2216,7 +2242,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (!soloRevoked()) return false;
         pushLog("sys", "FPGA solo: отменён оператором в полёте");
         stopSoloWalk();
+        // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
+        // иначе осиротевший опрос статуса тикал бы 400 мс до следующей сессии.
         stopFpgaKick();
+        stopFpgaObserve();
         if (justArmed || get().fpgaArmed) {
           const d = await gw({ op: "disarm" });
           if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
@@ -2234,7 +2263,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const abortAirIfRevoked = async (justArmed = false): Promise<boolean> => {
         if (!airRevoked()) return false;
         pushLog("sys", "FPGA эфир: отменён оператором в полёте");
+        // Kick и observe неразрывны (см. abortSoloIfRevoked).
         stopFpgaKick();
+        stopFpgaObserve();
         stopAirWalk();
         if (justArmed || get().fpgaArmed) {
           const d = await gw({ op: "disarm" });
@@ -2362,6 +2393,13 @@ export const useLegion = create<LegionStore>((set, get) => {
             return false;
           }
           const t0 = Date.now();
+          // Прогресс в полёте: при тысячах стоянок проход — минуты; оператор
+          // видит оценку заранее, отмена — СТОП (airRevoked на каждой стоянке).
+          pushLog(
+            "sys",
+            `FPGA эфир-обход: калибровочный проход ${walk.centers.length} стоянок ` +
+              "(~0.1–0.3 с/стоянка по LAN) — отмена кнопкой СТОП",
+          );
           const medians: (number | null)[] = [];
           let gainDb: number | undefined;
           let calibWhy = "";
@@ -2393,7 +2431,14 @@ export const useLegion = create<LegionStore>((set, get) => {
             await releaseSoapyForFpga();
           }
           const acq = await gw({ op: "usb", action: "acquire" });
-          if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          // Без USB у агента ARM ушёл бы в мёртвый транспорт и упал с
+          // криптичной причиной — отказываем здесь, как handoff (и с тем же
+          // чистым состоянием: USB свободен, ARM не было).
+          if (!acq.ok) {
+            pushLog("sys", `FPGA эфир-обход: USB обратно не занят (${acq.reason ?? "отказ"}) — ARM отменён`);
+            set({ fpgaPath: null });
+            return false;
+          }
           if (calibWhy) {
             pushLog("sys", calibWhy);
             set({ fpgaPath: null });
@@ -2662,6 +2707,21 @@ export const useLegion = create<LegionStore>((set, get) => {
           // следующий openSdr/скан ловит занятое устройство.
           const rel = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
           if (!rel.ok) pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
+        } else if (
+          gLastKickOkMs != null &&
+          Date.now() - gLastKickOkMs > FPGA_DEADMAN_PROOF_MS
+        ) {
+          // Шлюз молчит дольше всех слоёв deadman: TX погашен железом сам
+          // (FPGA watchdog не зависит от ноутбука и шлюза). Держать fpgaArmed
+          // дальше — вечный клинч UI (openSdr/ESP32/ПЕРЕДАТЬ блокируются, а
+          // ретраев нет — таймеры выше уже остановлены). Снимаем локально и
+          // честно логируем. Инвариант: приложение никогда не ARM'ит с
+          // wd=false (fpgaArmCmd — всегда wd:true), иначе доказательства нет.
+          pushLog(
+            "sys",
+            "FPGA DISARM: шлюз мёртв — локальный ARM снят; TX уже погасил собственный watchdog железа",
+          );
+          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
         }
       } finally {
         set({ fpgaBusy: false });

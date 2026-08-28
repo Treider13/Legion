@@ -65,10 +65,16 @@ export function StartGate({ mode, onClose }: Props) {
       ? airHopBlockedReason(sdrId, walkPlan.hop)
       : soloHopBlockedReason(sdrId, walkPlan.hop)
     : null;
+  // Калибровка порогов перед ARM: park+захват на каждой стоянке (~0.2 с по
+  // LAN) — при тысячах стоянок это минуты; честно показываем оценку заранее.
+  const calibEstSec = walkPlan.hops * 0.2;
+  const calibEstTxt =
+    calibEstSec < 90 ? `≈${Math.max(1, Math.ceil(calibEstSec))} с` : `≈${Math.round(calibEstSec / 60)} мин`;
   const airWalkReason = walkPlan.ok
     ? `коридор ${walkPlan.spanMhz} МГц · канал ${walkPlan.hopWindowMhz} МГц → ${walkPlan.hops} ${standingWordRu(walkPlan.hops)} · ${
         walkPlan.hop ? (pattern === "hop" ? "случайно" : "туда-сюда") : "без прыжков"
       } · ретрансляция эфира на каждой стоянке` +
+      (walkPlan.hop ? ` · калибровка порогов при старте ${calibEstTxt}` : "") +
       // ADI: скачок LO > 100 МГц перезапускает QEC/DC-калибровки (десятки мс
       // вместо ~0.25 мс) — в выдержку влезает, но честно предупреждаем.
       (walkPlan.spanMhz > 100 ? " · скачки > 100 МГц = калибровки AD9361, десятки мс" : "")
