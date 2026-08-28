@@ -480,7 +480,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
 
   const beginSoloWalk = (
-    walker: ScanWalker,
+    walker: ReturnType<typeof makeSoloWalker>,
     plan: ReturnType<typeof planFpgaSoloWalk>,
     gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>,
   ): void => {
@@ -1863,14 +1863,26 @@ export const useLegion = create<LegionStore>((set, get) => {
         get().setSdrId(board.sdrId);
         pushLog("sys", board.reason);
       }
-      if (!ensureSdrBand()) return false;
+      // Solo: любой конечный F1…F2. parseBand — синтезатор ESP32 34.375–4400,
+      // его сюда не мешаем. Эфир+FPGA по-прежнему через allowlist.
+      if (path === "air" && !ensureSdrBand()) return false;
 
       get().stopScan();
       if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
 
       const bands = get().sdrBands;
-      const f1 = bands.length ? Math.min(...bands.map((b) => b.f1Mhz)) : parseFloat(get().sdrF1);
-      const f2 = bands.length ? Math.max(...bands.map((b) => b.f2Mhz)) : parseFloat(get().sdrF2);
+      const f1 =
+        path === "solo"
+          ? parseFloat(get().sdrF1)
+          : bands.length
+            ? Math.min(...bands.map((b) => b.f1Mhz))
+            : parseFloat(get().sdrF1);
+      const f2 =
+        path === "solo"
+          ? parseFloat(get().sdrF2)
+          : bands.length
+            ? Math.max(...bands.map((b) => b.f2Mhz))
+            : parseFloat(get().sdrF2);
       const mid = (f1 + f2) / 2;
       const analog = catalogCaps(get().sdrId).analogBwMhz;
       const span = Math.max(f2 - f1, 0);

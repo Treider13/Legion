@@ -6,7 +6,7 @@
 // Эфир + сканер сюда не входят.
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
-import { ScanWalker, planCenters } from "./scan";
+import { mulberry32, planCenters } from "./scan";
 
 /** Nuand bladeRF 2.0 micro: RF Bandwidth Filter max 56 MHz (IBW). */
 export const FPGA_SOLO_MICRO_ANALOG_MHZ = 56;
@@ -145,17 +145,41 @@ export function soloWalkLineRu(p: FpgaSoloWalkPlan, idx = 0): string {
   return `стоянка ${idx + 1}/${p.hops} · ${mhz.toFixed(3)} МГц · окно ${p.analogMhz} МГц`;
 }
 
-/** Сетка = окно оператора. analog платы сюда не кладём: иначе 100 МГц
- *  окно сжалось бы до 56 и hop-сетка разъехалась бы с планом. */
-export function makeSoloWalker(plan: FpgaSoloWalkPlan, seed?: number): ScanWalker {
-  return new ScanWalker({
-    bands: plan.bands,
-    pattern: plan.pattern,
-    windowMhz: plan.hopWindowMhz,
-    analogBwMhz: plan.hopWindowMhz,
-    dwellMs: plan.dwellMs,
-    seed,
-  });
+/**
+ * Обход стоянок плана. Sweep = туда-сюда по centers.
+ * Hop = случайный выбор из той же сетки (не непрерывный hopCenterInBand
+ * хост-скана: иначе 50 МГц на 100 дал бы точки между 2425 и 2475).
+ */
+export class SoloWalker {
+  readonly centers: number[];
+  readonly pattern: FpgaSoloPattern;
+  private idx = 0;
+  private dir = 1;
+  private readonly rng: () => number;
+
+  constructor(plan: FpgaSoloWalkPlan, seed?: number) {
+    this.centers = plan.centers;
+    this.pattern = plan.pattern;
+    this.rng = mulberry32(seed ?? 1337);
+  }
+
+  next(): { centerMhz: number } {
+    if (this.centers.length === 0) return { centerMhz: 0 };
+    if (this.pattern === "hop") {
+      const i = Math.min(this.centers.length - 1, Math.floor(this.rng() * this.centers.length));
+      return { centerMhz: this.centers[i] };
+    }
+    if (this.centers.length === 1) return { centerMhz: this.centers[0] };
+    const centerMhz = this.centers[this.idx];
+    const nxt = this.idx + this.dir;
+    if (nxt >= this.centers.length || nxt < 0) this.dir *= -1;
+    this.idx = Math.min(Math.max(this.idx + this.dir, 0), this.centers.length - 1);
+    return { centerMhz };
+  }
+}
+
+export function makeSoloWalker(plan: FpgaSoloWalkPlan, seed?: number): SoloWalker {
+  return new SoloWalker(plan, seed);
 }
 
 export function soloParkOpts(plan: FpgaSoloWalkPlan): { analogMhz: number; spanMhz: number; fsHz: number } {

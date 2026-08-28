@@ -1240,8 +1240,20 @@ async function main(): Promise<void> {
   const soloHopW = makeSoloWalker(hopPlan, 7);
   const hopFirst = soloHopW.next();
   const hopSecond = soloHopW.next();
-  check("hop: первая стоянка из next() в коридоре", hopFirst.centerMhz >= 2400 && hopFirst.centerMhz <= 2500);
-  check("hop: второй шаг тоже в коридоре (не recapture)", hopSecond.centerMhz >= 2400 && hopSecond.centerMhz <= 2500);
+  check("hop: первая стоянка из сетки, не mid коридора", hopPlan.centers.includes(hopFirst.centerMhz));
+  check("hop: второй шаг тоже из сетки (не recapture)", hopPlan.centers.includes(hopSecond.centerMhz));
+  const hopSeq = Array.from({ length: 40 }, () => soloHopW.next().centerMhz);
+  check("hop: за 40 шагов не залипает на одной точке", new Set(hopSeq).size > 1);
+  check("hop: все шаги из centers плана", hopSeq.every((c) => hopPlan.centers.includes(c)));
+  const hop50 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 50, pattern: "hop" });
+  const hop50w = makeSoloWalker(hop50, 3);
+  const hop50samples = Array.from({ length: 20 }, () => hop50w.next().centerMhz);
+  check("hop 50 МГц только 2425/2475, не 2450", hop50samples.every((c) => c === 2425 || c === 2475));
+  const hostHop = Array.from({ length: 30 }, () => hopCenterInBand([{ f1Mhz: 2400, f2Mhz: 2500 }], 50, mulberry32(1)));
+  check("хост hopCenterInBand ≠ сетка solo (не мешаем)", hostHop.some((c) => c !== 2425 && c !== 2475));
+  check("parseBand 20–80 — синтезатор, отказ", parseBand("20", "80") === null);
+  const low = planFpgaSoloWalk({ f1Mhz: 20, f2Mhz: 80, windowMhz: 20 });
+  check("solo план 20–80 ок (не parseBand)", low.ok && low.hops === 3);
   const park = soloParkOpts(w50);
   check("park solo: fs/BW = окно 50, не 2 МГц", park.fsHz === 50e6 && park.analogMhz === 50 && park.spanMhz === 50);
   const tune = soloTuneCmd(2475, w50, "tok");
@@ -1285,6 +1297,23 @@ async function main(): Promise<void> {
     after.fpgaSoloWindowMhz === "20" && after.fpgaSoloDwellMs === "400" && after.fpgaSoloPattern === "sweep");
   check("без шлюза solo не ARM (как air)", started === false && after.fpgaArmed === false);
 
+  after.clearSdrBands();
+  after.setSdrAllowField("sdrF1", "20");
+  after.setSdrAllowField("sdrF2", "80");
+  after.setSdrLoad(true);
+  after.setSdrId("bladerf-micro-xa4");
+  const lowSolo = await after.startFpgaPath("solo");
+  const lowSoloLog = useLegion.getState().log.at(-1)?.text ?? "";
+  check("solo 20–80 не режет parseBand", lowSolo === false && !lowSoloLog.includes("задайте начало и конец полосы"));
+  check("solo 20–80 доходит до шлюза", /шлюз|desktop|Tauri|FAKE/i.test(lowSoloLog));
+
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "20");
+  useLegion.getState().setSdrAllowField("sdrF2", "80");
+  const lowAir = await useLegion.getState().startFpgaPath("air");
+  const lowAirLog = useLegion.getState().log.at(-1)?.text ?? "";
+  check("air 20–80 по-прежнему parseBand", lowAir === false && lowAirLog.includes("задайте начало и конец полосы"));
+
   const here = dirname(fileURLToPath(import.meta.url));
   const storeSrc = readFileSync(join(here, "../src/state/store.ts"), "utf8");
   const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
@@ -1300,6 +1329,10 @@ async function main(): Promise<void> {
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
   check("cinema: air стартует сразу после path", gateSrc.includes('if (path === "air")') && gateSrc.includes("await startSmart()"));
   check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
+  const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
+  check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
+  check("solo start не зовёт ensureSdrBand", storeSrc.includes('if (path === "air" && !ensureSdrBand())'));
+  check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
