@@ -136,7 +136,8 @@ export function LegionFlashPanel() {
       {s.legionFlashTarget === "gateway" && (
         <p className="panel-note">
           Файл должен уже лежать на машине шлюза (scp с этого ПК после сборки). Шлюз сам гоняет
-          bladeRF-cli и перезанимает USB. LEGION_FPGA_TOKEN — как на вкладке ТИП СИГНАЛА.
+          bladeRF-cli и перезанимает USB. Перед прошивкой на шлюзе остановить SoapySDRServer —
+          USB один владелец. LEGION_FPGA_TOKEN — как на вкладке ТИП СИГНАЛА.
         </p>
       )}
       <p className={flashPlan.ok ? "status-line" : "panel-warn"}>

@@ -1,6 +1,7 @@
 //! LEGION — сборка ревизии legion из fpga/ (Quartus на стенде) и артефакт .rbf.
 //! Не sdr_rpc (таймаут 15 с) и не sdr_flash (allowlist из трёх CLI вендоров):
-//! синтез Quartus идёт десятки минут, лог пишется в файл, UI опрашивает статус.
+//! синтез Quartus долгий (ориентир — десятки минут, точной цифры в дереве
+//! Nuand нет), лог пишется в файл, UI опрашивает статус и читает хвост.
 //!
 //! Факты, на которые опирается модуль:
 //!   - сборка: fpga/vendor/bladerf/hdl/quartus/build_bladerf.sh -b <board> -s <size> -r legion
@@ -10,7 +11,6 @@
 //!   - preflight: fpga/check_toolchain.sh (пин Quartus 23.1.1 — vendored hdl/README.md).
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -67,17 +67,29 @@ fn repo_root() -> Result<PathBuf, String> {
 
 /// nios2_command_shell.sh — как в fpga/check_toolchain.sh:
 /// $HOME/intelFPGA_lite/<ver>/nios2eds/nios2_command_shell.sh.
+/// При нескольких установках предпочитаем пин 23.1 (вендоренный hdl/README.md),
+/// иначе — последнюю по сортировке.
+fn pick_nios_shell(mut found: Vec<PathBuf>) -> Option<PathBuf> {
+    found.sort();
+    let pinned = found
+        .iter()
+        .position(|p| p.to_string_lossy().contains("intelFPGA_lite/23.1"));
+    match pinned {
+        Some(i) => Some(found.remove(i)),
+        None => found.pop(),
+    }
+}
+
 fn nios_shell() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let base = PathBuf::from(home).join("intelFPGA_lite");
-    let mut found: Vec<PathBuf> = fs::read_dir(base)
+    let found: Vec<PathBuf> = fs::read_dir(base)
         .ok()?
         .flatten()
         .map(|e| e.path().join("nios2eds/nios2_command_shell.sh"))
         .filter(|p| p.is_file())
         .collect();
-    found.sort();
-    found.pop()
+    pick_nios_shell(found)
 }
 
 #[tauri::command]
@@ -128,6 +140,20 @@ fn run_limited(mut cmd: Command, timeout: Duration, label: &str) -> Result<Strin
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("запуск {label}: {e}"))?;
+    // Дренаж параллельно, не после exit: иначе вывод > 64 КБ заполнил бы pipe
+    // и повесил дочерний процесс до таймаута (паттерн drain в esp32_flash.rs).
+    fn drain(pipe: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let mut r = pipe;
+            let _ = std::io::Read::read_to_string(&mut r, &mut buf);
+            let _ = tx.send(buf);
+        });
+        rx
+    }
+    let out_rx = child.stdout.take().map(drain);
+    let err_rx = child.stderr.take().map(drain);
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -143,15 +169,13 @@ fn run_limited(mut cmd: Command, timeout: Duration, label: &str) -> Result<Strin
             Err(e) => return Err(format!("{label}: {e}")),
         }
     };
-    let mut text = String::new();
-    if let Some(mut o) = child.stdout.take() {
-        use std::io::Read;
-        let _ = o.read_to_string(&mut text);
-    }
-    if let Some(mut e) = child.stderr.take() {
-        use std::io::Read;
-        let _ = e.read_to_string(&mut text);
-    }
+    let stdout = out_rx
+        .and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok())
+        .unwrap_or_default();
+    let stderr = err_rx
+        .and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok())
+        .unwrap_or_default();
+    let text = format!("{stdout}{stderr}");
     if status.success() {
         Ok(text)
     } else {
@@ -177,16 +201,6 @@ fn legion_build_start_blocking(board: &str, size: &str) -> Result<serde_json::Va
     let quartus = quartus_dir_of(&root);
     let shell = nios_shell()
         .ok_or("nios2_command_shell.sh не найден — сначала Quartus Prime Lite 23.1.1")?;
-    {
-        let mut guard = BUILD.lock().map_err(|_| "build lock")?;
-        if let Some(st) = guard.as_mut() {
-            // Завершившаяся сборка, которую никто не опросил, не блокирует новую.
-            match st.child.try_wait() {
-                Ok(None) => return Err("сборка уже идёт — дождитесь конца или ОТМЕНА".into()),
-                _ => *guard = None,
-            }
-        }
-    }
 
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -196,26 +210,38 @@ fn legion_build_start_blocking(board: &str, size: &str) -> Result<serde_json::Va
     let log_out = fs::File::create(&log_path).map_err(|e| format!("лог сборки: {e}"))?;
     let log_err = log_out.try_clone().map_err(|e| format!("лог сборки: {e}"))?;
 
-    // nios2_command_shell.sh в конце exec'ит интерактивный $SHELL — команды
-    // подаём в stdin (работает независимо от того, принимает ли скрипт argv).
-    // setsid: своя группа процессов — ОТМЕНА бьёт по группе (quartus_sh и
-    // nios2-make дети build_bladerf.sh), а не только по оболочке.
+    // Авто-запуск команды — документированная форма Nios II Command Shell
+    // (Nios II Software Developer's Handbook, «Auto-Executing a Command»:
+    // nios2_command_shell.sh <command>; скрипт делает exec "$@" — подтверждено
+    // и сообщением «exec: make: not found» при вызове с аргументами, Altera
+    // Community #259066). setsid: своя группа процессов — ОТМЕНА бьёт по
+    // группе (quartus_sh и nios2-make — дети build_bladerf.sh).
+    // board/size — из allowlist board_args_ok, путь — из репозитория: интерполяция
+    // в bash -c безопасна (внешних строк нет).
+    let script = format!(
+        "cd \"{}\" && ./build_bladerf.sh -b {board} -s {size} -r legion; ec=$?; echo LEGION_BUILD_EXIT=$ec; exit $ec",
+        quartus.to_string_lossy()
+    );
     let mut cmd = Command::new("setsid");
     cmd.arg(&shell)
-        .stdin(Stdio::piped())
+        .arg("bash")
+        .arg("-c")
+        .arg(&script)
+        .stdin(Stdio::null())
         .stdout(Stdio::from(log_out))
         .stderr(Stdio::from(log_err));
-    let mut child = cmd.spawn().map_err(|e| format!("запуск nios2_command_shell: {e}"))?;
-    {
-        let mut stdin = child.stdin.take().ok_or("нет stdin оболочки сборки")?;
-        writeln!(stdin, "cd \"{}\"", quartus.to_string_lossy())
-            .and_then(|_| writeln!(stdin, "./build_bladerf.sh -b {board} -s {size} -r legion"))
-            .and_then(|_| writeln!(stdin, "echo LEGION_BUILD_EXIT=$?"))
-            .and_then(|_| writeln!(stdin, "exit"))
-            .map_err(|e| format!("команды сборки в оболочку: {e}"))?;
-    }
 
+    // Один лок на проверку «уже идёт» + spawn + запись: иначе два старта
+    // подряд проскочили бы проверку и второй затёр бы первый процесс.
     let mut guard = BUILD.lock().map_err(|_| "build lock")?;
+    if let Some(st) = guard.as_mut() {
+        // Завершившаяся сборка, которую никто не опросил, не блокирует новую.
+        match st.child.try_wait() {
+            Ok(None) => return Err("сборка уже идёт — дождитесь конца или ОТМЕНА".into()),
+            _ => *guard = None,
+        }
+    }
+    let child = cmd.spawn().map_err(|e| format!("запуск nios2_command_shell: {e}"))?;
     *guard = Some(BuildState {
         child,
         log_path: log_path.clone(),
@@ -230,13 +256,23 @@ fn legion_build_start_blocking(board: &str, size: &str) -> Result<serde_json::Va
     }))
 }
 
-/// Хвост лога сборки (последние 16 КБ) — UI показывает прогресс Quartus.
+/// Хвост лога сборки (последние max байт) — UI показывает прогресс Quartus.
+/// Читаем только хвост (seek): полный лог синтеза — десятки МБ, опрос каждые 2 с.
 fn log_tail(path: &Path, max: usize) -> String {
-    let Ok(bytes) = fs::read(path) else {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = fs::File::open(path) else {
         return String::new();
     };
-    let start = bytes.len().saturating_sub(max);
-    String::from_utf8_lossy(&bytes[start..]).to_string()
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(max as u64);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&buf).to_string()
 }
 
 /// Каталог артефакта: legionx<size> или legionx<size>-<дата> (omit_date=false).
@@ -306,11 +342,10 @@ pub fn legion_build_status() -> serde_json::Value {
         }),
         Ok(Some(status)) => {
             let code = status.code().unwrap_or(-1);
-            let artifact = if status.success() {
-                find_artifact(&st.quartus_dir, &st.size)
-            } else {
-                None
-            };
+            // Критерий успеха — сам артефакт: build_bladerf.sh без set -e
+            // возвращает 0 и при упавшем Quartus, поэтому exit код — только
+            // для информации, .rbf — единственное доказательство.
+            let artifact = find_artifact(&st.quartus_dir, &st.size);
             let log_path = st.log_path.to_string_lossy().to_string();
             let elapsed = st.started.elapsed().map(|d| d.as_secs()).unwrap_or(0);
             *guard = None;
@@ -402,5 +437,24 @@ mod tests {
         assert_eq!(parse_sha256sum(&format!("{h} *legionxA4.rbf")), Some(h));
         assert_eq!(parse_sha256sum("not-a-hash legionxA4.rbf"), None);
         assert_eq!(parse_sha256sum(""), None);
+    }
+
+    #[test]
+    fn nios_shell_prefers_pin() {
+        let v = |s: &str| PathBuf::from(s);
+        // Пин 23.1 выигрывает у более новых/старых установок.
+        let got = pick_nios_shell(vec![
+            v("/home/u/intelFPGA_lite/20.1/nios2eds/nios2_command_shell.sh"),
+            v("/home/u/intelFPGA_lite/23.1/nios2eds/nios2_command_shell.sh"),
+            v("/home/u/intelFPGA_lite/24.1/nios2eds/nios2_command_shell.sh"),
+        ]);
+        assert_eq!(got, Some(v("/home/u/intelFPGA_lite/23.1/nios2eds/nios2_command_shell.sh")));
+        // Без пина — последняя по сортировке (свежайшая установка).
+        let got = pick_nios_shell(vec![
+            v("/home/u/intelFPGA_lite/20.1/nios2eds/nios2_command_shell.sh"),
+            v("/home/u/intelFPGA_lite/22.1/nios2eds/nios2_command_shell.sh"),
+        ]);
+        assert_eq!(got, Some(v("/home/u/intelFPGA_lite/22.1/nios2eds/nios2_command_shell.sh")));
+        assert_eq!(pick_nios_shell(vec![]), None);
     }
 }

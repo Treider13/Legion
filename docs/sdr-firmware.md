@@ -65,7 +65,8 @@ FX3 `.img` без FPGA задачу не закрывает.
 SDR (hosted): только вендорский CLI (`bladeRF-cli -l/-L/-f`, `uhd_image_loader`,
 `hackrf_spiflash`) после `validateFlashJob` + галочки. Кастом (ревизия legion):
 вкладка КАСТОМ FPGA — СОБРАТЬ (`build_bladerf.sh -r legion` через
-`nios2_command_shell`, Quartus 23.1.1 на этом ПК, лог потоком) → ПРОШИТЬ
+`nios2_command_shell` — документированный auto-executing command, Quartus
+23.1.1 на этом ПК, лог хвостом по опросу) → ПРОШИТЬ
 (`bladeRF-cli -l` RAM / `-L` flash; локальный USB или `{"op":"flash"}` на
 шлюзе, файл заранее на машине шлюза). Плата = суффикс артефакта
 (`legionx40/xA4/xA9.rbf`), A4↔A9 и x40↔micro — отказ. Шлюз после acquire

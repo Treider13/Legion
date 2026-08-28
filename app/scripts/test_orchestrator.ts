@@ -1538,6 +1538,47 @@ async function main(): Promise<void> {
   check("прошивка через шлюз без IP — отказ ДО closeSdr",
     legionFlashBlock.includes("укажите IP шлюза")
     && legionFlashBlock.indexOf("укажите IP шлюза") < legionFlashBlock.indexOf("closeSdr()"));
+  check("сборка legion: успех = артефакт на диске, не exit код (build_bladerf.sh без set -e)",
+    !storeSrc.includes("st.exit === 0 && art?.path") && storeSrc.includes("if (art?.path)"));
+  check("rust: сборка через документированный argv nios shell (auto-executing command)",
+    legionRust.includes('.arg("bash")') && legionRust.includes('.arg("-c")') && legionRust.includes(".stdin(Stdio::null())"));
+  check("rust: один лок на проверку+spawn (нет TOCTOU двойного старта)",
+    legionRust.includes("Один лок на проверку «уже идёт» + spawn + запись"));
+
+  // --- КАСТОМ FPGA: действия стора без Tauri — честные отказы, не фантазии ---
+  const L = () => useLegion.getState();
+  useLegion.setState({
+    sdrId: "bladerf-micro-xa4", legionFlashTarget: "local", legionFlashPath: "",
+    legionFlashConfirm: false, legionArtifactPath: "", lastLegionFlash: null,
+    sdrOpened: null, scanRunning: false, transmitArmed: false, fpgaArmed: false, flashBusy: false,
+  });
+  await L().legionFlash();
+  check("store legionFlash: без галочки — отказ до любых команд",
+    L().lastLegionFlash?.ok === false && (L().lastLegionFlash?.reason ?? "").includes("подтвердите"));
+  useLegion.setState({ legionFlashPath: "/tmp/hostedxA4.rbf", legionFlashConfirm: true });
+  await L().legionFlash();
+  check("store legionFlash: hosted-имя — отказ",
+    L().lastLegionFlash?.ok === false && (L().lastLegionFlash?.reason ?? "").includes("не артефакт ревизии legion"));
+  useLegion.setState({ legionFlashPath: "/tmp/fw/legionxA9.rbf", legionFlashConfirm: true });
+  await L().legionFlash();
+  check("store legionFlash: A9 на xA4 — отказ",
+    L().lastLegionFlash?.ok === false && (L().lastLegionFlash?.reason ?? "").includes("несовместим"));
+  useLegion.setState({ legionFlashTarget: "gateway", sdrGateway: "", legionFlashPath: "/abs/legionxA4.rbf", legionFlashConfirm: true });
+  await L().legionFlash();
+  check("store legionFlash: шлюз без IP — отказ",
+    L().lastLegionFlash?.ok === false && (L().lastLegionFlash?.reason ?? "").includes("IP шлюза"));
+  useLegion.setState({ legionFlashTarget: "local", legionFlashPath: "/tmp/fw/legionxA4.rbf", legionFlashConfirm: true });
+  await L().legionFlash();
+  check("store legionFlash: без desktop — команда не запущена",
+    L().lastLegionFlash?.ok === false && (L().lastLegionFlash?.reason ?? "").includes("нет desktop LEGION"));
+  useLegion.setState({ sdrId: "hackrf-one", legionBuildPhase: "idle" });
+  await L().legionBuildStart();
+  check("store legionBuildStart: hackrf — отказ, фаза не building", L().legionBuildPhase === "idle");
+  useLegion.setState({ sdrId: "bladerf-micro-xa4" });
+  await L().legionBuildStart();
+  check("store legionBuildStart: без desktop — failed с причиной, не «собралось»",
+    L().legionBuildPhase === "failed");
+  useLegion.setState({ sdrId: "bladerf-micro-xa4", legionBuildPhase: "idle", legionFlashConfirm: false, lastLegionFlash: null });
   const buildFn = storeSrc.slice(storeSrc.indexOf("legionBuildStart: async"), storeSrc.indexOf("legionBuildCancel: async"));
   check("сборка legion НЕ занимает flashBusy (часовой синтез не глушит скан)",
     !buildFn.includes("flashBusy: true") && !buildFn.includes("flashBusy: false"));

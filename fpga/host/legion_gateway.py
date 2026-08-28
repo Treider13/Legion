@@ -16,8 +16,9 @@
   {"op":"tune", "freq_mhz":float, ...}  — LO-hop на живом ARM (только micro)
   {"op":"flash", "path":"/abs/legionxA4.rbf", "action":"load"|"store"}
       — запись ревизии legion на ЭТОМ шлюзе: release USB → bladeRF-cli -l/-L
-      → acquire обратно. Async (CLI дольше 12-с релея воркера): старт сразу,
-      результат — {"op":"flash_status"}. Только legionx*.rbf, не hosted/FX3.
+      → acquire обратно. Async (запись flash и re-enumerate после -l могут
+      превышать 12-с релей воркера): старт сразу, результат — flash_status.
+      Только legionx*.rbf, не hosted/FX3.
   {"op":"ping"}
 
 Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
@@ -298,8 +299,8 @@ class LegionGateway:
         self._armed_at = 0.0      # monotonic ARM (сторож: ARM без единого kick)
         self._wd_en = True        # ARM с wd=false — оператор отказался от deadman
         self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
-        # Async flash (op flash): bladeRF-cli -l/-L дольше 12-с релея воркера,
-        # поэтому старт сразу, результат — op flash_status.
+        # Async flash (op flash): запись flash (-L) и re-enumerate после -l
+        # могут превышать 12-с релей воркера — старт сразу, результат опросом.
         self._flash: dict = {"running": False, "done": False, "ok": False,
                              "log": "", "action": "", "path": ""}
         # Ревизия legion в FPGA? True — 0x80 отвечает, False — hosted

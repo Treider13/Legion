@@ -2688,8 +2688,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       pushLog("sys", `сборка legion: ${plan.reason} · лог ${start.logPath ?? ""}`);
-      // Синтез Quartus — десятки минут: опрос статуса раз в 2 с, лог хвостом.
-      // Поколение режет дубли и опрос после отмены/повторного старта.
+      // Синтез Quartus долгий (ориентир — десятки минут): опрос статуса раз
+      // в 2 с, лог хвостом. Поколение режет дубли и опрос после отмены.
       while (gen === gLegionBuildGen) {
         await waitMs(2000);
         if (gen !== gLegionBuildGen) return;
@@ -2697,7 +2697,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (st.tail !== undefined) set({ legionBuildLog: st.tail });
         if (st.running) continue;
         const art = st.artifact;
-        if (st.exit === 0 && art?.path) {
+        // Успех = артефакт .rbf на диске: build_bladerf.sh без set -e
+        // возвращает 0 и при упавшем Quartus — exit коду не верим.
+        if (art?.path) {
           set({
             legionBuildPhase: "done",
             legionArtifactPath: art.path,
