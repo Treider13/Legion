@@ -42,9 +42,12 @@ export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boo
 
 export async function runCinemaStop(): Promise<void> {
   const s = useLegion.getState();
-  // Solo-старт в полёте (capture/park): fpgaArmed ещё false — DISARM не зовём,
-  // но поколение бампаем, иначе ARM и hop-таймер всё равно встанут.
+  // Старт в полёте (capture/park): fpgaArmed ещё false — DISARM не зовём,
+  // но поколения бампаем. Solo читает gFpgaSoloGen. Эфир / handoff читают
+  // gFpgaAirGen — без abortFpgaAir клик Стоп во время parkFpgaLo эфира
+  // доходил до AIR_PREP (кино live из-за fpgaBusy).
   s.abortFpgaSolo();
+  s.abortFpgaAir();
   if (s.fpgaArmed) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
   if (s.scanRunning) s.stopScan();

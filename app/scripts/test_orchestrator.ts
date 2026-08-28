@@ -24,7 +24,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, peekFpgaSoloGen, useLegion } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, peekFpgaAirGen, peekFpgaSoloGen, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -1353,10 +1353,15 @@ async function main(): Promise<void> {
   const genBeforeAbort = peekFpgaSoloGen();
   useLegion.getState().abortFpgaSolo();
   check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
+  const airBeforeAbort = peekFpgaAirGen();
+  useLegion.getState().abortFpgaAir();
+  check("abortFpgaAir бампает поколение", peekFpgaAirGen() === airBeforeAbort + 1);
   const genBeforeCinema = peekFpgaSoloGen();
+  const airBeforeCinema = peekFpgaAirGen();
   check("кино СТОП при !armed не требует DISARM чтобы бампнуть", useLegion.getState().fpgaArmed === false);
   await runCinemaStop();
   check("cinema СТОП бампает solo gen без ARM", peekFpgaSoloGen() === genBeforeCinema + 1);
+  check("cinema СТОП бампает air gen без ARM", peekFpgaAirGen() === airBeforeCinema + 1);
   check("cinema СТОП без ARM не ставит armed", useLegion.getState().fpgaArmed === false);
 
   const here = dirname(fileURLToPath(import.meta.url));
@@ -1365,8 +1370,11 @@ async function main(): Promise<void> {
   const dockSrc = readFileSync(join(here, "../src/components/cinema/CinemaDock.tsx"), "utf8");
   const nuandHdr = readFileSync(join(here, "../../fpga/vendor/bladerf/fpga_common/include/bladerf2_common.h"), "utf8");
   check("эфир park остаётся FPGA_FS_HZ", storeSrc.includes("fsHz: FPGA_FS_HZ"));
-  const airBlock = storeSrc.slice(storeSrc.indexOf('if (path === "air")'), storeSrc.indexOf("const kind = get().txWaveKind"));
+  const airBlock = storeSrc.slice(storeSrc.indexOf('set({ fpgaMode: "lb_gated" })'), storeSrc.indexOf("const kind = get().txWaveKind"));
   check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
+  check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked") && airBlock.includes("FPGA_FS_HZ"));
+  check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
+  check("отзыв после ARM снимает TX до set(fpgaArmed)", storeSrc.includes("abortAirIfRevoked(!!r.ok)") && storeSrc.includes("abortSoloIfRevoked(!!r.ok)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
@@ -1391,6 +1399,7 @@ async function main(): Promise<void> {
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
   check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
   check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
