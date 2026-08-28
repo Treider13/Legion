@@ -159,12 +159,6 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
   };
 }
 
-export function soloWalkLineRu(p: FpgaSoloWalkPlan, idx = 0): string {
-  if (!p.ok || p.centers.length === 0) return p.reason;
-  const mhz = p.centers[Math.min(Math.max(idx, 0), p.centers.length - 1)];
-  return `стоянка ${idx + 1}/${p.hops} · ${mhz.toFixed(3)} МГц · окно ${p.analogMhz} МГц`;
-}
-
 /**
  * Обход стоянок плана. Sweep = туда-сюда по centers.
  * Hop = случайный выбор из той же сетки (не непрерывный hopCenterInBand
@@ -218,17 +212,6 @@ export function soloTuneCmd(
     bw_mhz: plan.analogMhz,
     token,
   };
-}
-
-/** VHDL: timeout = limit × 65536 / tx_clock. Цель ≈ 1 с (дефолт 61 @ 4 МГц).
- *  micro: tx_clock = ad9361.clock = fs. x40: tx_clock ≈ 2·fs. */
-export const FPGA_WD_TICK = 65536;
-export const FPGA_WD_LIMIT_DEFAULT = 61;
-
-export function soloWatchdogLimit(fsHz: number, sdrId = "bladerf-micro-xa4"): number {
-  const fs = fsHz > 0 ? fsHz : 2e6;
-  const txClk = sdrId === "bladerf-x40" ? fs * 2 : fs;
-  return Math.min(0xffff, Math.max(1, Math.round(txClk / FPGA_WD_TICK)));
 }
 
 /** Прыжки — только micro: шлюз tune пишет AIR_* без USB. x40 — одна стоянка. */

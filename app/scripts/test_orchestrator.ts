@@ -51,10 +51,8 @@ import {
   soloHopBlockedReason,
   SOLO_HOP_MICRO_ONLY,
   soloParkOpts,
-  soloWatchdogLimit,
   standingWordRu,
   soloTuneCmd,
-  soloWalkLineRu,
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
@@ -1212,9 +1210,8 @@ async function main(): Promise<void> {
   check("50 МГц: центры 2425 и 2475", w50.centers[0] === 2425 && w50.centers[1] === 2475);
   check("50 МГц влезает в 56: analog=50", w50.analogMhz === 50 && !w50.analogClamped && w50.fsHz === 50e6);
   check("Nuand sample-rate min = 520834", FPGA_SOLO_FS_MIN_HZ === 520834);
-  check("wd x40 @ 2 МГц = VHDL 61", soloWatchdogLimit(2e6, "bladerf-x40") === 61);
-  check("wd micro @ 10 МГц = 153 (не дефолт 61)", soloWatchdogLimit(10e6) === 153);
-  check("wd micro @ 20 МГц = 305", soloWatchdogLimit(20e6) === 305);
+  // WD_LIMIT считает только шлюз (watchdog_limit_for_fs, Python) — TS-дубль
+  // удалён: два авторитета молча расходятся. Контракт пиннит test_legion_fpga.
   check("wd 10 МГц ×65536/fs > 500 мс kick", (153 * 65536) / 10e6 > 0.5);
   check("дефолт 61 @ 10 МГц < kick", (61 * 65536) / 10e6 < 0.5);
   check("hint analog не врёт «micro»", w100.reason.includes("фильтр платы") && !w100.reason.includes("фильтр micro"));
@@ -1248,7 +1245,6 @@ async function main(): Promise<void> {
   check("AWGN заполняет окно", waveFillsSoloWindow("awgn") === true);
   check("план тона пишет «палочка»", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, wave: "sine" }).reason.includes("палочка"));
   check("план AWGN пишет «заполнит»", w50.reason.includes("заполнит"));
-  check("строка стоянки 1/2", soloWalkLineRu(w50, 0).includes("1/2") && soloWalkLineRu(w50, 0).includes("2425"));
   check("пустой коридор отказ", planFpgaSoloWalk({ f1Mhz: 2500, f2Mhz: 2400, windowMhz: 10 }).ok === false);
   check("окно 0 отказ", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 0 }).ok === false);
   check("сетка не вылезает за F2", w50.centers.every((c) => c >= 2400 && c <= 2500));
@@ -1429,6 +1425,8 @@ async function main(): Promise<void> {
   check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
   check("Nuand header: bandwidth min 200000", /bladerf2_bandwidth_range = \{[\s\S]*?200000/.test(nuandHdr));
   check("solo start не зовёт ensureSdrBand", storeSrc.includes('if (path === "air" && !ensureSdrBand())'));
+  const soloSrc = readFileSync(join(here, "../src/sense/fpgaSoloWalk.ts"), "utf8");
+  check("solo-модуль без дубля WD (limit считает только шлюз)", !soloSrc.includes("FPGA_WD") && !soloSrc.includes("65536"));
   check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
   const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
   check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
