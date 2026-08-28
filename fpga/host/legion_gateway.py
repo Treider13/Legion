@@ -282,8 +282,10 @@ class LegionGateway:
         Последний софт-слой deadman: FPGA гасит цифру (~1 с), NIOS
         (legion_work) снимает ARM и эфир, шлюз отпускает USB, чтобы сканер
         или ожившая панель снова открыли Soapy. wd=false при ARM — отказ
-        оператора от deadman, сторож молчит. Опорная точка — последний
-        kick, а если kicks не было ни разу — момент ARM."""
+        оператора от deadman, сторож молчит. Опорная точка — ПОЗДНЯЯ из
+        (последний kick, момент ARM): last_kick переживает DISARM, и без
+        max() устаревший kick прошлой сессии сжёг бы свежий ARM до первого
+        kick (регресс-тест в test_legion_fpga.py)."""
         while True:
             time.sleep(0.5)
             if KICK_TIMEOUT_S <= 0:
@@ -291,7 +293,7 @@ class LegionGateway:
             with self._op_lock:
                 if not self._armed or not self._wd_en:
                     continue
-                ref = self.last_kick or self._armed_at
+                ref = max(self.last_kick, self._armed_at)
                 if not ref or time.monotonic() - ref < KICK_TIMEOUT_S:
                     continue
                 self._wd_attempts += 1

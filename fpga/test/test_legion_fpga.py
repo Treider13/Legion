@@ -320,6 +320,23 @@ check("сторож: ARM без единого kick → DISARM + release",
       gw._armed is False and gw.fpga._t.released is True)
 rpc({"op": "usb", "action": "acquire"})
 
+# Регресс (найден перепроверкой A2): last_kick переживает DISARM. Старый
+# kick прошлой сессии не должен сжечь свежий ARM до его первого kick —
+# опора max(last_kick, _armed_at), не «or».
+r = rpc({"op": "arm", "mode": "player"})
+rpc({"op": "kick"})
+rpc({"op": "disarm"})
+_time.sleep(1.3)  # last_kick устарел (> таймаута 1 с), ARM снят
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: re-ARM со старым last_kick", r.get("ok") is True)
+_time.sleep(0.7)  # > тика 0.5 с, < таймаута от ARM: со старым «or» тут FAIL
+check("сторож: устаревший kick не сжёг свежий ARM",
+      gw._armed is True and gw.fpga._t.released is False)
+_time.sleep(1.4)  # суммарно > таймаута без kicks — теперь обязан сработать
+check("сторож: свежий ARM без kicks гаснет по таймауту",
+      gw._armed is False and gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
 # wd=false — оператор отказался от deadman: сторож молчит
 r = rpc({"op": "arm", "mode": "player", "wd": False})
 check("сторож: arm wd=false", r.get("ok") is True)
