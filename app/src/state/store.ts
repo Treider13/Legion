@@ -62,7 +62,7 @@ import {
 import {
   makeSoloWalker,
   planFpgaSoloWalk,
-  soloHopAllowed,
+  soloHopBlockedReason,
   soloParkOpts,
   soloTuneCmd,
   type FpgaSoloPattern,
@@ -2011,8 +2011,9 @@ export const useLegion = create<LegionStore>((set, get) => {
           set({ fpgaPath: null });
           return false;
         }
-        if (walk.hop && !soloHopAllowed(get().sdrId)) {
-          pushLog("sys", "FPGA solo: прыжки только на bladeRF 2.0 micro (tune LO без USB)");
+        const hopNo = soloHopBlockedReason(get().sdrId, walk.hop);
+        if (hopNo) {
+          pushLog("sys", hopNo);
           set({ fpgaPath: null });
           return false;
         }

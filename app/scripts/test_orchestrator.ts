@@ -48,6 +48,8 @@ import {
   planFpgaSoloWalk,
   soloFsHz,
   soloHopAllowed,
+  soloHopBlockedReason,
+  SOLO_HOP_MICRO_ONLY,
   soloParkOpts,
   soloTuneCmd,
   soloWalkLineRu,
@@ -1271,6 +1273,10 @@ async function main(): Promise<void> {
   check("tune не несёт player_ctl", tune.player_ctl === undefined && tune.wave === undefined);
   check("прыжки на micro xA4", soloHopAllowed("bladerf-micro-xa4") === true);
   check("прыжки на x40 запрещены", soloHopAllowed("bladerf-x40") === false);
+  check("x40 + hops: кино/start режут до ARM", soloHopBlockedReason("bladerf-x40", true)?.includes("micro") === true);
+  check("x40 + одна стоянка: hops не блокируем", soloHopBlockedReason("bladerf-x40", false) === null);
+  check("micro + hops: не блокируем", soloHopBlockedReason("bladerf-micro-xa4", true) === null);
+  check("текст отказа hops один", SOLO_HOP_MICRO_ONLY.includes("tune LO без USB"));
 
   const soloArm = fpgaArmCmd("player", {
     detThr: 5000, detShift: 4, token: "t", freqMhz: 2425, fsHz: 20e6, bwMhz: 20,
@@ -1357,6 +1363,11 @@ async function main(): Promise<void> {
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
   check("cinema: air стартует сразу после path", gateSrc.includes('if (path === "air")') && gateSrc.includes("await startSmart()"));
   check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
+  check("cinema walk режет hops на x40 до старта", gateSrc.includes("soloHopBlockedReason") && gateSrc.includes("if (hopNo)"));
+  check("cinema эфир не врёт 28 MSPS", !gateSrc.includes("28 MSPS") && !gateSrc.includes("0.57"));
+  check("cinema эфир не «только x40»", !gateSrc.includes("Только bladeRF 1 x40"));
+  check("cinema эфир: 2 МГц и micro", gateSrc.includes("LEGION_FPGA_FS_HZ") && gateSrc.includes("fpgaAirSupported"));
+  check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));

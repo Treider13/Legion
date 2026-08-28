@@ -2,7 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { planFpgaSoloWalk, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, detectorWindowUs, fpgaAirSupported } from "../../sense/fpgaFastpath";
+import { planFpgaSoloWalk, soloHopBlockedReason, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -39,6 +40,7 @@ export function StartGate({ mode, onClose }: Props) {
 
   const selected = WAVE_CATALOG.find((w) => w.id === wave) ?? WAVE_CATALOG[0];
   const analogMax = catalogCaps(sdrId).analogBwMhz;
+  const airDetUs = detectorWindowUs(FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ);
   const walkPlan = useMemo(
     () =>
       planFpgaSoloWalk({
@@ -52,6 +54,7 @@ export function StartGate({ mode, onClose }: Props) {
       }),
     [f1, f2, windowMhz, dwellMs, pattern, wave, analogMax],
   );
+  const hopNo = walkPlan.ok ? soloHopBlockedReason(sdrId, walkPlan.hop) : null;
 
   useEffect(() => {
     firstRef.current?.focus();
@@ -131,6 +134,10 @@ export function StartGate({ mode, onClose }: Props) {
       setErr(walkPlan.reason);
       return;
     }
+    if (hopNo) {
+      setErr(hopNo);
+      return;
+    }
     await startSmart();
   };
 
@@ -184,7 +191,7 @@ export function StartGate({ mode, onClose }: Props) {
                 <span>Следующая стоянка из коридора наугад. Волну в RAM не переснимаем.</span>
               </button>
             </div>
-            <p className="cinema-gate-lead">{walkPlan.reason}</p>
+            <p className="cinema-gate-lead">{hopNo ?? walkPlan.reason}</p>
           </>
         ) : mode === "sdr" && step === "path" ? (
           <>
@@ -203,10 +210,13 @@ export function StartGate({ mode, onClose }: Props) {
               >
                 <strong>Эфир + FPGA</strong>
                 <span>
-                  Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов;
-                  время = 16/fs, на x40 при 28 MSPS ≈ 0.57 мкс). Есть энергия — тот же RX IQ на TX SMA
-                  / усилитель. Только bladeRF 1 x40 (LMS6002D). Видно analog-окно ~28 МГц
-                  вокруг центра, не весь коридор F1–F2.
+                  Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов @{" "}
+                  {LEGION_FPGA_FS_HZ / 1e6} МГц ≈ {airDetUs} мкс — не analog платы). Есть энергия —
+                  тот же RX IQ на TX SMA / усилитель.{" "}
+                  {fpgaAirSupported(sdrId)
+                    ? "Эта плата в ревизии legion."
+                    : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}{" "}
+                  Видно analog-окно ~{analogMax} МГц вокруг центра, не весь коридор F1–F2.
                 </span>
               </button>
               <button

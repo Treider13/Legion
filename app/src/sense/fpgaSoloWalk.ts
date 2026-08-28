@@ -215,3 +215,12 @@ export function soloTuneCmd(
 export function soloHopAllowed(sdrId: string): boolean {
   return sdrId === "bladerf-micro-xa4" || sdrId === "bladerf-micro-xa9";
 }
+
+export const SOLO_HOP_MICRO_ONLY =
+  "FPGA solo: прыжки только на bladeRF 2.0 micro (tune LO без USB)";
+
+/** Кино и start: x40 + hops > 1 — не «попробуем tune». */
+export function soloHopBlockedReason(sdrId: string, hop: boolean): string | null {
+  if (!hop || soloHopAllowed(sdrId)) return null;
+  return `${SOLO_HOP_MICRO_ONLY}. На этой плате окно ≥ коридора — одна стоянка.`;
+}
