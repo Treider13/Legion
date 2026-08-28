@@ -1,6 +1,7 @@
 -- ============================================================================
 -- LEGION FPGA revision — пакет констант и регистровой карты.
--- Целевая платформа: bladeRF 1 x40 (Cyclone IV E, LMS6002D).
+-- Платформы: bladeRF 1 x40 (Cyclone IV E, LMS6002D) и bladeRF 2.0 micro
+-- xA4/xA9 (Cyclone V, AD9361 — эфир поднимает NIOS через AIR-регистры).
 -- Источники интерфейсов (не выдуманы, сверены с деревом Nuand):
 --   - TX-контракт LMS6002D: valid импульс каждый 2-й tx_clock
 --     (hdl/fpga/ip/nuand/synthesis/lms6002d/vhdl/lms6002d.vhd, процесс tx_sample)
@@ -34,6 +35,12 @@ package legion_pkg is
     constant LEGION_REG_LB_SHIFT   : natural := 16#06#; -- сдвиг усиления loopback 0..8
     constant LEGION_REG_WD_LIMIT   : natural := 16#07#; -- таймаут: limit × 2^16 тактов tx_clock
     constant LEGION_REG_WD_KICK    : natural := 16#08#; -- любая запись = heartbeat (toggle)
+    -- Эфирные регистры micro (AD9361): живут только в NIOS (legion_cmds.c),
+    -- HDL их не декодирует (when others => null). На bladeRF 1 эфир поднимает
+    -- шлюз через CONTROL bit1/2, эти регистры там no-op.
+    constant LEGION_REG_AIR_FREQ_KHZ : natural := 16#09#; -- LO парковки, кГц (47М..6Г)
+    constant LEGION_REG_AIR_GAIN_DB  : natural := 16#0A#; -- ручной RX gain, дБ (0 = не трогать)
+    constant LEGION_REG_AIR_PREP     : natural := 16#0B#; -- bit0 up/down, bit1 RX, bit2 TX
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 armed, 1 playing, 2 det_active, 3 capture_done, 4 wd_fired,
