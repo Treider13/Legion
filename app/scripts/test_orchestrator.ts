@@ -3,7 +3,7 @@
 // Запуск: npx tsx scripts/test_orchestrator.ts
 // ============================================================================
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
-import { detectFromBins, estimateNoiseFloor, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
+import { detectFromBins, estimateNoiseFloor, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
@@ -262,6 +262,8 @@ function main(): void {
   const dets = detectFromBins(bins, 12);
   check("energy detection ловит несущую", dets.some((d) => Math.abs(d.freqMhz - 2442) < 0.5));
   check("пол = медиана нижних 60%", estimateNoiseFloor([-90, -88, -86, -84, -10]) === -88);
+  check("хост FFT span x40 = 28", hostScanSpanMhz(28) === 28);
+  check("хост FFT span xa4 = 40", hostScanSpanMhz(56) === 40);
 
   const centers = planCenters(ism, 20);
   check("план скана непустой", centers.length >= 5);

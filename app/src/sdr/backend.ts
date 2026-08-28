@@ -197,6 +197,12 @@ export class MockSdrBackend implements SdrBackend {
   }
 }
 
+/** Хост-FFT: 40 MSPS, кепка analog BW платы. Не ширина окна Walker. */
+export function hostScanSpanMhz(analogBwMhz: number): number {
+  const cap = analogBwMhz > 0 ? analogBwMhz : 20;
+  return Math.min(40, cap);
+}
+
 /** Медиана нижних 60% мощности — пол окна. Не 20-й перцентиль. */
 export function estimateNoiseFloor(powers: readonly number[]): number {
   if (powers.length === 0) return 0;

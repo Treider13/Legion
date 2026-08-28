@@ -162,6 +162,22 @@ def main() -> int:
     scan = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
     check("scan bins", scan.get("ok") is True and len(scan.get("bins") or []) == 32)
     check("scan freqs", abs(scan["bins"][16]["freqMhz"] - 2442) < 2)
+    check("fake span = ADC 40 МГц, не окно 20", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 40) < 1.5)
+
+    class _TimeoutDev:
+        def readStream(self, *a, **k):
+            return type("S", (), {"ret": -1})()
+
+    stuck = w.Radio()
+    stuck.dev = _TimeoutDev()
+    stuck.rx = object()
+    stuck._discard_left = 4096
+    try:
+        stuck._wait_psd(4e6)
+        drain_ok = False
+    except RuntimeError as e:
+        drain_ok = "слив" in str(e)
+    check("неполный слив → отказ, не Welch на старом IQ", drain_ok)
 
     hd = w.Radio()
     hd.fake = True

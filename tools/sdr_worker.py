@@ -817,7 +817,9 @@ class Radio:
                 **extra,
             }
         if self.fake:
-            return {"ok": True, "bins": _fake_bins(center_mhz, bw, n), "centerMhz": center_mhz, **extra}
+            # Тот же span, что у живого ADC: не окно Walker (bw_mhz).
+            span = scan_fs_hz(self.analog_bw) / 1e6
+            return {"ok": True, "bins": _fake_bins(center_mhz, span, n), "centerMhz": center_mhz, **extra}
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
@@ -843,6 +845,10 @@ class Radio:
                 continue
             self._discard_left -= len(got)
             tries = 0
+        if self._discard_left > 0:
+            raise RuntimeError(
+                f"слив после LO не дочитан ({self._discard_left} сэмплов) — спектр не строим на старом IQ"
+            )
 
     def _psd_from_ring(self, nfft: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
         self._wait_psd(fs)

@@ -109,7 +109,7 @@ export function fpgaObserveLine(st: {
  * FTW NCO: fj·2³². fj=0 → fs/8, не DC (панель без cinema иначе ставила 0).
  * NCO — TX DDS, не анализатор.
  */
-export function ncoFtwFromFrac(fj: number, _fsHz = LEGION_FPGA_FS_HZ): number {
+export function ncoFtwFromFrac(fj: number): number {
   let frac = Number.isFinite(fj) ? fj : 0.125;
   if (frac === 0) frac = 0.125;
   frac = Math.min(0.45, Math.max(-0.45, frac));

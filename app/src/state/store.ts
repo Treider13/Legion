@@ -35,7 +35,7 @@ import {
   markCatalogPresent,
   type FpgaStatus,
 } from "../sdr/hostClient";
-import { detectFromBins } from "../sdr/backend";
+import { detectFromBins, hostScanSpanMhz } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
@@ -460,7 +460,6 @@ export const useLegion = create<LegionStore>((set, get) => {
   /** Свой CW маскирует бин. Гасим тон, смотрим эфир, возвращаем если жива. */
   const resenseHeld = async (
     heldMhz: number,
-    windowMhz: number,
     nBins: number,
   ): Promise<"alive" | "gone" | "error" | "switch"> => {
     const gen = gTxGen;
@@ -470,7 +469,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       else gSdr.txOff();
       let bins: ScanBin[] = [];
       if (gLive) {
-        const win = await hostScan(heldMhz, windowMhz, nBins);
+        const win = await hostScan(heldMhz, hostScanSpanMhz(catalogCaps(get().sdrId).analogBwMhz), nBins);
         if (!win.ok) {
           pushLog("sys", win.reason || "re-sense fail — возвращаем TX");
           await restoreHeldTx(heldMhz);
@@ -478,7 +477,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         bins = win.bins;
       } else {
-        bins = gSdr.scanWindow(heldMhz, windowMhz, nBins);
+        bins = gSdr.scanWindow(heldMhz, hostScanSpanMhz(gSdr.analogBwMhz()), nBins);
       }
       // Стоп/сброс/закрытие, пока летал hostScan: ничего не восстанавливаем.
       if (gen !== gTxGen) return "gone";
@@ -1734,10 +1733,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           let detections: Detection[] = [];
           const step = gWalker?.next();
           if (!step?.centerMhz) return;
-          const winMhz = step.windowMhz;
+          const spanMhz = hostScanSpanMhz(analog);
           centerMhz = step.centerMhz;
           if (gLive) {
-            const win = await hostScan(centerMhz, winMhz, nBins);
+            const win = await hostScan(centerMhz, spanMhz, nBins);
             if (!get().scanRunning || get().flashBusy) return;
             if (win.txError) {
               pushLog("sys", win.txError);
@@ -1749,7 +1748,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             }
             bins = win.bins;
           } else {
-            bins = gSdr.scanWindow(centerMhz, winMhz, nBins);
+            bins = gSdr.scanWindow(centerMhz, spanMhz, nBins);
           }
           const now = Date.now();
           const raw = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
@@ -1769,7 +1768,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (bins.length > 0) set({ scanBins: bins });
           const cur = get();
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
-          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, winMhz, bins.length > 0);
+          gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
           const held = gGate.lastCuedMhz;
           if (
             cur.autoDispatch === "priority" &&
@@ -1779,7 +1778,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             Date.now() - lastResenseAt >= RESENSE_MS
           ) {
             lastResenseAt = Date.now();
-            const rs = await resenseHeld(held, winMhz, nBins);
+            const rs = await resenseHeld(held, nBins);
             if (!shouldContinuePriorityTick(rs)) return;
           }
           if (!get().scanRunning || get().flashBusy || !get().transmitArmed) return;
