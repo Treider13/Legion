@@ -52,6 +52,7 @@ import {
   FPGA_US_DET_SHIFT,
   clampDetShift,
   captureParkMhz,
+  detMedianRefusal,
   detThrFromMedian,
   fpgaAirSupported,
   fpgaArmCmd,
@@ -920,11 +921,18 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       if (await abortIfRevoked("pre")) return;
       const cap = await hostDetCapture(FPGA_DET_WIN_SAMPLES, FPGA_DET_WINDOWS);
-      const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
-      if (!cap.ok || !(detThr > 0)) {
-        await fail(cap.ok ? `порог 0 (медиана полки ${cap.medianEnergy})` : cap.reason);
+      if (!cap.ok) {
+        await fail(cap.reason);
         return;
       }
+      // Полка ниже MIN = RX глухой: порог из неё лёг бы под шум, гейт открылся
+      // бы навсегда (det_count растёт — автовозврат не спасает), TX на шум до СТОП.
+      const noAir = detMedianRefusal(cap.medianEnergy);
+      if (noAir) {
+        await fail(noAir);
+        return;
+      }
+      const detThr = detThrFromMedian(cap.medianEnergy ?? 0);
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro
       // LO при ARM выставит NIOS по freq_mhz — парк тут для readback-честности).
       const pk = await hostPark(mhz, 2, FPGA_FS_HZ, true, true);

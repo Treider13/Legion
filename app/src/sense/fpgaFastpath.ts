@@ -36,6 +36,25 @@ export const FPGA_DET_THR_K = 4;
 /** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
 export const FPGA_AIR_GONE_POLLS = 3;
 
+/** Полка ниже — RX глухой (обрыв тракта/антенны): handoff обязан отказать.
+ *  Порог из такой полки лёг бы ниже шума: гейт открыт всегда, det_count растёт
+ *  безостановочно — автовозврат «энергия пропала» не сработает никогда, TX
+ *  гоняет шум до ручного СТОП. Расчёт до стенда: 64 ≈ σ 5.7 кода ADC (энергия
+ *  окна = 2σ²) при пиннованых 30 дБ MGC — цифра жива, аналог мёртв; здоровый
+ *  тракт даёт сотни+. Калибруется измерением полки на стенде (приёмка E4). */
+export const FPGA_DET_MEDIAN_MIN = 64;
+
+/** Отказ handoff по измеренной полке: null = можно ARM, строка = причина.
+ *  0/не число — «порог 0» (гейт на шум); ниже MIN — «RX глухой». */
+export function detMedianRefusal(medianEnergy: number | undefined): string | null {
+  const m = medianEnergy ?? Number.NaN;
+  if (!Number.isFinite(m) || m <= 0) return `порог 0 (медиана полки ${medianEnergy})`;
+  if (m < FPGA_DET_MEDIAN_MIN) {
+    return `RX глухой: полка ${m} < ${FPGA_DET_MEDIAN_MIN} (тракт/антенна?)`;
+  }
+  return null;
+}
+
 /** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра. */
 export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): number {
   if (!Number.isFinite(medianEnergy) || medianEnergy <= 0) return 0;

@@ -29,8 +29,10 @@ import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
+  FPGA_DET_MEDIAN_MIN,
   FPGA_US_DET_SHIFT,
   clampDetShift,
+  detMedianRefusal,
   detThrFromMedian,
   detectorWindowUs,
   fpgaArmCmd,
@@ -1181,6 +1183,19 @@ async function main(): Promise<void> {
   }).ok === true);
   check("detThrFromMedian: полка × K", detThrFromMedian(1200, 4) === 4800);
   check("detThrFromMedian: ноль/мусор → 0 (шлюз откажет)", detThrFromMedian(0) === 0 && detThrFromMedian(Number.NaN) === 0);
+  // Floor полки: крошечная медиана = RX глухой (тракт/антенна). Порог из неё
+  // лёг бы под шум → гейт открыт всегда → det_count растёт вечно → автовозврат
+  // «энергия пропала» не сработает никогда. Только отказ, не clamp.
+  check("detMedianRefusal: живая полка → можно ARM", detMedianRefusal(1200) === null);
+  check("detMedianRefusal: ровно MIN → можно ARM", detMedianRefusal(FPGA_DET_MEDIAN_MIN) === null);
+  check(
+    "detMedianRefusal: ниже MIN → RX глухой, отказ",
+    (detMedianRefusal(FPGA_DET_MEDIAN_MIN - 1) ?? "").includes("RX глухой"),
+  );
+  check(
+    "detMedianRefusal: ноль/мусор → порог 0, отказ",
+    (detMedianRefusal(0) ?? "").includes("порог 0") && (detMedianRefusal(undefined) ?? "").includes("порог 0"),
+  );
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
