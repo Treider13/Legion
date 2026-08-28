@@ -237,6 +237,58 @@ check("unpack: success+data", ok and data == 0xDEADBEEF)
 ok2, _ = lf.unpack_8x32_resp(bytes(16))
 check("unpack: неверный magic → fail", not ok2)
 
+# unpack 16x64: roundtrip data64 + чужой magic
+resp16 = bytearray(lf.pack_16x64(lf.NIOS_PKT_16x64_TARGET_RFIC, False, 0x0102, 0))
+resp16[2] |= lf.NIOS_PKT_8x32_FLAG_SUCCESS
+for i in range(8):
+    resp16[6 + i] = (0x0102030405060708 >> (8 * i)) & 0xFF
+ok16, data16 = lf.unpack_16x64_resp(bytes(resp16))
+check("16x64 unpack: success + data64", ok16 and data16 == 0x0102030405060708)
+check("16x64 unpack: magic 8x32 → fail", not lf.unpack_16x64_resp(lf.pack_8x32(0x80, False, 0, 0))[0])
+check("board_name_for_pid: 0x5246/0x5250/чужой",
+      lf.board_name_for_pid(0x5246) == "bladerf1"
+      and lf.board_name_for_pid(0x5250) == "bladerf2"
+      and lf.board_name_for_pid(0x1234) == "unknown")
+
+# ---------------------------------------------------------------------------
+# 3.7. RFIC spinwait: осушение очереди, WQSUCCESS, таймаут (rfic_fpga.c Nuand)
+# ---------------------------------------------------------------------------
+class _ScriptedRfic:
+    """Транспорт 16x64: очередь записи осушается после drain_after опросов."""
+
+    def __init__(self, drain_after: int, wqsuccess: bool = True) -> None:
+        self.drain_after = drain_after
+        self.wqsuccess = wqsuccess
+        self.polls = 0
+        self.board = "bladerf2"
+
+    def xfer(self, req: bytes) -> bytes:
+        write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
+        cmd = (req[4] | (req[5] << 8)) & 0xFF
+        out = 0
+        if write:
+            self.polls = 0
+        elif cmd == lf.RFIC_CMD_STATUS:
+            self.polls += 1
+            wqlen = 1 if self.polls <= self.drain_after else 0
+            out = 1 | (int(self.wqsuccess) << 1) | (wqlen << lf.RFIC_STATUS_WQLEN_SHIFT)
+        resp = bytearray(req)
+        resp[2] = (req[2] & 0x1) | lf.NIOS_PKT_8x32_FLAG_SUCCESS
+        for i in range(8):
+            resp[6 + i] = (out >> (8 * i)) & 0xFF
+        return bytes(resp)
+
+
+f_dr = lf.LegionFpga(_ScriptedRfic(drain_after=3))
+check("spinwait: очередь осушена за 3 опроса → ok",
+      f_dr.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is True)
+f_to = lf.LegionFpga(_ScriptedRfic(drain_after=99))
+check("spinwait: очередь не осушается → timeout (False)",
+      f_to.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is False)
+f_ws = lf.LegionFpga(_ScriptedRfic(drain_after=0, wqsuccess=False))
+check("spinwait: WQSUCCESS=0 (команда не удалась) → False",
+      f_ws.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is False)
+
 # ---------------------------------------------------------------------------
 # 3.5. USB-константы шлюза против реальных заголовков Nuand (без памяти!)
 # ---------------------------------------------------------------------------
@@ -439,7 +491,44 @@ gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2400e6)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.0})
 check("micro: LO ≠ park → отказ", r.get("ok") is False)
 
-gw.fpga._t.board = "bladerf1"  # вернуть для чистоты завершения
+# LO в допуске (0.5 МГц < 1 МГц) → ок
+gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2442.5e6)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.0})
+check("micro: LO в допуске 1 МГц → ok", r.get("ok") is True)
+rpc({"op": "disarm"})
+
+# rx op на micro — RFIC ENABLE RX0, CONTROL (пины RFFE) не трогаем
+r = rpc({"op": "rx", "on": True})
+check("micro: rx on → RFIC ENABLE RX0", r.get("ok") is True
+      and lf.RFIC_CH_RX0 in gw.fpga._t.rfic_enabled)
+check("micro: rx on — CONTROL не тронут", gw.fpga._t.control == 0)
+r = rpc({"op": "rx", "on": False})
+check("micro: rx off → RX0 снят", lf.RFIC_CH_RX0 not in gw.fpga._t.rfic_enabled)
+
+# nco на micro — только TX через RFIC
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("micro: arm nco ok", r.get("ok") is True)
+check("micro: nco — только TX0 через RFIC", gw.fpga._t.rfic_enabled == {lf.RFIC_CH_TX0})
+check("micro: nco — CONTROL не тронут", gw.fpga._t.control == 0)
+rpc({"op": "disarm"})
+
+# Откат эфира при сбое записи CTRL — micro
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.5})
+check("micro: CTRL write fail → ARM отказ", r.get("ok") is False)
+check("micro: RFIC ENABLE откачен при сбое CTRL", gw.fpga._t.rfic_enabled == set())
+check("micro: флаги наши сняты", not gw._rx_by_us and not gw._tx_by_us)
+gw.fpga._t.fail_ctrl_write = False
+
+# Откат эфира при сбое записи CTRL — x40 (CONTROL path)
+gw.fpga._t.board = "bladerf1"
+gw.fpga._t.control = 0
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
+check("x40: CTRL write fail → ARM отказ", r.get("ok") is False)
+check("x40: CONTROL bit1/2 откачены при сбое CTRL", gw.fpga._t.control == 0)
+check("x40: флаги наши сняты", not gw._rx_by_us and not gw._tx_by_us)
+gw.fpga._t.fail_ctrl_write = False
 
 srv.shutdown()
 srv.server_close()

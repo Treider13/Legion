@@ -101,6 +101,7 @@ class FakeTransport:
         self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
         self.released = False
         self.fail_control_read = False
+        self.fail_ctrl_write = False  # честный сбой записи REG_CTRL (тест отката)
         self.board = board
         # Модель RFIC (micro): init_state ON?, включённые каналы, LO по каналам
         self.rfic_on = False
@@ -159,6 +160,8 @@ class FakeTransport:
         write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
         addr = req[4]
         data = int.from_bytes(req[5:9], "little")
+        if write and self.fail_ctrl_write and target == lf.LEGION_TARGET and addr == lf.REG_CTRL:
+            return bytes(16)  # нет SUCCESS: запись CTRL в FPGA не прошла
         resp = bytearray(16)
         resp[0] = lf.NIOS_PKT_8x32_MAGIC
         resp[1] = req[1]
@@ -251,6 +254,9 @@ class LegionGateway:
         if rx and not self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, True):
             return False, "RFIC ENABLE RX0 не выполнен"
         if tx and not self.fpga.rfic_enable_channel(lf.RFIC_CH_TX0, True):
+            if rx:
+                # TX не встал — включённый RX не оставляем сиротой
+                self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, False)
             return False, "RFIC ENABLE TX0 не выполнен"
         return True, ""
 
@@ -261,6 +267,18 @@ class LegionGateway:
         if tx:
             ok = self.fpga.rfic_enable_channel(lf.RFIC_CH_TX0, False) and ok
         return ok
+
+    def _analog_disable_ours(self) -> None:
+        """Снять то, что включали мы (флаги _rx/_tx_by_us), по плате."""
+        if self._board() == "bladerf2":
+            self._rfic_air_disable(self._rx_by_us, self._tx_by_us)
+        else:
+            self._lms_enable(
+                rx=False if self._rx_by_us else None,
+                tx=False if self._tx_by_us else None,
+            )
+        self._rx_by_us = False
+        self._tx_by_us = False
 
     def _control_read(self) -> int | None:
         """None = пакет не принят. Нельзя подставлять 0: бит 0 = lms_reset,
@@ -343,19 +361,14 @@ class LegionGateway:
                     return {"ok": False, "reason": "CONTROL: не включить TX (lms_tx_enable)"}
                 self._tx_by_us = True
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
-            return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась"}
+            if not ok and (self._rx_by_us or self._tx_by_us):
+                # CTRL не записался — включённый нами эфир не оставляем сиротой.
+                self._analog_disable_ours()
+            return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась — эфир откачен"}
         if op == "disarm":
             ok = self.fpga.disarm()
             if ok and (self._rx_by_us or self._tx_by_us):
-                if self._board() == "bladerf2":
-                    self._rfic_air_disable(self._rx_by_us, self._tx_by_us)
-                else:
-                    self._lms_enable(
-                        rx=False if self._rx_by_us else None,
-                        tx=False if self._tx_by_us else None,
-                    )
-                self._rx_by_us = False
-                self._tx_by_us = False
+                self._analog_disable_ours()
             return {"ok": ok, "reason": "DISARM"}
         if op == "status":
             st = self.fpga.read_status()
@@ -365,12 +378,13 @@ class LegionGateway:
             self.last_kick = time.monotonic()
             return {"ok": self.fpga.heartbeat()}
         if op == "rx":
-            # Включить/выключить RX штатным CONTROL-регистром (для мониторинга
-            # детектора без lb_*: NCO-тон с кабеля и т.п.)
+            # Включить/выключить RX (для мониторинга детектора без lb_*:
+            # NCO-тон с кабеля и т.п.). x40 — CONTROL bit1, micro — RFIC ENABLE.
             on = bool(msg.get("on"))
             ok = self._rx_enable(on)
             self._rx_by_us = bool(on) if ok else self._rx_by_us
-            return {"ok": ok, "reason": f"RX {'on' if on else 'off'} (CONTROL bit1)"}
+            via = "RFIC ENABLE" if self._board() == "bladerf2" else "CONTROL bit1"
+            return {"ok": ok, "reason": f"RX {'on' if on else 'off'} ({via})"}
         if op == "usb":
             # Один владелец USB: release → отдать устройство стрим-серверу
             # (SoapySDRServer), acquire → забрать обратно. Регистры FPGA при

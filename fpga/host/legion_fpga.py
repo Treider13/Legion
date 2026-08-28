@@ -12,6 +12,8 @@ fpga/test/test_legion_fpga.py против реального C-заголовк
 """
 from __future__ import annotations
 
+import time
+
 NIOS_PKT_LEN = 16
 NIOS_PKT_8x32_MAGIC = ord("C")
 NIOS_PKT_8x32_FLAG_WRITE = 1 << 0
@@ -217,15 +219,13 @@ class LegionFpga:
     def rfic_spinwait(self) -> bool:
         """Ждать осушения очереди записи RFIC (биты 15:8 STATUS).
         После осушения проверяем бит WQSUCCESS — последняя команда удалась."""
-        import time as _time
-
         for _ in range(RFIC_SPIN_TRIES):
             ok, st = self.rfic_status()
             if not ok:
                 return False
             if ((st >> RFIC_STATUS_WQLEN_SHIFT) & RFIC_STATUS_WQLEN_MASK) == 0:
                 return bool(st & RFIC_STATUS_WQSUCCESS)
-            _time.sleep(RFIC_SPIN_DELAY_S)
+            time.sleep(RFIC_SPIN_DELAY_S)
         return False
 
     def rfic_cmd(self, cmd: int, ch: int, data: int) -> bool:
