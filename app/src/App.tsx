@@ -77,8 +77,14 @@ function App() {
         rfVisual.corrF2 = parseFloat(s.corrF2) || 2500;
         rfVisual.telemFreqMhz = s.telemFreq;
         rfVisual.sdrTransmit = s.transmitArmed || s.fpgaArmed;
-        rfVisual.sdrHitMhz = s.lastInterceptMhz;
-        rfVisual.sdrTxMhz = s.lastForwardMhz;
+        // FPGA не отдаёт хост-МГц: lastIntercept/lastForward — от Soapy-скана.
+        rfVisual.sdrHitMhz = s.fpgaArmed ? null : s.lastInterceptMhz;
+        rfVisual.sdrTxMhz = s.fpgaArmed ? null : s.lastForwardMhz;
+        if (s.fpgaArmed) {
+          // Задача: частота с вкладки ТИП СИГНАЛА. Конвейер: хост-МГц нет.
+          rfVisual.freqMhz =
+            s.fpgaMode === "lb_gated" ? 2475 : parseFloat(s.signalFreqMhz) || 2475;
+        }
       });
   }, []);
 

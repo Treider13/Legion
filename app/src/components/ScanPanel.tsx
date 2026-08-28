@@ -21,10 +21,10 @@ export function ScanPanel() {
   const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
   const span = Math.max(f2 - f1, 1e-6);
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
-  const auto = scannerParticipates(s.scanPattern);
   const fpgaAir = isFpgaAirPattern(s.scanPattern);
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
+  const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
   const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
@@ -39,7 +39,11 @@ export function ScanPanel() {
   return (
     <section className="panel">
       <span className="panel-title">
-        {fpgaAir ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR" : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
+        {taskLive
+          ? "РЕЖИМ SDR // FPGA · ЗАДАЧА С НОУТБУКА"
+          : fpgaAir || airLive
+            ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR"
+            : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
       </span>
       <p className="panel-note">
         {taskLive
@@ -120,7 +124,7 @@ export function ScanPanel() {
             <option value="hop">{patternOptionRu("hop")}</option>
           </select>
         </label>
-        {fpgaAir && (
+        {fpgaAir && !taskLive && (
           <>
             <label>
               ПОРОГ DET
@@ -179,7 +183,7 @@ export function ScanPanel() {
             disabled={busy}
           />
         </label>
-        {!fpgaAir && (
+        {!fpgaAir && !taskLive && (
           <>
             <label>
               {auto ? "ОКНО RX МГц" : "ШАГ TX МГц"}
@@ -201,7 +205,9 @@ export function ScanPanel() {
         )}
       </div>
       <p className="sens-hint">
-        {fpgaAir
+        {taskLive
+          ? "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер I²+Q² и не хост-скан"
+          : fpgaAir
           ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает`
           : auto
             ? s.autoDispatch === "priority"
@@ -209,7 +215,7 @@ export function ScanPanel() {
               : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
             : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
-      {!fpgaAir && (
+      {!fpgaAir && !taskLive && (
         <p className="sens-hint">
           TX-контент:{" "}
           {s.txWaveKind !== null
@@ -301,7 +307,7 @@ export function ScanPanel() {
           </>
         )}
       </div>
-      {fpgaAir && (
+      {fpgaAir && !taskLive && (
         <p className="sens-hint">
           FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц

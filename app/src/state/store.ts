@@ -713,36 +713,40 @@ export const useLegion = create<LegionStore>((set, get) => {
       }),
     setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
     setSdrEmulation: (v) => {
-      // Смена бэкенда = новая эпоха: скан и TX-arm старого бэкенда гасим,
-      // иначе таймер скана продолжал молотить по мёртвому/переключённому пути.
-      gTxGen += 1;
-      stopTxWatch();
-      stopTxWalk();
-      stopFpgaKick();
-      stopFpgaObserve();
-      if (get().fpgaArmed) void get().fpgaDisarm();
-      else set({ fpgaArmed: false });
-      get().stopScan();
-      gGate.reset();
-      if (gLive) {
-        void hostTxOff();
-        void hostClose();
-      }
-      gLive = false;
-      gSdr.setEmulation(v);
-      set({
-        sdrEmulation: v,
-        sdrDevices: gSdr.probe(),
-        sdrOpened: gSdr.opened(),
-        sdrRemote: gSdr.remoteArgs(),
-        transmitArmed: false,
-        signalTxActive: false,
-        lastForwardMhz: null,
-        lastSdrTxUs: null,
-        lastForwardPowerDbm: null,
-        sdrHoldSince: null,
-      });
-      pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+      // Смена бэкенда = новая эпоха. DISARM дожидаемся: иначе Soapy/мок
+      // переключаются, а FPGA ещё держит TX до watchdog.
+      void (async () => {
+        gTxGen += 1;
+        stopTxWatch();
+        stopTxWalk();
+        if (get().fpgaArmed) await get().fpgaDisarm();
+        else {
+          stopFpgaKick();
+          stopFpgaObserve();
+          set({ fpgaArmed: false });
+        }
+        get().stopScan();
+        gGate.reset();
+        if (gLive) {
+          void hostTxOff();
+          void hostClose();
+        }
+        gLive = false;
+        gSdr.setEmulation(v);
+        set({
+          sdrEmulation: v,
+          sdrDevices: gSdr.probe(),
+          sdrOpened: gSdr.opened(),
+          sdrRemote: gSdr.remoteArgs(),
+          transmitArmed: false,
+          signalTxActive: false,
+          lastForwardMhz: null,
+          lastSdrTxUs: null,
+          lastForwardPowerDbm: null,
+          sdrHoldSince: null,
+        });
+        pushLog("sys", v ? "SDR: эмуляция включена (не эфир)" : "SDR: эмуляция выкл — нужен Soapy/CLI на шлюзе");
+      })();
     },
     setSdrImageFile: (name, byteLength, path) =>
       set({
@@ -1339,9 +1343,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           return;
         }
       }
-      // Хост-скан и FPGA не делят USB x40. µs-тракт забирает TX у Soapy.
+      // Хост-скан / Soapy и FPGA не делят USB x40. Закрыть Soapy до ARM.
       if (s.scanRunning) get().stopScan();
       if (s.transmitArmed || s.signalTxActive) await get().stopTransmit();
+      if (gLive || get().sdrOpened) await get().closeSdr();
       set({ fpgaBusy: true });
       try {
         const cmd = fpgaArmCmd(get().fpgaMode, {
@@ -1371,10 +1376,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           gFpgaKick = setInterval(() => {
             void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
               if (!kr.ok) {
-                pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — watchdog в FPGA погасит TX`);
-                stopFpgaKick();
-                stopFpgaObserve();
-                set({ fpgaArmed: false });
+                pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
+                void get().fpgaDisarm();
               }
             });
           }, 500);
@@ -1523,6 +1526,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     flashSdr: async (action) => {
       if (get().flashBusy) {
         pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      if (get().fpgaArmed) {
+        pushLog("sys", "прошивка SDR: сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB");
         return;
       }
       const s = get();
