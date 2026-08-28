@@ -2192,7 +2192,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
         pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-        if (r.ok) set({ fpgaArmed: false, fpgaPath: null });
+        if (r.ok) {
+          set({ fpgaArmed: false, fpgaPath: null });
+          // closeSdr/stopFpgaAir: disarm один оставлял USB у агента —
+          // следующий openSdr/скан ловит занятое устройство.
+          const rel = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+          if (!rel.ok) pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
+        }
       } finally {
         set({ fpgaBusy: false });
       }
@@ -2235,10 +2241,9 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", "FPGA+сканер: watchdog — DISARM, возврат к скану");
           await fpgaReturnToScan(null);
         } else {
-          stopFpgaKick();
-          stopFpgaObserve();
-          await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
-          set({ fpgaArmed: false, fpgaPath: null });
+          // Solo: stopSoloWalk сразу — иначе tune до следующего dwell
+          // снова поднимает AIR_PREP (TX) после deadman.
+          await get().fpgaDisarm();
         }
         return;
       }

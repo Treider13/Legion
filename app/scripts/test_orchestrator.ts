@@ -52,6 +52,7 @@ import {
   SOLO_HOP_MICRO_ONLY,
   soloParkOpts,
   soloWatchdogLimit,
+  standingWordRu,
   soloTuneCmd,
   soloWalkLineRu,
   waveFillsSoloWindow,
@@ -1225,6 +1226,11 @@ async function main(): Promise<void> {
   check("окно 1.0: fs = analog×1e6", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2410, windowMhz: 1 }).fsHz === 1e6);
   const w20 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20 });
   check("20 МГц на 100 → 5 стоянок", w20.hops === 5);
+  check("слово: 1 стоянка", standingWordRu(1) === "стоянка");
+  check("слово: 2 стоянки", standingWordRu(2) === "стоянки");
+  check("слово: 5 стоянок", standingWordRu(5) === "стоянок");
+  check("слово: 21 стоянка", standingWordRu(21) === "стоянка");
+  check("план 5 пишет стоянок, не стоянки", w20.reason.includes("5 стоянок"));
   const w10 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 10 });
   check("10 МГц на 100 → 10 стоянок", w10.hops === 10);
   const w2 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 2, pattern: "hop" });
@@ -1365,6 +1371,10 @@ async function main(): Promise<void> {
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
   check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
+  const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат"));
+  check("watchdog solo зовёт fpgaDisarm (стопает hop)", wdSolo.includes("fpgaDisarm()") && !wdSolo.includes("hostFpga({ op: \"disarm\""));
+  const disarmBlock = storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir:"));
+  check("DISARM отдаёт USB хосту", disarmBlock.includes('action: "release"'));
   const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
   check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
@@ -1377,6 +1387,7 @@ async function main(): Promise<void> {
   check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
   const gwSrc = readFileSync(join(here, "../../fpga/host/legion_gateway.py"), "utf8");
   check("шлюз ARM с fs пишет WD_LIMIT", gwSrc.includes("watchdog_limit_for_fs") && gwSrc.includes("set_watchdog"));
+  check("шлюз tune без ARM отказывает", gwSrc.includes('tune: нет ARM'));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));

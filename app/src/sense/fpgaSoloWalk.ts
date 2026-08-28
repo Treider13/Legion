@@ -88,6 +88,15 @@ export interface FpgaSoloWalkPlan {
   bands: AllowBand[];
 }
 
+/** 1 стоянка, 2 стоянки, 5 стоянок, 21 стоянка — не «5 стоянки». */
+export function standingWordRu(n: number): string {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return "стоянка";
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 > 20)) return "стоянки";
+  return "стоянок";
+}
+
 export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
   const analogMax = i.analogMaxMhz ?? FPGA_SOLO_MICRO_ANALOG_MHZ;
   const pattern: FpgaSoloPattern = i.pattern === "hop" ? "hop" : "sweep";
@@ -134,7 +143,7 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     : "";
   return {
     ok: true,
-    reason: `коридор ${spanMhz} МГц · окно ${hopWindowMhz} МГц → ${hops} ${hops === 1 ? "стоянка" : "стоянки"} · ${how}${clampHint} · ${fillHint}`,
+    reason: `коридор ${spanMhz} МГц · окно ${hopWindowMhz} МГц → ${hops} ${standingWordRu(hops)} · ${how}${clampHint} · ${fillHint}`,
     spanMhz,
     hopWindowMhz,
     analogMhz,

@@ -414,6 +414,9 @@ class LegionGateway:
             # player RAM и CTRL.ARM остаются. Только micro (AIR-регистры).
             if self.board != "bladerf2":
                 return {"ok": False, "reason": "tune: только bladeRF 2.0 micro (AD9361)"}
+            # Без ARM — отказ: иначе hop после watchdog снова жжёт AIR_PREP/TX.
+            if not self._armed:
+                return {"ok": False, "reason": "tune: нет ARM"}
             freq = msg.get("freq_mhz")
             if freq is None:
                 return {"ok": False, "reason": "tune: нужен freq_mhz"}
