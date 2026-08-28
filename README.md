@@ -92,7 +92,15 @@ ESP32 принимает её и физически настраивает чи�
    python3 tools/legion_cli.py --port /dev/ttyUSB0 --cmd "SET FREQ 2475.000"
    python3 tools/legion_cli.py --port /dev/ttyUSB0 --cmd "SWEEP START 2400 2500 STEP 1000 DWELL 10"
    ```
-5. **Без проводов:** ESP32 поднимает WiFi AP `LEGION` (пароль `legion4351`) —
+5. **SDR / антенна** (режим 1, не ESP32). Скан — Hann/Welch как
+   DIO-sys/spectrum_analyzer, 40 MSPS. На ПК или USB3-шлюзе:
+   ```bash
+   sudo apt install python3-soapysdr soapysdr-module-bladerf soapysdr-tools python3-numpy
+   pip install -r tools/requirements.txt
+   ```
+   Soapy с pip не ставить — нужен системный биндинг. Без `numpy` воркер
+   откроется, но FFT эфира не посчитает (честный отказ, не заглушка).
+6. **Без проводов:** ESP32 поднимает WiFi AP `LEGION` (пароль `legion4351`) —
    открыть `http://192.168.4.1/` (lite-UI) или подключиться по WebSocket :81.
 
 ## Разработка без железа

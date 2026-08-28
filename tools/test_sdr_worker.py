@@ -62,6 +62,9 @@ def main() -> int:
     check("stream_kind error", w.stream_kind(-2) == "error")
     check("stream_kind ok", w.stream_kind(4096) == "ok")
 
+    if not w.NUMPY:
+        print("  FAIL  numpy обязателен (tools/requirements.txt) — без него скан DIO-sys не проверяется")
+        fails += 1
     if w.NUMPY:
         import numpy as np
 
