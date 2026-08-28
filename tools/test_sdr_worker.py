@@ -231,10 +231,12 @@ def main() -> int:
     check("scan bins", scan.get("ok") is True and len(scan.get("bins") or []) == 32)
     check("scan freqs", abs(scan["bins"][16]["freqMhz"] - 2442) < 2)
 
-    check("FPGA park fs = 2e6 (не DIO 40e6)", w.FPGA_PARK_FS_HZ == 2e6)
+    check("FPGA park default = 2e6 (NCO)", w.FPGA_PARK_FS_HZ == 2e6)
     pk = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 20, "fsHz": 2e6, "rx": True, "tx": True})
     check("park RX+TX fake", pk.get("ok") is True and pk.get("freqMhz") == 2442)
     check("park fs 2 MSPS", pk.get("fsHz") == 2e6)
+    air = rpc(proc, {"op": "park", "centerMhz": 2442, "bwMhz": 28, "fsHz": 28e6, "rx": True, "tx": True})
+    check("park эфир 28 MSPS", air.get("ok") is True and air.get("fsHz") == 28e6)
     none = rpc(proc, {"op": "park", "centerMhz": 2442, "rx": False, "tx": False})
     check("park без RX/TX → отказ", none.get("ok") is False)
 

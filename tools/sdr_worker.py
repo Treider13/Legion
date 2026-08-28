@@ -94,7 +94,7 @@ def kwargs_str(kw: dict[str, str]) -> str:
 
 
 TX_FS = 2.0e6
-# Эфир+FPGA: тот же fs, что NCO FTW / окно детектора 16 сэмплов ≈ 8 мкс.
+# NCO FTW / solo-park. Эфир+FPGA передаёт fs = analog BW, не эту константу.
 FPGA_PARK_FS_HZ = 2_000_000
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
@@ -1037,7 +1037,7 @@ class Radio:
         """Поставить RX/TX LO без FFT и без USB-стрима. FPGA потом забирает USB.
 
         hostScan здесь нельзя: он поднимает 40 MSPS и не трогает TX LO —
-        loopback ушёл бы на чужой TX PLL, а окно детектора перестало бы быть 8 мкс.
+        loopback ушёл бы на чужой TX PLL.
         """
         fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(FPGA_PARK_FS_HZ)
         hz = float(center_mhz) * 1e6
@@ -1054,6 +1054,7 @@ class Radio:
             }
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "freqMhz": center_mhz, "fsHz": fs}
+        got = fs
         try:
             with self._lock:
                 if rx:
@@ -1063,8 +1064,14 @@ class Radio:
                         self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(bw, fs))
                     except Exception:
                         pass
+                    try:
+                        read = float(self.dev.getSampleRate(SOAPY_SDR_RX, 0))
+                        if read > 0:
+                            got = read
+                    except Exception:
+                        pass
                     self._rx_hz = hz
-                    self._rx_fs = fs
+                    self._rx_fs = got
                 if tx:
                     self.dev.setSampleRate(SOAPY_SDR_TX, 0, fs)
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, hz)
@@ -1072,14 +1079,21 @@ class Radio:
                         self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(bw, fs))
                     except Exception:
                         pass
+                    if not rx:
+                        try:
+                            read = float(self.dev.getSampleRate(SOAPY_SDR_TX, 0))
+                            if read > 0:
+                                got = read
+                        except Exception:
+                            pass
         except Exception as e:
             return {"ok": False, "reason": f"park LO: {e}", "freqMhz": center_mhz, "fsHz": fs}
         sides = "+".join(p for p, on in (("RX", rx), ("TX", tx)) if on)
         return {
             "ok": True,
-            "reason": f"park {sides} {center_mhz:.3f} МГц · {fs / 1e6:.1f} MSPS",
+            "reason": f"park {sides} {center_mhz:.3f} МГц · {got / 1e6:.1f} MSPS",
             "freqMhz": center_mhz,
-            "fsHz": fs,
+            "fsHz": got,
         }
 
     def _scan_extra(self) -> dict[str, Any]:

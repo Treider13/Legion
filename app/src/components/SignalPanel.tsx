@@ -256,6 +256,7 @@ export function SignalPanel() {
           PLAYER/NCO/LOOPBACK, мультиплексор FPGA перекрывает хост-стрим
           (стрим идёт в режиме PASS). Загрузка волны в RAM: режим PASS +
           capture_arm + обычная ЗАШИТЬ (стрим и capture одновременно).
+          ARM сначала паркует RX/TX LO (иначе loopback на чужой частоте). Без park — отказ.
         </p>
         <div className="corr-grid">
           <label>

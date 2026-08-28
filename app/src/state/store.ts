@@ -309,10 +309,11 @@ function stopFpgaKick(): void {
 }
 
 const LEGION_FPGA_BOARDS = new Set(["bladerf-x40", "bladerf-micro-xa4", "bladerf-micro-xa9"]);
-/** 16 сэмплов при fs=2 МГц ≈ 8 мкс на решение детектора. */
+/** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
 const FPGA_DET_SHIFT_FAST = 4;
 /** Сырой порог энергии (не дБ). 0 открывает гейт на шум. */
 const FPGA_DET_THR_DEFAULT = 5000;
+/** NCO FTW и solo-park. Эфир+FPGA паркует fs = analog BW платы. */
 const FPGA_FS_HZ = 2_000_000;
 
 function waitMs(ms: number): Promise<void> {
@@ -321,6 +322,18 @@ function waitMs(ms: number): Promise<void> {
 
 function ncoFtw(freqHz: number): number {
   return (Math.round((freqHz / FPGA_FS_HZ) * 2 ** 32) >>> 0);
+}
+
+function detWindowUs(fsHz: number, shift = FPGA_DET_SHIFT_FAST): number {
+  return ((2 ** shift) / Math.max(fsHz, 1)) * 1e6;
+}
+
+function formatDetWindow(fsHz: number): string {
+  const us = detWindowUs(fsHz);
+  const mhz = fsHz / 1e6;
+  const usTxt = us < 10 ? us.toFixed(2) : us.toFixed(0);
+  const mhzTxt = Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1);
+  return `~${usTxt} мкс @ ${mhzTxt} MSPS`;
 }
 /** Краткий RX без тона. Watch не должен глушить TX-arm. */
 let gResense = false;
@@ -568,6 +581,59 @@ export const useLegion = create<LegionStore>((set, get) => {
     set({ sdrBands: [band] });
     pushLog("sys", `SDR полоса ${band.f1Mhz}…${band.f2Mhz} (авто из F1/F2)`);
     return true;
+  };
+
+  const releaseSoapyForFpga = async (): Promise<void> => {
+    if (gLive) {
+      await hostTxOff();
+      await hostClose();
+    }
+    gSdr.txOff();
+    gSdr.close();
+    gLive = false;
+    set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, signalTxActive: false });
+  };
+
+  const parkFpgaLo = async (opts: {
+    midMhz: number;
+    analogMhz: number;
+    spanMhz: number;
+    rx: boolean;
+    fsHz: number;
+    gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>;
+  }): Promise<{ ok: boolean; fsHz: number }> => {
+    let fsHz = opts.fsHz;
+    const rel = await opts.gw({ op: "usb", action: "release" });
+    if (!rel.ok) {
+      pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
+      return { ok: false, fsHz };
+    }
+    let parked = false;
+    try {
+      if (get().sdrEmulation || !hostSdrAvailable()) {
+        pushLog("sys", "FPGA: Soapy нет — LO не паркуем, ARM без частоты нельзя");
+        return { ok: false, fsHz };
+      }
+      await get().openSdr();
+      if (!gLive) {
+        pushLog("sys", "FPGA: SDR не открылся — LO не поставлен");
+        return { ok: false, fsHz };
+      }
+      const win = Math.min(opts.analogMhz, Math.max(2, opts.spanMhz || opts.analogMhz));
+      const pk = await hostPark(opts.midMhz, win, opts.fsHz, opts.rx, true);
+      pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
+      if (!pk.ok) return { ok: false, fsHz };
+      if (pk.fsHz && pk.fsHz > 0) fsHz = pk.fsHz;
+      parked = true;
+    } finally {
+      await releaseSoapyForFpga();
+      const acq = await opts.gw({ op: "usb", action: "acquire" });
+      if (!acq.ok) {
+        pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+        parked = false;
+      }
+    }
+    return { ok: parked, fsHz };
   };
 
   return {
@@ -1286,22 +1352,51 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA ARM: ревизия legion — bladeRF 1 x40 или micro (вкладка SDR)");
         return;
       }
+      if (!ensureSdrBand()) return;
+      const bands = get().sdrBands;
+      const f1 = bands.length ? Math.min(...bands.map((b) => b.f1Mhz)) : parseFloat(get().sdrF1);
+      const f2 = bands.length ? Math.max(...bands.map((b) => b.f2Mhz)) : parseFloat(get().sdrF2);
+      const mid = (f1 + f2) / 2;
+      const analog = catalogCaps(get().sdrId).analogBwMhz;
+      const span = Math.max(f2 - f1, 0);
+      const mode = get().fpgaMode;
+      const air = mode === "lb_gated" || mode === "lb_always";
+      const gw = (cmd: Record<string, unknown>) =>
+        hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaBusy: true });
       try {
+        const pk = await parkFpgaLo({
+          midMhz: mid,
+          analogMhz: analog,
+          spanMhz: span,
+          rx: air,
+          fsHz: air ? analog * 1e6 : FPGA_FS_HZ,
+          gw,
+        });
+        if (!pk.ok) {
+          pushLog("sys", "FPGA ARM: без park LO не включаем — иначе IQ уйдёт на чужую частоту");
+          return;
+        }
         const cmd: Record<string, unknown> = {
           op: "arm",
-          mode: get().fpgaMode,
+          mode,
           wd: true,
           token: get().fpgaToken,
         };
-        if (get().fpgaMode === "lb_gated") {
+        if (mode === "lb_gated") {
           cmd.det_thr = FPGA_DET_THR_DEFAULT;
           cmd.det_shift = FPGA_DET_SHIFT_FAST;
         }
-        const r = await hostFpga(cmd, get().sdrGateway);
-        pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+        const r = await gw(cmd);
+        pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) {
-          set({ fpgaArmed: true });
+          set({
+            fpgaArmed: true,
+            lastForwardMhz: mid,
+            lastCueReason: air
+              ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
+              : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`,
+          });
           beginFpgaKick();
         }
       } finally {
@@ -1347,43 +1442,22 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
 
-      const releaseSoapy = async (): Promise<void> => {
-        if (gLive) {
-          await hostTxOff();
-          await hostClose();
-        }
-        gSdr.txOff();
-        gSdr.close();
-        gLive = false;
-        set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, signalTxActive: false });
-      };
-
-      const parkLo = async (rx: boolean): Promise<void> => {
-        const rel = await gw({ op: "usb", action: "release" });
-        if (!rel.ok) {
-          pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
-        }
-        if (get().sdrEmulation || !hostSdrAvailable()) {
-          pushLog("sys", "FPGA: Soapy нет — LO не паркуем (останется как был)");
-          return;
-        }
-        await get().openSdr();
-        if (!gLive) return;
-        // Оба PLL на одну частоту: loopback IQ иначе уйдёт на чужой TX LO.
-        // 2 MSPS — окно детектора 16 сэмплов ≈ 8 мкс (не 40 MSPS hostScan).
-        const win = Math.min(analog, Math.max(2, span || analog));
-        const pk = await hostPark(mid, win, FPGA_FS_HZ, rx, true);
-        pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
-        await releaseSoapy();
-        const acq = await gw({ op: "usb", action: "acquire" });
-        if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
-      };
-
       set({ fpgaBusy: true, fpgaPath: path });
       try {
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });
-          await parkLo(true);
+          const pk = await parkFpgaLo({
+            midMhz: mid,
+            analogMhz: analog,
+            spanMhz: span,
+            rx: true,
+            fsHz: analog * 1e6,
+            gw,
+          });
+          if (!pk.ok) {
+            set({ fpgaPath: null });
+            return false;
+          }
           const r = await gw({
             op: "arm",
             mode: "lb_gated",
@@ -1400,7 +1474,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mid,
             lastSdrTxUs: null,
-            lastCueReason: `эфир+FPGA · антенна→усилитель · ${mid.toFixed(3)} МГц · порог ${FPGA_DET_THR_DEFAULT} · ~8 мкс @ 2 MSPS`,
+            lastCueReason: `эфир+FPGA · антенна→усилитель · ${mid.toFixed(3)} МГц · порог ${FPGA_DET_THR_DEFAULT} · ${formatDetWindow(pk.fsHz)}`,
           });
           beginFpgaKick();
           return true;
@@ -1410,7 +1484,18 @@ export const useLegion = create<LegionStore>((set, get) => {
         const useNco = kind === "sine" || kind === "tone";
         if (useNco) {
           set({ fpgaMode: "nco" });
-          await parkLo(false);
+          const pk = await parkFpgaLo({
+            midMhz: mid,
+            analogMhz: analog,
+            spanMhz: span,
+            rx: false,
+            fsHz: FPGA_FS_HZ,
+            gw,
+          });
+          if (!pk.ok) {
+            set({ fpgaPath: null });
+            return false;
+          }
           const fj = Number(get().signalParams.fj) || 0;
           await gw({ op: "set", reg: "nco_ftw", value: ncoFtw(Math.abs(fj) * FPGA_FS_HZ) });
           const r = await gw({ op: "arm", mode: "nco", wd: true });
@@ -1435,17 +1520,37 @@ export const useLegion = create<LegionStore>((set, get) => {
         await gw({ op: "usb", action: "release" });
         if (!get().sdrEmulation && hostSdrAvailable()) {
           await get().openSdr();
-          if (gLive) {
-            const tx = await hostTxWave(mid, kind, get().signalParams);
-            pushLog("sys", tx.reason);
-            await waitMs(1000);
+          if (!gLive) {
+            pushLog("sys", "FPGA player: SDR не открылся — capture отменён");
+            set({ fpgaPath: null });
+            const acq0 = await gw({ op: "usb", action: "acquire" });
+            if (!acq0.ok) pushLog("sys", `FPGA USB acquire: ${acq0.reason ?? "отказ"}`);
+            return false;
           }
-          await releaseSoapy();
+          const tx = await hostTxWave(mid, kind, get().signalParams);
+          pushLog("sys", tx.reason);
+          if (!tx.ok) {
+            await releaseSoapyForFpga();
+            const acq0 = await gw({ op: "usb", action: "acquire" });
+            if (!acq0.ok) pushLog("sys", `FPGA USB acquire: ${acq0.reason ?? "отказ"}`);
+            set({ fpgaPath: null });
+            return false;
+          }
+          await waitMs(1000);
+          await releaseSoapyForFpga();
         } else {
-          pushLog("sys", "FPGA player: нет Soapy — capture волны пропущен, ARM всё равно");
+          pushLog("sys", "FPGA player: нет Soapy — волну в RAM не загрузить, ARM отменён");
+          set({ fpgaPath: null });
+          const acq = await gw({ op: "usb", action: "acquire" });
+          if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          return false;
         }
         const acq = await gw({ op: "usb", action: "acquire" });
-        if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+        if (!acq.ok) {
+          pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          set({ fpgaPath: null });
+          return false;
+        }
         const r = await gw({ op: "arm", mode: "player", wd: true });
         pushLog("sys", `FPGA ARM (player): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (!r.ok) {
@@ -1462,6 +1567,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return true;
       } finally {
         set({ fpgaBusy: false });
+        if (!get().fpgaArmed && get().fpgaPath) set({ fpgaPath: null });
       }
     },
 

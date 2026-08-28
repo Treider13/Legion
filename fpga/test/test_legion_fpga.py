@@ -283,6 +283,14 @@ check("rx on → CONTROL bit1 взведён", r.get("ok") is True and bool(gw.f
 r = rpc({"op": "rx", "on": False})
 check("rx off → CONTROL bit1 снят", r.get("ok") is True and not (gw.fpga._t.control & 0x2))
 
+# Сбой чтения CONTROL: нельзя писать 0 (lms_reset + полосы LMS)
+gw.fpga._t.control = 0x1  # bit0 = lms_reset отпущен, как после init
+gw.fpga._t.fail_control_read = True
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
+check("CONTROL read fail → arm отказ", r.get("ok") is False)
+check("CONTROL не затёрт в 0 при сбое чтения", gw.fpga._t.control == 0x1)
+gw.fpga._t.fail_control_read = False
+
 srv.shutdown()
 srv.server_close()
 

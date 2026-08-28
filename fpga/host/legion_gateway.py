@@ -95,6 +95,7 @@ class FakeTransport:
         self.cap_done = False
         self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
         self.released = False
+        self.fail_control_read = False
 
     def release(self) -> None:
         self.released = True
@@ -119,6 +120,8 @@ class FakeTransport:
         resp[2] = lf.NIOS_PKT_8x32_FLAG_SUCCESS
         if target == 0x01:
             # Штатный CONTROL: readback = текущее значение (control_reg_read)
+            if not write and self.fail_control_read:
+                return bytes(16)
             if write:
                 self.control = data
             resp[5:9] = self.control.to_bytes(4, "little")
@@ -167,10 +170,12 @@ class LegionGateway:
     LMS_RX_EN = 0x2
     LMS_TX_EN = 0x4
 
-    def _control_read(self) -> int:
+    def _control_read(self) -> int | None:
+        """None = пакет не принят. Нельзя подставлять 0: бит 0 = lms_reset,
+        биты 6:3 = выбор полосы LMS — запись 0 сажает чип в reset и сносит park."""
         ok, data = lf.unpack_8x32_resp(
             self.fpga._t.xfer(lf.pack_8x32(0x01, False, 0, 0)))
-        return data if ok else 0
+        return data if ok else None
 
     def _control_write(self, data: int) -> bool:
         ok, _ = lf.unpack_8x32_resp(
@@ -179,6 +184,8 @@ class LegionGateway:
 
     def _lms_enable(self, rx: bool | None = None, tx: bool | None = None) -> bool:
         ctrl = self._control_read()
+        if ctrl is None:
+            return False
         if rx is True:
             ctrl |= self.LMS_RX_EN
         elif rx is False:
@@ -244,8 +251,7 @@ class LegionGateway:
             # детектора без lb_*: NCO-тон с кабеля и т.п.)
             on = bool(msg.get("on"))
             ok = self._rx_enable(on)
-            if on:
-                self._rx_by_us = True
+            self._rx_by_us = bool(on) if ok else self._rx_by_us
             return {"ok": ok, "reason": f"RX {'on' if on else 'off'} (CONTROL bit1)"}
         if op == "usb":
             # Один владелец USB: release → отдать устройство стрим-серверу

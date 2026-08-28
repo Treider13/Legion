@@ -90,7 +90,23 @@ export async function hostPark(
   rx: boolean,
   tx: boolean,
 ): Promise<{ ok: boolean; reason: string; freqMhz?: number; fsHz?: number }> {
-  return hostRpc({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
+  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
+  try {
+    const r = await hostRpc<{
+      ok?: boolean;
+      reason?: string;
+      freqMhz?: number;
+      fsHz?: number;
+    }>({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
+    return {
+      ok: !!r.ok,
+      reason: r.reason ?? "",
+      freqMhz: r.freqMhz,
+      fsHz: r.fsHz,
+    };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
 }
 
 export async function hostTx(freqMhz: number): Promise<TxCueResult> {
