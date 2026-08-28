@@ -180,10 +180,22 @@ def rx_is_parked(
     )
 
 
-def settle_samples(_fs: float = 0.0) -> int:
-    """После смены LO сброс равен глубине USB DIO-sys: 32 × 4096 (capture.cpp sync_config).
-    Отдельной константы ФАПЧ в их репозитории нет — ничего не добавляем."""
-    return USB_RX_BUFFERS * TRANSFER_SAMPLES
+# Оседание после смены LO: AD9361 LO lock без fast lock ~200 мкс (EZ t=87062),
+# ADF4351 20 мкс band select + 100–300 мкс петля (docs/architecture.md).
+# 5 мс — запас ×10 к худшему PLL. DIO-sys после retune вообще не дискардит
+# (capture.cpp: set_frequency и дальше sync_rx), а 32×4096 на 2 MSPS — это
+# 65.5 мс задержки handoff на каждой парковке, не физика.
+SETTLE_TIME_S = 5e-3
+
+
+def settle_samples(fs: float = 0.0) -> int:
+    """Дискард после смены LO: min(глубина USB DIO-sys 32×4096, SETTLE_TIME_S × fs).
+    На 40 MSPS скане — как раньше 131072 (время режет сильнее USB); на 2 MSPS
+    park — 10000 сэмплов (5 мс) вместо 65.5 мс. fs<=0 → глубина USB."""
+    usb_depth = USB_RX_BUFFERS * TRANSFER_SAMPLES
+    if not fs or fs <= 0:
+        return usb_depth
+    return min(usb_depth, math.ceil(SETTLE_TIME_S * fs))
 
 
 class IqRing:

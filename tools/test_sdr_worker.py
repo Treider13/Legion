@@ -102,7 +102,10 @@ def main() -> int:
         check("DIO rate = 40e6 (не analog BW)", w.dio_rx_rate(28) == 40e6)
         check("DIO rate micro тоже 40e6", w.dio_rx_rate(56) == 40e6)
         check("DIO BW 40e6", w.DIO_BANDWIDTH_HZ == 40_000_000)
-        check("settle = 32×4096 (sync_config, без выдуманной ФАПЧ)", w.settle_samples(40e6) == 32 * 4096)
+        check("settle 40 MSPS = 32×4096 (время режет сильнее USB)", w.settle_samples(40e6) == 32 * 4096)
+        check("settle 2 MSPS = 5 мс (10000), не 65.5 мс", w.settle_samples(2e6) == 10000)
+        check("settle fs=0 → глубина USB (как раньше)", w.settle_samples(0) == 32 * 4096)
+        check("settle 1 MSPS = 5000", w.settle_samples(1e6) == 5000)
         check(
             "parked: тот же LO не ретунит",
             w.rx_is_parked(True, 915e6, 40e6, 915e6, 40e6, 0, True) is True,
