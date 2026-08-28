@@ -38,6 +38,11 @@ import {
   fpgaObserveLine,
   fpgaTurnDwellClamp,
   FPGA_TURN_DWELL_DEFAULT_MS,
+  airTractParams,
+  airFsHz,
+  captureParkMhz,
+  clampAirBwMhz,
+  detCaptureWindows,
   handoffRetryMs,
   handoffSkipAfter,
   handoffTimeline,
@@ -1196,6 +1201,29 @@ async function main(): Promise<void> {
   check("turn dwell: дефолт 3000", FPGA_TURN_DWELL_DEFAULT_MS === 3000 && fpgaTurnDwellClamp(Number.NaN) === 3000 && fpgaTurnDwellClamp(0) === 3000);
   check("turn dwell: кламп 500..60000", fpgaTurnDwellClamp(40) === 500 && fpgaTurnDwellClamp(999999) === 60_000);
   check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500);
+  check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
+  check("air полоса: кламп потолком платы", clampAirBwMhz(56, 28) === 28 && clampAirBwMhz(20, 56) === 20);
+  check("air полоса: пол 0.2 МГц", clampAirBwMhz(0.1, 56) === 0.2);
+  check("air fs = max(полоса, 520834)", airFsHz(2) === 2_000_000 && airFsHz(20) === 20_000_000 && airFsHz(0.2) === 520_834);
+  check("air тракт: окно мкс честно от fs", airTractParams(20, 56, 4).windowUs === detectorWindowUs(4, 20_000_000));
+  check("air тракт: shift не масштабируется (χ² от числа сэмплов)",
+    airTractParams(20, 56, 4).detShift === 4 && airTractParams(20, 56, 15).detShift === 12);
+  check("захват полки: отстройка за пределы ±bw/2", captureParkMhz(2442, 6000, 70, 20) === 2457);
+  check("захват полки: 3.2 МГц при канале 2 и по умолчанию",
+    captureParkMhz(2442, 6000, 70, 2) === 2445.2 && captureParkMhz(2442, 6000, 70) === 2445.2);
+  check("захват полки: окон в пределах IQ-кольца воркера",
+    detCaptureWindows(4) === 512 && detCaptureWindows(9) === 256 && detCaptureWindows(12) === 64);
+  check("planFpgaAir: полоса шире платы урезана честно", (() => {
+    const p = planFpgaAir({
+      sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+      loadOk: true, detThr: 5000, detShift: 4, bwMhz: 56,
+    });
+    return p.bwMhz === 28 && p.reason.includes("урезана");
+  })());
+  check("planFpgaAir: канал 20 МГц → fs 20 MSPS", planFpgaAir({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true, detThr: 5000, detShift: 4, bwMhz: 20,
+  }).fsHz === 20_000_000);
   check("handoff skip на 3-м страйке", !handoffSkipAfter(2) && handoffSkipAfter(3));
   check("handoff таймлайн: этапы с dt",
     handoffTimeline(1000, [["park_полки", 1070], ["arm", 1540]]) === "park_полки +70мс · arm +540мс");
@@ -1398,10 +1426,18 @@ async function main(): Promise<void> {
   const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
   const dockSrc = readFileSync(join(here, "../src/components/cinema/CinemaDock.tsx"), "utf8");
   const nuandHdr = readFileSync(join(here, "../../fpga/vendor/bladerf/fpga_common/include/bladerf2_common.h"), "utf8");
-  check("эфир park остаётся FPGA_FS_HZ", storeSrc.includes("fsHz: FPGA_FS_HZ"));
+  check("эфирный тракт по полосе оператора (airTractParams)", storeSrc.includes("airTractParams(parseFloat(get().fpgaAirBwMhz)"));
   const airBlock = storeSrc.slice(storeSrc.indexOf('set({ fpgaMode: "lb_gated" })'), storeSrc.indexOf("const kind = get().txWaveKind"));
-  check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
-  check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked") && airBlock.includes("FPGA_FS_HZ"));
+  check("air start шлёт fs_hz/bw_mhz в ARM (NIOS поднимает тракт под канал)",
+    airBlock.includes("fs_hz: tract.fsHz") && airBlock.includes("bw_mhz: tract.bwMhz"));
+  check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked"));
+  check("handoff паркует канал оператора, не зашитые 2 МГц",
+    storeSrc.includes("hostPark(mhz, tract.bwMhz, tract.fsHz, true, true)"));
+  check("handoff ARM несёт fs/bw канала", storeSrc.includes("fsHz: tract.fsHz,") && storeSrc.includes("bwMhz: tract.bwMhz,"));
+  check("захват полки по окну детектора оператора",
+    storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
+  check("захват полки с отстройкой под ширину канала",
+    storeSrc.includes("captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70, tract.bwMhz)"));
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
   check("air gen после ensureSdrBand, не до валидации",

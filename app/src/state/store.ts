@@ -44,16 +44,17 @@ import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
+  FPGA_AIR_BW_DEFAULT_MHZ,
   FPGA_AIR_GONE_POLLS,
   FPGA_DEFAULT_DET_THR,
   FPGA_DET_THR_FLOOR,
   FPGA_DET_THR_K,
-  FPGA_DET_WIN_SAMPLES,
-  FPGA_DET_WINDOWS,
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_US_DET_SHIFT,
+  airTractParams,
   clampDetShift,
   captureParkMhz,
+  detCaptureWindows,
   detThrFromMedian,
   fpgaAirSupported,
   fpgaArmCmd,
@@ -237,6 +238,8 @@ interface LegionStore {
   fpgaDetShift: number;
   /** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации, мс (строка UI). */
   fpgaTurnDwellMs: string;
+  /** Полоса канала подавления lb_* (fs = max(полоса, 520834 Гц)), МГц, строка UI. */
+  fpgaAirBwMhz: string;
   /** Главный старт: только FPGA или эфир+FPGA. null — не с главного кадра. */
   fpgaPath: "solo" | "air" | null;
   /** Solo: ширина окна на усилитель, МГц (не analog-потолок). */
@@ -318,6 +321,7 @@ interface LegionStore {
   setFpgaDetThr(v: number): void;
   setFpgaDetShift(v: number): void;
   setFpgaTurnDwellMs(v: string): void;
+  setFpgaAirBwMhz(v: string): void;
   setFpgaSoloWindowMhz(v: string): void;
   setFpgaSoloDwellMs(v: string): void;
   setFpgaSoloPattern(p: FpgaSoloPattern): void;
@@ -800,6 +804,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     spanMhz: number;
     rx: boolean;
     fsHz: number;
+    /** Эфир: явная полоса канала оператора. Без неё — min(analog, max(2, span)). */
+    bwMhz?: number;
     gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>;
   }): Promise<{ ok: boolean; fsHz: number }> => {
     let fsHz = opts.fsHz;
@@ -819,7 +825,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: SDR не открылся — LO не поставлен");
         return { ok: false, fsHz };
       }
-      const win = Math.min(opts.analogMhz, Math.max(2, opts.spanMhz || opts.analogMhz));
+      const win = opts.bwMhz ?? Math.min(opts.analogMhz, Math.max(2, opts.spanMhz || opts.analogMhz));
       const pk = await hostPark(opts.midMhz, win, opts.fsHz, opts.rx, true);
       pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
       if (!pk.ok) return { ok: false, fsHz };
@@ -960,15 +966,22 @@ export const useLegion = create<LegionStore>((set, get) => {
       // сигнала — порог выше сигнала, гейт глухой навсегда. Тот же fs/BW и
       // то же (пиннованое) усиление — полка переносима.
       const row = catalogById(get().sdrId);
-      const capMhz = captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70);
-      const pkCap = await hostPark(capMhz, 2, FPGA_FS_HZ, true, false);
+      // Канал подавления оператора: fs/BW парковок и ARM. shift не
+      // масштабируем под fs — статистика порога от числа сэмплов, не скорости.
+      const tract = airTractParams(
+        parseFloat(get().fpgaAirBwMhz),
+        catalogCaps(get().sdrId).analogBwMhz,
+        get().fpgaDetShift,
+      );
+      const capMhz = captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70, tract.bwMhz);
+      const pkCap = await hostPark(capMhz, tract.bwMhz, tract.fsHz, true, false);
       if (!pkCap.ok || pkCap.fake) {
         await fail(pkCap.fake ? "FAKE park — не эфир, ARM нельзя" : `park захвата: ${pkCap.reason}`);
         return;
       }
       mark("park_полки");
       if (await abortIfRevoked("pre")) return;
-      const cap = await hostDetCapture(FPGA_DET_WIN_SAMPLES, FPGA_DET_WINDOWS);
+      const cap = await hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift));
       const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
       if (!cap.ok || !(detThr > 0)) {
         // detThrFromMedian режет и ноль, и деградированный захват ниже floor —
@@ -985,7 +998,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       mark(`det_thr=${detThr}`);
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro
       // LO при ARM выставит NIOS по freq_mhz — парк тут для readback-честности).
-      const pk = await hostPark(mhz, 2, FPGA_FS_HZ, true, true);
+      const pk = await hostPark(mhz, tract.bwMhz, tract.fsHz, true, true);
       if (!pk.ok || pk.fake) {
         await fail(pk.fake ? "FAKE park — не эфир, ARM нельзя" : pk.reason || "park не удался");
         return;
@@ -1002,9 +1015,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (await abortIfRevoked("acquired")) return;
       const armCmd = fpgaArmCmd("lb_gated", {
         detThr,
-        detShift: FPGA_US_DET_SHIFT,
+        detShift: tract.detShift,
         token: get().fpgaToken,
         freqMhz: mhz,
+        fsHz: tract.fsHz,
+        bwMhz: tract.bwMhz,
       });
       // Усиление, при котором мерилась полка, — NIOS поставит ровно его.
       if (pk.rxGainDb !== undefined && Number.isFinite(pk.rxGainDb)) {
@@ -1030,7 +1045,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastForwardMhz: mhz,
         lastForwardPowerDbm: powerDbm,
         sdrHoldSince: Date.now(),
-        lastCueReason: `FPGA lb_gated · ${mhz.toFixed(3)} МГц · окно 8 мкс · порог ${detThr} (полка ×${FPGA_DET_THR_K})`,
+        lastCueReason: `FPGA lb_gated · ${mhz.toFixed(3)} МГц · окно ${tract.windowUs.toFixed(1)} мкс · канал ${tract.bwMhz} МГц · порог ${detThr} (полка ×${FPGA_DET_THR_K})`,
       });
       pushLog(
         "sys",
@@ -1138,6 +1153,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
     fpgaTurnDwellMs: String(FPGA_TURN_DWELL_DEFAULT_MS),
+    fpgaAirBwMhz: String(FPGA_AIR_BW_DEFAULT_MHZ),
     fpgaPath: null,
     fpgaSoloWindowMhz: "10",
     fpgaSoloDwellMs: "500",
@@ -1806,6 +1822,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
 
     setFpgaTurnDwellMs: (v) => set({ fpgaTurnDwellMs: v }),
+    setFpgaAirBwMhz: (v) => set({ fpgaAirBwMhz: v }),
     setFpgaSoloWindowMhz: (v) => set({ fpgaSoloWindowMhz: v }),
     setFpgaSoloDwellMs: (v) => set({ fpgaSoloDwellMs: v }),
     setFpgaSoloPattern: (p) => set({ fpgaSoloPattern: p === "hop" ? "hop" : "sweep" }),
@@ -1843,6 +1860,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           loadOk: get().sdrLoadOk,
           detThr: get().fpgaDetThr,
           detShift: get().fpgaDetShift,
+          bwMhz: parseFloat(get().fpgaAirBwMhz),
         });
         if (!airPlan.ok) {
           pushLog("sys", airPlan.reason);
@@ -1896,12 +1914,16 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
         }
+        const tract = air
+          ? airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift)
+          : null;
         const pk = await parkFpgaLo({
           midMhz: mid,
           analogMhz: analog,
           spanMhz: span,
           rx: air,
-          fsHz: FPGA_FS_HZ,
+          fsHz: tract ? tract.fsHz : FPGA_FS_HZ,
+          bwMhz: tract?.bwMhz,
           gw,
         });
         if (armRevoked()) {
@@ -1918,6 +1940,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           token: get().fpgaToken,
           ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
           freqMhz: mid,
+          ...(tract ? { fsHz: tract.fsHz, bwMhz: tract.bwMhz } : {}),
         });
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -1937,6 +1960,7 @@ export const useLegion = create<LegionStore>((set, get) => {
                   loadOk: get().sdrLoadOk,
                   detThr: get().fpgaDetThr,
                   detShift: get().fpgaDetShift,
+                  bwMhz: parseFloat(get().fpgaAirBwMhz),
                 }).reason
               : air
                 ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
@@ -2090,18 +2114,21 @@ export const useLegion = create<LegionStore>((set, get) => {
             loadOk: get().sdrLoadOk,
             detThr: get().fpgaDetThr,
             detShift: get().fpgaDetShift,
+            bwMhz: parseFloat(get().fpgaAirBwMhz),
           });
           if (!airPlan.ok) {
             pushLog("sys", airPlan.reason);
             set({ fpgaPath: null });
             return false;
           }
+          const tract = airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift);
           const pk = await parkFpgaLo({
             midMhz: mid,
             analogMhz: analog,
             spanMhz: span,
             rx: true,
-            fsHz: FPGA_FS_HZ,
+            fsHz: tract.fsHz,
+            bwMhz: tract.bwMhz,
             gw,
           });
           if (!pk.ok) {
@@ -2114,8 +2141,10 @@ export const useLegion = create<LegionStore>((set, get) => {
             mode: "lb_gated",
             wd: true,
             det_thr: get().fpgaDetThr,
-            det_shift: get().fpgaDetShift,
+            det_shift: tract.detShift,
             freq_mhz: mid,
+            fs_hz: tract.fsHz,
+            bw_mhz: tract.bwMhz,
           });
           pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (await abortAirIfRevoked(!!r.ok)) return false;

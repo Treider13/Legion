@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { detectorWindowUs, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -34,7 +34,8 @@ export function ScanPanel() {
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);
-  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift);
+  const tract = airTractParams(parseFloat(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
+  const fpgaWindowUs = tract.windowUs;
 
   return (
     <section className="panel">
@@ -135,6 +136,19 @@ export function ScanPanel() {
                 step={100}
                 value={s.fpgaDetThr}
                 onChange={(e) => s.setFpgaDetThr(parseFloat(e.target.value))}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label>
+              ПОЛОСА МГц
+              <input
+                aria-label="Полоса канала подавления FPGA"
+                type="number"
+                min={0.2}
+                max={analogBw}
+                step={0.2}
+                value={s.fpgaAirBwMhz}
+                onChange={(e) => s.setFpgaAirBwMhz(e.target.value)}
                 disabled={busy || s.fpgaBusy}
               />
             </label>
@@ -338,7 +352,7 @@ export function ScanPanel() {
       </div>
       {fpgaAir && !taskLive && (
         <p className="sens-hint">
-          FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
+          FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · канал {tract.bwMhz} МГц · коридор{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
           {!fpgaAirSupported(s.sdrId)
             ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"

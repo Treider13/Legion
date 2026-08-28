@@ -46,6 +46,51 @@ export function fpgaTurnDwellClamp(ms: number): number {
   if (!Number.isFinite(ms) || ms <= 0) return FPGA_TURN_DWELL_DEFAULT_MS;
   return Math.min(FPGA_TURN_DWELL_MAX_MS, Math.max(FPGA_TURN_DWELL_MIN_MS, Math.round(ms)));
 }
+
+/** Полоса канала подавления lb_*-тракта: fs = max(полоса, минимум sample-rate
+ *  чипа), analog BW = полоса. Дефолт 2 МГц — поведение до появления параметра.
+ *  Потолок — analog платы (x40 28 / micro 56 МГц, каталог). */
+export const FPGA_AIR_BW_DEFAULT_MHZ = 2;
+/** AD9361 BW min 200 кГц (Nuand). x40 ниже 1.5 МГц откажет честно в park. */
+export const FPGA_AIR_BW_MIN_MHZ = 0.2;
+/** AD9361 sample-rate min (Nuand bladerf2_sample_rate_range): BW 200 кГц ≠ fs. */
+export const FPGA_AIR_FS_MIN_HZ = 520_834;
+
+export function clampAirBwMhz(want: number, analogMaxMhz: number): number {
+  const cap = analogMaxMhz > 0 ? analogMaxMhz : FPGA_AIR_BW_DEFAULT_MHZ;
+  const w = Number.isFinite(want) && want > 0 ? want : FPGA_AIR_BW_DEFAULT_MHZ;
+  return Math.round(Math.min(Math.max(w, FPGA_AIR_BW_MIN_MHZ), cap) * 1000) / 1000;
+}
+
+export function airFsHz(bwMhz: number): number {
+  const hz = bwMhz * 1e6;
+  if (!Number.isFinite(hz) || hz <= 0) return LEGION_FPGA_FS_HZ;
+  return Math.max(Math.round(hz), FPGA_AIR_FS_MIN_HZ);
+}
+
+/** Эфирный тракт под полосу оператора: fs/BW парковки и ARM. shift НЕ
+ *  масштабируем под fs: статистика порога (χ²) зависит от числа сэмплов,
+ *  не от скорости — 16 сэмплов валидны на любом fs, окно в мкс честно
+ *  показываем от реального fs. */
+export function airTractParams(
+  bwRaw: number,
+  analogMaxMhz: number,
+  shiftUi: number,
+): { bwMhz: number; fsHz: number; detShift: number; windowUs: number } {
+  const bwMhz = clampAirBwMhz(bwRaw, analogMaxMhz);
+  const fsHz = airFsHz(bwMhz);
+  const detShift = clampDetShift(shiftUi);
+  return { bwMhz, fsHz, detShift, windowUs: detectorWindowUs(detShift, fsHz) };
+}
+
+/** Окон захвата полки: win×windows ≤ половины IQ-кольца воркера (RING_CAP
+ *  2^18, tools/sdr_worker.py) — иначе захват не наполнится и честно упадёт
+ *  по таймауту. При shift 4..8 — 512 как раньше. */
+export function detCaptureWindows(detShift: number): number {
+  const win = 1 << clampDetShift(detShift);
+  return Math.min(FPGA_DET_WINDOWS, Math.max(64, Math.floor(131072 / win)));
+}
+
 /** Пол порога: ниже — захват деградировал (мёртвый поток/ADC в нулях дают
  *  медиану 0..единицы; живая полка при MGC — сотни, фикстура воркера 400–2000).
  *  ARM с thr < floor = гейт на шум. 64 = медиана 16 при K=4: в 6 раз ниже
@@ -61,17 +106,23 @@ export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): numb
   return Math.min(0xffffffff, Math.max(0, thr));
 }
 
-/** LO для захвата шумовой полки: на 3.2 МГц В СТОРОНУ от пика.
+/** LO для захвата шумовой полки: В СТОРОНУ от пика, за пределы окна ±bw/2.
  *  Захват на самом пике для непрерывного сигнала дал бы энергию сигнала,
  *  а не шума (тон живёт в каждом окне) — порог стал бы глухим навсегда.
- *  3.2 МГц: вне окна 2 МГц (±1 МГц), внутри полосы чипа; у края диапазона
- *  уходим в минус. */
+ *  3.2 МГц при канале 2 МГц: вне окна (±1 МГц), внутри полосы чипа; шире
+ *  канал — дальше отстройка (0.75×bw); у края диапазона уходим в минус. */
 export const FPGA_DET_CAP_DELTA_MHZ = 3.2;
 
-export function captureParkMhz(peakMhz: number, rxHiMhz: number, rxLoMhz: number): number {
-  const up = peakMhz + FPGA_DET_CAP_DELTA_MHZ;
+export function captureParkMhz(
+  peakMhz: number,
+  rxHiMhz: number,
+  rxLoMhz: number,
+  bwMhz = FPGA_AIR_BW_DEFAULT_MHZ,
+): number {
+  const delta = Math.max(FPGA_DET_CAP_DELTA_MHZ, bwMhz * 0.75);
+  const up = peakMhz + delta;
   if (up <= rxHiMhz) return up;
-  const down = peakMhz - FPGA_DET_CAP_DELTA_MHZ;
+  const down = peakMhz - delta;
   return down >= rxLoMhz ? down : up; // край чипа: лучше up с клипом, чем вне диапазона
 }
 
@@ -101,6 +152,8 @@ export interface FpgaAirInput {
   loadOk: boolean;
   detThr: number;
   detShift: number;
+  /** Полоса канала подавления, МГц. Дефолт 2 — поведение до параметра. */
+  bwMhz?: number;
 }
 
 export interface FpgaAirPlan {
@@ -110,12 +163,20 @@ export interface FpgaAirPlan {
   detThr: number;
   detShift: number;
   spanMhz: number;
+  bwMhz: number;
+  fsHz: number;
 }
 
 export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
+  const bwMhz = clampAirBwMhz(i.bwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, i.analogBwMhz);
+  const fsHz = airFsHz(bwMhz);
   const detShift = clampDetShift(i.detShift);
-  const windowUs = detectorWindowUs(detShift);
+  const windowUs = detectorWindowUs(detShift, fsHz);
   const spanMhz = parkSpanMhz(i.bands);
+  const clipNote =
+    i.bwMhz !== undefined && Number.isFinite(i.bwMhz) && i.bwMhz > i.analogBwMhz
+      ? ` (урезана с ${i.bwMhz} — фильтр платы ≤${i.analogBwMhz} МГц)`
+      : "";
   const fail = (reason: string): FpgaAirPlan => ({
     ok: false,
     reason,
@@ -123,6 +184,8 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
     detThr: i.detThr,
     detShift,
     spanMhz,
+    bwMhz,
+    fsHz,
   });
   if (!fpgaAirSupported(i.sdrId)) {
     return fail("FPGA эфир: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
@@ -133,23 +196,27 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
     return fail("FPGA эфир: задайте det_thr > 0 (порог 0 = гейт на шум)");
   }
-  if (spanMhz > i.analogBwMhz) {
+  if (spanMhz > bwMhz) {
     return {
       ok: true,
-      reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs в текущем LO (≤${i.analogBwMhz} МГц). Полоса ${spanMhz.toFixed(1)} МГц не сканируется — hop ФАПЧ = мс`,
+      reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs в текущем LO · канал ${bwMhz} МГц${clipNote}. Коридор ${spanMhz.toFixed(1)} МГц не сканируется — hop ФАПЧ = мс`,
       windowUs,
       detThr: i.detThr,
       detShift,
       spanMhz,
+      bwMhz,
+      fsHz,
     };
   }
   return {
     ok: true,
-    reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs → RX→TX внутри чипа → усилитель`,
+    reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs · канал ${bwMhz} МГц${clipNote} → RX→TX внутри чипа → усилитель`,
     windowUs,
     detThr: i.detThr,
     detShift,
     spanMhz,
+    bwMhz,
+    fsHz,
   };
 }
 
@@ -212,7 +279,7 @@ export function fpgaArmCmd(
     wd?: boolean;
     ncoFtw?: number;
     freqMhz?: number;
-    /** Solo: fs/BW окна. Эфир не передаёт — NIOS оставит 2 МГц. */
+    /** fs/BW тракта (solo окно / эфирный канал). Без них NIOS оставит 2 МГц. */
     fsHz?: number;
     bwMhz?: number;
   },
