@@ -185,11 +185,15 @@ check("статус bit0=playing (VHDL)", status_bits.get("0") == "playing")
 check("статус bit1=cap_done (VHDL)", status_bits.get("1") == "cap_done")
 check("статус bit2=det_active (VHDL)", status_bits.get("2") == "det_active")
 check("статус bit3=wd_fired (VHDL)", status_bits.get("3") == "wd_fired")
-py_bits = {"playing": 0, "capture_done": 1, "det_active": 2, "wd_fired": 3}
-# Python read_status: playing=bit0, capture_done=bit1, det_active=bit2, wd_fired=bit3
+py_bits = {"playing": 0, "capture_done": 1, "det_active": 2}
+# Python read_status: playing=bit0, capture_done=bit1, det_active=bit2,
+# wd_fired = bit3 (HDL, живой expired) | bit4 (NIOS, липкий латч deadman —
+# после автономного DISARM HDL-бит гаснет за мкс, enable=0 сбрасывает expired)
 host_src = open(os.path.join(ROOT, "host", "legion_fpga.py"), encoding="utf-8").read()
 for key, bit in py_bits.items():
     check(f"py read_status {key}=bit{bit}", f'"{key}": bool(data & (1 << {bit}))' in host_src)
+check("py read_status wd_fired=bit3|bit4 (HDL|NIOS-латч)",
+      '"wd_fired": bool(data & 0x18)' in host_src)
 
 # ---------------------------------------------------------------------------
 # 4. Шлюз: TCP loopback с FAKE-транспортом (протокол без железа)
@@ -205,6 +209,9 @@ srv.gw = gw
 import threading as _th
 _th.Thread(target=srv.serve_forever, daemon=True).start()
 port = srv.server_address[1]
+# Сторож kick_age (A2) не должен мешать основному suite: таймаут огромный,
+# в dedicated-блоке ниже опускается до 1 с и возвращается обратно.
+lg.KICK_TIMEOUT_S = 3600.0
 
 
 def rpc(msg: dict) -> dict:
@@ -249,6 +256,22 @@ check("gateway arm неизвестного mode → отказ", r.get("ok") is
 # lb_gated без порога → честный отказ (порог 0 = гейт на шум)
 r = rpc({"op": "arm", "mode": "lb_gated"})
 check("lb_gated без det_thr → отказ", r.get("ok") is False)
+# Явный 0 — та же дыра: раньше проходил (документация «0 шлюз отвергает»
+# расходилась с кодом). floor по умолчанию 1 → 0 отвергается.
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 0})
+check("lb_gated с det_thr=0 → отказ (floor)", r.get("ok") is False)
+check("det_thr=0 не взводит det_thr_set", gw.det_thr_set is False)
+# Поднятый floor (LEGION_DET_THR_FLOOR на стенде): ниже него — отказ
+lg.DET_THR_FLOOR = 100
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 50})
+check("lb_gated det_thr=50 < floor=100 → отказ", r.get("ok") is False)
+lg.DET_THR_FLOOR = 1
+# Тот же floor на низкоуровневом set: иначе «set det_thr 0» взводил бы
+# det_thr_set и lb_gated без det_thr армировался с гейтом на шум (дыра
+# найдена углублённой проверкой B1).
+r = rpc({"op": "set", "reg": "det_thr", "value": 0})
+check("set det_thr=0 → отказ (floor), det_thr_set не взведён",
+      r.get("ok") is False and gw.det_thr_set is False)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
@@ -275,6 +298,227 @@ check("агент без само-кика (нет _start_kick)", not hasattr(gw
 r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)
+
+# ---------------------------------------------------------------------------
+# Сторож kick_age (A2): ARM жив, kicks пропали → сам DISARM → USB release
+# (именно в этом порядке). Таймаут 1 с только в этом блоке.
+# ---------------------------------------------------------------------------
+import time as _time  # noqa: E402
+
+lg.KICK_TIMEOUT_S = 1.0
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm player", r.get("ok") is True)
+rpc({"op": "kick"})
+_time.sleep(2.2)  # > таймаута 1 с при тике 0.5 с
+check("сторож: kicks пропали → DISARM сам", gw._armed is False)
+check("сторож: USB отпущен после DISARM", gw.fpga._t.released is True)
+r = rpc({"op": "usb", "action": "acquire"})
+check("сторож: после release USB занимается обратно", r.get("ok") is True)
+
+# ARM без единого kick (панель умерла до beginFpgaKick): опора — момент ARM
+gw.last_kick = 0.0
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm без kicks", r.get("ok") is True)
+_time.sleep(2.2)
+check("сторож: ARM без единого kick → DISARM + release",
+      gw._armed is False and gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
+# Регресс (найден перепроверкой A2): last_kick переживает DISARM. Старый
+# kick прошлой сессии не должен сжечь свежий ARM до его первого kick —
+# опора max(last_kick, _armed_at), не «or».
+r = rpc({"op": "arm", "mode": "player"})
+rpc({"op": "kick"})
+rpc({"op": "disarm"})
+_time.sleep(1.3)  # last_kick устарел (> таймаута 1 с), ARM снят
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: re-ARM со старым last_kick", r.get("ok") is True)
+_time.sleep(0.7)  # > тика 0.5 с, < таймаута от ARM: со старым «or» тут FAIL
+check("сторож: устаревший kick не сжёг свежий ARM",
+      gw._armed is True and gw.fpga._t.released is False)
+_time.sleep(1.4)  # суммарно > таймаута без kicks — теперь обязан сработать
+check("сторож: свежий ARM без kicks гаснет по таймауту",
+      gw._armed is False and gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
+# wd=false — оператор отказался от deadman: сторож молчит
+r = rpc({"op": "arm", "mode": "player", "wd": False})
+check("сторож: arm wd=false", r.get("ok") is True)
+_time.sleep(2.2)
+check("сторож: wd=false → нет само-DISARM (решение оператора)",
+      gw._armed is True and gw.fpga._t.released is False)
+rpc({"op": "disarm"})
+
+# Нормальный путь: kicks идут каждые 0.4 с → сторож обязан молчать
+# (ранее покрыт только на уровне FPGA, E5; теперь и на уровне шлюза)
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm для живых kicks", r.get("ok") is True)
+for _ in range(4):
+    rpc({"op": "kick"})
+    _time.sleep(0.4)
+check("сторож: живые kicks → ARM жив, USB не тронут",
+      gw._armed is True and gw.fpga._t.released is False)
+rpc({"op": "disarm"})
+lg.KICK_TIMEOUT_S = 3600.0
+
+# ---------------------------------------------------------------------------
+# A4: тихий выход (SIGTERM/SIGINT/atexit → gateway_cleanup): DISARM если
+# ARM + USB release; идемпотентно (atexit после сигнала повторяет).
+# ---------------------------------------------------------------------------
+r = rpc({"op": "arm", "mode": "player"})
+check("a4: arm player", r.get("ok") is True)
+lg.gateway_cleanup(gw)
+check("a4: cleanup снял ARM", gw._armed is False)
+check("a4: cleanup отпустил USB", gw.fpga._t.released is True)
+lg.gateway_cleanup(gw)
+check("a4: cleanup идемпотентен (повтор без ошибок)", gw.fpga._t.released is True)
+r = rpc({"op": "usb", "action": "acquire"})
+check("a4: после cleanup USB занимается", r.get("ok") is True)
+# cleanup без ARM: просто release, без ошибок
+lg.gateway_cleanup(gw)
+check("a4: cleanup без ARM — release без DISARM", gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
+# Повторный сигнал во время cleanup: threading.Lock нереентерабелен —
+# acquire(timeout=2) отваливается без дедлока, DISARM честно пропущен,
+# USB release всё равно выполняется.
+r = rpc({"op": "arm", "mode": "player"})
+check("a4: arm для cleanup под локом", r.get("ok") is True)
+gw._op_lock.acquire()
+_t0 = _time.monotonic()
+lg.gateway_cleanup(gw)
+_dt = _time.monotonic() - _t0
+gw._op_lock.release()
+check("a4: cleanup при занятом локе — без дедлока (~2 с), release прошёл",
+      _dt < 3.0 and gw.fpga._t.released is True)
+check("a4: DISARM при занятом локе честно пропущен", gw._armed is True)
+rpc({"op": "usb", "action": "acquire"})
+rpc({"op": "disarm"})
+
+# ---------------------------------------------------------------------------
+# Липкий латч deadman (NIOS, STATUS bit4): после автономного DISARM HDL-бит
+# wd_fired (bit3) гаснет за мкс — без латча E5 и fpgaPollStatus никогда
+# не увидели бы срабатывание (найдено перепроверкой A1, раунд 4).
+# ---------------------------------------------------------------------------
+gw.fpga._t.wd_latch = True
+r = rpc({"op": "status"})
+check("wd_latch (NIOS bit4) виден как wd_fired", r.get("wd_fired") is True)
+r = rpc({"op": "arm", "mode": "player"})
+check("ARM снимает латч deadman", r.get("ok") is True and gw.fpga._t.wd_latch is False)
+r = rpc({"op": "status"})
+check("после ARM wd_fired чист", r.get("wd_fired") is False)
+rpc({"op": "disarm"})
+
+# ---------------------------------------------------------------------------
+# D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
+# (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
+# retry xfer с re-acquire при USBError (re-enumerate).
+# ---------------------------------------------------------------------------
+import types as _types  # noqa: E402
+
+
+class _USBError(Exception):
+    pass
+
+
+class _FakeUsbDev:
+    def __init__(self):
+        self.configured = 1      # FPGA status: 1=загружена, 0=пустая
+        self.write_fails = 0     # сколько первых write упадут USBError
+        self.disposed = 0
+        self.finds = 0           # сколько раз find() отдал это устройство
+
+    def get_active_configuration(self):
+        return 1
+
+    def set_configuration(self):
+        pass
+
+    def ctrl_transfer(self, bm, req, wv, wi, n, timeout=None):
+        assert bm == 0xC0 and req == 1 and n == 4, (bm, req, n)
+        return self.configured.to_bytes(4, "little", signed=True)
+
+    def write(self, ep, data, timeout=None):
+        if self.write_fails > 0:
+            self.write_fails -= 1
+            raise _USBError("re-enumerate")
+
+    def read(self, ep, n, timeout=None):
+        return bytes(16)
+
+
+def _stub_usb(dev):
+    fake_usb = _types.ModuleType("usb")
+    fake_core = _types.ModuleType("usb.core")
+    fake_util = _types.ModuleType("usb.util")
+    fake_core.USBError = _USBError
+
+    def _find(**kw):
+        dev.finds += 1
+        return dev
+
+    fake_core.find = _find
+    fake_util.dispose_resources = lambda d: setattr(dev, "disposed", dev.disposed + 1)
+    fake_usb.core = fake_core
+    fake_usb.util = fake_util
+    old = {k: sys.modules.get(k) for k in ("usb", "usb.core", "usb.util")}
+    sys.modules["usb"] = fake_usb
+    sys.modules["usb.core"] = fake_core
+    sys.modules["usb.util"] = fake_util
+    return old
+
+
+def _restore_usb(old):
+    for k, v in old.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
+_dev = _FakeUsbDev()
+_old_usb = _stub_usb(_dev)
+try:
+    t_usb = lg.UsbTransport()
+    check("d1: FPGA загружена → acquire ok (board bladerf1)",
+          t_usb._dev is _dev and t_usb.board == "bladerf1")
+    # D2: один USBError → re-acquire + повтор успешен
+    _dev.write_fails = 1
+    resp = t_usb.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+    check("d2: USBError → re-acquire и повтор успешен",
+          len(resp) == 16 and _dev.finds >= 2)
+    check("d2: старый handle dispose при re-acquire", _dev.disposed >= 1)
+    # D2: постоянный сбой → честная ошибка после ОДНОГО ретрая
+    _dev.write_fails = 100
+    try:
+        t_usb.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+        check("d2: постоянный USBError → отказ", False)
+    except _USBError:
+        check("d2: постоянный USBError → отказ", True)
+finally:
+    _restore_usb(_old_usb)
+
+# D1: FPGA пустая (питание xA4 от USB — выдёргивание = образ потерян)
+_dev2 = _FakeUsbDev()
+_dev2.configured = 0
+_old_usb2 = _stub_usb(_dev2)
+try:
+    os.environ.pop("LEGION_FPGA_RBF", None)
+    try:
+        lg.UsbTransport()
+        check("d1: FPGA пустая → честный отказ", False)
+    except RuntimeError as e:
+        check("d1: FPGA пустая → честный отказ", "FPGA не загружена" in str(e))
+    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legion_xA4.rbf"
+    try:
+        lg.UsbTransport()
+        check("d1: LEGION_FPGA_RBF не найден → отказ с причиной", False)
+    except RuntimeError as e:
+        check("d1: LEGION_FPGA_RBF не найден → отказ с причиной",
+              "не найден" in str(e))
+    os.environ.pop("LEGION_FPGA_RBF", None)
+finally:
+    _restore_usb(_old_usb2)
 
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.

@@ -35,11 +35,18 @@ export const FPGA_DET_WINDOWS = 512;
 export const FPGA_DET_THR_K = 4;
 /** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
 export const FPGA_AIR_GONE_POLLS = 3;
+/** Пол порога: ниже — захват деградировал (мёртвый поток/ADC в нулях дают
+ *  медиану 0..единицы; живая полка при MGC — сотни, фикстура воркера 400–2000).
+ *  ARM с thr < floor = гейт на шум. 64 = медиана 16 при K=4: в 6 раз ниже
+ *  нижней границы фикстуры, в разы выше деградированного захвата. */
+export const FPGA_DET_THR_FLOOR = 64;
 
-/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра. */
+/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра.
+ *  Ниже FPGA_DET_THR_FLOOR → 0 (отказ ARM, как при нулевой медиане). */
 export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): number {
   if (!Number.isFinite(medianEnergy) || medianEnergy <= 0) return 0;
   const thr = Math.round(medianEnergy * k);
+  if (thr < FPGA_DET_THR_FLOOR) return 0;
   return Math.min(0xffffffff, Math.max(0, thr));
 }
 
@@ -148,6 +155,27 @@ export function fpgaObserveLine(st: {
   if (st.wd_fired) return "watchdog погасил TX — конвейер на SDR остановлен";
   const gate = st.det_active ? "энергия → RX→TX на усилитель" : "тишина, гейт закрыт";
   return `наблюдение: ${gate} · окон с энергией ${st.det_count ?? 0}`;
+}
+
+/** Пауза перед повторным handoff на частоту, где он упал: 1-й страйк 10 с,
+ *  дальше ×2 (10/20/40…). На 3-м страйке подряд — skip частоты (как у
+ *  пропавшей энергии): не долбим мёртвый/недостижный ARM каждым циклом. */
+export const FPGA_HANDOFF_RETRY_MS = 10_000;
+export const FPGA_HANDOFF_MAX_STRIKES = 3;
+
+export function handoffRetryMs(strikes: number): number {
+  const s = Math.max(1, Math.round(strikes));
+  return FPGA_HANDOFF_RETRY_MS * 2 ** (s - 1);
+}
+
+/** true — частоту пора пропускать (страйков ≥ MAX), а не ретраить. */
+export function handoffSkipAfter(strikes: number): boolean {
+  return strikes >= FPGA_HANDOFF_MAX_STRIKES;
+}
+
+/** Таймлайн handoff для лога: [имя, ts] → "park_полки +70мс · arm +540мс". */
+export function handoffTimeline(t0: number, marks: Array<readonly [string, number]>): string {
+  return marks.map(([n, t]) => `${n} +${t - t0}мс`).join(" · ");
 }
 
 /**

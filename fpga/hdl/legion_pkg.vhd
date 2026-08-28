@@ -45,8 +45,10 @@ package legion_pkg is
     constant LEGION_REG_AIR_BW_HZ    : natural := 16#0D#; -- analog BW, Гц; 0 = 2 МГц
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
-    --   0 armed, 1 playing, 2 det_active, 3 capture_done, 4 wd_fired,
-    --   5 lb_fifo_empty, 6 lb_fifo_full, 15..8 lb_fifo_level, 31..16 det_count
+    --   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (живой expired),
+    --   15..8 lb_fifo_level, 31..16 det_count; 7..4 в HDL нули.
+    --   Бит 4 подмешивает NIOS (липкий латч deadman, legion_cmds.c) — после
+    --   автономного DISARM expired гаснет за мкс (enable=0), хост читает латч.
 
     constant LEGION_RAM_DEPTH      : natural := 4096;   -- 4096×32бит = 16 M9K на EP4CE40
     constant LEGION_LB_FIFO_DEPTH  : natural := 64;     -- CDC RX→TX, Gray-указатели

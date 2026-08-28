@@ -44,9 +44,14 @@
 #define LEGION_MODE_LB_ALWAYS     0x4   /* RX→TX всегда */
 
 /* Статус (STATUS-PIO, читается по read-пакету target 0x80), биты:
- *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired,
+ *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (HDL, живой),
+ *   4 wd_latch (NIOS, липкий до следующего ARM — HDL 7..4 = 0, бит
+ *   подмешивается в legion_reg_read: после автономного DISARM по deadman
+ *   HDL-бит 3 гаснет за мкс, enable=0 сбрасывает expired),
  *   15..8 lb_fifo_level, 31..16 det_count
  * (зеркало legion_regs.vhd, процесс status_tx) */
+#define LEGION_STATUS_WD_FIRED    (1u << 3)
+#define LEGION_STATUS_WD_LATCH    (1u << 4)
 
 /* Запись/чтение регистра LEGION в FPGA (через PIO legion_wdata/legion_aws).
  * Реализация — в legion_cmds.c; вызывается из pkt_8x32.c (case 0x80). */
@@ -55,9 +60,18 @@ bool legion_reg_read(uint8_t addr, uint32_t *data);
 
 /* Эфир micro: подъём/стендбай воздушного тракта через Nuand RFIC-интерфейс
  * NIOS (rfic_command_write_immed, devices_rfic.c). На bladeRF 1 — no-op.
- * Подъём: INIT(ON) → LO/fs/BW/gain → TX unmute → ENABLE. Первый подъём после
- * питания — полный ad9361_init (сотни мс): хост ждёт длинным таймаутом. */
+ * Подъём: INIT(ON) → TX mute → LO/fs/BW/gain(+readback GAINMODE) →
+ * ENABLE → TX unmute последним. Первый подъём после питания — полный
+ * ad9361_init (сотни мс): хост ждёт длинным таймаутом. */
 bool legion_air_up(bool rx, bool tx);
 bool legion_air_down(void);
+
+/* Фоновая работа из main-loop (else-ветка bladeRF_nios.c, рядом с
+ * do_work пакетных обработчиков). Deadman без хоста: watchdog сработал
+ * (STATUS.wd_fired) при живом ARM → сам DISARM: CTRL=0, на micro это
+ * уводит RFIC в standby (case LEGION_REG_CTRL), на x40 снимаются
+ * lms_rx/tx_enable в CONTROL (NIOS — хозяин PIO, devices_inline.h).
+ * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз. */
+void legion_work(void);
 
 #endif /* LEGION_CMDS_H_ */

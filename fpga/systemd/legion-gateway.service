@@ -1,0 +1,32 @@
+# LEGION FPGA gateway — агент на шлюзе (мини-ПК с USB3 к bladeRF).
+# Установка: скопировать legion_gateway.py + legion_fpga.py в /opt/legion/,
+# этот unit в /etc/systemd/system/, затем:
+#   systemctl daemon-reload && systemctl enable --now legion-gateway
+#
+# Завершение: SIGTERM → агент сам делает DISARM (если ARM) и USB release
+# (wiki Nuand Troubleshooting: kill без libusb_close роняет Intel XHCI).
+# При падении процесса: Restart поднимает заново; зависший ARM без
+# heartbeat гаснут железом (FPGA ~1 с), NIOS (legion_work) и сторожом
+# kick_age (LEGION_KICK_TIMEOUT_S) — USB освобождается без оператора.
+[Unit]
+Description=LEGION FPGA gateway (bladeRF ревизия legion)
+After=network.target
+
+[Service]
+Type=simple
+Environment=LEGION_FPGA_PORT=5531
+# Токен обязателен вне доверенной LAN стенда:
+# Environment=LEGION_FPGA_TOKEN=change-me
+# Образ FPGA для автозагрузки при пустой FPGA после re-enumerate:
+# Environment=LEGION_FPGA_RBF=/opt/legion/legion_xA4.rbf
+# Environment=LEGION_KICK_TIMEOUT_S=2.5
+# Environment=LEGION_DET_THR_FLOOR=1
+ExecStart=/usr/bin/python3 /opt/legion/legion_gateway.py
+Restart=on-failure
+RestartSec=2
+# Холодный AIR_PREP на micro — сотни мс; xfer timeout 250 мс. 5 с хватает
+# на DISARM+release при остановке; дальше SIGKILL — уборку доделает ОС.
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

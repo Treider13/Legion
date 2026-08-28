@@ -49,6 +49,9 @@ begin
 
     stim : process
         variable saw_valid : boolean;
+        variable saw_ramp  : boolean;
+        variable saw_full  : boolean;
+        variable last_abs  : integer;
     begin
         wait for 20 ns;
         reset <= '0';
@@ -129,6 +132,60 @@ begin
             end if;
         end loop;
         assert saw_valid report "FAIL: starved LB lost valid cadence (stale DAC)" severity failure;
+
+        -- 7) Ramp-down: спад det_active в LB_GATED → затухание k/32 за
+        --    валид, а не ступенька last→0. In-flight сэмпл (конвейер)
+        --    первые 4 такта может быть полным — его пропускаем.
+        mode <= LEGION_MODE_LB_GATED;
+        lb_empty <= '0';
+        det_active <= '1';
+        for k in 0 to 5 loop wait until rising_edge(clock); end loop;
+        det_active <= '0';  -- спад → рампа
+        for k in 0 to 3 loop wait until rising_edge(clock); end loop;
+        saw_ramp := false;
+        saw_full := false;
+        last_abs := 769;  -- |768|+1: первое ненулевое обязано быть меньше
+        for k in 0 to 90 loop  -- 45 валидов > 31 ступень рампы
+            wait until rising_edge(clock);
+            if out_valid = '1' then
+                if out_i = 768 or out_i = -768 then
+                    saw_full := true;  -- ступенька: полный шкал после спада
+                elsif out_i /= 0 then
+                    saw_ramp := true;
+                    assert abs(to_integer(out_i)) < last_abs
+                        report "FAIL: ramp not strictly decaying" severity failure;
+                    last_abs := abs(to_integer(out_i));
+                    assert (out_q = -out_i)
+                        report "FAIL: ramp breaks I/Q symmetry" severity failure;
+                end if;
+            end if;
+        end loop;
+        assert saw_ramp report "FAIL: no ramp-down on det_active falling" severity failure;
+        assert not saw_full report "FAIL: full-scale after det falling (no ramp)" severity failure;
+
+        -- 8) Возврат энергии посреди рампы → мгновенно полный сквозь
+        det_active <= '1';
+        for k in 0 to 3 loop wait until rising_edge(clock); end loop;
+        saw_valid := false;
+        for k in 0 to 9 loop
+            wait until rising_edge(clock);
+            if out_valid = '1' and out_i = 768 then saw_valid := true; end if;
+        end loop;
+        assert saw_valid report "FAIL: ramp not cancelled by energy return" severity failure;
+
+        -- 9) Watchdog посреди рампы → мгновенные нули (авария без рампы)
+        det_active <= '0';
+        for k in 0 to 5 loop wait until rising_edge(clock); end loop;
+        wd_ok <= '0';
+        for k in 0 to 3 loop wait until rising_edge(clock); end loop;
+        for k in 0 to 7 loop
+            wait until rising_edge(clock);
+            if out_valid = '1' then
+                assert out_i = 0 and out_q = 0
+                    report "FAIL: watchdog during ramp not instant zero" severity failure;
+            end if;
+        end loop;
+        wd_ok <= '1';
 
         report "legion_tx_mux_tb: PASS" severity note;
         done <= true;

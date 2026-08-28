@@ -12,6 +12,8 @@
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
   {"op":"set", "reg":"nco_ftw"|..., "value":int}
+  {"op":"usb", "action":"release"|"acquire"}  — один владелец USB
+  {"op":"tune", "freq_mhz":float, ...}  — LO-hop на живом ARM (только micro)
   {"op":"ping"}
 
 Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
@@ -19,14 +21,25 @@ bit1/2, bladerf_p.vhd), 0x5250 = micro (эфир через AIR-регистры
 AD9361 поднимает прошивка — хост при close гасит RFIC, факт из
 libbladeRF rfic_host.c/bladerf2.c).
 
-LEGION_FPGA_FAKE=1 — проверка протокола без железа (не эфир).
+Deadman слои: FPGA гасит цифру (~1 с без kick) → NIOS (legion_work)
+снимает ARM и эфир → сторож kick_age шлюза делает DISARM → USB release.
+SIGTERM/SIGINT/atexit → DISARM + release (wiki Nuand: kill без
+libusb_close роняет Intel XHCI).
+
+Переменные: LEGION_FPGA_FAKE=1 — проверка протокола без железа (не эфир);
+LEGION_FPGA_TOKEN — токен доступа; LEGION_FPGA_PORT (5531);
+LEGION_KICK_TIMEOUT_S (2.5) — сторож kick_age; LEGION_DET_THR_FLOOR (1) —
+пол порога lb_gated; LEGION_FPGA_RBF — образ для автозагрузки, если FPGA
+пустая после re-enumerate (питание xA4 — от USB).
 """
 from __future__ import annotations
 
 import json
 import os
+import signal
 import socketserver
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -52,8 +65,28 @@ EP_IN = 0x82   # PERIPHERAL_EP_IN
 TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 
 
+# Пол порога детектора: lb_gated с det_thr ниже floor = гейт на шум.
+# Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
+# на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
+DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+
+# Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
+# сам DISARM → USB release (именно в этом порядке: release без DISARM
+# отдал бы плату Soapy с живым ARM и поднятым аналогом). Дефолт 2.5 с:
+# дольше FPGA-сторожа (~1 с, WD_LIMIT) — первичное гашение цифрой делает
+# железо, затем NIOS (legion_work), шлюз убирает USB последним слоем.
+# 0 = выключить (не рекомендуется). Kick приложения = 500 мс.
+KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
+
+
 class UsbTransport:
     """pyusb bulk-передачи 16-байтных NIOS-пакетов."""
+
+    # firmware_common/bladeRF.h: BLADE_USB_CMD_QUERY_FPGA_STATUS = 1,
+    # BLADE_USB_TYPE_IN = 0xC0 (vendor, device-to-host). Ответ int32 LE:
+    # 1 = FPGA сконфигурирована, 0 = пустая (usb_is_fpga_configured, usb.c).
+    USB_CMD_QUERY_FPGA_STATUS = 1
+    USB_TYPE_IN = 0xC0
 
     def __init__(self) -> None:
         import usb.core  # pyusb
@@ -63,7 +96,7 @@ class UsbTransport:
         self.board = ""  # bladerf1 | bladerf2 — по PID при acquire
         self._acquire()
 
-    def _acquire(self) -> None:
+    def _find(self) -> None:
         self._dev = None
         for pid, board in BLADERF_PIDS.items():
             self._dev = self._usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
@@ -79,6 +112,44 @@ class UsbTransport:
         except self._usb.core.USBError:
             self._dev.set_configuration()
 
+    def _fpga_configured(self) -> bool:
+        raw = self._dev.ctrl_transfer(self.USB_TYPE_IN,
+                                      self.USB_CMD_QUERY_FPGA_STATUS,
+                                      0, 0, 4, timeout=TIMEOUT_MS)
+        val = int.from_bytes(bytes(raw[:4]), "little", signed=True)
+        if val not in (0, 1):
+            raise RuntimeError(f"FPGA status query: неожиданный ответ {val}")
+        return val == 1
+
+    def _load_fpga(self) -> None:
+        """FPGA пустая (питание xA4 — от USB: выдёргивание = образ потерян,
+        если нет autoload из flash). Грузим в RAM как bladeRF-cli -l."""
+        rbf = os.environ.get("LEGION_FPGA_RBF", "").strip()
+        if not rbf:
+            raise RuntimeError(
+                "FPGA не загружена (пустая после re-enumerate?): задайте "
+                "LEGION_FPGA_RBF для автозагрузки или bladeRF-cli -l/-L вручную")
+        if not os.path.isfile(rbf):
+            raise RuntimeError(f"LEGION_FPGA_RBF: файл не найден: {rbf}")
+        import subprocess
+        try:
+            cp = subprocess.run(["bladeRF-cli", "-l", rbf],
+                                capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            raise RuntimeError("bladeRF-cli не найден — FPGA загрузить нечем")
+        if cp.returncode != 0:
+            raise RuntimeError(
+                f"bladeRF-cli -l: {(cp.stderr or cp.stdout).strip()[:200]}")
+
+    def _acquire(self) -> None:
+        self._find()
+        if not self._fpga_configured():
+            self._load_fpga()
+            time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+            self._find()
+            if not self._fpga_configured():
+                raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
         if self._dev is not None:
@@ -89,10 +160,28 @@ class UsbTransport:
         if self._dev is None:
             self._acquire()
 
+    def _reacquire(self) -> None:
+        """Re-enumerate: старый handle мёртв, устройство возвращается не сразу."""
+        try:
+            if self._dev is not None:
+                self._usb.util.dispose_resources(self._dev)
+        except Exception:
+            pass
+        self._dev = None
+        time.sleep(0.2)
+        self._acquire()
+
     def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
         t = TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
-        self._dev.write(EP_OUT, req, timeout=t)
-        resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
+        try:
+            self._dev.write(EP_OUT, req, timeout=t)
+            resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
+        except self._usb.core.USBError:
+            # Краткий сбой шины / re-enumerate: переоткрыть и повторить
+            # ОДИН раз. Дальше — честный отказ наверх (ретрай-шторм хуже).
+            self._reacquire()
+            self._dev.write(EP_OUT, req, timeout=t)
+            resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
         return bytes(resp)
 
 
@@ -107,6 +196,9 @@ class FakeTransport:
         self.fail_control_read = False
         self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
+        # Модель липкого латча NIOS (bit4 STATUS): deadman сработал —
+        # после автономного DISARM HDL-бит wd_fired (bit3) гаснет за мкс.
+        self.wd_latch = False
 
     def release(self) -> None:
         self.released = True
@@ -142,6 +234,9 @@ class FakeTransport:
             # Сбой записи CTRL (откат эфира в ARM проверяется этим)
             if addr == lf.REG_CTRL and self.fail_ctrl_write:
                 return bytes(16)
+            # Новый ARM снимает латч deadman (как NIOS legion_cmds.c)
+            if addr == lf.REG_CTRL and (data & lf.CTRL_ARM):
+                self.wd_latch = False
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
                 if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:
@@ -162,7 +257,8 @@ class FakeTransport:
             status |= int(armed and mode in (lf.MODE_PLAYER,)) << 0   # playing
             status |= int(self.cap_done) << 1                          # capture_done
             status |= 0 << 2  # det_active
-            status |= 0 << 3  # wd_fired
+            status |= 0 << 3  # wd_fired (HDL, живой)
+            status |= int(self.wd_latch) << 4  # wd_latch (NIOS, липкий)
             resp[5:9] = status.to_bytes(4, "little")
         return bytes(resp)
 
@@ -189,6 +285,52 @@ class LegionGateway:
         self._rx_by_us = False    # analog RX включён нами — снять при disarm
         self._tx_by_us = False    # analog TX включён нами — снять при disarm
         self._armed = False       # CTRL.ARM записан и не снят (по нашим командам)
+        self._armed_at = 0.0      # monotonic ARM (сторож: ARM без единого kick)
+        self._wd_en = True        # ARM с wd=false — оператор отказался от deadman
+        self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
+        # Операции и сторож сериализуются: ThreadingTCPServer гоняет handle()
+        # в потоках, а xfer — это пара write/read 16-байтных пакетов, которую
+        # нельзя перемежать с DISARM сторожа (иначе ответ уедет не тому).
+        self._op_lock = threading.Lock()
+        threading.Thread(target=self._kick_watchdog, daemon=True).start()
+
+    def _kick_watchdog(self) -> None:
+        """Heartbeat пропал при живом ARM → сам DISARM → USB release.
+
+        Последний софт-слой deadman: FPGA гасит цифру (~1 с), NIOS
+        (legion_work) снимает ARM и эфир, шлюз отпускает USB, чтобы сканер
+        или ожившая панель снова открыли Soapy. wd=false при ARM — отказ
+        оператора от deadman, сторож молчит. Опорная точка — ПОЗДНЯЯ из
+        (последний kick, момент ARM): last_kick переживает DISARM, и без
+        max() устаревший kick прошлой сессии сжёг бы свежий ARM до первого
+        kick (регресс-тест в test_legion_fpga.py)."""
+        while True:
+            time.sleep(0.5)
+            if KICK_TIMEOUT_S <= 0:
+                continue
+            with self._op_lock:
+                if not self._armed or not self._wd_en:
+                    continue
+                ref = max(self.last_kick, self._armed_at)
+                if not ref or time.monotonic() - ref < KICK_TIMEOUT_S:
+                    continue
+                self._wd_attempts += 1
+                # USB мог умереть вместе с линком — DISARM будет падать;
+                # ретраим каждый тик, но в лог — первый раз и дальше раз в 5 с.
+                if self._wd_attempts == 1 or self._wd_attempts % 10 == 0:
+                    print("legion-gateway: heartbeat пропал при ARM — "
+                          "DISARM + USB release (сторож kick_age, "
+                          f"попытка {self._wd_attempts})", flush=True)
+                try:
+                    self.handle({"op": "disarm"})
+                except Exception as e:
+                    print(f"legion-gateway: сторож DISARM: {e}", flush=True)
+                try:
+                    t = self.fpga._t
+                    if hasattr(t, "release"):
+                        t.release()
+                except Exception as e:
+                    print(f"legion-gateway: сторож USB release: {e}", flush=True)
 
     # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
     # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
@@ -288,6 +430,12 @@ class LegionGateway:
             if mode == lf.MODE_LB_GATED and msg.get("det_thr") is None and not self.det_thr_set:
                 return {"ok": False, "reason": "lb_gated: сначала det_thr (порог детектора)"}
             if msg.get("det_thr") is not None:
+                # Явный порог ниже floor (в т.ч. 0) = гейт на шум. Раньше 0
+                # проходил — документация («0 шлюз отвергает») расходилась
+                # с кодом; floor по умолчанию 1, поднимается LEGION_DET_THR_FLOOR.
+                if mode == lf.MODE_LB_GATED and int(msg["det_thr"]) < DET_THR_FLOOR:
+                    return {"ok": False,
+                            "reason": f"lb_gated: det_thr {msg['det_thr']} < floor {DET_THR_FLOOR} (гейт на шум)"}
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
@@ -313,6 +461,9 @@ class LegionGateway:
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             if ok:
                 self._armed = True
+                self._armed_at = time.monotonic()
+                self._wd_en = bool(msg.get("wd", True))
+                self._wd_attempts = 0
             elif (self._rx_by_us or self._tx_by_us) and not self._armed:
                 # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
                 # подняли, а ARM не взвёлся — тракт под током не оставляем
@@ -336,6 +487,7 @@ class LegionGateway:
             ok = self.fpga.disarm()
             if ok:
                 self._armed = False
+                self._armed_at = 0.0
             # micro: NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c),
             # флаги там информационные. x40: CONTROL снимаем как раньше —
             # при сбое флаги держим, следующий disarm повторит.
@@ -405,6 +557,11 @@ class LegionGateway:
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}
+            # Тот же floor, что в ARM: иначе «set det_thr 0» взводил бы
+            # det_thr_set, и lb_gated без det_thr армировался с гейтом на шум.
+            if reg == "det_thr" and val < DET_THR_FLOOR:
+                return {"ok": False,
+                        "reason": f"det_thr {val} < floor {DET_THR_FLOOR} (гейт на шум)"}
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True
@@ -449,8 +606,15 @@ class _Handler(socketserver.StreamRequestHandler):
                 # (кроме ping) несёт токен; неверный/отсутствует — отказ.
                 if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
                     resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
-                else:
+                elif msg.get("op") == "ping":
+                    # ping без лока: длинный ARM/сторож не задерживают liveness
                     resp = gw.handle(msg)
+                else:
+                    # Сериализация операций: xfer — пара write/read 16-байтных
+                    # пакетов, её нельзя перемежать с другой командой или
+                    # DISARM сторожа (ответ уехал бы не тому).
+                    with gw._op_lock:
+                        resp = gw.handle(msg)
             except Exception as e:
                 resp = {"ok": False, "reason": str(e)}
             self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
@@ -461,9 +625,44 @@ class _Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def gateway_cleanup(gw: LegionGateway) -> None:
+    """Тихий выход агента (SIGTERM/SIGINT/atexit): DISARM если ARM, затем
+    USB release. Факт из wiki Nuand (Troubleshooting): завершение процесса
+    без libusb_close на Intel XHCI роняет контроллер («not enough bandwidth
+    for altsetting», нужен power-on reset) — поэтому закрываемся явно,
+    а не полагаемся на ОС. Идемпотентно: atexit после сигнала повторит. """
+    try:
+        got = gw._op_lock.acquire(timeout=2.0)
+        try:
+            if got and gw._armed:
+                gw.handle({"op": "disarm"})
+        finally:
+            if got:
+                gw._op_lock.release()
+    except Exception as e:
+        print(f"legion-gateway: cleanup DISARM: {e}", flush=True)
+    try:
+        t = gw.fpga._t
+        if hasattr(t, "release"):
+            t.release()
+    except Exception as e:
+        print(f"legion-gateway: cleanup USB release: {e}", flush=True)
+
+
 def main() -> int:
     port = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
     gw = LegionGateway(FAKE)
+
+    def _on_signal(signum, frame) -> None:
+        print(f"legion-gateway: сигнал {signum} — DISARM + USB release", flush=True)
+        gateway_cleanup(gw)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+    import atexit
+    atexit.register(gateway_cleanup, gw)
+
     with _Server(("0.0.0.0", port), _Handler) as srv:
         srv.gw = gw  # type: ignore[attr-defined]
         mode = "FAKE (не эфир)" if FAKE else f"USB {gw.board}"

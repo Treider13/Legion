@@ -44,6 +44,7 @@
 #include "pkt_retune.h"
 #include "pkt_legacy.h"
 #include "debug.h"
+#include "legion_cmds.h"
 
 #ifdef BLADERF_NIOS_PC_SIMULATION
     extern bool run_nios;
@@ -288,6 +289,12 @@ int main(void)
                     pkt_handlers[i].do_work();
                 }
             }
+
+#ifdef LEGION_FPGA
+            /* LEGION: deadman без хоста — wd_fired при живом ARM →
+             * автономный DISARM + снятие lms_*_enable (legion_cmds.c). */
+            legion_work();
+#endif
         }
     }
 
