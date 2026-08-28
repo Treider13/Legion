@@ -35,6 +35,17 @@ export const FPGA_DET_WINDOWS = 512;
 export const FPGA_DET_THR_K = 4;
 /** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
 export const FPGA_AIR_GONE_POLLS = 3;
+/** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации на следующую живую.
+ *  Ниже 500 мс handoff (сотни мс на micro) не успевает отработать — крутилка
+ *  вхолостую; выше минуты — уже удержание, а не очередь. */
+export const FPGA_TURN_DWELL_DEFAULT_MS = 3000;
+export const FPGA_TURN_DWELL_MIN_MS = 500;
+export const FPGA_TURN_DWELL_MAX_MS = 60_000;
+
+export function fpgaTurnDwellClamp(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return FPGA_TURN_DWELL_DEFAULT_MS;
+  return Math.min(FPGA_TURN_DWELL_MAX_MS, Math.max(FPGA_TURN_DWELL_MIN_MS, Math.round(ms)));
+}
 /** Пол порога: ниже — захват деградировал (мёртвый поток/ADC в нулях дают
  *  медиану 0..единицы; живая полка при MGC — сотни, фикстура воркера 400–2000).
  *  ARM с thr < floor = гейт на шум. 64 = медиана 16 при K=4: в 6 раз ниже

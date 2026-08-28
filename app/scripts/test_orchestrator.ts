@@ -36,6 +36,8 @@ import {
   detectorWindowUs,
   fpgaArmCmd,
   fpgaObserveLine,
+  fpgaTurnDwellClamp,
+  FPGA_TURN_DWELL_DEFAULT_MS,
   handoffRetryMs,
   handoffSkipAfter,
   handoffTimeline,
@@ -1191,6 +1193,9 @@ async function main(): Promise<void> {
   check("floor pinned (порядок от фикстуры полки 400–2000)", FPGA_DET_THR_FLOOR === 64);
   check("handoff backoff: 10→20→40 с", handoffRetryMs(1) === 10_000 && handoffRetryMs(2) === 20_000 && handoffRetryMs(3) === 40_000);
   check("handoff backoff: страйк 0/мусор → базовые 10 с", handoffRetryMs(0) === 10_000);
+  check("turn dwell: дефолт 3000", FPGA_TURN_DWELL_DEFAULT_MS === 3000 && fpgaTurnDwellClamp(Number.NaN) === 3000 && fpgaTurnDwellClamp(0) === 3000);
+  check("turn dwell: кламп 500..60000", fpgaTurnDwellClamp(40) === 500 && fpgaTurnDwellClamp(999999) === 60_000);
+  check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500);
   check("handoff skip на 3-м страйке", !handoffSkipAfter(2) && handoffSkipAfter(3));
   check("handoff таймлайн: этапы с dt",
     handoffTimeline(1000, [["park_полки", 1070], ["arm", 1540]]) === "park_полки +70мс · arm +540мс");
@@ -1450,6 +1455,18 @@ async function main(): Promise<void> {
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
+  check("fpga-ветка tickScan: ОБЫЧНЫЙ → pickTurnTarget от последней ARM",
+    storeSrc.includes('cur.autoDispatch === "turn"') && storeSrc.includes("pickTurnTarget(pool, null, gFpgaTurnLastMhz)"));
+  check("fpga-ветка tickScan: пустое окно — ARM на тишину не ставим",
+    storeSrc.includes("if (pool.length === 0) return;"));
+  check("handoff commit помнит частоту очереди", storeSrc.includes("gFpgaTurnLastMhz = mhz;"));
+  check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
+    storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));
+  check("fpgaPollStatus: ротация ОБЫЧНОГО по выдержке до стагнации",
+    storeSrc.includes("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") &&
+    storeSrc.indexOf("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") < storeSrc.indexOf("gDetStagnantPolls += 1"));
+  check("автовозврат по стагнации работает в обоих dispatch",
+    storeSrc.includes("await fpgaReturnToScan(mhz);"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

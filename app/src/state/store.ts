@@ -50,6 +50,7 @@ import {
   FPGA_DET_THR_K,
   FPGA_DET_WIN_SAMPLES,
   FPGA_DET_WINDOWS,
+  FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_US_DET_SHIFT,
   clampDetShift,
   captureParkMhz,
@@ -57,6 +58,7 @@ import {
   fpgaAirSupported,
   fpgaArmCmd,
   fpgaObserveLine,
+  fpgaTurnDwellClamp,
   handoffRetryMs,
   handoffSkipAfter,
   handoffTimeline,
@@ -74,6 +76,7 @@ import {
 import {
   heldHitAlive,
   pickArmedAutoTarget,
+  pickTurnTarget,
   refreshSkipMhz,
   RESENSE_MS,
   shouldContinuePriorityTick,
@@ -232,6 +235,8 @@ interface LegionStore {
   fpgaDetThr: number;
   /** win_shift 4..12. По умолчанию 4 → 16 сэмплов @ 2 МГц = 8 µs. */
   fpgaDetShift: number;
+  /** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации, мс (строка UI). */
+  fpgaTurnDwellMs: string;
   /** Главный старт: только FPGA или эфир+FPGA. null — не с главного кадра. */
   fpgaPath: "solo" | "air" | null;
   /** Solo: ширина окна на усилитель, МГц (не analog-потолок). */
@@ -312,6 +317,7 @@ interface LegionStore {
   setFpgaToken(v: string): void;
   setFpgaDetThr(v: number): void;
   setFpgaDetShift(v: number): void;
+  setFpgaTurnDwellMs(v: string): void;
   setFpgaSoloWindowMhz(v: string): void;
   setFpgaSoloDwellMs(v: string): void;
   setFpgaSoloPattern(p: FpgaSoloPattern): void;
@@ -466,6 +472,10 @@ function formatDetWindow(fsHz: number): string {
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
 let gSkipMhz: number | null = null;
+/** ОБЫЧНЫЙ в FPGA+сканер: последняя ARM-частота. Переживает возврат в скан
+ *  (fpgaReturnToScan обнуляет lastForwardMhz) — от неё берётся следующая по
+ *  кругу. Сброс — операторский/эпохальный стоп (fpgaDisarm), не автовозврат. */
+let gFpgaTurnLastMhz: number | null = null;
 /** FPGA+сканер: handoff в полёте (один за раз — USB и LO общие). */
 let gFpgaHandoffBusy = false;
 /** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
@@ -1013,6 +1023,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gHandoffStrikes = 0;
       gLastDetCount = null;
       gDetStagnantPolls = 0;
+      gFpgaTurnLastMhz = mhz;
       set({
         fpgaArmed: true,
         fpgaPath: "air",
@@ -1126,6 +1137,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaToken: "",
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
+    fpgaTurnDwellMs: String(FPGA_TURN_DWELL_DEFAULT_MS),
     fpgaPath: null,
     fpgaSoloWindowMhz: "10",
     fpgaSoloDwellMs: "500",
@@ -1792,6 +1804,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaDetThr: (v) => set({ fpgaDetThr: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 }),
 
     setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
+
+    setFpgaTurnDwellMs: (v) => set({ fpgaTurnDwellMs: v }),
     setFpgaSoloWindowMhz: (v) => set({ fpgaSoloWindowMhz: v }),
     setFpgaSoloDwellMs: (v) => set({ fpgaSoloDwellMs: v }),
     setFpgaSoloPattern: (p) => set({ fpgaSoloPattern: p === "hop" ? "hop" : "sweep" }),
@@ -2324,6 +2338,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopSoloWalk();
       stopFpgaKick();
       stopFpgaObserve();
+      // Операторский/эпохальный стоп: очередь ОБЫЧНОГО начинается заново.
+      // Автовозврат (fpgaReturnToScan) сюда не приходит — порядок держится.
+      gFpgaTurnLastMhz = null;
       set({ fpgaBusy: true });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
@@ -2388,6 +2405,24 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Уровень det_active семплировался бы с пропусками коротких гейтов —
       // счётчик монотонен и от фазы опроса не зависит.
       if (autoAir && r.ok && !gFpgaHandoffBusy) {
+        // ОБЫЧНЫЙ: выдержка на частоте истекла — ротация на следующую живую,
+        // даже если энергия ещё есть. Без skip: частота не мертва, к ней
+        // вернёмся по кругу (gFpgaTurnLastMhz держит порядок).
+        if (get().autoDispatch === "turn") {
+          const since = get().sdrHoldSince;
+          const dwellMs = fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs));
+          if (since != null && Date.now() - since >= dwellMs) {
+            const from = get().lastForwardMhz;
+            pushLog(
+              "sys",
+              `FPGA+сканер: выдержка ${dwellMs} мс истекла` +
+                (from != null ? ` на ${from.toFixed(3)} МГц` : "") +
+                " — следующая по очереди",
+            );
+            await fpgaReturnToScan(null);
+            return;
+          }
+        }
         const dc = r.det_count ?? 0;
         if (gLastDetCount !== null && dc === gLastDetCount) {
           gDetStagnantPolls += 1;
@@ -2806,7 +2841,16 @@ export const useLegion = create<LegionStore>((set, get) => {
               }
               return true;
             });
-            const target = pickStrongest(pool);
+            // Пустое живое окно — ARM на тишину не ставим (pickTurnTarget
+            // подставил бы held-слот мёртвой частоты).
+            if (pool.length === 0) return;
+            // ПРИОРИТЕТ — сильнейшая. ОБЫЧНЫЙ — следующая по кругу после
+            // последней ARM (её слот подставляется, если она выпала из живого
+            // окна: порядок очереди не сбивается).
+            const target =
+              cur.autoDispatch === "turn"
+                ? pickTurnTarget(pool, null, gFpgaTurnLastMhz)
+                : pickStrongest(pool);
             if (target) void fpgaHandoff(target.freqMhz, target.powerDbm);
             return;
           }

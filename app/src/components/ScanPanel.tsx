@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { detectorWindowUs, fpgaAirSupported, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
+import { detectorWindowUs, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -151,6 +151,21 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
+            {s.autoDispatch === "turn" && (
+              <label>
+                ВЫДЕРЖКА НА ЧАСТОТЕ мс
+                <input
+                  aria-label="Выдержка на частоте до переключения по очереди"
+                  type="number"
+                  min={500}
+                  max={60000}
+                  step={500}
+                  value={s.fpgaTurnDwellMs}
+                  onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
+                  disabled={busy || s.fpgaBusy}
+                />
+              </label>
+            )}
           </>
         )}
         {auto && (
@@ -208,7 +223,11 @@ export function ScanPanel() {
         {taskLive
           ? "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер I²+Q² и не хост-скан"
           : fpgaAir
-          ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает`
+          ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает. ${
+              s.autoDispatch === "turn"
+                ? `ОБЫЧНЫЙ: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseFloat(s.fpgaTurnDwellMs))} мс на частоту`
+                : "ПРИОРИТЕТ: сильнейшая, пока жива"
+            }`
           : auto
             ? s.autoDispatch === "priority"
               ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
