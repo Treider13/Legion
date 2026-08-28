@@ -92,8 +92,12 @@ class LegionFpga:
             ok, _ = unpack_8x32_resp(self._t.xfer(req, timeout_ms))
         return ok
 
+    def read_reg(self, addr: int) -> tuple[bool, int]:
+        """Чтение регистра (status — addr 0; AIR_PREP — состояние эфира NIOS)."""
+        return unpack_8x32_resp(self._t.xfer(pack_8x32(LEGION_TARGET, False, addr, 0)))
+
     def read_status(self) -> dict:
-        ok, data = unpack_8x32_resp(self._t.xfer(pack_8x32(LEGION_TARGET, False, 0, 0)))
+        ok, data = self.read_reg(0)
         if not ok:
             return {"ok": False}
         return {

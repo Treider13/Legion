@@ -211,7 +211,13 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 
 bool legion_reg_read(uint8_t addr, uint32_t *data)
 {
-    (void)addr;  /* статус единый, адрес не используется */
+    /* Readback эфира — из статиков NIOS, не из HDL: «ok» AIR_PREP без
+     * readback был бы вайбом (та же философия, что readback LO/fs в park). */
+    if (addr == LEGION_REG_AIR_PREP) {
+        *data = (legion_air_is_up ? 0x1u : 0x0u) |
+                (legion_air_freq_khz != 0 ? 0x2u : 0x0u);
+        return true;
+    }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
     return true;
 }

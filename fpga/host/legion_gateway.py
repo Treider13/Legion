@@ -105,6 +105,7 @@ class FakeTransport:
         self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
         self.released = False
         self.fail_control_read = False
+        self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
 
     def release(self) -> None:
@@ -138,12 +139,22 @@ class FakeTransport:
             resp[5:9] = self.control.to_bytes(4, "little")
             return bytes(resp)
         if write:
+            # Сбой записи CTRL (откат эфира в ARM проверяется этим)
+            if addr == lf.REG_CTRL and self.fail_ctrl_write:
+                return bytes(16)
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
                 if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:
                     self.cap_done = True
             self.regs[addr] = data
         else:
+            if addr == lf.REG_AIR_PREP:
+                # Модель readback'а NIOS: bit0 = эфир поднят (по последней
+                # записи AIR_PREP), bit1 = частота задана.
+                air = int(bool(self.regs.get(lf.REG_AIR_PREP, 0) & 0x1))
+                freq = int(self.regs.get(lf.REG_AIR_FREQ_KHZ, 0) != 0)
+                resp[5:9] = (air | (freq << 1)).to_bytes(4, "little")
+                return bytes(resp)
             ctrl = self.regs.get(lf.REG_CTRL, 0)
             armed = bool(ctrl & lf.CTRL_ARM)
             mode = (ctrl >> 1) & 0x7
@@ -318,6 +329,12 @@ class LegionGateway:
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
+            if st.get("ok") and self.board == "bladerf2":
+                # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
+                ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
+                if ok2:
+                    st["air_up"] = bool(air & 0x1)
+                    st["air_freq_set"] = bool(air & 0x2)
             return st
         if op == "kick":
             self.last_kick = time.monotonic()

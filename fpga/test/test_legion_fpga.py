@@ -303,6 +303,15 @@ check("CONTROL read fail → arm отказ", r.get("ok") is False)
 check("CONTROL не затёрт в 0 при сбое чтения", gw.fpga._t.control == 0x1)
 gw.fpga._t.fail_control_read = False
 
+# Откат эфира при сбое записи CTRL (x40): CONTROL bit2 взвели под nco,
+# CTRL не записался — бит обязан быть снят (TX не остаётся под током).
+gw.fpga._t.control = 0x1
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("x40: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("x40: CONTROL bit2 откачен (TX не под током)", not (gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
+
 srv.shutdown()
 srv.server_close()
 
@@ -330,6 +339,9 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "fre
 check("micro: ARM lb_gated с freq_mhz → ok", r.get("ok") is True)
 check("micro: AIR_FREQ_KHZ = 2442500", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2442500)
 check("micro: AIR_PREP up+RX+TX (0x7)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+st_m = rpcm({"op": "status"})
+check("micro: status несёт readback эфира (air_up)",
+      st_m.get("ok") is True and st_m.get("air_up") is True and st_m.get("air_freq_set") is True)
 check("micro: CONTROL не тронут (AD9361 не кормится LMS-битами)",
       gw_m.fpga._t.control == 0)
 check("micro: CTRL ARM lb_gated записан",
@@ -343,6 +355,15 @@ check("micro: ARM nco с freq_mhz → ok", r.get("ok") is True)
 check("micro: AIR_PREP для nco = up+TX (0x5)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x5)
 r = rpcm({"op": "arm", "mode": "nco"})
 check("micro: ARM nco без freq_mhz → отказ", r.get("ok") is False)
+
+# Откат эфира при сбое записи CTRL: эфир подняли, ARM не взвёлся —
+# тракт под током не оставляем (micro: AIR_PREP down; x40: CONTROL clear).
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("micro: эфир откачен (AIR_PREP=0)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0)
+check("micro: флаги эфира сняты", not gw_m._rx_by_us and not gw_m._tx_by_us)
+gw_m.fpga._t.fail_ctrl_write = False
 
 srv_m.shutdown()
 srv_m.server_close()
