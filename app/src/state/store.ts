@@ -65,7 +65,6 @@ import {
   soloHopAllowed,
   soloParkOpts,
   soloTuneCmd,
-  soloWalkLineRu,
   type FpgaSoloPattern,
 } from "../sense/fpgaSoloWalk";
 import {
@@ -2006,7 +2005,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mhz,
             lastSdrTxUs: null,
-            lastCueReason: `FPGA · NCO ${kind} · ${soloWalkLineRu(walk, 0)} · без эфира`,
+            lastCueReason: `FPGA · NCO ${kind} · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
           });
           beginFpgaKick();
           beginSoloWalk(walker, walk, gw);
@@ -2093,7 +2092,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fpgaArmed: true,
           lastForwardMhz: mhz,
           lastSdrTxUs: null,
-          lastCueReason: `FPGA · player «${kind}» · ${soloWalkLineRu(walk, 0)} · без эфира`,
+          lastCueReason: `FPGA · player «${kind}» · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
         });
         beginFpgaKick();
         beginSoloWalk(walker, walk, gw);

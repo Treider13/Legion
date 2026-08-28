@@ -118,7 +118,7 @@ function check(name: string, cond: boolean, detail = ""): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   check("каталог содержит xA4", SDR_CATALOG.some((e) => e.id === "bladerf-micro-xa4"));
   const xa4 = SDR_CATALOG.find((e) => e.id === "bladerf-micro-xa4");
   check("xA4 без нативного Ethernet (Nuand USB3)", xa4?.nativeEthernet === false && xa4.iface === "usb3");
@@ -1237,9 +1237,9 @@ function main(): void {
   const firstSweep = walk50.next();
   check("sweep: первая стоянка = next(), не mid коридора", firstSweep.centerMhz === 2425);
   const hopPlan = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, pattern: "hop" });
-  const hopW = makeSoloWalker(hopPlan, 7);
-  const hopFirst = hopW.next();
-  const hopSecond = hopW.next();
+  const soloHopW = makeSoloWalker(hopPlan, 7);
+  const hopFirst = soloHopW.next();
+  const hopSecond = soloHopW.next();
   check("hop: первая стоянка из next() в коридоре", hopFirst.centerMhz >= 2400 && hopFirst.centerMhz <= 2500);
   check("hop: второй шаг тоже в коридоре (не recapture)", hopSecond.centerMhz >= 2400 && hopSecond.centerMhz <= 2500);
   const park = soloParkOpts(w50);
@@ -1305,4 +1305,4 @@ function main(): void {
   process.exit(failures === 0 ? 0 : 1);
 }
 
-main();
+void main();
