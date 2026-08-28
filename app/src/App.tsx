@@ -51,6 +51,7 @@ function App() {
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const fpgaMode = useLegion((s) => s.fpgaMode);
+  const fpgaAutoCycle = useLegion((s) => s.fpgaAutoCycle);
 
   useEffect(() => {
     return useLegion.subscribe((s) => {
@@ -110,7 +111,9 @@ function App() {
           <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning || fpgaArmed ? "alert" : ""}`}>
             {fpgaArmed
               ? fpgaMode === "lb_gated"
-                ? "РЕЖИМ SDR · FPGA+СКАНЕР · НАБЛЮДЕНИЕ"
+                ? fpgaAutoCycle
+                  ? "РЕЖИМ SDR · FPGA+СКАНЕР · НАБЛЮДЕНИЕ"
+                  : "РЕЖИМ SDR · FPGA · ЭФИР→УСИЛИТЕЛЬ · НАБЛЮДЕНИЕ"
                 : "РЕЖИМ SDR · FPGA · ЗАДАЧА С НОУТБУКА"
               : transmitArmed
                 ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"

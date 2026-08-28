@@ -55,19 +55,23 @@ import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
+  FPGA_AIR_BW_DEFAULT_MHZ,
   FPGA_AIR_GONE_POLLS,
   FPGA_DEFAULT_DET_THR,
   FPGA_DET_THR_FLOOR,
   FPGA_DET_THR_K,
-  FPGA_DET_WIN_SAMPLES,
-  FPGA_DET_WINDOWS,
+  FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_US_DET_SHIFT,
+  airThrTable,
+  airTractParams,
   clampDetShift,
   captureParkMhz,
+  detCaptureWindows,
   detThrFromMedian,
   fpgaAirSupported,
   fpgaArmCmd,
   fpgaObserveLine,
+  fpgaTurnDwellClamp,
   handoffRetryMs,
   handoffSkipAfter,
   handoffTimeline,
@@ -75,6 +79,8 @@ import {
   planFpgaAir,
 } from "../sense/fpgaFastpath";
 import {
+  FPGA_SOLO_DWELL_DEFAULT_MS,
+  airHopBlockedReason,
   makeSoloWalker,
   planFpgaSoloWalk,
   soloHopBlockedReason,
@@ -85,6 +91,7 @@ import {
 import {
   heldHitAlive,
   pickArmedAutoTarget,
+  pickTurnTarget,
   refreshSkipMhz,
   RESENSE_MS,
   shouldContinuePriorityTick,
@@ -248,6 +255,9 @@ interface LegionStore {
   // FPGA-ревизия legion (bladeRF 1 x40): автономный тракт в FPGA
   fpgaMode: "player" | "nco" | "lb_gated" | "lb_always";
   fpgaArmed: boolean;
+  /** lb_gated ARM из авто-цикла сканера (handoff), не кино/панели —
+   *  ему одному положен автовозврат в скан (стагнация/watchdog/heartbeat). */
+  fpgaAutoCycle: boolean;
   fpgaBusy: boolean;
   fpgaStatus: FpgaStatus | null;
   /** Шлюз распознал ревизию legion в FPGA. null — неизвестно (старый шлюз/USB у хоста). */
@@ -258,6 +268,14 @@ interface LegionStore {
   fpgaDetThr: number;
   /** win_shift 4..12. По умолчанию 4 → 16 сэмплов @ 2 МГц = 8 µs. */
   fpgaDetShift: number;
+  /** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации, мс (строка UI). */
+  fpgaTurnDwellMs: string;
+  /** Полоса канала подавления lb_* (fs = max(полоса, 520834 Гц)), МГц, строка UI. */
+  fpgaAirBwMhz: string;
+  /** Эфир-обход (air-hop): выдержка на стоянке, мс (строка UI). */
+  fpgaAirDwellMs: string;
+  /** Эфир-обход: порядок стоянок — туда-сюда (sweep) или случайно (hop). */
+  fpgaAirWalkPattern: FpgaSoloPattern;
   /** Главный старт: только FPGA или эфир+FPGA. null — не с главного кадра. */
   fpgaPath: "solo" | "air" | null;
   /** Solo: ширина окна на усилитель, МГц (не analog-потолок). */
@@ -347,6 +365,10 @@ interface LegionStore {
   setFpgaToken(v: string): void;
   setFpgaDetThr(v: number): void;
   setFpgaDetShift(v: number): void;
+  setFpgaTurnDwellMs(v: string): void;
+  setFpgaAirBwMhz(v: string): void;
+  setFpgaAirDwellMs(v: string): void;
+  setFpgaAirWalkPattern(p: FpgaSoloPattern): void;
   setFpgaSoloWindowMhz(v: string): void;
   setFpgaSoloDwellMs(v: string): void;
   setFpgaSoloPattern(p: FpgaSoloPattern): void;
@@ -391,6 +413,16 @@ function stopSoloWalk(): void {
   if (gSoloWalk) {
     clearInterval(gSoloWalk);
     gSoloWalk = null;
+  }
+}
+
+/** Эфир-обход (air-hop): прыжки LO через шлюз tune с порогом стоянки. */
+let gAirWalk: ReturnType<typeof setInterval> | null = null;
+
+function stopAirWalk(): void {
+  if (gAirWalk) {
+    clearInterval(gAirWalk);
+    gAirWalk = null;
   }
 }
 
@@ -513,6 +545,12 @@ function formatDetWindow(fsHz: number): string {
 let gResense = false;
 /** После СБРОСИТЬ не хватаем ту же частоту сразу. */
 let gSkipMhz: number | null = null;
+/** ОБЫЧНЫЙ в FPGA+сканер: последняя ARM-частота. Переживает возврат в скан
+ *  (fpgaReturnToScan обнуляет lastForwardMhz) — от неё берётся следующая по
+ *  кругу. Сброс — операторский/эпохальный стоп (fpgaDisarm), не автовозврат. */
+let gFpgaTurnLastMhz: number | null = null;
+/** Источник lb_gated ARM живёт в сторе (fpgaAutoCycle): его читает и UI
+ *  (hero/панель), не только тики. */
 /** FPGA+сканер: handoff в полёте (один за раз — USB и LO общие). */
 let gFpgaHandoffBusy = false;
 /** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
@@ -586,6 +624,57 @@ export const useLegion = create<LegionStore>((set, get) => {
     }, plan.dwellMs);
   };
 
+  /** Эфир-обход: на каждой стоянке tune несёт и LO, и порог из калибровочной
+   *  таблицы — одной командой, без лишнего round-trip (скорость обхода не
+   *  режем). Ретрансляция по энергии — в FPGA, ноутбук только крутит сетку. */
+  const beginAirWalk = (
+    walker: ReturnType<typeof makeSoloWalker>,
+    plan: ReturnType<typeof planFpgaSoloWalk>,
+    tract: { fsHz: number; bwMhz: number },
+    thrTable: readonly number[],
+    centers: readonly number[],
+    gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>,
+  ): void => {
+    stopAirWalk();
+    if (!plan.hop) return;
+    // tune медленнее выдержки (LAN/USB-шторм) — тик пропускаем, а не копим
+    // очередь на шлюзе (там операции и так под _op_lock, но зачем очередь).
+    let inflight = false;
+    gAirWalk = setInterval(() => {
+      if (!get().fpgaArmed || get().fpgaPath !== "air") {
+        stopAirWalk();
+        return;
+      }
+      if (inflight) return;
+      inflight = true;
+      const step = walker.next();
+      const i = centers.indexOf(step.centerMhz);
+      const thr = thrTable[i >= 0 ? i : 0] ?? thrTable[0];
+      void gw({
+        op: "tune",
+        freq_mhz: step.centerMhz,
+        fs_hz: tract.fsHz,
+        bw_mhz: tract.bwMhz,
+        det_thr: thr,
+        token: get().fpgaToken,
+      })
+        .then((r) => {
+          if (!get().fpgaArmed || get().fpgaPath !== "air") return;
+          if (!r.ok) {
+            pushLog("sys", `FPGA эфир tune: ${r.reason ?? "отказ"} — стоянка прежняя`);
+            return;
+          }
+          set({
+            lastForwardMhz: step.centerMhz,
+            lastCueReason: `FPGA lb_gated · обход ${step.centerMhz.toFixed(3)} МГц · канал ${tract.bwMhz} МГц · порог ${thr}`,
+          });
+        })
+        .finally(() => {
+          inflight = false;
+        });
+    }, plan.dwellMs);
+  };
+
   const beginFpgaKick = (): void => {
     stopFpgaKick();
     stopFpgaObserve();
@@ -593,7 +682,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
         if (!kr.ok) {
           pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
-          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated") {
+          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
             // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
             void fpgaReturnToScan(null);
           } else {
@@ -839,6 +928,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     spanMhz: number;
     rx: boolean;
     fsHz: number;
+    /** Эфир: явная полоса канала оператора. Без неё — min(analog, max(2, span)). */
+    bwMhz?: number;
     gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>;
   }): Promise<{ ok: boolean; fsHz: number }> => {
     let fsHz = opts.fsHz;
@@ -858,7 +949,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: SDR не открылся — LO не поставлен");
         return { ok: false, fsHz };
       }
-      const win = Math.min(opts.analogMhz, Math.max(2, opts.spanMhz || opts.analogMhz));
+      const win = opts.bwMhz ?? Math.min(opts.analogMhz, Math.max(2, opts.spanMhz || opts.analogMhz));
       const pk = await hostPark(opts.midMhz, win, opts.fsHz, opts.rx, true);
       pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
       if (!pk.ok) return { ok: false, fsHz };
@@ -894,11 +985,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     try {
       stopFpgaKick();
       stopFpgaObserve();
+      stopAirWalk();
       if (get().fpgaArmed) {
         // На micro NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c).
         await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
       }
-      set({ fpgaArmed: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
+      set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
@@ -999,15 +1091,22 @@ export const useLegion = create<LegionStore>((set, get) => {
       // сигнала — порог выше сигнала, гейт глухой навсегда. Тот же fs/BW и
       // то же (пиннованое) усиление — полка переносима.
       const row = catalogById(get().sdrId);
-      const capMhz = captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70);
-      const pkCap = await hostPark(capMhz, 2, FPGA_FS_HZ, true, false);
+      // Канал подавления оператора: fs/BW парковок и ARM. shift не
+      // масштабируем под fs — статистика порога от числа сэмплов, не скорости.
+      const tract = airTractParams(
+        parseFloat(get().fpgaAirBwMhz),
+        catalogCaps(get().sdrId).analogBwMhz,
+        get().fpgaDetShift,
+      );
+      const capMhz = captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70, tract.bwMhz);
+      const pkCap = await hostPark(capMhz, tract.bwMhz, tract.fsHz, true, false);
       if (!pkCap.ok || pkCap.fake) {
         await fail(pkCap.fake ? "FAKE park — не эфир, ARM нельзя" : `park захвата: ${pkCap.reason}`);
         return;
       }
       mark("park_полки");
       if (await abortIfRevoked("pre")) return;
-      const cap = await hostDetCapture(FPGA_DET_WIN_SAMPLES, FPGA_DET_WINDOWS);
+      const cap = await hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift));
       const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
       if (!cap.ok || !(detThr > 0)) {
         // detThrFromMedian режет и ноль, и деградированный захват ниже floor —
@@ -1024,7 +1123,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       mark(`det_thr=${detThr}`);
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro
       // LO при ARM выставит NIOS по freq_mhz — парк тут для readback-честности).
-      const pk = await hostPark(mhz, 2, FPGA_FS_HZ, true, true);
+      const pk = await hostPark(mhz, tract.bwMhz, tract.fsHz, true, true);
       if (!pk.ok || pk.fake) {
         await fail(pk.fake ? "FAKE park — не эфир, ARM нельзя" : pk.reason || "park не удался");
         return;
@@ -1041,9 +1140,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (await abortIfRevoked("acquired")) return;
       const armCmd = fpgaArmCmd("lb_gated", {
         detThr,
-        detShift: FPGA_US_DET_SHIFT,
+        detShift: tract.detShift,
         token: get().fpgaToken,
         freqMhz: mhz,
+        fsHz: tract.fsHz,
+        bwMhz: tract.bwMhz,
       });
       // Усиление, при котором мерилась полка, — NIOS поставит ровно его.
       if (pk.rxGainDb !== undefined && Number.isFinite(pk.rxGainDb)) {
@@ -1062,13 +1163,16 @@ export const useLegion = create<LegionStore>((set, get) => {
       gHandoffStrikes = 0;
       gLastDetCount = null;
       gDetStagnantPolls = 0;
+      gFpgaTurnLastMhz = mhz;
       set({
         fpgaArmed: true,
+        // Авто-цикл сканера: ему одному положен автовозврат в скан.
+        fpgaAutoCycle: true,
         fpgaPath: "air",
         lastForwardMhz: mhz,
         lastForwardPowerDbm: powerDbm,
         sdrHoldSince: Date.now(),
-        lastCueReason: `FPGA lb_gated · ${mhz.toFixed(3)} МГц · окно 8 мкс · порог ${detThr} (полка ×${FPGA_DET_THR_K})`,
+        lastCueReason: `FPGA lb_gated · ${mhz.toFixed(3)} МГц · окно ${tract.windowUs.toFixed(1)} мкс · канал ${tract.bwMhz} МГц · порог ${detThr} (полка ×${FPGA_DET_THR_K})`,
       });
       pushLog(
         "sys",
@@ -1181,12 +1285,17 @@ export const useLegion = create<LegionStore>((set, get) => {
     txWaveParams: {},
     fpgaMode: "player",
     fpgaArmed: false,
+    fpgaAutoCycle: false,
     fpgaBusy: false,
     fpgaStatus: null,
     fpgaLegion: null,
     fpgaToken: "",
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
+    fpgaTurnDwellMs: String(FPGA_TURN_DWELL_DEFAULT_MS),
+    fpgaAirBwMhz: String(FPGA_AIR_BW_DEFAULT_MHZ),
+    fpgaAirDwellMs: String(FPGA_SOLO_DWELL_DEFAULT_MS),
+    fpgaAirWalkPattern: "sweep",
     fpgaPath: null,
     fpgaSoloWindowMhz: "10",
     fpgaSoloDwellMs: "500",
@@ -1255,6 +1364,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         else {
           stopFpgaKick();
           stopFpgaObserve();
+          stopAirWalk();
           set({ fpgaArmed: false });
         }
         get().stopScan();
@@ -1853,6 +1963,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaDetThr: (v) => set({ fpgaDetThr: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 }),
 
     setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
+
+    setFpgaTurnDwellMs: (v) => set({ fpgaTurnDwellMs: v }),
+    setFpgaAirBwMhz: (v) => set({ fpgaAirBwMhz: v }),
+    setFpgaAirDwellMs: (v) => set({ fpgaAirDwellMs: v }),
+    setFpgaAirWalkPattern: (p) => set({ fpgaAirWalkPattern: p === "hop" ? "hop" : "sweep" }),
     setFpgaSoloWindowMhz: (v) => set({ fpgaSoloWindowMhz: v }),
     setFpgaSoloDwellMs: (v) => set({ fpgaSoloDwellMs: v }),
     setFpgaSoloPattern: (p) => set({ fpgaSoloPattern: p === "hop" ? "hop" : "sweep" }),
@@ -1890,6 +2005,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           loadOk: get().sdrLoadOk,
           detThr: get().fpgaDetThr,
           detShift: get().fpgaDetShift,
+          bwMhz: parseFloat(get().fpgaAirBwMhz),
         });
         if (!airPlan.ok) {
           pushLog("sys", airPlan.reason);
@@ -1949,12 +2065,16 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
         }
+        const tract = air
+          ? airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift)
+          : null;
         const pk = await parkFpgaLo({
           midMhz: mid,
           analogMhz: analog,
           spanMhz: span,
           rx: air,
-          fsHz: FPGA_FS_HZ,
+          fsHz: tract ? tract.fsHz : FPGA_FS_HZ,
+          bwMhz: tract?.bwMhz,
           gw,
         });
         if (armRevoked()) {
@@ -1971,6 +2091,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           token: get().fpgaToken,
           ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
           freqMhz: mid,
+          ...(tract ? { fsHz: tract.fsHz, bwMhz: tract.bwMhz } : {}),
         });
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -1990,12 +2111,14 @@ export const useLegion = create<LegionStore>((set, get) => {
                   loadOk: get().sdrLoadOk,
                   detThr: get().fpgaDetThr,
                   detShift: get().fpgaDetShift,
+                  bwMhz: parseFloat(get().fpgaAirBwMhz),
                 }).reason
               : air
                 ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
                 : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
+            fpgaAutoCycle: false,
             fpgaPath: air ? "air" : "solo",
             lastForwardMhz: mid,
             lastCueReason: cue,
@@ -2017,6 +2140,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
       stopSoloWalk();
+      stopAirWalk();
       let soloGen = 0;
       let airGen = 0;
       if (path === "solo") {
@@ -2081,12 +2205,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const mid = (f1 + f2) / 2;
       const analog = catalogCaps(get().sdrId).analogBwMhz;
       const span = Math.max(f2 - f1, 0);
-      if (path === "air" && span > analog) {
-        pushLog(
-          "sys",
-          `FPGA: коридор ${span.toFixed(1)} МГц шире окна ${analog} МГц — чип видит центр ${mid.toFixed(3)}, не обход F1–F2`,
-        );
-      }
+      // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
+      // коридор шире канала либо ходится по стоянкам (micro), либо честно
+      // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
 
       const gw = (cmd: Record<string, unknown>) =>
         hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
@@ -2114,6 +2235,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (!airRevoked()) return false;
         pushLog("sys", "FPGA эфир: отменён оператором в полёте");
         stopFpgaKick();
+        stopAirWalk();
         if (justArmed || get().fpgaArmed) {
           const d = await gw({ op: "disarm" });
           if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
@@ -2142,6 +2264,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       try {
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });
+          const tract = airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift);
           const airPlan = planFpgaAir({
             sdrId: get().sdrId,
             analogBwMhz: analog,
@@ -2149,33 +2272,157 @@ export const useLegion = create<LegionStore>((set, get) => {
             loadOk: get().sdrLoadOk,
             detThr: get().fpgaDetThr,
             detShift: get().fpgaDetShift,
+            bwMhz: parseFloat(get().fpgaAirBwMhz),
           });
           if (!airPlan.ok) {
             pushLog("sys", airPlan.reason);
             set({ fpgaPath: null });
             return false;
           }
-          const pk = await parkFpgaLo({
-            midMhz: mid,
-            analogMhz: analog,
-            spanMhz: span,
-            rx: true,
-            fsHz: FPGA_FS_HZ,
-            gw,
+          // Сетка стоянок: коридор ÷ канал. Одна стоянка — прежний путь
+          // (парк в центр, ручной порог); обход — калибровочная таблица.
+          const walk = planFpgaSoloWalk({
+            f1Mhz: f1,
+            f2Mhz: f2,
+            windowMhz: tract.bwMhz,
+            analogMaxMhz: analog,
+            dwellMs: parseFloat(get().fpgaAirDwellMs),
+            pattern: get().fpgaAirWalkPattern,
+            wave: get().signalKind,
           });
-          if (!pk.ok) {
+          if (!walk.ok) {
+            pushLog("sys", walk.reason);
             set({ fpgaPath: null });
             return false;
           }
+          const hopNo = airHopBlockedReason(get().sdrId, walk.hop);
+          if (hopNo) {
+            pushLog("sys", hopNo);
+            set({ fpgaPath: null });
+            return false;
+          }
+          const walker = makeSoloWalker(walk);
+          const first = walker.next().centerMhz;
+          // hop: первая стоянка — СЛУЧАЙНАЯ из сетки, не centers[0] (SoloWalker
+          // hop берёт centres[floor(rng·len)]). Порог ARM — по её индексу,
+          // иначе на стартовой частоте до первого шага стоит чужой порог.
+          const firstIdx = Math.max(0, walk.centers.indexOf(first));
+
+          if (!walk.hop) {
+            const pk = await parkFpgaLo({
+              midMhz: mid,
+              analogMhz: analog,
+              spanMhz: span,
+              rx: true,
+              fsHz: tract.fsHz,
+              bwMhz: tract.bwMhz,
+              gw,
+            });
+            if (!pk.ok) {
+              set({ fpgaPath: null });
+              return false;
+            }
+            if (await abortAirIfRevoked()) return false;
+            const r = await gw({
+              op: "arm",
+              mode: "lb_gated",
+              wd: true,
+              det_thr: get().fpgaDetThr,
+              det_shift: tract.detShift,
+              freq_mhz: mid,
+              fs_hz: tract.fsHz,
+              bw_mhz: tract.bwMhz,
+            });
+            pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+            if (await abortAirIfRevoked(!!r.ok)) return false;
+            if (!r.ok) {
+              set({ fpgaPath: null });
+              return false;
+            }
+            set({
+              fpgaArmed: true,
+              fpgaAutoCycle: false,
+              lastForwardMhz: mid,
+              lastSdrTxUs: null,
+              lastCueReason: `${airPlan.reason} · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`,
+            });
+            beginFpgaKick();
+            if (await abortAirIfRevoked()) return false;
+            return true;
+          }
+
+          // Обход с ретрансляцией: калибровочный проход ДО ARM, пока USB у
+          // хоста. На каждой стоянке полка → det_thr (медиана нижних 60% × K);
+          // на шаге обхода порог едет внутри tune — без лишнего round-trip.
+          // Цена — разовая: ~десятки мс на стоянку (park+settle+capture),
+          // логируется; в цикле обхода калибровки нет.
+          if (get().sdrEmulation || !hostSdrAvailable()) {
+            pushLog("sys", "FPGA эфир-обход: нужен Soapy на шлюзе — калибровка полок невозможна, ARM нельзя");
+            set({ fpgaPath: null });
+            return false;
+          }
+          const t0 = Date.now();
+          const medians: (number | null)[] = [];
+          let gainDb: number | undefined;
+          let calibWhy = "";
+          const rel = await gw({ op: "usb", action: "release" });
+          if (!rel.ok) calibWhy = `FPGA USB release: ${rel.reason ?? "отказ"}`;
+          try {
+            if (!calibWhy) {
+              await get().openSdr({ requireHw: requireHwForSdr(get().sdrId) || undefined });
+              if (!gLive) calibWhy = "FPGA эфир-обход: SDR не открылся — калибровка невозможна";
+            }
+            for (let i = 0; i < walk.centers.length && !calibWhy; i++) {
+              if (airRevoked()) {
+                calibWhy = "FPGA эфир: отменён оператором в полёте";
+                break;
+              }
+              const c = walk.centers[i];
+              const pkc = await hostPark(c, tract.bwMhz, tract.fsHz, true, false);
+              if (!pkc.ok || pkc.fake) {
+                medians.push(null);
+                continue;
+              }
+              // MGC пиннится первым park'ом и держится между перестройками —
+              // все полки и ARM на одном усилении (gain_db уходит в ARM).
+              if (pkc.rxGainDb !== undefined && Number.isFinite(pkc.rxGainDb)) gainDb = pkc.rxGainDb;
+              const cap = await hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift));
+              medians.push(cap.ok ? cap.medianEnergy ?? null : null);
+            }
+          } finally {
+            await releaseSoapyForFpga();
+          }
+          const acq = await gw({ op: "usb", action: "acquire" });
+          if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          if (calibWhy) {
+            pushLog("sys", calibWhy);
+            set({ fpgaPath: null });
+            return false;
+          }
+          pushLog(
+            "sys",
+            `FPGA эфир-обход: калибровка ${walk.centers.length} стоянок за ${Date.now() - t0} мс ` +
+              `(~${Math.round((Date.now() - t0) / walk.centers.length)} мс/стоянка)`,
+          );
           if (await abortAirIfRevoked()) return false;
-          const r = await gw({
-            op: "arm",
-            mode: "lb_gated",
-            wd: true,
-            det_thr: get().fpgaDetThr,
-            det_shift: get().fpgaDetShift,
-            freq_mhz: mid,
+          const thrTable = airThrTable(medians);
+          if (!thrTable) {
+            pushLog("sys", "FPGA эфир-обход: калибровка не дала ни одной живой полки — ARM отменён");
+            set({ fpgaPath: null });
+            return false;
+          }
+          const armCmd = fpgaArmCmd("lb_gated", {
+            detThr: thrTable[firstIdx],
+            detShift: tract.detShift,
+            token: get().fpgaToken,
+            freqMhz: first,
+            fsHz: tract.fsHz,
+            bwMhz: tract.bwMhz,
           });
+          if (gainDb !== undefined && Number.isFinite(gainDb)) {
+            armCmd.gain_db = Math.round(gainDb);
+          }
+          const r = await gw(armCmd);
           pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (await abortAirIfRevoked(!!r.ok)) return false;
           if (!r.ok) {
@@ -2184,12 +2431,16 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           set({
             fpgaArmed: true,
-            lastForwardMhz: mid,
+            fpgaAutoCycle: false,
+            lastForwardMhz: first,
             lastSdrTxUs: null,
-            lastCueReason: `${airPlan.reason} · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`,
+            lastCueReason:
+              `FPGA lb_gated · обход ${walk.centers.length} стоянок · канал ${tract.bwMhz} МГц · ` +
+              `выдержка ${walk.dwellMs} мс · ${formatDetWindow(tract.fsHz)}`,
           });
           beginFpgaKick();
           if (await abortAirIfRevoked()) return false;
+          beginAirWalk(walker, walk, tract, thrTable, walk.centers, gw);
           return true;
         }
 
@@ -2395,9 +2646,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       gFpgaAirGen += 1;
       gFpgaArmGen += 1;
       stopSoloWalk();
+      stopAirWalk();
       stopFpgaKick();
       stopFpgaObserve();
-      set({ fpgaBusy: true });
+      // Операторский/эпохальный стоп: очередь ОБЫЧНОГО начинается заново.
+      // Автовозврат (fpgaReturnToScan) сюда не приходит — порядок держится.
+      gFpgaTurnLastMhz = null;
+      set({ fpgaBusy: true, fpgaAutoCycle: false });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
         pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -2442,7 +2697,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ lastCueReason: fpgaObserveLine(r) });
       }
       const autoAir =
-        isFpgaAirPattern(get().scanPattern) && get().fpgaArmed && get().fpgaMode === "lb_gated";
+        isFpgaAirPattern(get().scanPattern) &&
+        get().fpgaArmed &&
+        get().fpgaMode === "lb_gated" &&
+        get().fpgaAutoCycle;
       if (r.ok && r.wd_fired && get().fpgaArmed) {
         pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
         // CTRL.ARM в FPGA после wd_fired всё ещё взведён, а expired липкий —
@@ -2462,6 +2720,24 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Уровень det_active семплировался бы с пропусками коротких гейтов —
       // счётчик монотонен и от фазы опроса не зависит.
       if (autoAir && r.ok && !gFpgaHandoffBusy) {
+        // ОБЫЧНЫЙ: выдержка на частоте истекла — ротация на следующую живую,
+        // даже если энергия ещё есть. Без skip: частота не мертва, к ней
+        // вернёмся по кругу (gFpgaTurnLastMhz держит порядок).
+        if (get().autoDispatch === "turn") {
+          const since = get().sdrHoldSince;
+          const dwellMs = fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs));
+          if (since != null && Date.now() - since >= dwellMs) {
+            const from = get().lastForwardMhz;
+            pushLog(
+              "sys",
+              `FPGA+сканер: выдержка ${dwellMs} мс истекла` +
+                (from != null ? ` на ${from.toFixed(3)} МГц` : "") +
+                " — следующая по очереди",
+            );
+            await fpgaReturnToScan(null);
+            return;
+          }
+        }
         const dc = r.det_count ?? 0;
         if (gLastDetCount !== null && dc === gLastDetCount) {
           gDetStagnantPolls += 1;
@@ -2572,6 +2848,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopTxWalk();
       stopFpgaKick();
       stopFpgaObserve();
+      stopAirWalk();
       if (get().fpgaArmed) {
         await get().fpgaDisarm();
         // USB остаётся у агента после disarm — отдаём хосту, иначе следующий
@@ -3069,7 +3346,16 @@ export const useLegion = create<LegionStore>((set, get) => {
               }
               return true;
             });
-            const target = pickStrongest(pool);
+            // Пустое живое окно — ARM на тишину не ставим (pickTurnTarget
+            // подставил бы held-слот мёртвой частоты).
+            if (pool.length === 0) return;
+            // ПРИОРИТЕТ — сильнейшая. ОБЫЧНЫЙ — следующая по кругу после
+            // последней ARM (её слот подставляется, если она выпала из живого
+            // окна: порядок очереди не сбивается).
+            const target =
+              cur.autoDispatch === "turn"
+                ? pickTurnTarget(pool, null, gFpgaTurnLastMhz)
+                : pickStrongest(pool);
             if (target) void fpgaHandoff(target.freqMhz, target.powerDbm);
             return;
           }

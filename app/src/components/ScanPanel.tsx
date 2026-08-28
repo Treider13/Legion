@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { detectorWindowUs, fpgaAirSupported, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -34,23 +34,28 @@ export function ScanPanel() {
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);
-  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift);
+  const tract = airTractParams(parseFloat(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
+  const fpgaWindowUs = tract.windowUs;
 
   return (
     <section className="panel">
       <span className="panel-title">
         {taskLive
           ? "РЕЖИМ SDR // FPGA · ЗАДАЧА С НОУТБУКА"
-          : fpgaAir || airLive
-            ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR"
-            : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
+          : airLive && !s.fpgaAutoCycle
+            ? "РЕЖИМ SDR // FPGA · АВТОНОМНЫЙ ЭФИР (БЕЗ СКАНЕРА)"
+            : fpgaAir || airLive
+              ? "РЕЖИМ SDR // FPGA+СКАНЕР · КОНВЕЙЕР НА SDR"
+              : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
       </span>
       <p className="panel-note">
         {taskLive
           ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (PLAYER/NCO/LOOPBACK). Это не конвейер I²+Q² и не хост-скан. Стоп — там или кнопкой ниже."
-          : fpgaAir
-            ? "Сканер (Welch-8, 40 MSPS) находит пик → LO паркуется на него (2 MSPS) → порог от шумовой полки → FPGA ретранслирует RX→TX за микросекунды. Энергия пропала, watchdog или СТОП — возврат к скану. ПЕРЕДАТЬ не нужен: цикл автономный."
-            : "АВТО + ПЕРЕДАТЬ — хост-скан (Welch-8 на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР. Хост-скан и FPGA вместе не работают (один USB)."}
+          : airLive && !s.fpgaAutoCycle
+            ? "Автономный эфир: детектор в FPGA, RX→TX по энергии на стоянке или обходе коридора. Сканер не участвует — ноутбук наблюдает и стопит."
+            : fpgaAir
+              ? "Сканер (Welch-8, 40 MSPS) находит пик → LO паркуется на него (канал оператора) → порог от шумовой полки → FPGA ретранслирует RX→TX за микросекунды. Энергия пропала, watchdog или СТОП — возврат к скану. ПЕРЕДАТЬ не нужен: цикл автономный."
+              : "АВТО + ПЕРЕДАТЬ — хост-скан (Welch-8 на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР. Хост-скан и FPGA вместе не работают (один USB)."}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -139,6 +144,19 @@ export function ScanPanel() {
               />
             </label>
             <label>
+              ПОЛОСА МГц
+              <input
+                aria-label="Полоса канала подавления FPGA"
+                type="number"
+                min={0.2}
+                max={analogBw}
+                step={0.2}
+                value={s.fpgaAirBwMhz}
+                onChange={(e) => s.setFpgaAirBwMhz(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label>
               ОКНО SHIFT
               <input
                 aria-label="Окно детектора FPGA"
@@ -151,6 +169,21 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
+            {s.autoDispatch === "turn" && (
+              <label>
+                ВЫДЕРЖКА НА ЧАСТОТЕ мс
+                <input
+                  aria-label="Выдержка на частоте до переключения по очереди"
+                  type="number"
+                  min={500}
+                  max={60000}
+                  step={500}
+                  value={s.fpgaTurnDwellMs}
+                  onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
+                  disabled={busy || s.fpgaBusy}
+                />
+              </label>
+            )}
           </>
         )}
         {auto && (
@@ -208,7 +241,11 @@ export function ScanPanel() {
         {taskLive
           ? "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер I²+Q² и не хост-скан"
           : fpgaAir
-          ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает`
+          ? `конвейер на SDR, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает FFT и не ставит TX — только наблюдает. ${
+              s.autoDispatch === "turn"
+                ? `ОБЫЧНЫЙ: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseFloat(s.fpgaTurnDwellMs))} мс на частоту`
+                : "ПРИОРИТЕТ: сильнейшая, пока жива"
+            }`
           : auto
             ? s.autoDispatch === "priority"
               ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
@@ -319,7 +356,7 @@ export function ScanPanel() {
       </div>
       {fpgaAir && !taskLive && (
         <p className="sens-hint">
-          FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
+          FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · канал {tract.bwMhz} МГц · коридор{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
           {!fpgaAirSupported(s.sdrId)
             ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
