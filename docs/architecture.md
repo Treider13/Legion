@@ -93,13 +93,18 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   (`allowBands`) — разные списки.
   **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. ПЕРЕДАТЬ в
   настройках — синтез волны на найденной частоте, не IQ с антенны.
-  Микросекунды detect→TX: FPGA `lb_gated` только на bladeRF 1 x40
-  (LMS6002D CONTROL bit1/2). micro AD9361 этим трактом не кормится —
-  каталог micro переключается на x40; HackRF/Pluto/N210 не подменяются.
-  Энергия в окне 16 сэмплов / fs (при analog 28 MSPS ≈ 0.57 мкс), затем
+  Микросекунды detect→TX: FPGA `lb_gated` на bladeRF 1 x40 (эфир —
+  LMS6002D CONTROL bit1/2) и на micro xA4/xA9 (эфир — RFIC-команды
+  16x64 от агента шлюза: INIT=ON + ENABLE, LO readback против park_mhz;
+  CONTROL на micro — пины RFFE AD9361, не трогаем). Подмены каталога нет;
+  HackRF/Pluto/N210 не подменяются. Энергия в окне 16 сэмплов / fs
+  (x40: analog 28 MSPS ≈ 0.57 мкс; micro: 2 MSPS = 8 мкс), затем
   тот же RX IQ на TX SMA / усилитель. FAKE park, FAKE Soapy/TX или FAKE шлюз → ARM нет.
   park читает LO, RX/TX fs и analog BW (не глотает дефолт LMS ~1.5 МГц)
-  и требует Soapy `hardwareKey=bladerf1`
-  (`bladerf_get_board_name`, не драйвер bladerf — он общий с micro).
-  Без readback / не LMS → ARM нет. `CUE` —
+  и сверяет Soapy `hardwareKey` с выбранной платой
+  (`bladerf_get_board_name`, не драйвер bladerf — он общий).
+  Без readback → ARM нет. Конвейер «FPGA+СКАНЕР»: скан-фаза на хосте →
+  handoff на пик (park на пик, det_thr = K×медиана окон I²+Q² из захвата
+  CS16) → ARM; выходы — N тиков «гейт закрыт» / watchdog 1 с / СТОП —
+  со skip частоты и возвратом в скан. `CUE` —
   команда режима ESP32 (`synth_apply_fast`).

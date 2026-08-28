@@ -47,7 +47,7 @@ SoapySDRServer --bind
 
 ## Что нам нужно от образа
 
-Официальный **hosted** bitstream даёт RX+TX через libbladeRF/Soapy — скан полосы и перестройка TX LO. Свой HDL «detect за микросекунды» в репозиторий не кладём: xA4 49 kLE тесен, это не hosted-образ.
+Официальный **hosted** bitstream даёт RX+TX через libbladeRF/Soapy — скан полосы и перестройка TX LO. Микросекундный detect→TX — отдельная ревизия `legion` (собирается и под x40, и под micro xA4/xA9): состав, сборка и эксплуатация — в `fpga/README.md`; на micro эфир lb_* включается RFIC-командами 16x64 от агента шлюза, не CONTROL-битами LMS6002D.
 
 Не ставим чужие jam-FPGA и не шьём ESP32 этими файлами.
 
