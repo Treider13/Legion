@@ -291,6 +291,13 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
+            # Solo fs > 2 МГц: дефолт WD_LIMIT=61 короче kick 500 мс
+            # (61×65536/10e6 ≈ 0.40 с на micro). Эфир без fs_hz — не трогаем.
+            fs_wd = msg.get("fs_hz")
+            if fs_wd is not None:
+                limit = lf.watchdog_limit_for_fs(int(fs_wd), self.board)
+                if not self.fpga.set_watchdog(limit):
+                    return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}

@@ -130,7 +130,7 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     ? "волна заполнит окно"
     : "волна узкая — на усилителе палочка, не пятно";
   const clampHint = analogClamped
-    ? ` · на усилителе до ${analogMhz} МГц (фильтр micro ≤${analogMax} МГц)`
+    ? ` · на усилителе до ${analogMhz} МГц (фильтр платы ≤${analogMax} МГц)`
     : "";
   return {
     ok: true,
@@ -209,6 +209,17 @@ export function soloTuneCmd(
     bw_mhz: plan.analogMhz,
     token,
   };
+}
+
+/** VHDL: timeout = limit × 65536 / tx_clock. Цель ≈ 1 с (дефолт 61 @ 4 МГц).
+ *  micro: tx_clock = ad9361.clock = fs. x40: tx_clock ≈ 2·fs. */
+export const FPGA_WD_TICK = 65536;
+export const FPGA_WD_LIMIT_DEFAULT = 61;
+
+export function soloWatchdogLimit(fsHz: number, sdrId = "bladerf-micro-xa4"): number {
+  const fs = fsHz > 0 ? fsHz : 2e6;
+  const txClk = sdrId === "bladerf-x40" ? fs * 2 : fs;
+  return Math.min(0xffff, Math.max(1, Math.round(txClk / FPGA_WD_TICK)));
 }
 
 /** Прыжки — только micro: шлюз tune пишет AIR_* без USB. x40 — одна стоянка. */

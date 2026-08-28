@@ -398,6 +398,7 @@ rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
 check("micro: без fs_hz AIR_FS не писали", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
+check("micro: эфир/без fs не пишет WD_LIMIT", lf.REG_WD_LIMIT not in gw_m.fpga._t.regs)
 check("micro: без bw_mhz AIR_BW не писали", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
 rpcm({"op": "disarm"})
 
@@ -407,9 +408,17 @@ check("micro: эфир не пишет AIR_FS (2 МГц NIOS)", lf.REG_AIR_FS_HZ
 check("micro: эфир не пишет AIR_BW", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
 rpcm({"op": "disarm"})
 
+check("wd limit 4 МГц = VHDL дефолт 61", lf.watchdog_limit_for_fs(2_000_000, "bladerf1") == 61)
+check("wd limit micro 2 МГц = 31 (tx_clock=fs)", lf.watchdog_limit_for_fs(2_000_000, "bladerf2") == 31)
+check("wd limit micro 10 МГц > kick 500 мс", lf.watchdog_limit_for_fs(10_000_000, "bladerf2") == 153)
+check("wd limit micro 20 МГц = 305", lf.watchdog_limit_for_fs(20_000_000, "bladerf2") == 305)
+check("wd limit micro 56 МГц = 854", lf.watchdog_limit_for_fs(56_000_000, "bladerf2") == 854)
+# 153×65536/10e6 = 1.002 с > 0.5 с kick; дефолт 61×65536/10e6 = 0.400 с.
+
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2425.0, "fs_hz": 20_000_000, "bw_mhz": 20})
 check("micro: ARM player с fs_hz=20e6 → ok", r.get("ok") is True)
 check("micro: AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
+check("micro: ARM 20e6 пишет WD_LIMIT=305", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 305)
 check("micro: AIR_BW_HZ = 20e6 (из bw_mhz)", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 20_000_000)
 check("micro: AIR_FREQ_KHZ = 2425000", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2_425_000)
 ctrl_before_tune = gw_m.fpga._t.regs.get(lf.REG_CTRL)

@@ -51,6 +51,7 @@ import {
   soloHopBlockedReason,
   SOLO_HOP_MICRO_ONLY,
   soloParkOpts,
+  soloWatchdogLimit,
   soloTuneCmd,
   soloWalkLineRu,
   waveFillsSoloWindow,
@@ -1210,6 +1211,12 @@ async function main(): Promise<void> {
   check("50 МГц: центры 2425 и 2475", w50.centers[0] === 2425 && w50.centers[1] === 2475);
   check("50 МГц влезает в 56: analog=50", w50.analogMhz === 50 && !w50.analogClamped && w50.fsHz === 50e6);
   check("Nuand sample-rate min = 520834", FPGA_SOLO_FS_MIN_HZ === 520834);
+  check("wd x40 @ 2 МГц = VHDL 61", soloWatchdogLimit(2e6, "bladerf-x40") === 61);
+  check("wd micro @ 10 МГц = 153 (не дефолт 61)", soloWatchdogLimit(10e6) === 153);
+  check("wd micro @ 20 МГц = 305", soloWatchdogLimit(20e6) === 305);
+  check("wd 10 МГц ×65536/fs > 500 мс kick", (153 * 65536) / 10e6 > 0.5);
+  check("дефолт 61 @ 10 МГц < kick", (61 * 65536) / 10e6 < 0.5);
+  check("hint analog не врёт «micro»", w100.reason.includes("фильтр платы") && !w100.reason.includes("фильтр micro"));
   check("soloFsHz(10) = 10e6 (выше пола)", soloFsHz(10) === 10e6);
   check("soloFsHz(0.2) = пол AD9361, не 200000", soloFsHz(0.2) === FPGA_SOLO_FS_MIN_HZ);
   const w02 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2400.2, windowMhz: 0.2, analogMaxMhz: 56, wave: "awgn" });
@@ -1368,6 +1375,8 @@ async function main(): Promise<void> {
   check("cinema эфир не «только x40»", !gateSrc.includes("Только bladeRF 1 x40"));
   check("cinema эфир: 2 МГц и micro", gateSrc.includes("LEGION_FPGA_FS_HZ") && gateSrc.includes("fpgaAirSupported"));
   check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
+  const gwSrc = readFileSync(join(here, "../../fpga/host/legion_gateway.py"), "utf8");
+  check("шлюз ARM с fs пишет WD_LIMIT", gwSrc.includes("watchdog_limit_for_fs") && gwSrc.includes("set_watchdog"));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));

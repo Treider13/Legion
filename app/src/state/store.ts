@@ -532,7 +532,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
         }
       });
-    }, 500);
+    }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
     gFpgaObserve = setInterval(() => {
       void get().fpgaPollStatus();
     }, 400);
