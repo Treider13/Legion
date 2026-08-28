@@ -37,6 +37,7 @@
  * tools/sdr_worker.py FPGA_PARK_FS_HZ). Окно детектора 16 сэмплов = 8 мкс. */
 #define LEGION_AIR_FS_HZ 2000000U
 #define LEGION_AIR_BW_HZ 2000000U
+/* 0 = «не задан» → дефолт 2 МГц (эфир lb_gated). Solo пишет окно оператора. */
 
 /* Параметры эфира, приехавшие регистрами (только NIOS, в HDL не пишутся).
  * gain: 0xFFFFFFFF = «не задан» (остаётся из init AD9361); на проводе gain
@@ -44,6 +45,8 @@
  * сентинелом. */
 static uint32_t legion_air_freq_khz;
 static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
+static uint32_t legion_air_fs_hz;
+static uint32_t legion_air_bw_hz;
 static bool     legion_air_is_up;
 
 bool legion_air_up(bool rx, bool tx)
@@ -65,13 +68,16 @@ bool legion_air_up(bool rx, bool tx)
         return false;
     }
 
+    uint32_t const fs_hz = legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
+    uint32_t const bw_hz = legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
+
     if (rx) {
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
                                       BLADERF_CHANNEL_RX(0), freq_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
-                                      BLADERF_CHANNEL_RX(0), LEGION_AIR_FS_HZ) ||
+                                      BLADERF_CHANNEL_RX(0), fs_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
-                                      BLADERF_CHANNEL_RX(0), LEGION_AIR_BW_HZ) ||
+                                      BLADERF_CHANNEL_RX(0), bw_hz) ||
             /* Ручной gain: AGC после ARM уплыл бы — порог детектора
              * посчитан хостом при усилении парковки и дальше неизменен. */
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAINMODE,
@@ -97,9 +103,9 @@ bool legion_air_up(bool rx, bool tx)
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
                                       BLADERF_CHANNEL_TX(0), freq_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
-                                      BLADERF_CHANNEL_TX(0), LEGION_AIR_FS_HZ) ||
+                                      BLADERF_CHANNEL_TX(0), fs_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
-                                      BLADERF_CHANNEL_TX(0), LEGION_AIR_BW_HZ) ||
+                                      BLADERF_CHANNEL_TX(0), bw_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
                                       BLADERF_CHANNEL_TX(0), 0)) {
             DBG("LEGION: RFIC TX cfg — отказ\n");
@@ -164,7 +170,7 @@ bool legion_air_down(void)
 
 bool legion_reg_write(uint8_t addr, uint32_t data)
 {
-    if (addr > LEGION_REG_AIR_PREP) {
+    if (addr > LEGION_REG_AIR_BW_HZ) {
         DBG("LEGION: bad addr 0x%x\n", addr);
         return false;
     }
@@ -176,6 +182,14 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 
         case LEGION_REG_AIR_GAIN_DB:
             legion_air_gain_db = data;
+            return true;
+
+        case LEGION_REG_AIR_FS_HZ:
+            legion_air_fs_hz = data;
+            return true;
+
+        case LEGION_REG_AIR_BW_HZ:
+            legion_air_bw_hz = data;
             return true;
 
         case LEGION_REG_AIR_PREP:

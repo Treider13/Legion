@@ -829,6 +829,7 @@ class Radio:
         self._rx_gen = 0
         self._rx_io = threading.Lock()
         self._tone = None
+        self._tx_fs = float(TX_FS)
         self.tx_error: str | None = None
         self.tx_fail = 0
         self.hardware_key = ""
@@ -1437,12 +1438,15 @@ class Radio:
             out["txError"] = self.tx_error
         return out
 
-    def _tx_prime(self, buf: Any, lo_hz: float, prev_mhz: float | None) -> dict[str, Any] | None:
+    def _tx_prime(self, buf: Any, lo_hz: float, prev_mhz: float | None, fs: float | None = None) -> dict[str, Any] | None:
         """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
         иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима.
         Буфер подменяется под локом сразу после первой записи — TX-петля не
-        успевает выпустить старую волну на новой частоте."""
-        timeout = stream_timeout_us(len(buf), TX_FS)
+        успевает выпустить старую волну на новой частоте.
+        fs=None → TX_FS (2 МГц, tx_cue и обычный ПЕРЕДАТЬ). Solo пишет окно."""
+        tx_fs = float(fs) if fs and fs > 0 else float(TX_FS)
+        prev_fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
+        timeout = stream_timeout_us(len(buf), tx_fs)
         created = False
         if not self.full_duplex:
             self._rx_pause.set()
@@ -1454,11 +1458,11 @@ class Radio:
                     if not self.full_duplex and self.rx is not None and self._rx_on:
                         self.dev.deactivateStream(self.rx)
                         self._rx_on = False
-                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
+                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, tx_fs)
                     try:
                         # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
                         # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.
-                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(TX_FS, self.analog_bw * 1e6))
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(tx_fs, self.analog_bw * 1e6))
                     except Exception:
                         pass
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
@@ -1472,7 +1476,7 @@ class Radio:
                     kind = stream_kind(ret)
                     if ret != len(buf):
                         if prev_mhz is not None:
-                            self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
+                            self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, prev_fs))
                         elif created and self.tx is not None:
                             try:
                                 self.dev.deactivateStream(self.tx)
@@ -1486,6 +1490,7 @@ class Radio:
                             "latencyUs": 0,
                         }
                     self._tone = buf
+                    self._tx_fs = tx_fs
                 except Exception as e:
                     return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
         finally:
@@ -1533,10 +1538,13 @@ class Radio:
             f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f})",
         )
 
-    def tx_wave(self, freq_mhz: float, wave: str, params: dict[str, Any]) -> dict[str, Any]:
+    def tx_wave(self, freq_mhz: float, wave: str, params: dict[str, Any], fs_hz: float | None = None) -> dict[str, Any]:
         """TX произвольной baseband-волны из WAVE_KINDS (вкладка ТИП СИГНАЛА).
         Буфер гетеродинируется на +fs/8, LO = RF − fs/8: ось 0 Гц волны
-        оказывается на запрошенной RF, DC-волны не давятся IQ-коррекцией."""
+        оказывается на запрошенной RF, DC-волны не давятся IQ-коррекцией.
+        fs_hz=None → TX_FS (2 МГц). Solo передаёт fs окна, чтобы 4096 сэмплов
+        в player RAM заняли ту же полосу, что analog/AIR_FS после ARM."""
+        tx_fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(TX_FS)
         if wave not in WAVE_KINDS:
             return {"ok": False, "reason": f"неизвестный тип сигнала: {wave}", "latencyUs": 0}
         if not self.can_tx:
@@ -1545,10 +1553,11 @@ class Radio:
         if self.fake:
             if NUMPY:
                 try:
-                    make_waveform(wave, TX_FS, WAVE_N, params)
+                    make_waveform(wave, tx_fs, WAVE_N, params)
                 except Exception as e:
                     return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
             self.tx_mhz = freq_mhz
+            self._tx_fs = tx_fs
             self.tx_error = None
             us = int((time.perf_counter() - t0) * 1e6)
             return {
@@ -1556,6 +1565,7 @@ class Radio:
                 "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц",
                 "latencyUs": us,
                 "freqMhz": freq_mhz,
+                "fsHz": tx_fs,
                 "fake": True,
             }
         if self.dev is None:
@@ -1565,15 +1575,15 @@ class Radio:
         if not NUMPY:
             return {"ok": False, "reason": "нет numpy — сигнал не синтезировать", "latencyUs": 0}
         try:
-            buf = make_waveform(wave, TX_FS, WAVE_N, params)
+            buf = make_waveform(wave, tx_fs, WAVE_N, params)
         except Exception as e:
             return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
         n = len(buf)
-        t = np.arange(n, dtype=np.float64) / TX_FS
-        buf = (buf * np.exp(1j * 2.0 * np.pi * (TX_FS / 8.0) * t)).astype(np.complex64)
+        t = np.arange(n, dtype=np.float64) / tx_fs
+        buf = (buf * np.exp(1j * 2.0 * np.pi * (tx_fs / 8.0) * t)).astype(np.complex64)
         rf_hz = freq_mhz * 1e6
-        lo_hz = cw_lo_hz(rf_hz, TX_FS)
-        err = self._tx_prime(buf, lo_hz, self.tx_mhz)
+        lo_hz = cw_lo_hz(rf_hz, tx_fs)
+        err = self._tx_prime(buf, lo_hz, self.tx_mhz, tx_fs)
         if err is not None:
             return err
         return self._tx_commit(
@@ -1596,7 +1606,7 @@ class Radio:
                     buf = self._tone
                     if buf is None:
                         break
-                    timeout = stream_timeout_us(len(buf), TX_FS)
+                    timeout = stream_timeout_us(len(buf), self._tx_fs if self._tx_fs > 0 else TX_FS)
                     try:
                         sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
                     except Exception as e:
@@ -1885,10 +1895,13 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         return radio.tx_cue(float(msg["freqMhz"]))
     if op == "tx_wave":
         params = msg.get("params")
+        fs_raw = msg.get("fsHz", msg.get("fs_hz"))
+        fs_hz = float(fs_raw) if fs_raw not in (None, "") else None
         return radio.tx_wave(
             float(msg["freqMhz"]),
             str(msg.get("wave") or ""),
             params if isinstance(params, dict) else {},
+            fs_hz,
         )
     if op == "tx_off":
         radio.tx_off()

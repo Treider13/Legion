@@ -1,6 +1,9 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
+import { catalogCaps } from "../../sdr/hostClient";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, detectorWindowUs, fpgaAirSupported } from "../../sense/fpgaFastpath";
+import { planFpgaSoloWalk, soloHopBlockedReason, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -19,16 +22,39 @@ export function StartGate({ mode, onClose }: Props) {
   const signalKind = useLegion((s) => s.signalKind);
   const sdrLoadOk = useLegion((s) => s.sdrLoadOk);
   const loadOk = useLegion((s) => s.loadOk);
-  const [step, setStep] = useState<"band" | "path">(mode === "sdr" ? "band" : "band");
+  const sdrId = useLegion((s) => s.sdrId);
+  const storedWindow = useLegion((s) => s.fpgaSoloWindowMhz);
+  const storedDwell = useLegion((s) => s.fpgaSoloDwellMs);
+  const storedPattern = useLegion((s) => s.fpgaSoloPattern);
+  const [step, setStep] = useState<"band" | "path" | "walk">(mode === "sdr" ? "band" : "band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("air");
+  const [windowMhz, setWindowMhz] = useState(storedWindow);
+  const [dwellMs, setDwellMs] = useState(storedDwell);
+  const [pattern, setPattern] = useState<FpgaSoloPattern>(storedPattern);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const selected = WAVE_CATALOG.find((w) => w.id === wave) ?? WAVE_CATALOG[0];
+  const analogMax = catalogCaps(sdrId).analogBwMhz;
+  const airDetUs = detectorWindowUs(FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ);
+  const walkPlan = useMemo(
+    () =>
+      planFpgaSoloWalk({
+        f1Mhz: parseFloat(f1),
+        f2Mhz: parseFloat(f2),
+        windowMhz: parseFloat(windowMhz),
+        analogMaxMhz: analogMax,
+        dwellMs: parseFloat(dwellMs),
+        pattern,
+        wave,
+      }),
+    [f1, f2, windowMhz, dwellMs, pattern, wave, analogMax],
+  );
+  const hopNo = walkPlan.ok ? soloHopBlockedReason(sdrId, walkPlan.hop) : null;
 
   useEffect(() => {
     firstRef.current?.focus();
@@ -41,6 +67,29 @@ export function StartGate({ mode, onClose }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
+
+  const startSmart = async () => {
+    setBusy(true);
+    try {
+      const ok = await runSmartStart({
+        f1,
+        f2,
+        wave,
+        loadOk: ohm,
+        path,
+        windowMhz,
+        dwellMs,
+        pattern,
+      });
+      if (!ok) {
+        setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
+        return;
+      }
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const goNext = async () => {
     setErr("");
@@ -73,23 +122,78 @@ export function StartGate({ mode, onClose }: Props) {
       setStep("path");
       return;
     }
-    setBusy(true);
-    try {
-      const ok = await runSmartStart({ f1, f2, wave, loadOk: ohm, path });
-      if (!ok) {
-        setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
+    if (step === "path") {
+      if (path === "air") {
+        await startSmart();
         return;
       }
-      onClose();
-    } finally {
-      setBusy(false);
+      setStep("walk");
+      return;
     }
+    if (!walkPlan.ok) {
+      setErr(walkPlan.reason);
+      return;
+    }
+    if (hopNo) {
+      setErr(hopNo);
+      return;
+    }
+    await startSmart();
+  };
+
+  const goBack = () => {
+    setErr("");
+    if (step === "walk") setStep("path");
+    else if (step === "path") setStep("band");
+    else onClose();
   };
 
   return (
     <div className="cinema-gate" role="presentation" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="cinema-gate-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        {mode === "sdr" && step === "path" ? (
+        {mode === "sdr" && step === "walk" ? (
+          <>
+            <p className="cinema-kicker">Умный · Только FPGA</p>
+            <h2 id={titleId}>Окно на усилитель</h2>
+            <p className="cinema-gate-lead">
+              Число — ширина пятна на усилителе. Коридор ÷ окно = стоянки. Окно ≥ коридора — одна точка, без
+              прыжков. Тон остаётся палочкой.
+            </p>
+            <div className="cinema-gate-row">
+              <label>
+                Окно, МГц
+                <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
+              </label>
+              <label>
+                Задержка, мс
+                <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
+              </label>
+            </div>
+            <div className="cinema-paths" role="radiogroup" aria-label="Ход по стоянкам">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={pattern === "sweep"}
+                className={pattern === "sweep" ? "cinema-path on" : "cinema-path"}
+                onClick={() => setPattern("sweep")}
+              >
+                <strong>Туда-сюда</strong>
+                <span>По сетке стоянок туда и обратно. USB не отпускаем — только LO.</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={pattern === "hop"}
+                className={pattern === "hop" ? "cinema-path on" : "cinema-path"}
+                onClick={() => setPattern("hop")}
+              >
+                <strong>Случайно</strong>
+                <span>Следующая стоянка из коридора наугад. Волну в RAM не переснимаем.</span>
+              </button>
+            </div>
+            <p className="cinema-gate-lead">{hopNo ?? walkPlan.reason}</p>
+          </>
+        ) : mode === "sdr" && step === "path" ? (
           <>
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Как работает чип</h2>
@@ -106,10 +210,13 @@ export function StartGate({ mode, onClose }: Props) {
               >
                 <strong>Эфир + FPGA</strong>
                 <span>
-                  Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов;
-                  время = 16/fs, на x40 при 28 MSPS ≈ 0.57 мкс). Есть энергия — тот же RX IQ на TX SMA
-                  / усилитель. Только bladeRF 1 x40 (LMS6002D). Видно analog-окно ~28 МГц
-                  вокруг центра, не весь коридор F1–F2.
+                  Антенна на RX SMA. LO RX и TX в центр F1–F2. Детектор в FPGA (I²+Q², 16 сэмплов @{" "}
+                  {LEGION_FPGA_FS_HZ / 1e6} МГц ≈ {airDetUs} мкс — не analog платы). Есть энергия —
+                  тот же RX IQ на TX SMA / усилитель.{" "}
+                  {fpgaAirSupported(sdrId)
+                    ? "Эта плата в ревизии legion."
+                    : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}{" "}
+                  Видно analog-окно ~{analogMax} МГц вокруг центра, не весь коридор F1–F2.
                 </span>
               </button>
               <button
@@ -121,8 +228,8 @@ export function StartGate({ mode, onClose }: Props) {
               >
                 <strong>Только FPGA</strong>
                 <span>
-                  Эфир не слушаем. Выбранная помеха играет из FPGA (NCO или player) на центре
-                  коридора. Это не скан и не хостовые 200 µs.
+                  Эфир не слушаем. Помеха из FPGA (NCO или player) по сетке коридор÷окно. Одна стоянка
+                  или прыжки LO без пересъёма волны. Это не скан и не хостовые 200 µs.
                 </span>
               </button>
             </div>
@@ -179,8 +286,8 @@ export function StartGate({ mode, onClose }: Props) {
         {err ? <p className="cinema-gate-err">{err}</p> : null}
 
         <div className="cinema-gate-actions">
-          {mode === "sdr" && step === "path" ? (
-            <button type="button" className="cinema-btn ghost" onClick={() => setStep("band")} disabled={busy}>
+          {mode === "sdr" && (step === "path" || step === "walk") ? (
+            <button type="button" className="cinema-btn ghost" onClick={goBack} disabled={busy}>
               Назад
             </button>
           ) : (

@@ -15,10 +15,11 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const signalTxActive = useLegion((s) => s.signalTxActive);
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
+  const fpgaBusy = useLegion((s) => s.fpgaBusy);
   const lastCue = useLegion((s) => s.lastCueReason);
   const lastLog = useLegion((s) => s.log[s.log.length - 1]?.text ?? "");
   const workspace = useLegion((s) => s.workspace);
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed });
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy });
 
   return (
     <footer className="cinema-dock">

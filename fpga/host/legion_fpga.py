@@ -39,6 +39,8 @@ REG_WD_KICK = 0x08
 REG_AIR_FREQ_KHZ = 0x09
 REG_AIR_GAIN_DB = 0x0A
 REG_AIR_PREP = 0x0B  # bit0: 1=поднять тракт / 0=standby; bit1: RX; bit2: TX
+REG_AIR_FS_HZ = 0x0C  # sample rate эфира/solo, Гц; 0 = 2 МГц (NIOS)
+REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
 
 # Режимы MODE (CTRL bits 3:1)
 MODE_PASS = 0x0
@@ -49,6 +51,21 @@ MODE_LB_ALWAYS = 0x4
 
 CTRL_ARM = 1 << 0
 CTRL_WD_EN = 1 << 4
+
+# VHDL: timeout = limit × 2^16 тактов tx_clock. Дефолт 0x3D=61 ≈ 1 с при
+# tx_clock=4 МГц (x40 @ 2 MSPS). Kick хоста = 500 мс. На micro
+# tx_clock = ad9361.clock = fs — при окне ≥8 МГц 61 тика < 500 мс.
+WD_TICK = 65536
+WD_LIMIT_DEFAULT = 61
+
+
+def watchdog_limit_for_fs(fs_hz: int, board: str) -> int:
+    """limit, чтобы limit×65536/tx_clock ≈ 1 с. Clamp 1..65535."""
+    fs = int(fs_hz) if fs_hz else 2_000_000
+    tx_clk = fs if board == "bladerf2" else fs * 2
+    if tx_clk <= 0:
+        return WD_LIMIT_DEFAULT
+    return max(1, min(0xFFFF, int(round(tx_clk / WD_TICK))))
 
 
 def pack_8x32(target: int, write: bool, addr: int, data: int) -> bytes:
@@ -156,6 +173,14 @@ class LegionFpga:
         Код = gain + 1000 (смещение): сентинел «не задан» в NIOS = 0xFFFFFFFF,
         а легальные 0/−1 дБ не должны с ним сталкиваться."""
         return self.write_reg(REG_AIR_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
+
+    def set_air_fs_hz(self, fs_hz: int) -> bool:
+        """Sample rate AD9361, Гц. 0 = дефолт NIOS 2 МГц (эфир lb_gated)."""
+        return self.write_reg(REG_AIR_FS_HZ, int(fs_hz) & 0xFFFFFFFF)
+
+    def set_air_bw_hz(self, bw_hz: int) -> bool:
+        """Analog BW AD9361, Гц. 0 = дефолт NIOS 2 МГц."""
+        return self.write_reg(REG_AIR_BW_HZ, int(bw_hz) & 0xFFFFFFFF)
 
     def air_prepare(self, up: bool, rx: bool, tx: bool) -> bool:
         """Подъём/стендбай воздушного тракта на micro. На x40 — no-op true.

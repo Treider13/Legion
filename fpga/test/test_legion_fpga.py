@@ -121,6 +121,8 @@ py_map = {
     "LEGION_REG_AIR_FREQ_KHZ": lf.REG_AIR_FREQ_KHZ,
     "LEGION_REG_AIR_GAIN_DB": lf.REG_AIR_GAIN_DB,
     "LEGION_REG_AIR_PREP": lf.REG_AIR_PREP,
+    "LEGION_REG_AIR_FS_HZ": lf.REG_AIR_FS_HZ,
+    "LEGION_REG_AIR_BW_HZ": lf.REG_AIR_BW_HZ,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -322,6 +324,9 @@ check("x40: эфир предыдущего ARM жив (bit2 не откачен
 gw.fpga._t.fail_ctrl_write = False
 rpc({"op": "disarm"})
 
+r = rpc({"op": "tune", "freq_mhz": 2475.0})
+check("x40: tune → отказ (нет AIR, hop только Soapy)", r.get("ok") is False)
+
 srv.shutdown()
 srv.server_close()
 
@@ -387,6 +392,56 @@ check("micro: re-arm при живом ARM — сбой CTRL → отказ", r.
 check("micro: эфир предыдущего ARM жив (AIR_PREP не откачен)",
       gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
 gw_m.fpga._t.fail_ctrl_write = False
+rpcm({"op": "disarm"})
+
+# Solo: fs/BW окна до AIR_PREP. Без полей — регистры не пишутся (NIOS 2 МГц).
+r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
+check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
+check("micro: без fs_hz AIR_FS не писали", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
+check("micro: эфир/без fs не пишет WD_LIMIT", lf.REG_WD_LIMIT not in gw_m.fpga._t.regs)
+check("micro: без bw_mhz AIR_BW не писали", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+rpcm({"op": "disarm"})
+
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: ARM lb_gated без fs → ok", r.get("ok") is True)
+check("micro: эфир не пишет AIR_FS (2 МГц NIOS)", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
+check("micro: эфир не пишет AIR_BW", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+rpcm({"op": "disarm"})
+
+check("wd limit 4 МГц = VHDL дефолт 61", lf.watchdog_limit_for_fs(2_000_000, "bladerf1") == 61)
+check("wd limit micro 2 МГц = 31 (tx_clock=fs)", lf.watchdog_limit_for_fs(2_000_000, "bladerf2") == 31)
+check("wd limit micro 10 МГц > kick 500 мс", lf.watchdog_limit_for_fs(10_000_000, "bladerf2") == 153)
+check("wd limit micro 20 МГц = 305", lf.watchdog_limit_for_fs(20_000_000, "bladerf2") == 305)
+check("wd limit micro 56 МГц = 854", lf.watchdog_limit_for_fs(56_000_000, "bladerf2") == 854)
+# 153×65536/10e6 = 1.002 с > 0.5 с kick; дефолт 61×65536/10e6 = 0.400 с.
+
+r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2425.0, "fs_hz": 20_000_000, "bw_mhz": 20})
+check("micro: ARM player с fs_hz=20e6 → ok", r.get("ok") is True)
+check("micro: AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
+check("micro: ARM 20e6 пишет WD_LIMIT=305", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 305)
+check("micro: AIR_BW_HZ = 20e6 (из bw_mhz)", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 20_000_000)
+check("micro: AIR_FREQ_KHZ = 2425000", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2_425_000)
+ctrl_before_tune = gw_m.fpga._t.regs.get(lf.REG_CTRL)
+r = rpcm({"op": "tune", "freq_mhz": 2475.0, "fs_hz": 20_000_000, "bw_mhz": 20})
+check("micro: tune → ok", r.get("ok") is True)
+check("micro: tune сменил AIR_FREQ на 2475000", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2_475_000)
+check("micro: tune не DISARM (CTRL тот же)", gw_m.fpga._t.regs.get(lf.REG_CTRL) == ctrl_before_tune)
+check("micro: tune не отпускает USB", gw_m.fpga._t.released is False)
+check("micro: после tune USB status жив", rpcm({"op": "status"}).get("ok") is True)
+r = rpcm({"op": "tune"})
+check("micro: tune без freq_mhz → отказ", r.get("ok") is False)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "tune", "freq_mhz": 2475.0})
+check("micro: tune после DISARM → отказ (не поднимаем TX)", r.get("ok") is False and "ARM" in (r.get("reason") or ""))
+r = rpcm({"op": "set", "reg": "air_fs_hz", "value": 10_000_000})
+check("set air_fs_hz", r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 10_000_000)
+r = rpcm({"op": "set", "reg": "air_bw_hz", "value": 10_000_000})
+check("set air_bw_hz", r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 10_000_000)
+rpcm({"op": "disarm"})
+
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2442.5, "fs_hz": 20_000_000, "bw_mhz": 20})
+check("micro: ARM nco с fs/bw → ok", r.get("ok") is True)
+check("micro: nco AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
 rpcm({"op": "disarm"})
 
 srv_m.shutdown()

@@ -2,6 +2,9 @@
 // LEGION — хостовые тесты фазы 11: каталог SDR, прошивка, allowlist, скан, CUE.
 // Запуск: npx tsx scripts/test_orchestrator.ts
 // ============================================================================
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { detectFromBins, estimateNoiseFloor, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
@@ -21,7 +24,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -36,6 +39,23 @@ import {
   parkSpanMhz,
   planFpgaAir,
 } from "../src/sense/fpgaFastpath";
+import {
+  FPGA_SOLO_FS_MIN_HZ,
+  FPGA_SOLO_MICRO_ANALOG_MHZ,
+  clampSoloAnalogMhz,
+  clampSoloDwellMs,
+  makeSoloWalker,
+  planFpgaSoloWalk,
+  soloFsHz,
+  soloHopAllowed,
+  soloHopBlockedReason,
+  SOLO_HOP_MICRO_ONLY,
+  soloParkOpts,
+  standingWordRu,
+  soloTuneCmd,
+  waveFillsSoloWindow,
+} from "../src/sense/fpgaSoloWalk";
+import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -102,7 +122,7 @@ function check(name: string, cond: boolean, detail = ""): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   check("каталог содержит xA4", SDR_CATALOG.some((e) => e.id === "bladerf-micro-xa4"));
   const xa4 = SDR_CATALOG.find((e) => e.id === "bladerf-micro-xa4");
   check("xA4 без нативного Ethernet (Nuand USB3)", xa4?.nativeEthernet === false && xa4.iface === "usb3");
@@ -1180,8 +1200,245 @@ function main(): void {
   );
   check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
 
+  // --- FPGA solo: сетка стоянок (не эфир, не хост-скан) ---
+  const w100 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 100, analogMaxMhz: 56, wave: "awgn" });
+  check("100 МГц окно на 100 МГц коридоре → 1 стоянка", w100.ok && w100.hops === 1 && w100.hop === false);
+  check("100 без прыжков: центр середины", w100.centers.length === 1 && Math.abs(w100.centers[0] - 2450) < 1e-6);
+  check("100 без прыжков: analog clamped к 56", w100.analogClamped && w100.analogMhz === 56 && w100.fsHz === 56e6);
+  const w50 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 50, analogMaxMhz: 56, wave: "awgn" });
+  check("50 МГц на 100 → 2 стоянки", w50.ok && w50.hops === 2 && w50.hop === true);
+  check("50 МГц: центры 2425 и 2475", w50.centers[0] === 2425 && w50.centers[1] === 2475);
+  check("50 МГц влезает в 56: analog=50", w50.analogMhz === 50 && !w50.analogClamped && w50.fsHz === 50e6);
+  check("Nuand sample-rate min = 520834", FPGA_SOLO_FS_MIN_HZ === 520834);
+  // WD_LIMIT считает только шлюз (watchdog_limit_for_fs, Python) — TS-дубль
+  // удалён: два авторитета молча расходятся. Контракт пиннит test_legion_fpga.
+  check("wd 10 МГц ×65536/fs > 500 мс kick", (153 * 65536) / 10e6 > 0.5);
+  check("дефолт 61 @ 10 МГц < kick", (61 * 65536) / 10e6 < 0.5);
+  check("hint analog не врёт «micro»", w100.reason.includes("фильтр платы") && !w100.reason.includes("фильтр micro"));
+  check("soloFsHz(10) = 10e6 (выше пола)", soloFsHz(10) === 10e6);
+  check("soloFsHz(0.2) = пол AD9361, не 200000", soloFsHz(0.2) === FPGA_SOLO_FS_MIN_HZ);
+  const w02 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2400.2, windowMhz: 0.2, analogMaxMhz: 56, wave: "awgn" });
+  check("окно 0.2: analog 0.2 (BW min), fs = 520834", w02.ok && w02.analogMhz === 0.2 && w02.fsHz === 520834 && !w02.analogClamped);
+  check("окно 0.2: одна стоянка", w02.hops === 1 && w02.hop === false);
+  check("окно 1.0: fs = analog×1e6", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2410, windowMhz: 1 }).fsHz === 1e6);
+  const w20 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20 });
+  check("20 МГц на 100 → 5 стоянок", w20.hops === 5);
+  check("слово: 1 стоянка", standingWordRu(1) === "стоянка");
+  check("слово: 2 стоянки", standingWordRu(2) === "стоянки");
+  check("слово: 5 стоянок", standingWordRu(5) === "стоянок");
+  check("слово: 21 стоянка", standingWordRu(21) === "стоянка");
+  check("план 5 пишет стоянок, не стоянки", w20.reason.includes("5 стоянок"));
+  const w10 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 10 });
+  check("10 МГц на 100 → 10 стоянок", w10.hops === 10);
+  const w2 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 2, pattern: "hop" });
+  check("2 МГц: много стоянок и hop", w2.hops === 50 && w2.pattern === "hop");
+  const w3 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 3, pattern: "sweep" });
+  check("3 МГц: ceil(100/3)=34 стоянки", w3.hops === 34 && w3.pattern === "sweep");
+  const narrow = planFpgaSoloWalk({ f1Mhz: 2440, f2Mhz: 2450, windowMhz: 50 });
+  check("окно шире коридора → 1 стоянка", narrow.hops === 1 && narrow.hop === false);
+  check("дефолт analog micro = 56", FPGA_SOLO_MICRO_ANALOG_MHZ === 56);
+  check("analog 30 не клипается к 56", clampSoloAnalogMhz(30, 56) === 30);
+  check("analog 100 клипается к 56", clampSoloAnalogMhz(100, 56) === 56);
+  check("выдержка 10 мс → минимум 200", clampSoloDwellMs(10) === 200);
+  check("выдержка 800 без клипа", clampSoloDwellMs(800) === 800);
+  check("тон не заполняет окно", waveFillsSoloWindow("sine") === false && waveFillsSoloWindow("tone") === false);
+  check("AWGN заполняет окно", waveFillsSoloWindow("awgn") === true);
+  check("план тона пишет «палочка»", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, wave: "sine" }).reason.includes("палочка"));
+  check("план AWGN пишет «заполнит»", w50.reason.includes("заполнит"));
+  check("пустой коридор отказ", planFpgaSoloWalk({ f1Mhz: 2500, f2Mhz: 2400, windowMhz: 10 }).ok === false);
+  check("окно 0 отказ", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 0 }).ok === false);
+  check("сетка не вылезает за F2", w50.centers.every((c) => c >= 2400 && c <= 2500));
+
+  // --- FPGA solo: walker / ARM / tune (не recapture) ---
+  const walk100 = makeSoloWalker(w100);
+  check("walker 100 МГц: одна стоянка (сетка не сжата к 56)", walk100.centers.length === 1);
+  const walk50 = makeSoloWalker(w50);
+  check("walker 50 МГц: две стоянки", walk50.centers.length === 2 && walk50.centers[0] === 2425);
+  const firstSweep = walk50.next();
+  check("sweep: первая стоянка = next(), не mid коридора", firstSweep.centerMhz === 2425);
+  const hopPlan = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, pattern: "hop" });
+  const soloHopW = makeSoloWalker(hopPlan, 7);
+  const hopFirst = soloHopW.next();
+  const hopSecond = soloHopW.next();
+  check("hop: первая стоянка из сетки, не mid коридора", hopPlan.centers.includes(hopFirst.centerMhz));
+  check("hop: второй шаг тоже из сетки (не recapture)", hopPlan.centers.includes(hopSecond.centerMhz));
+  const hopSeq = Array.from({ length: 40 }, () => soloHopW.next().centerMhz);
+  check("hop: за 40 шагов не залипает на одной точке", new Set(hopSeq).size > 1);
+  check("hop: все шаги из centers плана", hopSeq.every((c) => hopPlan.centers.includes(c)));
+  const hop50 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 50, pattern: "hop" });
+  const hop50w = makeSoloWalker(hop50, 3);
+  const hop50samples = Array.from({ length: 20 }, () => hop50w.next().centerMhz);
+  check("hop 50 МГц только 2425/2475, не 2450", hop50samples.every((c) => c === 2425 || c === 2475));
+  const hostHop = Array.from({ length: 30 }, () => hopCenterInBand([{ f1Mhz: 2400, f2Mhz: 2500 }], 50, mulberry32(1)));
+  check("хост hopCenterInBand ≠ сетка solo (не мешаем)", hostHop.some((c) => c !== 2425 && c !== 2475));
+  check("parseBand 20–80 — синтезатор, отказ", parseBand("20", "80") === null);
+  const low = planFpgaSoloWalk({ f1Mhz: 20, f2Mhz: 80, windowMhz: 20 });
+  check("solo план 20–80 ок (не parseBand)", low.ok && low.hops === 3);
+  const park = soloParkOpts(w50);
+  check("park solo: fs/BW = окно 50, не 2 МГц", park.fsHz === 50e6 && park.analogMhz === 50 && park.spanMhz === 50);
+  const tune = soloTuneCmd(2475, w50, "tok");
+  check("tune: op=tune без USB/capture", tune.op === "tune" && tune.freq_mhz === 2475);
+  check("tune несёт fs/bw окна", tune.fs_hz === 50e6 && tune.bw_mhz === 50);
+  check("tune не несёт player_ctl", tune.player_ctl === undefined && tune.wave === undefined);
+  check("прыжки на micro xA4", soloHopAllowed("bladerf-micro-xa4") === true);
+  check("прыжки на x40 запрещены", soloHopAllowed("bladerf-x40") === false);
+  check("x40 + hops: кино/start режут до ARM", soloHopBlockedReason("bladerf-x40", true)?.includes("micro") === true);
+  check("x40 + одна стоянка: hops не блокируем", soloHopBlockedReason("bladerf-x40", false) === null);
+  check("micro + hops: не блокируем", soloHopBlockedReason("bladerf-micro-xa4", true) === null);
+  check("текст отказа hops один", SOLO_HOP_MICRO_ONLY.includes("tune LO без USB"));
+
+  const soloArm = fpgaArmCmd("player", {
+    detThr: 5000, detShift: 4, token: "t", freqMhz: 2425, fsHz: 20e6, bwMhz: 20,
+  });
+  check("ARM player solo несёт fs_hz и bw_mhz", soloArm.fs_hz === 20e6 && soloArm.bw_mhz === 20 && soloArm.freq_mhz === 2425);
+  const airArm = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 });
+  check("ARM эфир без fs_hz/bw_mhz", airArm.fs_hz === undefined && airArm.bw_mhz === undefined);
+  check("ARM эфир всё ещё несёт det_thr", airArm.det_thr === 5000 && airArm.freq_mhz === 2442.5);
+  const ncoArm = fpgaArmCmd("nco", {
+    detThr: 5000, detShift: 4, token: "", freqMhz: 2450, fsHz: 10e6, bwMhz: 10, ncoFtw: 1,
+  });
+  check("ARM nco solo несёт fs/bw", ncoArm.fs_hz === 10e6 && ncoArm.bw_mhz === 10 && ncoArm.nco_ftw === 1);
+
+  const st0 = useLegion.getState();
+  check("store: окно по умолчанию 10", st0.fpgaSoloWindowMhz === "10");
+  check("store: задержка по умолчанию 500", st0.fpgaSoloDwellMs === "500");
+  check("store: ход по умолчанию sweep", st0.fpgaSoloPattern === "sweep");
+  st0.setFpgaSoloWindowMhz("50");
+  st0.setFpgaSoloDwellMs("800");
+  st0.setFpgaSoloPattern("hop");
+  check("store: сеттеры окна/задержки/хода",
+    useLegion.getState().fpgaSoloWindowMhz === "50"
+    && useLegion.getState().fpgaSoloDwellMs === "800"
+    && useLegion.getState().fpgaSoloPattern === "hop");
+  useLegion.getState().setSdrLoad(true);
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  const started = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "solo",
+    windowMhz: "20", dwellMs: "400", pattern: "sweep",
+  });
+  const after = useLegion.getState();
+  check("cinema записал окно/задержку/ход до ARM",
+    after.fpgaSoloWindowMhz === "20" && after.fpgaSoloDwellMs === "400" && after.fpgaSoloPattern === "sweep");
+  check("без шлюза solo не ARM (как air)", started === false && after.fpgaArmed === false);
+
+  after.clearSdrBands();
+  after.setSdrAllowField("sdrF1", "20");
+  after.setSdrAllowField("sdrF2", "80");
+  after.setSdrLoad(true);
+  after.setSdrId("bladerf-micro-xa4");
+  const lowSolo = await after.startFpgaPath("solo");
+  const lowSoloLog = useLegion.getState().log.at(-1)?.text ?? "";
+  check("solo 20–80 не режет parseBand", lowSolo === false && !lowSoloLog.includes("задайте начало и конец полосы"));
+  check("solo 20–80 доходит до шлюза", /шлюз|desktop|Tauri|FAKE/i.test(lowSoloLog));
+
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "20");
+  useLegion.getState().setSdrAllowField("sdrF2", "80");
+  const airGenBeforeReject = peekFpgaAirGen();
+  const lowAir = await useLegion.getState().startFpgaPath("air");
+  const lowAirLog = useLegion.getState().log.at(-1)?.text ?? "";
+  check("air 20–80 по-прежнему parseBand", lowAir === false && lowAirLog.includes("задайте начало и конец полосы"));
+  check("air 20–80 не бампает air gen (не срывает FPGA+сканер)", peekFpgaAirGen() === airGenBeforeReject);
+
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "2400");
+  useLegion.getState().setSdrAllowField("sdrF2", "2500");
+  const airGenBeforePing = peekFpgaAirGen();
+  await useLegion.getState().startFpgaPath("air");
+  check("air после parseBand бампает gen (отзыв Стоп на ping/park)", peekFpgaAirGen() === airGenBeforePing + 1);
+
+  const idleLive = {
+    scanRunning: false, transmitArmed: false, corridorRunning: false,
+    signalTxActive: false, fpgaArmed: false, fpgaBusy: false,
+  };
+  check("cinema idle не live", cinemaIsLive(idleLive) === false);
+  check("cinema live при capture (busy, не armed)", cinemaIsLive({ ...idleLive, fpgaBusy: true }) === true);
+  check("cinema live при ARM", cinemaIsLive({ ...idleLive, fpgaArmed: true }) === true);
+
+  const genBeforeAbort = peekFpgaSoloGen();
+  useLegion.getState().abortFpgaSolo();
+  check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
+  const airBeforeAbort = peekFpgaAirGen();
+  useLegion.getState().abortFpgaAir();
+  check("abortFpgaAir бампает поколение", peekFpgaAirGen() === airBeforeAbort + 1);
+  const armBeforeAbort = peekFpgaArmGen();
+  useLegion.getState().abortFpgaArm();
+  check("abortFpgaArm бампает поколение", peekFpgaArmGen() === armBeforeAbort + 1);
+  const genBeforeCinema = peekFpgaSoloGen();
+  const airBeforeCinema = peekFpgaAirGen();
+  const armBeforeCinema = peekFpgaArmGen();
+  check("кино СТОП при !armed не требует DISARM чтобы бампнуть", useLegion.getState().fpgaArmed === false);
+  await runCinemaStop();
+  check("cinema СТОП бампает solo gen без ARM", peekFpgaSoloGen() === genBeforeCinema + 1);
+  check("cinema СТОП бампает air gen без ARM", peekFpgaAirGen() === airBeforeCinema + 1);
+  check("cinema СТОП бампает arm gen без ARM", peekFpgaArmGen() === armBeforeCinema + 1);
+  check("cinema СТОП без ARM не ставит armed", useLegion.getState().fpgaArmed === false);
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const storeSrc = readFileSync(join(here, "../src/state/store.ts"), "utf8");
+  const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
+  const dockSrc = readFileSync(join(here, "../src/components/cinema/CinemaDock.tsx"), "utf8");
+  const nuandHdr = readFileSync(join(here, "../../fpga/vendor/bladerf/fpga_common/include/bladerf2_common.h"), "utf8");
+  check("эфир park остаётся FPGA_FS_HZ", storeSrc.includes("fsHz: FPGA_FS_HZ"));
+  const airBlock = storeSrc.slice(storeSrc.indexOf('set({ fpgaMode: "lb_gated" })'), storeSrc.indexOf("const kind = get().txWaveKind"));
+  check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
+  check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked") && airBlock.includes("FPGA_FS_HZ"));
+  check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
+  const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
+  check("air gen после ensureSdrBand, не до валидации",
+    startFn.indexOf('if (path === "air" && !ensureSdrBand())') < startFn.indexOf("gFpgaAirGen += 1")
+    && startFn.indexOf("gFpgaAirGen += 1") < startFn.indexOf("get().stopScan()"));
+  check("отзыв после ARM снимает TX до set(fpgaArmed)", storeSrc.includes("abortAirIfRevoked(!!r.ok)") && storeSrc.includes("abortSoloIfRevoked(!!r.ok)"));
+  check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
+  check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
+  check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
+  check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
+  const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат «энергия"));
+  check("watchdog solo зовёт fpgaDisarm (стопает hop)", wdSolo.includes("fpgaDisarm()") && !wdSolo.includes("hostFpga({ op: \"disarm\""));
+  const disarmBlock = storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async ()"), storeSrc.indexOf("stopFpgaAir: async ()"));
+  check("DISARM отдаёт USB хосту", disarmBlock.includes('action: "release"'));
+  check("DISARM стопает walk до первого await", disarmBlock.indexOf("stopSoloWalk()") < disarmBlock.indexOf("await hostFpga"));
+  check("DISARM отзывает in-flight эфир и ручной ARM",
+    disarmBlock.includes("gFpgaAirGen += 1") && disarmBlock.includes("gFpgaArmGen += 1")
+    && disarmBlock.indexOf("gFpgaAirGen += 1") < disarmBlock.indexOf("await hostFpga"));
+  const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
+  check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
+  check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
+  check("cinema: air стартует сразу после path", gateSrc.includes('if (path === "air")') && gateSrc.includes("await startSmart()"));
+  check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
+  check("cinema walk режет hops на x40 до старта", gateSrc.includes("soloHopBlockedReason") && gateSrc.includes("if (hopNo)"));
+  check("cinema эфир не врёт 28 MSPS", !gateSrc.includes("28 MSPS") && !gateSrc.includes("0.57"));
+  check("cinema эфир не «только x40»", !gateSrc.includes("Только bladeRF 1 x40"));
+  check("cinema эфир: 2 МГц и micro", gateSrc.includes("LEGION_FPGA_FS_HZ") && gateSrc.includes("fpgaAirSupported"));
+  check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
+  const gwSrc = readFileSync(join(here, "../../fpga/host/legion_gateway.py"), "utf8");
+  check("шлюз ARM с fs пишет WD_LIMIT", gwSrc.includes("watchdog_limit_for_fs") && gwSrc.includes("set_watchdog"));
+  check("шлюз tune без ARM отказывает", gwSrc.includes('tune: нет ARM'));
+  const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
+  check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
+  check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
+  check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
+  check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
+  check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
+  check("Nuand header: bandwidth min 200000", /bladerf2_bandwidth_range = \{[\s\S]*?200000/.test(nuandHdr));
+  check("solo start не зовёт ensureSdrBand", storeSrc.includes('if (path === "air" && !ensureSdrBand())'));
+  const soloSrc = readFileSync(join(here, "../src/sense/fpgaSoloWalk.ts"), "utf8");
+  check("solo-модуль без дубля WD (limit считает только шлюз)", !soloSrc.includes("FPGA_WD") && !soloSrc.includes("65536"));
+  check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
+  const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
+  check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
+  check("ручной fpgaArm держит метку fpgaPath solo в UI", armBlock.includes('fpgaPath: air ? "air" : "solo"'));
+  check("fpgaArm busy до первого await (кино-старт откажет)",
+    armBlock.indexOf("set({ fpgaBusy: true })") > 0 && armBlock.indexOf("set({ fpgaBusy: true })") < armBlock.indexOf("await get().stopTransmit()"));
+  check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
+  check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
+  check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
+
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
-main();
+void main();
