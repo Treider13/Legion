@@ -219,6 +219,11 @@ def main() -> int:
         bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
         check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
+    check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
+    check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")
+    check("hw пусто → unknown", w.classify_bladerf_hw("") == "unknown")
+    check("hw HackRF → unknown", w.classify_bladerf_hw("HackRF One") == "unknown")
+
     ping = rpc(proc, {"op": "ping"})
     check("ping ok", ping.get("ok") is True)
     check("fake flag", ping.get("fake") is True)
@@ -226,6 +231,19 @@ def main() -> int:
 
     opened = rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
     check("fake open", opened.get("ok") is True)
+    need = rpc(
+        proc,
+        {
+            "op": "open",
+            "args": "driver=fake",
+            "analogBwMhz": 28,
+            "canTx": True,
+            "requireHw": "bladerf1",
+        },
+    )
+    check("FAKE open + require bladerf1 → отказ", need.get("ok") is False and need.get("fake") is True)
+    # вернуть FAKE-открытие для последующих park/tx тестов
+    rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 
     scan = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
     check("scan bins", scan.get("ok") is True and len(scan.get("bins") or []) == 32)
@@ -274,6 +292,9 @@ def main() -> int:
                 return self.tx_hz
             return self._set.get((d, "hz"), 0)
 
+        def getHardwareKey(self):
+            return getattr(self, "hw", "bladerf1")
+
     def _radio(dev):
         r = w.Radio()
         r.fake = False
@@ -295,6 +316,14 @@ def main() -> int:
     check("park RX/TX fs разъехались → отказ", pk_fs.get("ok") is False)
     pk_deaf = _radio(_Dev(deaf=True)).park(2442, 28, 28e6, True, True)
     check("park без getFrequency → отказ", pk_deaf.get("ok") is False)
+    micro = _Dev()
+    micro.hw = "bladerf2"
+    pk_micro = _radio(micro).park(2442, 28, 28e6, True, True)
+    check("park micro/AD9361 → отказ", pk_micro.get("ok") is False)
+    unknown = _Dev()
+    unknown.hw = ""
+    pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)
+    check("park без hardwareKey → отказ", pk_unk.get("ok") is False)
 
     hd = w.Radio()
     hd.fake = True
@@ -309,6 +338,7 @@ def main() -> int:
 
     wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "qpsk", "params": {"amp": 0.2}})
     check("tx_wave qpsk ok (fake)", wave.get("ok") is True and wave.get("freqMhz") == 2442.0)
+    check("tx_wave fake помечен (player ARM это отвергнет)", wave.get("fake") is True)
 
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
     check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)

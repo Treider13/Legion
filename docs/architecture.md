@@ -97,6 +97,8 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   (LMS6002D CONTROL bit1/2). micro AD9361 этим трактом не кормится —
   каталог micro переключается на x40; HackRF/Pluto/N210 не подменяются.
   Энергия в окне 16 сэмплов / fs (при analog 28 MSPS ≈ 0.57 мкс), затем
-  тот же RX IQ на TX SMA / усилитель. FAKE park или FAKE шлюз → ARM нет.
-  park читает LO и RX/TX fs; без readback ARM нет. `CUE` —
+  тот же RX IQ на TX SMA / усилитель. FAKE park, FAKE Soapy/TX или FAKE шлюз → ARM нет.
+  park читает LO и RX/TX fs и требует Soapy `hardwareKey=bladerf1`
+  (`bladerf_get_board_name`, не драйвер bladerf — он общий с micro).
+  Без readback / не LMS → ARM нет. `CUE` —
   команда режима ESP32 (`synth_apply_fast`).

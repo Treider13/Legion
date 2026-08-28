@@ -117,8 +117,10 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
   FAKE park, FAKE шлюз (`LEGION_FPGA_FAKE`) и сбой park → ARM нет.
   park читает getFrequency/getSampleRate; RX и TX fs должны совпасть
-  (loopback FIFO). Локальный USB открывается `driver=bladerf`, не первая
-  плата Soapy. HackRF/Pluto не подменяются на x40. NCO/player — 2 MSPS.
+  (loopback FIFO).   Локальный USB открывается `driver=bladerf`, не первая
+  плата Soapy; после open `getHardwareKey` должен быть `bladerf1`
+  (libbladeRF / SoapyBladeRF). `bladerf2` (micro) — отказ, даже если
+  каталог уже x40. HackRF/Pluto не подменяются на x40. NCO/player — 2 MSPS.
 - **Усиление loopback** — грубый сдвиг `lb_shift` (0..8): переполнение 16 бит
   заворачивает знак (wrap), насыщения (saturation) в этой ревизии нет.
   Подбирать с осциллографом/сканом на стенде, начиная с 0.

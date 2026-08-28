@@ -63,8 +63,16 @@ export async function hostOpen(
   analogBwMhz: number,
   canTx: boolean,
   fullDuplex: boolean,
-): Promise<{ ok: boolean; reason: string }> {
-  return hostRpc({ op: "open", args, analogBwMhz, canTx, fullDuplex });
+  requireHw?: string,
+): Promise<{ ok: boolean; reason: string; fake?: boolean; hardwareKey?: string }> {
+  return hostRpc({
+    op: "open",
+    args,
+    analogBwMhz,
+    canTx,
+    fullDuplex,
+    ...(requireHw ? { requireHw } : {}),
+  });
 }
 
 export async function hostScan(centerMhz: number, bwMhz: number, bins: number): Promise<HostScanResult> {
@@ -155,6 +163,7 @@ export async function hostTxWave(
     reason?: string;
     latencyUs?: number;
     freqMhz?: number;
+    fake?: boolean;
   }>({ op: "tx_wave", freqMhz, wave, params });
   return {
     ok: !!r.ok,
@@ -162,6 +171,7 @@ export async function hostTxWave(
     freqMhz: r.freqMhz ?? freqMhz,
     latencyUs: r.latencyUs ?? 0,
     path: r.ok ? "sdr-tx" : "none",
+    fake: !!r.fake,
   };
 }
 

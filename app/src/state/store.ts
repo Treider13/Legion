@@ -250,7 +250,7 @@ interface LegionStore {
   setPaEnabled(on: boolean): Promise<void>;
   cueTo(mhz: number): Promise<void>;
   probeSdr(): Promise<void>;
-  openSdr(): Promise<void>;
+  openSdr(opts?: { requireHw?: string }): Promise<void>;
   closeSdr(): Promise<void>;
   flashSdr(action?: SdrFlashAction): Promise<void>;
   probeEsp32Chip(): Promise<void>;
@@ -655,7 +655,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: Soapy нет — LO не паркуем, ARM без частоты нельзя");
         return { ok: false, fsHz };
       }
-      await get().openSdr();
+      await get().openSdr({ requireHw: "bladerf1" });
       if (!gLive) {
         pushLog("sys", "FPGA: SDR не открылся — LO не поставлен");
         return { ok: false, fsHz };
@@ -1584,7 +1584,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await gw({ op: "set", reg: "player_ctl", value: 1 });
         await gw({ op: "usb", action: "release" });
         if (!get().sdrEmulation && hostSdrAvailable()) {
-          await get().openSdr();
+          await get().openSdr({ requireHw: "bladerf1" });
           if (!gLive) {
             pushLog("sys", "FPGA player: SDR не открылся — capture отменён");
             set({ fpgaPath: null });
@@ -1594,6 +1594,14 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           const tx = await hostTxWave(mid, kind, get().signalParams);
           pushLog("sys", tx.reason);
+          if (tx.fake) {
+            await releaseSoapyForFpga();
+            const acq0 = await gw({ op: "usb", action: "acquire" });
+            if (!acq0.ok) pushLog("sys", `FPGA USB acquire: ${acq0.reason ?? "отказ"}`);
+            set({ fpgaPath: null });
+            pushLog("sys", "FPGA player: FAKE TX — волна не в эфире, ARM отменён");
+            return false;
+          }
           if (!tx.ok) {
             await releaseSoapyForFpga();
             const acq0 = await gw({ op: "usb", action: "acquire" });
@@ -1682,7 +1690,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `SDR probe: ${list.length} типов в каталоге (эмуляция)`);
     },
 
-    openSdr: async () => {
+    openSdr: async (opts) => {
       const s = get();
       if (s.flashBusy) {
         // Иначе Soapy откроет USB-устройство посередине записи bladeRF-cli.
@@ -1714,9 +1722,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       const caps = catalogCaps(s.sdrId);
-      const r = await hostOpen(remote, caps.analogBwMhz, caps.canTx, caps.fullDuplex);
+      const r = await hostOpen(remote, caps.analogBwMhz, caps.canTx, caps.fullDuplex, opts?.requireHw);
       if (!r.ok) {
         pushLog("sys", r.reason);
+        return;
+      }
+      if (opts?.requireHw && r.fake) {
+        pushLog("sys", "FPGA: FAKE Soapy — не эфир, ARM нельзя");
+        await hostClose();
         return;
       }
       gLive = true;

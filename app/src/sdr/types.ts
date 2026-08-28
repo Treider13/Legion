@@ -94,4 +94,5 @@ export interface TxCueResult {
   /** Модель host-retune, не FPGA HDL. Не выдаём за микросекунды FPGA. */
   latencyUs: number;
   path: "sdr-tx" | "none";
+  fake?: boolean;
 }

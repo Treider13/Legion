@@ -100,6 +100,41 @@ def kwargs_str(kw: dict[str, str]) -> str:
 TX_FS = 2.0e6
 # NCO FTW / solo-park. Эфир+FPGA передаёт fs = analog BW, не эту константу.
 FPGA_PARK_FS_HZ = 2_000_000
+# libbladeRF bladerf_get_board_name / SoapyBladeRF getHardwareKey():
+#   bladerf1 = LMS6002D (x40/x115, CONTROL bit1/2)
+#   bladerf2 = AD9361 micro (этими битами не кормится)
+
+
+def classify_bladerf_hw(hardware_key: str, info: dict[str, str] | None = None) -> str:
+    """lms | ad9361 | unknown. Не угадываем по драйверу bladerf — он общий."""
+    key = (hardware_key or "").strip().lower()
+    if key == "bladerf1":
+        return "lms"
+    if key == "bladerf2":
+        return "ad9361"
+    blob = " ".join([key, *(str(v).lower() for v in (info or {}).values())])
+    if "bladerf2" in blob:
+        return "ad9361"
+    if "bladerf1" in blob:
+        return "lms"
+    return "unknown"
+
+
+def soapy_hw_snapshot(dev: Any) -> dict[str, Any]:
+    key = ""
+    info: dict[str, str] = {}
+    try:
+        key = str(dev.getHardwareKey() or "")
+    except Exception:
+        key = ""
+    try:
+        raw = dev.getHardwareInfo()
+        info = {str(k): str(v) for k, v in dict(raw).items()}
+    except Exception:
+        pass
+    return {"hardwareKey": key, "info": info, "class": classify_bladerf_hw(key, info)}
+
+
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
 # DIO-sys/spectrum_analyzer: FFT 1024/2048/4096, Welch 8 кадров, Hann, |X|²/N².
@@ -787,6 +822,7 @@ class Radio:
         self._tone = None
         self.tx_error: str | None = None
         self.tx_fail = 0
+        self.hardware_key = ""
 
     def tx_live(self) -> bool:
         if self.tx_mhz is None or self.tx_error:
@@ -827,11 +863,32 @@ class Radio:
             self._rx_on = False
             self.args = ""
             self.tx_error = None
+            self.hardware_key = ""
         # Soapy-Device держит USB-handle до GC: без принудительного сбора
         # быстрый re-open ловит -7 NODEV (поймано на стенде 2026-08-27).
         gc.collect()
 
-    def open(self, args: str, analog_bw: float, can_tx: bool, full_duplex: bool) -> dict[str, Any]:
+    def _unmake(self) -> None:
+        with self._lock:
+            if self.dev is not None and SOAPY:
+                try:
+                    self.dev.close()
+                except Exception:
+                    pass
+            self.dev = None
+            self.rx = None
+            self.tx = None
+            self._rx_on = False
+        gc.collect()
+
+    def open(
+        self,
+        args: str,
+        analog_bw: float,
+        can_tx: bool,
+        full_duplex: bool,
+        require_hw: str = "",
+    ) -> dict[str, Any]:
         self.close()
         self.analog_bw = analog_bw if analog_bw > 0 else 20.0
         self.can_tx = can_tx
@@ -839,7 +896,14 @@ class Radio:
         self.args = args
         if self.fake or args.startswith("driver=fake"):
             self.fake = True
-            return {"ok": True, "reason": "FAKE worker — не эфир", "fake": True}
+            if require_hw:
+                return {
+                    "ok": False,
+                    "reason": "FAKE worker — не эфир, FPGA ARM нельзя",
+                    "fake": True,
+                    "hardwareKey": "",
+                }
+            return {"ok": True, "reason": "FAKE worker — не эфир", "fake": True, "hardwareKey": ""}
         if not SOAPY:
             return {"ok": False, "reason": "SoapySDR Python не установлен (пакет python3-soapysdr / pip SoapySDR)"}
         if not NUMPY:
@@ -862,21 +926,64 @@ class Radio:
             kw = {k: full[k] for k in ("driver", "serial") if k in full}
             if not kw:
                 kw = full
-        last_err: Exception | None = None
-        for _ in range(4):
+        candidates = [kw]
+        if require_hw == "bladerf1":
+            # Soapy enumerate не пишет board name. Открываем каждую bladeRF
+            # и смотрим getHardwareKey (bladerf1 vs bladerf2).
             try:
-                self.dev = SoapySDR.Device(kwargs_str(kw))
-                _setup_front_end(self.dev, self.can_tx)
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                self.dev = None  # если Device() успел создаться — отпустить до retry
-                gc.collect()
-                time.sleep(0.4)
-        if self.dev is None:
-            return {"ok": False, "reason": f"Soapy Device(): {last_err}"}
-        return {"ok": True, "reason": f"открыт Soapy {kw}", "fake": False}
+                filt = dict(kw) if kw.get("remote") else {"driver": "bladerf"}
+                rows = list(SoapySDR.Device.enumerate(filt))
+                found_kw: list[dict[str, str]] = []
+                for row in rows:
+                    full = {str(k): str(v) for k, v in dict(row).items()}
+                    sel = {k: full[k] for k in ("driver", "serial") if k in full}
+                    if kw.get("remote"):
+                        sel = {**kw, **sel}
+                    if sel:
+                        found_kw.append(sel)
+                if found_kw:
+                    candidates = found_kw
+            except Exception:
+                pass
+        last_err: Exception | None = None
+        last_hw = ""
+        for cand in candidates:
+            self.dev = None
+            for _ in range(4):
+                try:
+                    self.dev = SoapySDR.Device(kwargs_str(cand))
+                    _setup_front_end(self.dev, self.can_tx)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    self.dev = None
+                    gc.collect()
+                    time.sleep(0.4)
+            if self.dev is None:
+                continue
+            snap = soapy_hw_snapshot(self.dev)
+            self.hardware_key = str(snap["hardwareKey"])
+            last_hw = self.hardware_key
+            if require_hw == "bladerf1" and snap["class"] != "lms":
+                last_err = RuntimeError(
+                    f"открыт {self.hardware_key or 'плата без hardwareKey'} — "
+                    "нужен bladerf1 (LMS6002D), не micro/AD9361"
+                )
+                self._unmake()
+                continue
+            return {
+                "ok": True,
+                "reason": f"открыт Soapy {cand}"
+                + (f" · {self.hardware_key}" if self.hardware_key else ""),
+                "fake": False,
+                "hardwareKey": self.hardware_key,
+            }
+        return {
+            "ok": False,
+            "reason": f"Soapy Device(): {last_err}",
+            "hardwareKey": last_hw,
+        }
 
     def _stop_rx_capture(self) -> None:
         self._rx_cap_stop.set()
@@ -1078,6 +1185,13 @@ class Radio:
 
         def _fail(why: str) -> dict[str, Any]:
             return {"ok": False, "reason": why, **base}
+
+        snap = soapy_hw_snapshot(self.dev)
+        if snap["class"] != "lms":
+            return _fail(
+                f"park: {snap['hardwareKey'] or 'плата без hardwareKey'} — "
+                "FPGA эфир только bladerf1 (LMS6002D CONTROL), не micro/AD9361"
+            )
 
         # 1 МГц: ловит «не записалось» (0 / другой ГГц), не фазовый шум PLL.
         lo_tol = 1e6
@@ -1285,6 +1399,7 @@ class Radio:
                 "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц",
                 "latencyUs": us,
                 "freqMhz": freq_mhz,
+                "fake": True,
             }
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
@@ -1573,6 +1688,7 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             float(msg.get("analogBwMhz") or 20),
             bool(msg.get("canTx", True)),
             bool(msg.get("fullDuplex", True)),
+            str(msg.get("requireHw") or ""),
         )
     if op == "scan":
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
