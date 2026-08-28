@@ -1,8 +1,18 @@
-# LEGION FPGA — ревизия `legion` для bladeRF 1 x40
+# LEGION FPGA — ревизия `legion` для bladeRF 1 x40 и bladeRF 2.0 micro xA4/xA9
 
 Автономный тракт в FPGA: плеер волны из RAM, DDS-тон, loopback RX→TX
 (по детектору энергии или постоянный), watchdog-deadman. Управление и
-мониторинг — с ноутбука по Ethernet через шлюз (мини-ПК с USB3 к x40).
+мониторинг — с ноутбука по Ethernet через шлюз (мини-ПК с USB3 к плате).
+
+**Целевая связка «сканер → handoff → FPGA-ретрансляция» (режим FPGA+СКАНЕР):**
+хост-сканер (Welch-8, 40 MSPS) находит пик → LO паркуется на него
+(2 MSPS, BW 2 МГц) → порог детектора считается по захвату шумовой полки
+(медиана нижних 60% окон × K, с отстройкой LO на 3.2 МГц — на самом пике
+непрерывный сигнал жил бы в каждом окне) → USB передаётся агенту →
+ARM `lb_gated`. FPGA ретранслирует RX→TX по энергии с задержкой окна
+(8 мкс на 2 MSPS). Энергия пропала (det_count не растёт N опросов),
+watchdog (1 с без kick) или СТОП оператора → DISARM, USB хосту, скан
+возобновляется (для первого случая — с skip частоты).
 
 **Правовая/безопасная рамка:** выход TX — только в нагрузку 50 Ом
 (см. `docs/compliance.md`). Watchdog включён по умолчанию: пропал heartbeat
@@ -111,17 +121,37 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   выключен. HDL держит цифровой RX, пока analog RX (CONTROL bit1) жив, и
   цифровой TX, пока FPGA ARM. `fifo_reader`/`fifo_writer` остаются на FX3:
   USB FIFO может overflow/underflow (косметика), тап детектора и mux — до них.
-- **Эфир+FPGA — только bladeRF 1 x40 (LMS6002D).** Analog RX/TX = CONTROL
-  bit1/2 (`bladerf_p.vhd`). micro AD9361 этими битами не кормится — ARM
-  эфира на micro не включаем. Soapy паркует RX и TX LO на одну частоту
-  при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
+- **Эфир+FPGA — bladeRF 1 x40 и bladeRF 2.0 micro xA4/xA9.** Парковка везде
+  через Soapy (RX/TX LO, fs = 2 MSPS, BW 2 МГц, readback с допусками).
+  Разница — в подъёме аналога после ухода хоста с USB:
+  - **x40 (LMS6002D):** шлюз пишет CONTROL bit1/2 (`bladerf_p.vhd`), RMW.
+    Чип держит состояние сам — цифровой IQ не зависит от USB после ARM.
+  - **micro (AD9361):** CONTROL-битов там нет, а хост при закрытии handle
+    гасит RFIC (факт libbladeRF: `bladerf2_close` → `rfic->standby` →
+    clear RFFE + `ad9361_deinit`; SoapyBladeRF `closeStream` →
+    `bladerf_enable_module(false)`). Поэтому тракт поднимает NIOS-прошивка:
+    шлюз пишет AIR_FREQ_KHZ (+AIR_GAIN_DB) и AIR_PREP → `legion_cmds.c`
+    через штатный RFIC-интерфейс Nuand для FPGA-tuning
+    (`rfic_command_write_immed`, devices_rfic.c) делает INIT(ON) →
+    LO/fs/BW → GAINMODE=MGC + GAIN (ровно то усиление, при котором хост
+    мерил полку) → TX unmute → ENABLE. DISARM (CTRL=0) уводит RFIC в
+    STANDBY сам. ARM lb_* без AIR_PREP на micro — отказ в NIOS.
+    Первый AIR_PREP после питания — полный ad9361_init (сотни мс, длинный
+    таймаут у шлюза); дальше — тёплый рестор из standby.
   FAKE park, FAKE шлюз (`LEGION_FPGA_FAKE`) и сбой park → ARM нет.
   Player ARM только при `capture_done` (HDL: иначе нули на DAC). sleep не считается.
   park читает getFrequency/getSampleRate; RX и TX fs должны совпасть
-  (loopback FIFO).   Локальный USB открывается `driver=bladerf`, не первая
-  плата Soapy; после open `getHardwareKey` должен быть `bladerf1`
-  (libbladeRF / SoapyBladeRF). `bladerf2` (micro) — отказ, даже если
-  каталог уже x40. HackRF/Pluto не подменяются на x40. NCO/player — 2 MSPS.
+  (loopback FIFO). Локальный USB открывается `driver=bladerf`, не первая
+  плата Soapy; после open `getHardwareKey` сверяется с платой каталога
+  (`bladerf1` для x40, `bladerf2` для micro) — подмены нет.
+  HackRF/Pluto не подменяются. NCO/player — 2 MSPS.
+  Окно детектора = 16/fs: на 2 MSPS = 8 мкс.
+  **Порог lb_gated из захвата:** после парковки (USB ещё у хоста) захват IQ
+  на 2 MSPS с отстройкой LO на 3.2 МГц от пика, медиана нижних 60% энергий
+  окон по 16 сэмплов (как estimate_noise_floor сканера), det_thr = медиана × K
+  (K=4 по умолчанию). Единицы совпадают с детектором 1:1: SoapyBladeRF
+  CF32 = SC16Q11/2048 (bladeRF_Streaming.cpp), а ядро ADI отдаёт ADC
+  sign-extended LSB-justified (ad_datafmt.v) — тап детектора в тех же кодах.
 - **Усиление loopback** — грубый сдвиг `lb_shift` (0..8): переполнение 16 бит
   заворачивает знак (wrap), насыщения (saturation) в этой ревизии нет.
   Подбирать с осциллографом/сканом на стенде, начиная с 0.
@@ -134,7 +164,9 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   LB_* забирают TX у fifo_reader. Загрузка волны в RAM идёт в режиме PASS
   (стрим + capture_arm одновременно — слышно, что грузим, в нагрузку).
 - **Watchdog-единица:** 2¹⁶ тактов tx_clock (≈16.4 мс при fs=2 МГц); heartbeat
-  2 Гц → запас 2× к таймауту 1 с по умолчанию.
+  2 Гц → запас 2× к таймауту 1 с по умолчанию. На micro tx_clock =
+  ad9361.clock (2R2T DDR → DATA_CLK = 2×fs = 4 МГц при 2 MSPS — тот же
+  юнит; стенд E5 подтверждает: wd_fired ≤ ~1.5 с после потери kick).
 - **Deadman end-to-end:** heartbeat генерирует ПРИЛОЖЕНИЕ на ноутбуке
   (500 мс, пока ARM), агент шлюза только релеит. Замерло любое звено
   (app/TCP/агент/USB) → kicks прекращаются → watchdog в FPGA гасит TX сам.
@@ -147,7 +179,12 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 Перед сборкой: `fpga/check_toolchain.sh` — проверит Quartus 20.1.1,
 nios2_command_shell, bladeRF-cli, pyusb (честные FAIL с инструкциями).
 
-Автоматическая приёмка на стенде (ноутбук → Ethernet → шлюз с x40,
+Отличия micro (xA4/xA9) от x40 при приёмке: `{"op":"rx"}` на micro честно
+отказывает (CONTROL не существует — RX поднимает AIR_PREP); ARM требует
+`freq_mhz` (LO для AD9361); первый ARM после питания длиннее (полный
+ad9361_init в NIOS при AIR_PREP). Остальные этапы те же.
+
+Автоматическая приёмка на стенде (ноутбук → Ethernet → шлюз с платой,
 на шлюзе `legion_gateway.py`; кабель TX→RX через аттенюатор для E2/E4):
 
 ```bash

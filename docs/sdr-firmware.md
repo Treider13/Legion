@@ -47,14 +47,17 @@ SoapySDRServer --bind
 
 ## Что нам нужно от образа
 
-Официальный **hosted** bitstream даёт RX+TX через libbladeRF/Soapy — скан полосы и перестройка TX LO. Свой HDL «detect за микросекунды» в репозиторий не кладём: xA4 49 kLE тесен, это не hosted-образ.
+Официальный **hosted** bitstream даёт RX+TX через libbladeRF/Soapy — скан полосы и перестройка TX LO. Поверх hosted — наша ревизия **legion** (`fpga/`, сборка из вендоренного дерева Nuand, обе платформы: x40 и micro xA4/xA9): автономный тракт в FPGA (детектор I²+Q², loopback RX→TX по гейту, плеер/NCO, watchdog-deadman) и NIOS-восстановление эфира на micro (AIR-регистры). Это и есть «detect за микросекунды» — внутри FPGA, не на хосте.
 
 Не ставим чужие jam-FPGA и не шьём ESP32 этими файлами.
 
 ## Замысел образа (режим SDR)
 
-Нужен официальный **hosted** bitstream: RX (energy detect по allowlist) +
-TX LO на RF out → усилитель. FX3 `.img` без FPGA задачу не закрывает.
+Нужен **hosted** bitstream: RX (energy detect по allowlist) +
+TX LO на RF out → усилитель; для конвейера «скан → FPGA-ретрансляция»
+— ревизия legion поверх hosted (`bladeRF-cli -l/-L legion_xA4.rbf`,
+сборка `fpga/vendor/bladerf/hdl/quartus/build_bladerf.sh -b bladeRF-micro -s A4 -r legion`).
+FX3 `.img` без FPGA задачу не закрывает.
 Имена вроде RF-Clown / BlueJammer / nRF24 отклоняются на хосте.
 
 Запись в железо — вкладки **ПРОШИВКА SDR** и **ПРОШИВКА ESP32** (не одна кнопка).
