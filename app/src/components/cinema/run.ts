@@ -48,6 +48,9 @@ export async function runCinemaStop(): Promise<void> {
   // доходил до AIR_PREP (кино live из-за fpgaBusy).
   s.abortFpgaSolo();
   s.abortFpgaAir();
+  // Ручной ARM панели тоже в полёте виден как fpgaBusy — Стоп обязан
+  // отозвать и его, иначе кнопка видна, но ARM доезжает.
+  s.abortFpgaArm();
   if (s.fpgaArmed) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
   if (s.scanRunning) s.stopScan();
