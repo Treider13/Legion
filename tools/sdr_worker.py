@@ -134,11 +134,10 @@ def rx_is_parked(
     )
 
 
-def settle_samples(fs: float) -> int:
-    """После смены LO: 32 USB-буфера DIO-sys + 2 мс ФАПЧ. Иначе в FFT старый IQ."""
-    pipeline = USB_RX_BUFFERS * TRANSFER_SAMPLES
-    pll = max(1, int(0.002 * max(float(fs), 1.0)))
-    return pipeline + pll
+def settle_samples(_fs: float = 0.0) -> int:
+    """После смены LO сброс равен глубине USB DIO-sys: 32 × 4096 (capture.cpp sync_config).
+    Отдельной константы ФАПЧ в их репозитории нет — ничего не добавляем."""
+    return USB_RX_BUFFERS * TRANSFER_SAMPLES
 
 
 class IqRing:

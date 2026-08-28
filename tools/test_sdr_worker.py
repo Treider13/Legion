@@ -92,8 +92,7 @@ def main() -> int:
         check("DIO rate = 40e6 (не analog BW)", w.dio_rx_rate(28) == 40e6)
         check("DIO rate micro тоже 40e6", w.dio_rx_rate(56) == 40e6)
         check("DIO BW 40e6", w.DIO_BANDWIDTH_HZ == 40_000_000)
-        check("settle ≥ 32×4096", w.settle_samples(40e6) >= 32 * 4096)
-        check("settle = pipeline + 2 мс", w.settle_samples(40e6) == 32 * 4096 + int(0.002 * 40e6))
+        check("settle = 32×4096 (sync_config, без выдуманной ФАПЧ)", w.settle_samples(40e6) == 32 * 4096)
         check(
             "parked: тот же LO не ретунит",
             w.rx_is_parked(True, 915e6, 40e6, 915e6, 40e6, 0, True) is True,
