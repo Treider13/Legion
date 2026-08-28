@@ -14,6 +14,12 @@ import {
   type Esp32FlashResult,
 } from "../flash/esp32";
 import { planSdrWrite } from "../flash/sdrWrite";
+import {
+  planLegionBuild,
+  planLegionFlashGateway,
+  planLegionFlashLocal,
+  type LegionFlashAction,
+} from "../flash/legionCustom";
 import { defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
 import { catalogById } from "../sdr/catalog";
 import { hostOpenAllowed, usableImagePath } from "../sdr/host";
@@ -34,6 +40,11 @@ import {
   hostTxOff,
   hostTxWave,
   hostFpga,
+  hostLegionBuildCancel,
+  hostLegionBuildStart,
+  hostLegionBuildStatus,
+  hostLegionEnvInfo,
+  hostLegionToolchain,
   markCatalogPresent,
   requireHwForSdr,
   type FpgaStatus,
@@ -111,6 +122,7 @@ export type WorkspaceId =
   | "signal"
   | "pa"
   | "sdrFlash"
+  | "sdrCustom"
   | "esp32Flash";
 export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 
@@ -193,6 +205,18 @@ interface LegionStore {
   sdrHostDetail: string;
   sdrImageBytes: number;
   sdrImagePath: string;
+  // КАСТОМ FPGA (ревизия legion): сборка из fpga/ на этом ПК + запись .rbf
+  legionBuildPhase: "idle" | "building" | "done" | "failed";
+  legionBuildLog: string;
+  legionArtifactPath: string;
+  legionArtifactSha256: string;
+  legionEnvDetail: string;
+  legionCanBuild: boolean;
+  legionFlashTarget: "local" | "gateway";
+  legionFlashAction: LegionFlashAction;
+  legionFlashPath: string;
+  legionFlashConfirm: boolean;
+  lastLegionFlash: { ok: boolean; reason: string } | null;
   // SCAN RX
   scanRunning: boolean;
   scanThresholdDb: number;
@@ -292,6 +316,15 @@ interface LegionStore {
   openSdr(opts?: { requireHw?: string }): Promise<void>;
   closeSdr(): Promise<void>;
   flashSdr(action?: SdrFlashAction): Promise<void>;
+  setLegionFlashTarget(v: "local" | "gateway"): void;
+  setLegionFlashAction(a: LegionFlashAction): void;
+  setLegionFlashPath(v: string): void;
+  setLegionFlashConfirm(v: boolean): void;
+  legionEnvRefresh(): Promise<void>;
+  legionToolchainRun(): Promise<void>;
+  legionBuildStart(): Promise<void>;
+  legionBuildCancel(): Promise<void>;
+  legionFlash(): Promise<void>;
   probeEsp32Chip(): Promise<void>;
   flashEsp32(): Promise<void>;
   injectDemoTone(): void;
@@ -479,6 +512,8 @@ let gDetStagnantPolls = 0;
  *  Handoff сверяет поколение после await ARM — сменилось, значит оператор
  *  стопнул в полёте: не коммитим ARM, откатываемся (паттерн gTxGen). */
 let gFpgaAirGen = 0;
+/** Поколение опроса сборки legion: отмена/новый старт режут старый цикл. */
+let gLegionBuildGen = 0;
 
 export function peekFpgaAirGen(): number {
   return gFpgaAirGen;
@@ -1085,6 +1120,17 @@ export const useLegion = create<LegionStore>((set, get) => {
     sdrHostDetail: "",
     sdrImagePath: "",
     sdrImageBytes: 0,
+    legionBuildPhase: "idle",
+    legionBuildLog: "",
+    legionArtifactPath: "",
+    legionArtifactSha256: "",
+    legionEnvDetail: "",
+    legionCanBuild: false,
+    legionFlashTarget: "local",
+    legionFlashAction: "load",
+    legionFlashPath: "",
+    legionFlashConfirm: false,
+    lastLegionFlash: null,
     scanRunning: false,
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
@@ -2567,6 +2613,172 @@ export const useLegion = create<LegionStore>((set, get) => {
           sdrFlashConfirm: false,
         });
         pushLog("sys", r.written ? `записано в SDR: ${r.reason}` : `не записано: ${r.reason}`);
+      } finally {
+        set({ flashBusy: false });
+      }
+    },
+
+    setLegionFlashTarget: (v) => set({ legionFlashTarget: v, legionFlashConfirm: false }),
+    setLegionFlashAction: (a) => set({ legionFlashAction: a, legionFlashConfirm: false }),
+    setLegionFlashPath: (v) => set({ legionFlashPath: v, legionFlashConfirm: false }),
+    setLegionFlashConfirm: (v) => set({ legionFlashConfirm: v }),
+
+    legionEnvRefresh: async () => {
+      const r = await hostLegionEnvInfo();
+      if (!r.ok || !r.info) {
+        set({ legionEnvDetail: r.reason, legionCanBuild: false });
+        return;
+      }
+      set({ legionEnvDetail: r.info.reason, legionCanBuild: r.info.canBuild });
+    },
+
+    legionToolchainRun: async () => {
+      const r = await hostLegionToolchain();
+      set({ legionBuildLog: r.text });
+      const lastLine = r.text.trim().split("\n").filter(Boolean).pop() ?? "";
+      pushLog("sys", r.ok ? `toolchain legion: ${lastLine || "OK"}` : `toolchain legion: ${lastLine || "FAIL"}`);
+    },
+
+    legionBuildStart: async () => {
+      // Сборка не трогает USB и не пишет в железо — flashBusy тут не нужен
+      // (иначе часовой синтез глушил бы скан: tickScan стоит на flashBusy).
+      if (get().legionBuildPhase === "building") {
+        pushLog("sys", "сборка уже идёт — ждите или ОТМЕНА");
+        return;
+      }
+      const plan = planLegionBuild(get().sdrId);
+      if (!plan.ok || !plan.board || !plan.size) {
+        pushLog("sys", plan.reason);
+        return;
+      }
+      const gen = ++gLegionBuildGen;
+      set({ legionBuildPhase: "building", legionBuildLog: "", lastLegionFlash: null });
+      const start = await hostLegionBuildStart(plan.board, plan.size);
+      if (!start.ok) {
+        set({ legionBuildPhase: "failed", legionBuildLog: start.reason });
+        pushLog("sys", `сборка legion: ${start.reason}`);
+        return;
+      }
+      pushLog("sys", `сборка legion: ${plan.reason} · лог ${start.logPath ?? ""}`);
+      // Синтез Quartus — десятки минут: опрос статуса раз в 2 с, лог хвостом.
+      // Поколение режет дубли и опрос после отмены/повторного старта.
+      while (gen === gLegionBuildGen) {
+        await waitMs(2000);
+        if (gen !== gLegionBuildGen) return;
+        const st = await hostLegionBuildStatus();
+        if (st.tail !== undefined) set({ legionBuildLog: st.tail });
+        if (st.running) continue;
+        const art = st.artifact;
+        if (st.exit === 0 && art?.path) {
+          set({
+            legionBuildPhase: "done",
+            legionArtifactPath: art.path,
+            legionArtifactSha256: art.sha256 ?? "",
+            legionFlashPath: art.path,
+          });
+          pushLog(
+            "sys",
+            `сборка legion: готово ${art.path}${art.sha256 ? ` · sha256 ${art.sha256.slice(0, 16)}…` : ""}`,
+          );
+        } else {
+          set({ legionBuildPhase: "failed" });
+          pushLog("sys", `сборка legion: exit ${st.exit ?? "?"} — артефакт не найден, хвост лога на вкладке`);
+        }
+        return;
+      }
+    },
+
+    legionBuildCancel: async () => {
+      gLegionBuildGen += 1;
+      const r = await hostLegionBuildCancel();
+      set({ legionBuildPhase: "idle" });
+      pushLog("sys", r.reason);
+    },
+
+    legionFlash: async () => {
+      if (get().flashBusy) {
+        pushLog("sys", "прошивка уже идёт — ждите");
+        return;
+      }
+      if (get().fpgaArmed) {
+        pushLog("sys", "прошивка legion: сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB");
+        return;
+      }
+      const s = get();
+      const target = s.legionFlashTarget;
+      const path = (s.legionFlashPath || (target === "local" ? s.legionArtifactPath : "")).trim();
+      const action = s.legionFlashAction;
+      const plan =
+        target === "local"
+          ? planLegionFlashLocal({ sdrId: s.sdrId, path, action, confirmed: s.legionFlashConfirm })
+          : planLegionFlashGateway({ sdrId: s.sdrId, path, action, confirmed: s.legionFlashConfirm });
+      if (!plan.ok) {
+        set({ lastLegionFlash: { ok: false, reason: plan.reason } });
+        pushLog("sys", plan.reason);
+        return;
+      }
+      if (!hostSdrAvailable()) {
+        const reason = `команда не запущена (нет desktop LEGION): ${plan.reason}`;
+        set({ lastLegionFlash: { ok: false, reason }, legionFlashConfirm: false });
+        pushLog("sys", reason);
+        return;
+      }
+      set({ flashBusy: true });
+      try {
+        if (get().sdrOpened || get().scanRunning || get().transmitArmed) {
+          await get().closeSdr();
+        }
+        // USB у агента даже без ARM (он держит его со старта) — release
+        // лучшее-усилие: шлюз выключен → локальный USB и так свободен.
+        const rel = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+        if (!rel.ok) {
+          pushLog(
+            "sys",
+            `USB release перед прошивкой: ${rel.reason ?? "шлюз молчит"} — если USB на шлюзе, CLI плату не откроет`,
+          );
+        }
+        if (target === "local") {
+          const r = await hostFlash(plan.argv, plan.file);
+          const hint = !r.ok
+            ? ""
+            : action === "load"
+              ? " · дальше: legion_gateway с LEGION_FPGA_RBF=<этот .rbf>"
+              : " · autoload после цикла питания; откат — hostedx*.rbf (вкладка ПРОШИВКА SDR)";
+          set({ lastLegionFlash: { ok: r.ok, reason: r.reason + hint }, legionFlashConfirm: false });
+          pushLog("sys", r.ok ? `записано (legion): ${r.reason}${hint}` : `не записано: ${r.reason}`);
+          return;
+        }
+        // Шлюз: flash async + опрос flash_status. Релей воркера 12 с режет
+        // синхронный вызов (bladeRF-cli -L дольше) — старт/статус мгновенные.
+        const start = await hostFpga(
+          { op: "flash", path, action, token: get().fpgaToken },
+          get().sdrGateway,
+        );
+        if (!start.ok || !start.started) {
+          const reason = start.reason ?? "шлюз flash не начал";
+          set({ lastLegionFlash: { ok: false, reason }, legionFlashConfirm: false });
+          pushLog("sys", `не записано: ${reason}`);
+          return;
+        }
+        pushLog("sys", `шлюз: прошивка пошла (${action}) — опрос flash_status`);
+        const deadline = Date.now() + 240_000;
+        let finalSt: FpgaStatus | null = null;
+        while (Date.now() < deadline) {
+          await waitMs(1500);
+          const st = await hostFpga({ op: "flash_status", token: get().fpgaToken }, get().sdrGateway);
+          if (st.running) continue;
+          finalSt = st;
+          break;
+        }
+        const st = finalSt ?? ({ ok: false, reason: "таймаут опроса flash_status (240 с)" } as FpgaStatus);
+        const reason = st.reason ?? st.log ?? (st.ok ? "готово" : "отказ");
+        const hint = !st.ok
+          ? ""
+          : action === "load"
+            ? " · шлюз перезанял USB, ревизия в RAM"
+            : " · autoload после цикла питания";
+        set({ lastLegionFlash: { ok: !!st.ok, reason: reason + hint }, legionFlashConfirm: false });
+        pushLog("sys", st.ok ? `записано (legion, шлюз): ${reason}` : `не записано (шлюз): ${reason}`);
       } finally {
         set({ flashBusy: false });
       }

@@ -11,6 +11,14 @@ import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
 import { looksLikeEsp32Firmware, looksLikeSdrFirmware, refuseCrossFlash } from "../src/flash/guard";
+import {
+  LEGION_BOARDS,
+  classifyLegionRbf,
+  legionBoardFor,
+  planLegionBuild,
+  planLegionFlashGateway,
+  planLegionFlashLocal,
+} from "../src/flash/legionCustom";
 import { classifyFirmware, validateFlashJob } from "../src/sdr/firmware";
 import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
@@ -1450,6 +1458,77 @@ async function main(): Promise<void> {
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
+
+  // --- КАСТОМ FPGA (ревизия legion): сборка + запись, отдельно от hosted ---
+  check("legion: три платы", LEGION_BOARDS.length === 3);
+  check("legion: xA4 → micro/A4", legionBoardFor("bladerf-micro-xa4")?.board === "bladeRF-micro"
+    && legionBoardFor("bladerf-micro-xa4")?.size === "A4");
+  check("legion: x40 → bladeRF/40", legionBoardFor("bladerf-x40")?.rbf === "legionx40.rbf");
+  check("legion: hackrf вне таблицы", legionBoardFor("hackrf-one") === null);
+  check("legion build xA4", planLegionBuild("bladerf-micro-xa4").reason.includes("-b bladeRF-micro -s A4 -r legion"));
+  check("legion build x40", planLegionBuild("bladerf-x40").rbf === "legionx40.rbf");
+  check("legion build pluto отказ", planLegionBuild("plutosdr").ok === false);
+  check("legion rbf legionxA4", classifyLegionRbf("legionxA4.rbf") === "xa4");
+  check("legion rbf legion_x40 (алиас docs)", classifyLegionRbf("legion_x40.rbf") === "x40");
+  check("legion rbf по абсолютному пути", classifyLegionRbf("/tmp/fw/legionxA9.rbf") === "xa9");
+  check("legion rbf hosted не принимает", classifyLegionRbf("hostedxA4.rbf") === null);
+  check("legion rbf fx3 не принимает", classifyLegionRbf("bladeRF_fw_latest.img") === null);
+  check("legion rbf esp32 не принимает", classifyLegionRbf("firmware.bin") === null);
+  check("legion rbf похожее имя не принимает", classifyLegionRbf("legionxA40.rbf") === null);
+  const legionLocalOk = planLegionFlashLocal({
+    sdrId: "bladerf-micro-xa4", path: "/tmp/fw/legionxA4.rbf", action: "load", confirmed: true,
+  });
+  check("legion flash local argv", legionLocalOk.ok && legionLocalOk.argv.join(" ") === "bladeRF-cli -l /tmp/fw/legionxA4.rbf");
+  check("legion flash store = -L", planLegionFlashLocal({
+    sdrId: "bladerf-x40", path: "/tmp/fw/legionx40.rbf", action: "store", confirmed: true,
+  }).argv[1] === "-L");
+  check("legion flash без галочки отказ", planLegionFlashLocal({
+    sdrId: "bladerf-micro-xa4", path: "/tmp/fw/legionxA4.rbf", action: "load", confirmed: false,
+  }).ok === false);
+  check("legion flash A9 на A4 отказ", planLegionFlashLocal({
+    sdrId: "bladerf-micro-xa4", path: "/tmp/fw/legionxA9.rbf", action: "load", confirmed: true,
+  }).ok === false);
+  check("legion flash hosted отказ", planLegionFlashLocal({
+    sdrId: "bladerf-micro-xa4", path: "/tmp/fw/hostedxA4.rbf", action: "load", confirmed: true,
+  }).ok === false);
+  check("legion flash имя без пути отказ", planLegionFlashLocal({
+    sdrId: "bladerf-micro-xa4", path: "legionxA4.rbf", action: "load", confirmed: true,
+  }).ok === false);
+  check("legion flash на hackrf отказ", planLegionFlashLocal({
+    sdrId: "hackrf-one", path: "/tmp/fw/legionxA4.rbf", action: "load", confirmed: true,
+  }).ok === false);
+  const legionGwOk = planLegionFlashGateway({
+    sdrId: "bladerf-micro-xa9", path: "/home/gw/legionxA9.rbf", action: "store", confirmed: true,
+  });
+  check("legion flash gateway ok", legionGwOk.ok && legionGwOk.file === "/home/gw/legionxA9.rbf");
+  check("legion flash gateway относительный отказ", planLegionFlashGateway({
+    sdrId: "bladerf-micro-xa9", path: "home/gw/legionxA9.rbf", action: "store", confirmed: true,
+  }).ok === false);
+  check("legion flash gateway чужая плата отказ", planLegionFlashGateway({
+    sdrId: "bladerf-x40", path: "/home/gw/legionxA4.rbf", action: "load", confirmed: true,
+  }).ok === false);
+  check("legion: hosted-валидатор по-прежнему режет legion-имена", validateFlashJob({
+    deviceId: "bladerf-micro-xa4", filename: "legionxA4.rbf", byteLength: 1000, action: "load-fpga",
+  }).ok === false);
+  check("legion: вкладка в режиме SDR", modeOf("sdrCustom") === "sdr");
+  const sdrRs = readFileSync(join(here, "../src-tauri/src/sdr.rs"), "utf8");
+  check("legion: sdr_flash allowlist без скрипта сборки", !sdrRs.includes("build_bladerf"));
+  const legionRust = readFileSync(join(here, "../src-tauri/src/legion_build.rs"), "utf8");
+  check("rust: таблица плат как в TS", legionRust.includes('("bladeRF", "40")') && legionRust.includes('("bladeRF-micro", "A9")'));
+  check("rust: сборка через nios shell + build_bladerf.sh", legionRust.includes("nios2_command_shell.sh") && legionRust.includes("./build_bladerf.sh -b {board} -s {size} -r legion"));
+  check("rust: setsid для отмены группой", legionRust.includes("setsid"));
+  check("rust: артефакт legionx<size>", legionRust.includes('format!("legionx{size}")'));
+  check("store: flash legion отдаёт USB шлюза до CLI", storeSrc.includes('op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway)')
+    && storeSrc.includes("planLegionFlashLocal"));
+  check("store: flash legion при ARM отказ", storeSrc.includes("прошивка legion: сначала ОСТАНОВИТЬ FPGA"));
+  check("store: опрос сборки по поколению", storeSrc.includes("gLegionBuildGen"));
+  const buildFn = storeSrc.slice(storeSrc.indexOf("legionBuildStart: async"), storeSrc.indexOf("legionBuildCancel: async"));
+  check("сборка legion НЕ занимает flashBusy (часовой синтез не глушит скан)",
+    !buildFn.includes("flashBusy: true") && !buildFn.includes("flashBusy: false"));
+  check("сборка legion: повторный старт отказ", buildFn.includes('legionBuildPhase === "building"'));
+  const legionFlashFn = storeSrc.slice(storeSrc.indexOf("legionFlash: async"), storeSrc.indexOf("probeEsp32Chip: async"));
+  check("прошивка legion под flashBusy (мьютекс записи)", legionFlashFn.includes("flashBusy: true"));
+  check("прошивка legion: шлюз async flash + опрос", legionFlashFn.includes('op: "flash"') && legionFlashFn.includes('op: "flash_status"'));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

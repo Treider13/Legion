@@ -9,7 +9,7 @@
 export type LegionMode = "sdr" | "esp32";
 
 export function modeOf(workspace: string): LegionMode {
-  return workspace === "sdr" || workspace === "scan" || workspace === "signal" || workspace === "sdrFlash"
+  return workspace === "sdr" || workspace === "scan" || workspace === "signal" || workspace === "sdrFlash" || workspace === "sdrCustom"
     ? "sdr"
     : "esp32";
 }
