@@ -15,7 +15,8 @@ API сверен с:
   MeasureDelay.py: if status.ret != len(tx_pulse): raise.
   SoapyRemote: enumerate/open с driver=remote,remote=tcp://host:55132.
 
-Режим 1: RX FFT (energy) + TX CW на LO → RF out. ESP32 сюда не входит.
+Режим 1: RX PSD как DIO-sys/spectrum_analyzer (Hann, Welch-8, |X|²/N²,
+сглаживание DC) + TX CW на LO → RF out. ESP32 сюда не входит.
 LEGION_SDR_FAKE=1 — только проверка протокола (не эфир).
 """
 from __future__ import annotations
@@ -94,7 +95,10 @@ def kwargs_str(kw: dict[str, str]) -> str:
 TX_FS = 2.0e6
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
-FFT_MIN = 1024  # wiki PythonSupport: буфер 1024, не 64 бина UI
+# DIO-sys/spectrum_analyzer: FFT 1024/2048/4096, Welch 8 кадров, Hann, |X|²/N².
+FFT_SIZES = (1024, 2048, 4096)
+WELCH_FRAMES = 8
+FFT_MIN = 1024
 
 
 def cw_lo_hz(rf_hz: float, fs: float = TX_FS) -> float:
@@ -652,6 +656,8 @@ class Radio:
         self.full_duplex = True
         self.analog_bw = 20.0
         self._rx_on = False
+        self._rx_hz: float | None = None
+        self._rx_fs: float | None = None
         self._tone = None
         self.tx_error: str | None = None
         self.tx_fail = 0
@@ -665,6 +671,8 @@ class Radio:
 
     def close(self) -> None:
         self.tx_off()
+        self._rx_hz = None
+        self._rx_fs = None
         with self._lock:
             if self.dev is not None and SOAPY:
                 try:
@@ -744,6 +752,7 @@ class Radio:
 
     def _ensure_rx(self, fs: float, center_hz: float) -> None:
         assert self.dev is not None
+        retuned = self._rx_hz != center_hz or self._rx_fs != fs
         self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
         try:
             self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(fs, self.analog_bw * 1e6))
@@ -758,6 +767,11 @@ class Radio:
             # half-duplex: после TX поток есть, но deactivate — wiki: activate снова
             self.dev.activateStream(self.rx)
             self._rx_on = True
+        self._rx_hz = center_hz
+        self._rx_fs = fs
+        # После смены LO в USB ещё старый IQ — на антенне это ложные пики не на той частоте.
+        if retuned and self._rx_on:
+            _flush_rx(self.dev, self.rx, fs)
 
     def scan(self, center_mhz: float, bw_mhz: float, bins: int) -> dict[str, Any]:
         n = max(8, min(int(bins), 4096))
@@ -1001,7 +1015,7 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
 
 
 def _setup_front_end(dev: Any, can_tx: bool) -> None:
-    """Антенна/gain — как в wiki listAntennas + Deepwave setGain. Иначе TX часто в 0."""
+    """Антенна/gain. RX — фиксированный gain как DIO-sys (AGC на антенне качает пол)."""
     try:
         rx_ants = list(dev.listAntennas(SOAPY_SDR_RX, 0) or [])
         pick = next((a for a in rx_ants if str(a).upper() in ("RX", "RX1", "RX2", "LNAL", "LNAH")), None)
@@ -1010,10 +1024,11 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
     except Exception:
         pass
     try:
-        dev.setGainMode(SOAPY_SDR_RX, 0, True)
+        dev.setGainMode(SOAPY_SDR_RX, 0, False)
+        dev.setGain(SOAPY_SDR_RX, 0, 30)
     except Exception:
         try:
-            dev.setGain(SOAPY_SDR_RX, 0, 30)
+            dev.setGainMode(SOAPY_SDR_RX, 0, True)
         except Exception:
             pass
     if not can_tx:
@@ -1036,15 +1051,45 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
             pass
 
 
-def _read_size(dev: Any, rx: Any, n: int) -> int:
+def _pick_fft_size(n: int) -> int:
+    """DIO-sys dropdown: 1024 / 2048 / 4096."""
     want = max(int(n), FFT_MIN)
-    try:
-        mtu = int(dev.getStreamMTU(rx))
-        if mtu > 0:
-            want = max(want, min(mtu, 4096))
-    except Exception:
-        pass
-    return min(max(want, FFT_MIN), 4096)
+    for size in FFT_SIZES:
+        if want <= size:
+            return size
+    return FFT_SIZES[-1]
+
+
+def _hann(n: int) -> Any:
+    """w[n] = 0.5 * (1 − cos(2πn / (N−1))) — processing.cpp rebuild_plan."""
+    idx = np.arange(n, dtype=np.float64)
+    return (0.5 * (1.0 - np.cos(2.0 * np.pi * idx / (n - 1)))).astype(np.float32)
+
+
+def welch_dbm(frames: Any) -> Any:
+    """DIO-sys convert_to_dbm + fftshift + интерполяция DC.
+    frames: (WELCH_FRAMES, N) complex. power = |X|² / N²."""
+    n = int(frames.shape[1])
+    win = _hann(n)
+    accum = np.zeros(n, dtype=np.float64)
+    for i in range(frames.shape[0]):
+        x = frames[i] * win
+        spec = np.fft.fft(x)
+        accum += np.abs(spec) ** 2
+    avg = accum / float(frames.shape[0])
+    power = np.maximum(avg / (n * n), 1e-20)
+    db = 10.0 * np.log10(power)
+    db = np.fft.fftshift(db)
+    half = n // 2
+    db[half] = 0.5 * (db[half - 1] + db[half + 1])
+    return db
+
+
+def estimate_noise_floor(db: Any) -> float:
+    """DIO-sys psd_plot.estimate_noise_floor: медиана нижних 60%."""
+    sorted_vals = np.sort(np.asarray(db, dtype=np.float64))
+    lower = sorted_vals[: max(1, int(len(sorted_vals) * 0.60))]
+    return float(np.median(lower))
 
 
 def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
@@ -1061,20 +1106,30 @@ def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
     return out
 
 
-def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-    """Усредняем |FFT|², не IQ (когерентная сумма фаз гасит тон).
-    Wiki: readStream возвращает StreamResult; timeoutUs не дефолт 100ms."""
+def _flush_rx(dev: Any, rx: Any, fs: float) -> None:
     if not NUMPY:
-        raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
-    nread = _read_size(dev, rx, n)
-    buf = np.zeros(nread, dtype=np.complex64)
-    timeout = stream_timeout_us(nread, fs)
-    ps = None
+        return
+    n = 1024
+    buf = np.zeros(n, dtype=np.complex64)
+    timeout = min(stream_timeout_us(n, fs), 200_000)
+    for _ in range(4):
+        try:
+            sr = dev.readStream(rx, [buf], n, timeoutUs=timeout)
+            if stream_ret(sr) <= 0:
+                break
+        except Exception:
+            break
+
+
+def _read_exact(dev: Any, rx: Any, n: int, fs: float) -> Any:
+    """Полный кадр FFT, как DIO-sys ждёт available() >= fft_size."""
+    out = np.zeros(n, dtype=np.complex64)
     got = 0
-    used = nread
+    timeout = stream_timeout_us(n, fs)
     fatal = None
-    for _ in range(12):
-        sr = dev.readStream(rx, [buf], nread, timeoutUs=timeout)
+    for _ in range(32):
+        chunk = np.zeros(n - got, dtype=np.complex64)
+        sr = dev.readStream(rx, [chunk], n - got, timeoutUs=timeout)
         ret = stream_ret(sr)
         kind = stream_kind(ret)
         if kind == "error":
@@ -1082,27 +1137,28 @@ def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[d
             break
         if ret <= 0:
             continue
-        x = buf[:ret]
-        if len(x) < 8:
-            continue
-        # нули в хвосте размазывают спектр (sinc). Только одинаковая длина.
-        if ps is not None and len(x) != used:
-            continue
-        used = len(x)
-        win = np.hanning(len(x))
-        spec = np.fft.fftshift(np.fft.fft(x * win))
-        p = (np.abs(spec) ** 2) / len(x)
-        ps = p if ps is None else ps + p
-        got += 1
-        if got >= 2:
+        out[got : got + ret] = chunk[:ret]
+        got += ret
+        if got >= n:
             break
     if fatal:
         raise RuntimeError(fatal)
-    if ps is None or got == 0:
-        raise RuntimeError("readStream: нет сэмплов (шлюз/кабель/прошивка?)")
-    ps = ps / got
-    db = 10.0 * np.log10(ps + 1e-12)
-    freqs = np.fft.fftshift(np.fft.fftfreq(used, 1.0 / fs)) / 1e6 + center_mhz
+    if got < n:
+        raise RuntimeError("readStream: нет полного кадра FFT (шлюз/кабель/прошивка?)")
+    return out
+
+
+def _read_fft(dev: Any, rx: Any, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
+    """PSD как DIO-sys/spectrum_analyzer: Hann + Welch-8 + |X|²/N² + DC-bin."""
+    if not NUMPY:
+        raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
+    fft_n = _pick_fft_size(n)
+    frames = np.zeros((WELCH_FRAMES, fft_n), dtype=np.complex64)
+    for i in range(WELCH_FRAMES):
+        frames[i] = _read_exact(dev, rx, fft_n, fs)
+    db = welch_dbm(frames)
+    freqs = np.linspace(center_mhz - (fs / 1e6) / 2.0, center_mhz + (fs / 1e6) / 2.0, fft_n)
+    # Полный PSD в UI; если просили меньше бинов — пик в каждом сегменте.
     return _pool_bins(freqs, db, n)
 
 

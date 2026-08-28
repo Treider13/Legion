@@ -75,6 +75,30 @@ def main() -> int:
         check("pool 1024→64", len(pooled) == 64)
         check("pool берёт max", pooled[-1]["powerDbm"] > pooled[0]["powerDbm"])
 
+        hann = w._hann(1024)
+        check("Hann DIO: края ≈ 0", abs(float(hann[0])) < 1e-6 and abs(float(hann[-1])) < 1e-6)
+        check("Hann DIO: середина ≈ 1", abs(float(hann[512]) - 1.0) < 1e-5)
+        check("FFT size 64→1024", w._pick_fft_size(64) == 1024)
+        check("FFT size 2048", w._pick_fft_size(2048) == 2048)
+
+        n = 1024
+        t = np.arange(n)
+        tone_bin = 80
+        frames = np.stack([
+            (0.25 + 0.2 * np.exp(1j * 2 * np.pi * tone_bin * t / n)).astype(np.complex64)
+            for _ in range(w.WELCH_FRAMES)
+        ])
+        psd = w.welch_dbm(frames)
+        half = n // 2
+        check("Welch: DC-бин сглажен", abs(psd[half] - 0.5 * (psd[half - 1] + psd[half + 1])) < 1e-9)
+        peak = int(np.argmax(psd))
+        check("Welch: пик не на LO/DC", peak != half)
+        # bin k → после fftshift индекс (k + N/2) % N
+        expect = (tone_bin + half) % n
+        check("Welch: пик на тоне", abs(peak - expect) <= 1)
+        floor = w.estimate_noise_floor(psd)
+        check("пол = медиана нижних 60%", psd[peak] - floor > 20)
+
         # --- ТИП СИГНАЛА: синтез всех волн ---
         all_ok = True
         for kind in w.WAVE_KINDS:

@@ -197,13 +197,22 @@ export class MockSdrBackend implements SdrBackend {
   }
 }
 
+/** DIO-sys/spectrum_analyzer psd_plot.estimate_noise_floor: медиана нижних 60%. */
+export function estimateNoiseFloor(bins: readonly ScanBin[]): number {
+  if (bins.length === 0) return 0;
+  const sorted = [...bins].map((b) => b.powerDbm).sort((a, b) => a - b);
+  const n = Math.max(1, Math.floor(sorted.length * 0.6));
+  const lower = sorted.slice(0, n);
+  const mid = Math.floor(lower.length / 2);
+  return lower.length % 2 === 0 ? (lower[mid - 1] + lower[mid]) / 2 : lower[mid];
+}
+
 export function detectFromBins(
   bins: readonly ScanBin[],
   thresholdDb: number,
 ): Detection[] {
   if (bins.length === 0) return [];
-  const sorted = [...bins].map((b) => b.powerDbm).sort((a, b) => a - b);
-  const noiseDbm = sorted[Math.floor(sorted.length * 0.2)] ?? sorted[0];
+  const noiseDbm = estimateNoiseFloor(bins);
   const hits: Detection[] = [];
   for (const b of bins) {
     const snr = b.powerDbm - noiseDbm;
