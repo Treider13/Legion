@@ -352,6 +352,7 @@ class LegionGateway:
                     t = self.fpga._t
                     if hasattr(t, "release"):
                         t.release()
+                    self._legion = None  # USB не наш — ревизия неизвестна
                 except Exception as e:
                     print(f"legion-gateway: сторож USB release: {e}", flush=True)
 
@@ -495,6 +496,10 @@ class LegionGateway:
             t = self.fpga._t
             if hasattr(t, "release"):
                 t.release()
+            # Как в op usb release: пока USB не наш, ревизия неизвестна —
+            # иначе ping рапортовал бы протухшее значение (напр. hosted=False
+            # после прошивки legion при провале re-acquire).
+            self._legion = None
             flag = "-l" if action == "load" else "-L"
             try:
                 cp = subprocess.run(["bladeRF-cli", flag, path],
@@ -534,7 +539,13 @@ class LegionGateway:
                 return {"ok": False, "reason": why}
             self._flash = {"running": True, "done": False, "ok": False,
                            "log": "", "action": action, "path": path, "warn": ""}
-            threading.Thread(target=self._flash_run, args=(path, action), daemon=True).start()
+            try:
+                threading.Thread(target=self._flash_run, args=(path, action), daemon=True).start()
+            except Exception as e:
+                # Без отката running залип бы True — все следующие flash отказывали.
+                self._flash = {"running": False, "done": False, "ok": False,
+                               "log": "", "action": "", "path": "", "warn": ""}
+                return {"ok": False, "reason": f"flash: поток не стартовал: {e}"}
             return {"ok": True, "started": True, "reason": f"flash {action}: {path}"}
         if op == "flash_status":
             f = self._flash

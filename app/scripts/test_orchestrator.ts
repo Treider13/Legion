@@ -1529,7 +1529,10 @@ async function main(): Promise<void> {
   check("legion missing: шлюз мёртв → null (это зона fpgaGatewayRefused)", fpgaLegionMissing({ ok: false }) === null);
   check("шлюз: детект legion на acquire и в ping", gwSrc.includes("_detect_legion") && gwSrc.includes('"legion": self._legion'));
   check("шлюз: ARM на hosted отказ", gwSrc.includes("в FPGA нет ревизии legion"));
-  check("шлюз: release обнуляет знание ревизии", gwSrc.includes("self._legion = None"));
+  check("шлюз: release обнуляет знание ревизии на всех путях (op usb, flash, сторож, сбой детекта)",
+    (gwSrc.match(/self\._legion = None/g) ?? []).length === 4);
+  check("шлюз: сбой старта flash-потока откатывает running",
+    gwSrc.includes("flash: поток не стартовал"));
   check("store: ARM проверяет legion до парковки", storeSrc.includes("fpgaLegionMissing(ping)"));
   check("store: статус обновляет fpgaLegion", storeSrc.includes("fpgaLegion: r.legion"));
   check("store: fpgaLegion из ping на всех трёх точках ARM/скан",

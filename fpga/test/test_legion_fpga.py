@@ -506,6 +506,8 @@ lg.subprocess.run = _orig_run
 check("flash: CLI ok + re-acquire провал → ok=True (запись состоялась)",
       gw_f._flash["ok"] is True)
 check("flash: warn про re-acquire присутствует", "re-acquire" in gw_f._flash["warn"])
+check("flash: _legion обнулён при release (не протухшее True из fake-init)",
+      gw_f._legion is None)
 r = gw_f.handle({"op": "flash_status"})
 check("flash_status: reason несёт ВНИМАНИЕ про USB",
       r.get("ok") is True and "ВНИМАНИЕ" in str(r.get("reason")) and bool(r.get("warn")))
@@ -521,8 +523,37 @@ gw_f2._flash_run("/abs/legionx40.rbf", "load")
 lg.subprocess.run = _orig_run
 check("flash: CLI exit≠0 → ok=False, warn пуст (acquire прошёл)",
       gw_f2._flash["ok"] is False and not gw_f2._flash["warn"])
+check("flash: после удачного acquire ревизия перечитана (fake-транспорт = legion)",
+      gw_f2._legion is True)
 r = gw_f2.handle({"op": "flash_status"})
 check("flash_status: отказ CLI без ВНИМАНИЯ", r.get("ok") is False and "отказ" in str(r.get("reason")))
+
+# Сбой старта потока: running откатывается, следующий flash доступен.
+gw_t = lg.LegionGateway(fake=True)
+
+
+class _BoomThread:
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        raise RuntimeError("no threads")
+
+
+_orig_thread = lg.threading.Thread
+lg.threading.Thread = _BoomThread
+r = gw_t.handle({"op": "flash", "path": "/abs/legionx40.rbf", "action": "load"})
+lg.threading.Thread = _orig_thread
+check("flash: поток не стартовал → честный отказ", r.get("ok") is False and "поток" in str(r.get("reason")))
+check("flash: running не залип после сбоя потока", gw_t._flash["running"] is False)
+r = gw_t.handle({"op": "flash", "path": "/abs/legionx40.rbf", "action": "load"})
+check("flash после сбоя потока снова доступен", r.get("ok") is True and r.get("started") is True)
+for _ in range(30):
+    r = gw_t.handle({"op": "flash_status"})
+    if not r.get("running"):
+        break
+    _time.sleep(0.1)
+check("flash после сбоя потока доезжает (fake)", r.get("done") is True and r.get("ok") is True)
 
 # ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
