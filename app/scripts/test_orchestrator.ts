@@ -1210,7 +1210,17 @@ async function main(): Promise<void> {
   check("air тракт: окно мкс честно от fs", airTractParams(20, 56, 4).windowUs === detectorWindowUs(4, 20_000_000));
   check("air тракт: shift не масштабируется (χ² от числа сэмплов)",
     airTractParams(20, 56, 4).detShift === 4 && airTractParams(20, 56, 15).detShift === 12);
-  check("захват полки: отстройка за пределы ±bw/2", captureParkMhz(2442, 6000, 70, 20) === 2457);
+  check("захват полки: отстройка 1.6×bw (геометрия 3.2 @ 2 МГц)", captureParkMhz(2442, 6000, 70, 20) === 2474);
+  check("захват полки: окно захвата НЕ пересекает канал сигнала ни на одной полосе", (() => {
+    // Сигнал живёт в ±bw/2 от пика; захват видит cap ± bw/2. Пересечение =
+    // полка измерена по сигналу → гейт глухой навсегда (та самая ловушка).
+    for (const bw of [2, 5, 20, 28, 56]) {
+      const cap = captureParkMhz(2442, 6000, 70, bw);
+      if (cap >= 2442 && cap - bw / 2 < 2442 + bw / 2) return false;
+      if (cap < 2442 && cap + bw / 2 > 2442 - bw / 2) return false;
+    }
+    return true;
+  })());
   check("захват полки: 3.2 МГц при канале 2 и по умолчанию",
     captureParkMhz(2442, 6000, 70, 2) === 2445.2 && captureParkMhz(2442, 6000, 70) === 2445.2);
   check("захват полки: окон в пределах IQ-кольца воркера",

@@ -588,11 +588,16 @@ export const useLegion = create<LegionStore>((set, get) => {
   ): void => {
     stopAirWalk();
     if (!plan.hop) return;
+    // tune медленнее выдержки (LAN/USB-шторм) — тик пропускаем, а не копим
+    // очередь на шлюзе (там операции и так под _op_lock, но зачем очередь).
+    let inflight = false;
     gAirWalk = setInterval(() => {
       if (!get().fpgaArmed || get().fpgaPath !== "air") {
         stopAirWalk();
         return;
       }
+      if (inflight) return;
+      inflight = true;
       const step = walker.next();
       const i = centers.indexOf(step.centerMhz);
       const thr = thrTable[i >= 0 ? i : 0] ?? thrTable[0];
@@ -603,17 +608,21 @@ export const useLegion = create<LegionStore>((set, get) => {
         bw_mhz: tract.bwMhz,
         det_thr: thr,
         token: get().fpgaToken,
-      }).then((r) => {
-        if (!get().fpgaArmed || get().fpgaPath !== "air") return;
-        if (!r.ok) {
-          pushLog("sys", `FPGA эфир tune: ${r.reason ?? "отказ"} — стоянка прежняя`);
-          return;
-        }
-        set({
-          lastForwardMhz: step.centerMhz,
-          lastCueReason: `FPGA lb_gated · обход ${step.centerMhz.toFixed(3)} МГц · канал ${tract.bwMhz} МГц · порог ${thr}`,
+      })
+        .then((r) => {
+          if (!get().fpgaArmed || get().fpgaPath !== "air") return;
+          if (!r.ok) {
+            pushLog("sys", `FPGA эфир tune: ${r.reason ?? "отказ"} — стоянка прежняя`);
+            return;
+          }
+          set({
+            lastForwardMhz: step.centerMhz,
+            lastCueReason: `FPGA lb_gated · обход ${step.centerMhz.toFixed(3)} МГц · канал ${tract.bwMhz} МГц · порог ${thr}`,
+          });
+        })
+        .finally(() => {
+          inflight = false;
         });
-      });
     }, plan.dwellMs);
   };
 

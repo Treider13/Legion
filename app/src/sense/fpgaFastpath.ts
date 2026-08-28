@@ -120,8 +120,10 @@ export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): numb
 /** LO для захвата шумовой полки: В СТОРОНУ от пика, за пределы окна ±bw/2.
  *  Захват на самом пике для непрерывного сигнала дал бы энергию сигнала,
  *  а не шума (тон живёт в каждом окне) — порог стал бы глухим навсегда.
- *  3.2 МГц при канале 2 МГц: вне окна (±1 МГц), внутри полосы чипа; шире
- *  канал — дальше отстройка (0.75×bw); у края диапазона уходим в минус. */
+ *  Геометрия без перекрытия: delta = bw/2 (край сигнала) + bw/2 (край фильтра
+ *  захвата) + запас на скаты аналогового фильтра (они не кирпичные и растут
+ *  с BW — запас пропорционален). 3.2 МГц при канале 2 МГц — это ровно 1.6×bw;
+ *  у края диапазона уходим в минус. */
 export const FPGA_DET_CAP_DELTA_MHZ = 3.2;
 
 export function captureParkMhz(
@@ -130,7 +132,7 @@ export function captureParkMhz(
   rxLoMhz: number,
   bwMhz = FPGA_AIR_BW_DEFAULT_MHZ,
 ): number {
-  const delta = Math.max(FPGA_DET_CAP_DELTA_MHZ, bwMhz * 0.75);
+  const delta = Math.max(FPGA_DET_CAP_DELTA_MHZ, bwMhz * 1.6);
   const up = peakMhz + delta;
   if (up <= rxHiMhz) return up;
   const down = peakMhz - delta;

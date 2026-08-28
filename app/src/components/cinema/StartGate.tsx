@@ -210,7 +210,11 @@ export function StartGate({ mode, onClose }: Props) {
                 onClick={() => setPattern("hop")}
               >
                 <strong>Случайно</strong>
-                <span>Следующая стоянка из коридора наугад. Волну в RAM не переснимаем.</span>
+                <span>
+                  {path === "air"
+                    ? "Следующая стоянка из коридора наугад. Порог стоянки едет в той же команде tune."
+                    : "Следующая стоянка из коридора наугад. Волну в RAM не переснимаем."}
+                </span>
               </button>
             </div>
             <p className="cinema-gate-lead">{hopNo ?? (path === "air" ? airWalkReason : walkPlan.reason)}</p>
