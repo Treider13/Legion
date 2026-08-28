@@ -350,6 +350,18 @@ export function fpgaGatewayRefused(ping: {
   return null;
 }
 
+/** HDL: без capture_done плеер гонит нули (legion_player.vhd).
+ *  acceptance_bench E3 проверяет флаг до ARM. sleep — не доказательство. */
+export function fpgaPlayerReady(st: {
+  ok?: boolean;
+  capture_done?: boolean;
+  reason?: string;
+}): string | null {
+  if (!st.ok) return st.reason ?? "FPGA: статус недоступен — capture не подтверждён";
+  if (!st.capture_done) return "FPGA player: capture_done=0 — в RAM нет волны, ARM нельзя";
+  return null;
+}
+
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
 const FPGA_DET_SHIFT_FAST = 4;
 /** Сырой порог энергии (не дБ). 0 открывает гейт на шум. */
@@ -1421,6 +1433,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", pingNo);
         return;
       }
+      if (mode === "player") {
+        const st = await gw({ op: "status" });
+        const noWave = fpgaPlayerReady(st);
+        if (noWave) {
+          pushLog("sys", noWave);
+          return;
+        }
+      }
       set({ fpgaBusy: true });
       try {
         const pk = await parkFpgaLo({
@@ -1609,7 +1629,9 @@ export const useLegion = create<LegionStore>((set, get) => {
             set({ fpgaPath: null });
             return false;
           }
-          await waitMs(1000);
+          // 4096 сэмплов @ 2 MSPS ≈ 2 мс. sleep только даёт стриму дойти,
+          // доказательство — capture_done после acquire (HDL / E3).
+          await waitMs(50);
           await releaseSoapyForFpga();
         } else {
           pushLog("sys", "FPGA player: нет Soapy — волну в RAM не загрузить, ARM отменён");
@@ -1621,6 +1643,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         const acq = await gw({ op: "usb", action: "acquire" });
         if (!acq.ok) {
           pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          set({ fpgaPath: null });
+          return false;
+        }
+        const cap = await gw({ op: "status" });
+        const noWave = fpgaPlayerReady(cap);
+        if (noWave) {
+          pushLog("sys", noWave);
           set({ fpgaPath: null });
           return false;
         }

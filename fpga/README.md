@@ -116,6 +116,7 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   эфира на micro не включаем. Soapy паркует RX и TX LO на одну частоту
   при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
   FAKE park, FAKE шлюз (`LEGION_FPGA_FAKE`) и сбой park → ARM нет.
+  Player ARM только при `capture_done` (HDL: иначе нули на DAC). sleep не считается.
   park читает getFrequency/getSampleRate; RX и TX fs должны совпасть
   (loopback FIFO).   Локальный USB открывается `driver=bladerf`, не первая
   плата Soapy; после open `getHardwareKey` должен быть `bladerf1`

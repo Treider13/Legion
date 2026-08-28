@@ -257,6 +257,7 @@ export function SignalPanel() {
           (стрим идёт в режиме PASS). Загрузка волны в RAM: режим PASS +
           capture_arm + обычная ЗАШИТЬ (стрим и capture одновременно).
           ARM сначала паркует RX/TX LO (иначе loopback на чужой частоте). Без park — отказ.
+          PLAYER без capture_done не стартует (в RAM нули, не волна).
         </p>
         <div className="corr-grid">
           <label>

@@ -1158,6 +1158,13 @@ class Radio:
             return None
         return rate if rate > 0 else None
 
+    def _soapy_get_bw(self, direction: int) -> float | None:
+        try:
+            bw = float(self.dev.getBandwidth(direction, 0))
+        except Exception:
+            return None
+        return bw if bw > 0 else None
+
     def park(self, center_mhz: float, bw_mhz: float, fs_hz: float, rx: bool, tx: bool) -> dict[str, Any]:
         """Поставить RX/TX LO без FFT и без USB-стрима. FPGA потом забирает USB.
 
@@ -1197,6 +1204,8 @@ class Radio:
         lo_tol = 1e6
         fs_req_tol = 0.15
         fs_match_tol = 0.02
+        bw_min_frac = 0.5
+        want_bw = min(bw, fs)
         rx_lo = tx_lo = rx_fs = tx_fs = None
         got = fs
         try:
@@ -1205,9 +1214,17 @@ class Radio:
                     self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
                     self.dev.setFrequency(SOAPY_SDR_RX, 0, hz)
                     try:
-                        self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(bw, fs))
-                    except Exception:
-                        pass
+                        self.dev.setBandwidth(SOAPY_SDR_RX, 0, want_bw)
+                    except Exception as e:
+                        return _fail(f"park: setBandwidth RX: {e}")
+                    rx_bw = self._soapy_get_bw(SOAPY_SDR_RX)
+                    if rx_bw is None:
+                        return _fail("park: getBandwidth RX не ответил")
+                    if rx_bw < bw_min_frac * want_bw:
+                        return _fail(
+                            f"park: RX BW {rx_bw / 1e6:.1f} МГц << {want_bw / 1e6:.1f} — "
+                            "окно не analog (LMS дефолт ~1.5 МГц)"
+                        )
                     rx_lo = self._soapy_get_hz(SOAPY_SDR_RX)
                     rx_fs = self._soapy_get_fs(SOAPY_SDR_RX)
                     if rx_lo is None:
@@ -1229,9 +1246,18 @@ class Radio:
                     self.dev.setSampleRate(SOAPY_SDR_TX, 0, fs)
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, hz)
                     try:
-                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(bw, fs))
-                    except Exception:
-                        pass
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, want_bw)
+                    except Exception as e:
+                        if rx:
+                            return _fail(f"park: setBandwidth TX: {e}")
+                    if rx:
+                        tx_bw = self._soapy_get_bw(SOAPY_SDR_TX)
+                        if tx_bw is None:
+                            return _fail("park: getBandwidth TX не ответил")
+                        if tx_bw < bw_min_frac * want_bw:
+                            return _fail(
+                                f"park: TX BW {tx_bw / 1e6:.1f} МГц << {want_bw / 1e6:.1f}"
+                            )
                     tx_lo = self._soapy_get_hz(SOAPY_SDR_TX)
                     tx_fs = self._soapy_get_fs(SOAPY_SDR_TX)
                     if tx_lo is None:

@@ -274,7 +274,14 @@ def main() -> int:
             self._set[(d, "hz")] = hz
 
         def setBandwidth(self, d, _ch, bw):
+            if getattr(self, "bw_fail", False):
+                raise RuntimeError("setBandwidth нет")
             self._set[(d, "bw")] = bw
+
+        def getBandwidth(self, d, _ch):
+            if getattr(self, "bw_read", None) is not None:
+                return self.bw_read
+            return self._set.get((d, "bw"), 0)
 
         def getSampleRate(self, d, _ch):
             if d == w.SOAPY_SDR_RX and self.rx_fs is not None:
@@ -324,6 +331,14 @@ def main() -> int:
     unknown.hw = ""
     pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)
     check("park без hardwareKey → отказ", pk_unk.get("ok") is False)
+    narrow = _Dev()
+    narrow.bw_read = 1.5e6
+    pk_bw = _radio(narrow).park(2442, 28, 28e6, True, True)
+    check("park RX BW 1.5 МГц при запросе 28 → отказ", pk_bw.get("ok") is False)
+    nobw = _Dev()
+    nobw.bw_fail = True
+    pk_nobw = _radio(nobw).park(2442, 28, 28e6, True, True)
+    check("park без setBandwidth на эфире → отказ", pk_nobw.get("ok") is False)
 
     hd = w.Radio()
     hd.fake = True
