@@ -347,6 +347,117 @@ lg.gateway_cleanup(gw)
 check("a4: cleanup без ARM — release без DISARM", gw.fpga._t.released is True)
 rpc({"op": "usb", "action": "acquire"})
 
+# ---------------------------------------------------------------------------
+# D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
+# (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
+# retry xfer с re-acquire при USBError (re-enumerate).
+# ---------------------------------------------------------------------------
+import types as _types  # noqa: E402
+
+
+class _USBError(Exception):
+    pass
+
+
+class _FakeUsbDev:
+    def __init__(self):
+        self.configured = 1      # FPGA status: 1=загружена, 0=пустая
+        self.write_fails = 0     # сколько первых write упадут USBError
+        self.disposed = 0
+        self.finds = 0           # сколько раз find() отдал это устройство
+
+    def get_active_configuration(self):
+        return 1
+
+    def set_configuration(self):
+        pass
+
+    def ctrl_transfer(self, bm, req, wv, wi, n, timeout=None):
+        assert bm == 0xC0 and req == 1 and n == 4, (bm, req, n)
+        return self.configured.to_bytes(4, "little", signed=True)
+
+    def write(self, ep, data, timeout=None):
+        if self.write_fails > 0:
+            self.write_fails -= 1
+            raise _USBError("re-enumerate")
+
+    def read(self, ep, n, timeout=None):
+        return bytes(16)
+
+
+def _stub_usb(dev):
+    fake_usb = _types.ModuleType("usb")
+    fake_core = _types.ModuleType("usb.core")
+    fake_util = _types.ModuleType("usb.util")
+    fake_core.USBError = _USBError
+
+    def _find(**kw):
+        dev.finds += 1
+        return dev
+
+    fake_core.find = _find
+    fake_util.dispose_resources = lambda d: setattr(dev, "disposed", dev.disposed + 1)
+    fake_usb.core = fake_core
+    fake_usb.util = fake_util
+    old = {k: sys.modules.get(k) for k in ("usb", "usb.core", "usb.util")}
+    sys.modules["usb"] = fake_usb
+    sys.modules["usb.core"] = fake_core
+    sys.modules["usb.util"] = fake_util
+    return old
+
+
+def _restore_usb(old):
+    for k, v in old.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
+_dev = _FakeUsbDev()
+_old_usb = _stub_usb(_dev)
+try:
+    t_usb = lg.UsbTransport()
+    check("d1: FPGA загружена → acquire ok (board bladerf1)",
+          t_usb._dev is _dev and t_usb.board == "bladerf1")
+    # D2: один USBError → re-acquire + повтор успешен
+    _dev.write_fails = 1
+    resp = t_usb.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+    check("d2: USBError → re-acquire и повтор успешен",
+          len(resp) == 16 and _dev.finds >= 2)
+    check("d2: старый handle dispose при re-acquire", _dev.disposed >= 1)
+    # D2: постоянный сбой → честная ошибка после ОДНОГО ретрая
+    _dev.write_fails = 100
+    try:
+        t_usb.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+        check("d2: постоянный USBError → отказ", False)
+    except _USBError:
+        check("d2: постоянный USBError → отказ", True)
+finally:
+    _restore_usb(_old_usb)
+
+# D1: FPGA пустая (питание xA4 от USB — выдёргивание = образ потерян)
+_dev2 = _FakeUsbDev()
+_dev2.configured = 0
+_old_usb2 = _stub_usb(_dev2)
+try:
+    os.environ.pop("LEGION_FPGA_RBF", None)
+    try:
+        lg.UsbTransport()
+        check("d1: FPGA пустая → честный отказ", False)
+    except RuntimeError as e:
+        check("d1: FPGA пустая → честный отказ", "FPGA не загружена" in str(e))
+    os.environ["LEGION_FPGA_RBF"] = "/nonexistent/legion_xA4.rbf"
+    try:
+        lg.UsbTransport()
+        check("d1: LEGION_FPGA_RBF не найден → отказ с причиной", False)
+    except RuntimeError as e:
+        check("d1: LEGION_FPGA_RBF не найден → отказ с причиной",
+              "не найден" in str(e))
+    os.environ.pop("LEGION_FPGA_RBF", None)
+finally:
+    _restore_usb(_old_usb2)
+
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.
 r = rpc({"op": "usb", "action": "release"})

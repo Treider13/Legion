@@ -71,6 +71,12 @@ KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
 class UsbTransport:
     """pyusb bulk-передачи 16-байтных NIOS-пакетов."""
 
+    # firmware_common/bladeRF.h: BLADE_USB_CMD_QUERY_FPGA_STATUS = 1,
+    # BLADE_USB_TYPE_IN = 0xC0 (vendor, device-to-host). Ответ int32 LE:
+    # 1 = FPGA сконфигурирована, 0 = пустая (usb_is_fpga_configured, usb.c).
+    USB_CMD_QUERY_FPGA_STATUS = 1
+    USB_TYPE_IN = 0xC0
+
     def __init__(self) -> None:
         import usb.core  # pyusb
 
@@ -79,7 +85,7 @@ class UsbTransport:
         self.board = ""  # bladerf1 | bladerf2 — по PID при acquire
         self._acquire()
 
-    def _acquire(self) -> None:
+    def _find(self) -> None:
         self._dev = None
         for pid, board in BLADERF_PIDS.items():
             self._dev = self._usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
@@ -95,6 +101,44 @@ class UsbTransport:
         except self._usb.core.USBError:
             self._dev.set_configuration()
 
+    def _fpga_configured(self) -> bool:
+        raw = self._dev.ctrl_transfer(self.USB_TYPE_IN,
+                                      self.USB_CMD_QUERY_FPGA_STATUS,
+                                      0, 0, 4, timeout=TIMEOUT_MS)
+        val = int.from_bytes(bytes(raw[:4]), "little", signed=True)
+        if val not in (0, 1):
+            raise RuntimeError(f"FPGA status query: неожиданный ответ {val}")
+        return val == 1
+
+    def _load_fpga(self) -> None:
+        """FPGA пустая (питание xA4 — от USB: выдёргивание = образ потерян,
+        если нет autoload из flash). Грузим в RAM как bladeRF-cli -l."""
+        rbf = os.environ.get("LEGION_FPGA_RBF", "").strip()
+        if not rbf:
+            raise RuntimeError(
+                "FPGA не загружена (пустая после re-enumerate?): задайте "
+                "LEGION_FPGA_RBF для автозагрузки или bladeRF-cli -l/-L вручную")
+        if not os.path.isfile(rbf):
+            raise RuntimeError(f"LEGION_FPGA_RBF: файл не найден: {rbf}")
+        import subprocess
+        try:
+            cp = subprocess.run(["bladeRF-cli", "-l", rbf],
+                                capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            raise RuntimeError("bladeRF-cli не найден — FPGA загрузить нечем")
+        if cp.returncode != 0:
+            raise RuntimeError(
+                f"bladeRF-cli -l: {(cp.stderr or cp.stdout).strip()[:200]}")
+
+    def _acquire(self) -> None:
+        self._find()
+        if not self._fpga_configured():
+            self._load_fpga()
+            time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+            self._find()
+            if not self._fpga_configured():
+                raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
         if self._dev is not None:
@@ -105,10 +149,28 @@ class UsbTransport:
         if self._dev is None:
             self._acquire()
 
+    def _reacquire(self) -> None:
+        """Re-enumerate: старый handle мёртв, устройство возвращается не сразу."""
+        try:
+            if self._dev is not None:
+                self._usb.util.dispose_resources(self._dev)
+        except Exception:
+            pass
+        self._dev = None
+        time.sleep(0.2)
+        self._acquire()
+
     def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
         t = TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
-        self._dev.write(EP_OUT, req, timeout=t)
-        resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
+        try:
+            self._dev.write(EP_OUT, req, timeout=t)
+            resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
+        except self._usb.core.USBError:
+            # Краткий сбой шины / re-enumerate: переоткрыть и повторить
+            # ОДИН раз. Дальше — честный отказ наверх (ретрай-шторм хуже).
+            self._reacquire()
+            self._dev.write(EP_OUT, req, timeout=t)
+            resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
         return bytes(resp)
 
 
