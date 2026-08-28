@@ -27,6 +27,7 @@ import json
 import os
 import socketserver
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -56,6 +57,14 @@ TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
 # Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
 # на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
 DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+
+# Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
+# сам DISARM → USB release (именно в этом порядке: release без DISARM
+# отдал бы плату Soapy с живым ARM и поднятым аналогом). Дефолт 2.5 с:
+# дольше FPGA-сторожа (~1 с, WD_LIMIT) — первичное гашение цифрой делает
+# железо, затем NIOS (legion_work), шлюз убирает USB последним слоем.
+# 0 = выключить (не рекомендуется). Kick приложения = 500 мс.
+KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
 
 
 class UsbTransport:
@@ -195,6 +204,50 @@ class LegionGateway:
         self._rx_by_us = False    # analog RX включён нами — снять при disarm
         self._tx_by_us = False    # analog TX включён нами — снять при disarm
         self._armed = False       # CTRL.ARM записан и не снят (по нашим командам)
+        self._armed_at = 0.0      # monotonic ARM (сторож: ARM без единого kick)
+        self._wd_en = True        # ARM с wd=false — оператор отказался от deadman
+        self._wd_attempts = 0     # попытки сторожа в этом ARM (троттлинг лога)
+        # Операции и сторож сериализуются: ThreadingTCPServer гоняет handle()
+        # в потоках, а xfer — это пара write/read 16-байтных пакетов, которую
+        # нельзя перемежать с DISARM сторожа (иначе ответ уедет не тому).
+        self._op_lock = threading.Lock()
+        threading.Thread(target=self._kick_watchdog, daemon=True).start()
+
+    def _kick_watchdog(self) -> None:
+        """Heartbeat пропал при живом ARM → сам DISARM → USB release.
+
+        Последний софт-слой deadman: FPGA гасит цифру (~1 с), NIOS
+        (legion_work) снимает ARM и эфир, шлюз отпускает USB, чтобы сканер
+        или ожившая панель снова открыли Soapy. wd=false при ARM — отказ
+        оператора от deadman, сторож молчит. Опорная точка — последний
+        kick, а если kicks не было ни разу — момент ARM."""
+        while True:
+            time.sleep(0.5)
+            if KICK_TIMEOUT_S <= 0:
+                continue
+            with self._op_lock:
+                if not self._armed or not self._wd_en:
+                    continue
+                ref = self.last_kick or self._armed_at
+                if not ref or time.monotonic() - ref < KICK_TIMEOUT_S:
+                    continue
+                self._wd_attempts += 1
+                # USB мог умереть вместе с линком — DISARM будет падать;
+                # ретраим каждый тик, но в лог — первый раз и дальше раз в 5 с.
+                if self._wd_attempts == 1 or self._wd_attempts % 10 == 0:
+                    print("legion-gateway: heartbeat пропал при ARM — "
+                          "DISARM + USB release (сторож kick_age, "
+                          f"попытка {self._wd_attempts})", flush=True)
+                try:
+                    self.handle({"op": "disarm"})
+                except Exception as e:
+                    print(f"legion-gateway: сторож DISARM: {e}", flush=True)
+                try:
+                    t = self.fpga._t
+                    if hasattr(t, "release"):
+                        t.release()
+                except Exception as e:
+                    print(f"legion-gateway: сторож USB release: {e}", flush=True)
 
     # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
     # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
@@ -325,6 +378,9 @@ class LegionGateway:
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             if ok:
                 self._armed = True
+                self._armed_at = time.monotonic()
+                self._wd_en = bool(msg.get("wd", True))
+                self._wd_attempts = 0
             elif (self._rx_by_us or self._tx_by_us) and not self._armed:
                 # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
                 # подняли, а ARM не взвёлся — тракт под током не оставляем
@@ -348,6 +404,7 @@ class LegionGateway:
             ok = self.fpga.disarm()
             if ok:
                 self._armed = False
+                self._armed_at = 0.0
             # micro: NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c),
             # флаги там информационные. x40: CONTROL снимаем как раньше —
             # при сбое флаги держим, следующий disarm повторит.
@@ -466,8 +523,15 @@ class _Handler(socketserver.StreamRequestHandler):
                 # (кроме ping) несёт токен; неверный/отсутствует — отказ.
                 if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
                     resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
-                else:
+                elif msg.get("op") == "ping":
+                    # ping без лока: длинный ARM/сторож не задерживают liveness
                     resp = gw.handle(msg)
+                else:
+                    # Сериализация операций: xfer — пара write/read 16-байтных
+                    # пакетов, её нельзя перемежать с другой командой или
+                    # DISARM сторожа (ответ уехал бы не тому).
+                    with gw._op_lock:
+                        resp = gw.handle(msg)
             except Exception as e:
                 resp = {"ok": False, "reason": str(e)}
             self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())

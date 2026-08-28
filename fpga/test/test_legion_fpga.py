@@ -205,6 +205,9 @@ srv.gw = gw
 import threading as _th
 _th.Thread(target=srv.serve_forever, daemon=True).start()
 port = srv.server_address[1]
+# Сторож kick_age (A2) не должен мешать основному suite: таймаут огромный,
+# в dedicated-блоке ниже опускается до 1 с и возвращается обратно.
+lg.KICK_TIMEOUT_S = 3600.0
 
 
 def rpc(msg: dict) -> dict:
@@ -291,6 +294,40 @@ check("агент без само-кика (нет _start_kick)", not hasattr(gw
 r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)
+
+# ---------------------------------------------------------------------------
+# Сторож kick_age (A2): ARM жив, kicks пропали → сам DISARM → USB release
+# (именно в этом порядке). Таймаут 1 с только в этом блоке.
+# ---------------------------------------------------------------------------
+import time as _time  # noqa: E402
+
+lg.KICK_TIMEOUT_S = 1.0
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm player", r.get("ok") is True)
+rpc({"op": "kick"})
+_time.sleep(2.2)  # > таймаута 1 с при тике 0.5 с
+check("сторож: kicks пропали → DISARM сам", gw._armed is False)
+check("сторож: USB отпущен после DISARM", gw.fpga._t.released is True)
+r = rpc({"op": "usb", "action": "acquire"})
+check("сторож: после release USB занимается обратно", r.get("ok") is True)
+
+# ARM без единого kick (панель умерла до beginFpgaKick): опора — момент ARM
+gw.last_kick = 0.0
+r = rpc({"op": "arm", "mode": "player"})
+check("сторож: arm без kicks", r.get("ok") is True)
+_time.sleep(2.2)
+check("сторож: ARM без единого kick → DISARM + release",
+      gw._armed is False and gw.fpga._t.released is True)
+rpc({"op": "usb", "action": "acquire"})
+
+# wd=false — оператор отказался от deadman: сторож молчит
+r = rpc({"op": "arm", "mode": "player", "wd": False})
+check("сторож: arm wd=false", r.get("ok") is True)
+_time.sleep(2.2)
+check("сторож: wd=false → нет само-DISARM (решение оператора)",
+      gw._armed is True and gw.fpga._t.released is False)
+rpc({"op": "disarm"})
+lg.KICK_TIMEOUT_S = 3600.0
 
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.
