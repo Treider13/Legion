@@ -65,7 +65,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
 
 #ifdef LEGION_FPGA
         case NIOS_PKT_8x32_TARGET_USR1: {
-            /* LEGION: читаем STATUS-PIO целиком (addr не используется) */
+            /* LEGION: STATUS-PIO целиком; addr=AIR_PREP — состояние эфира NIOS */
             if (!legion_reg_read(addr, data)) {
                 *data = 0x00;
                 return false;

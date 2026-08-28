@@ -108,16 +108,19 @@ begin
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;
                     end if;
-                when LEGION_MODE_LB_GATED =>
-                    if live = '1' and det_active = '1' then
-                        out_i <= lb_i; out_q <= lb_q; out_valid <= lb_valid;
-                    else
-                        out_i <= (others => '0'); out_q <= (others => '0');
-                        out_valid <= phase;
-                    end if;
-                when LEGION_MODE_LB_ALWAYS =>
+                when LEGION_MODE_LB_GATED | LEGION_MODE_LB_ALWAYS =>
+                    -- Каденс valid ВСЕГДА (когда live): FIFO пуст → нули,
+                    -- иначе valid=0 надолго → DAC держит ПОСЛЕДНИЙ сэмпл
+                    -- (lms6002d.vhd). Гейт (GATED) режет ДАННЫЕ, не каденс.
                     if live = '1' then
-                        out_i <= lb_i; out_q <= lb_q; out_valid <= lb_valid;
+                        out_valid <= phase;
+                        if lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
+                            out_i <= lb_i;
+                            out_q <= lb_q;
+                        else
+                            out_i <= (others => '0');
+                            out_q <= (others => '0');
+                        end if;
                     else
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;

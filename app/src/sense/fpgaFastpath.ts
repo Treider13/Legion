@@ -1,41 +1,60 @@
 // ============================================================================
 // LEGION — микросекундный detect→TX только внутри FPGA (lb_gated).
 // Хост-скан / Soapy / React сюда не входят: USB retune = сотни µs…мс.
-// Окно детектора: 2^shift сэмплов I²+Q². shift=4 → 16 сэмплов.
-// x40 (LMS6002D): fs = analog BW (28 МГц) → окно ≈ 0.57 µs, эфир через
-// CONTROL bit1/2. micro xA4/xA9 (AD9361): fs = 2 МГц → окно 8 µs, эфир через
-// RFIC-команды 16x64 (NIOS). Полоса должна влезть в analog BW: hop ФАПЧ ≠ µs.
+// Окно детектора: 2^shift сэмплов I²+Q². Ревизия legion: fs = 2 МГц.
+// shift=4 → 16 сэмплов → 8 µs. shift=8 (дефолт шлюза) → 256 → 128 µs.
+// Полоса должна влезть в analog BW (x40 = 28 МГц): hop ФАПЧ ≠ микросекунды.
+// Платы: bladeRF 2.0 micro xA4/xA9 (AD9361, эфир поднимает NIOS через
+// AIR-регистры) и bladeRF 1 x40 (LMS6002D, CONTROL bit1/2 со шлюза).
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
-import { sameBin } from "./orchestrator";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
 export const FPGA_US_DET_SHIFT = 4;
 /** Стартовый порог средней энергии; 0 открывает гейт на шум (шлюз отказывает). */
 export const FPGA_DEFAULT_DET_THR = 5000;
-
-/** Платы с ревизией legion и эфиром lb_*: x40 (LMS6002D) и micro (AD9361). */
-const FPGA_AIR_HW: Record<string, "bladerf1" | "bladerf2"> = {
-  "bladerf-x40": "bladerf1",
-  "bladerf-micro-xa4": "bladerf2",
-  "bladerf-micro-xa9": "bladerf2",
-};
-
-/** Класс железа для FPGA-эфира: hardwareKey libbladeRF, не драйвер (он общий). */
-export function fpgaAirHw(sdrId: string): "bladerf1" | "bladerf2" | null {
-  return FPGA_AIR_HW[sdrId] ?? null;
-}
+/** Платы с ревизией legion и эфирным трактом lb_*. Подмены каталога нет:
+ *  micro паркуется через AD9361 как сама себя, x40 — через LMS6002D. */
+export const FPGA_AIR_SDR_IDS: readonly string[] = [
+  "bladerf-micro-xa4",
+  "bladerf-micro-xa9",
+  "bladerf-x40",
+];
 
 export function fpgaAirSupported(sdrId: string): boolean {
-  return fpgaAirHw(sdrId) !== null;
+  return FPGA_AIR_SDR_IDS.includes(sdrId);
 }
 
-/** fs тракта lb_*: micro — 2 MSPS (окно 16 = 8 µs), x40 — analog BW (28 МГц). */
-export function fpgaAirFsHz(sdrId: string, analogBwMhz: number): number {
-  return fpgaAirHw(sdrId) === "bladerf2"
-    ? LEGION_FPGA_FS_HZ
-    : Math.max(1, analogBwMhz) * 1e6;
+/** Окно детектора для захвата порога: 16 сэмплов = 8 мкс на 2 MSPS. */
+export const FPGA_DET_WIN_SAMPLES = 1 << FPGA_US_DET_SHIFT;
+/** Окон в захвате шумовой полки (512 × 16 = 8192 сэмпла ≈ 4 мс на 2 MSPS). */
+export const FPGA_DET_WINDOWS = 512;
+/** Множитель над медианой нижних 60% энергий окон. Окно 16 сэмплов — χ² с 32
+ *  степенями: разброс среднего ~25%, K=4 ≈ +6 дБ над полкой. Тюнинг на стенде. */
+export const FPGA_DET_THR_K = 4;
+/** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
+export const FPGA_AIR_GONE_POLLS = 3;
+
+/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра. */
+export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): number {
+  if (!Number.isFinite(medianEnergy) || medianEnergy <= 0) return 0;
+  const thr = Math.round(medianEnergy * k);
+  return Math.min(0xffffffff, Math.max(0, thr));
+}
+
+/** LO для захвата шумовой полки: на 3.2 МГц В СТОРОНУ от пика.
+ *  Захват на самом пике для непрерывного сигнала дал бы энергию сигнала,
+ *  а не шума (тон живёт в каждом окне) — порог стал бы глухим навсегда.
+ *  3.2 МГц: вне окна 2 МГц (±1 МГц), внутри полосы чипа; у края диапазона
+ *  уходим в минус. */
+export const FPGA_DET_CAP_DELTA_MHZ = 3.2;
+
+export function captureParkMhz(peakMhz: number, rxHiMhz: number, rxLoMhz: number): number {
+  const up = peakMhz + FPGA_DET_CAP_DELTA_MHZ;
+  if (up <= rxHiMhz) return up;
+  const down = peakMhz - FPGA_DET_CAP_DELTA_MHZ;
+  return down >= rxLoMhz ? down : up; // край чипа: лучше up с клипом, чем вне диапазона
 }
 
 export function clampDetShift(shift: number): number {
@@ -77,8 +96,7 @@ export interface FpgaAirPlan {
 
 export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   const detShift = clampDetShift(i.detShift);
-  // Окно — на реальной fs тракта платы: x40 = analog BW (28 МГц), micro = 2 МГц.
-  const windowUs = detectorWindowUs(detShift, fpgaAirFsHz(i.sdrId, i.analogBwMhz));
+  const windowUs = detectorWindowUs(detShift);
   const spanMhz = parkSpanMhz(i.bands);
   const fail = (reason: string): FpgaAirPlan => ({
     ok: false,
@@ -89,7 +107,7 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
     spanMhz,
   });
   if (!fpgaAirSupported(i.sdrId)) {
-    return fail("FPGA эфир: ревизия legion на bladeRF x40 / micro xA4/xA9");
+    return fail("FPGA эфир: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
   }
   if (!i.loadOk) {
     return fail("FPGA эфир: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
@@ -97,11 +115,10 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
     return fail("FPGA эфир: задайте det_thr > 0 (порог 0 = гейт на шум)");
   }
-  const usTxt = windowUs < 10 ? windowUs.toFixed(2) : windowUs.toFixed(1);
   if (spanMhz > i.analogBwMhz) {
     return {
       ok: true,
-      reason: `FPGA I²+Q² окно ${usTxt} µs в текущем LO (≤${i.analogBwMhz} МГц). Полоса ${spanMhz.toFixed(1)} МГц не сканируется — hop ФАПЧ = мс`,
+      reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs в текущем LO (≤${i.analogBwMhz} МГц). Полоса ${spanMhz.toFixed(1)} МГц не сканируется — hop ФАПЧ = мс`,
       windowUs,
       detThr: i.detThr,
       detShift,
@@ -110,7 +127,7 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   }
   return {
     ok: true,
-    reason: `FPGA I²+Q² окно ${usTxt} µs → RX→TX внутри чипа → усилитель`,
+    reason: `FPGA I²+Q² окно ${windowUs.toFixed(1)} µs → RX→TX внутри чипа → усилитель`,
     windowUs,
     detThr: i.detThr,
     detShift,
@@ -118,7 +135,9 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   };
 }
 
-/** Строка наблюдения: ноутбук не в тракте, только телеметрия. */
+/** Строка наблюдения: ноутбук не в тракте, только телеметрия.
+ *  det_count — счётчик КАЖДОГО окна с детектом (HDL, не фронт): рост =
+ *  энергия жива; стагнация N опросов = «пропала» → автовозврат к скану. */
 export function fpgaObserveLine(st: {
   ok?: boolean;
   det_active?: boolean;
@@ -128,35 +147,7 @@ export function fpgaObserveLine(st: {
   if (!st?.ok) return "ноутбук наблюдает · статус FPGA недоступен";
   if (st.wd_fired) return "watchdog погасил TX — конвейер на SDR остановлен";
   const gate = st.det_active ? "энергия → RX→TX на усилитель" : "тишина, гейт закрыт";
-  return `наблюдение: ${gate} · детектов ${st.det_count ?? 0}`;
-}
-
-/** Выход «энергия пропала»: столько подряд опросов с det_active=0 (гейт
- *  закрыт) считаем сигнал ушедшим. Опрос 400 мс → 5 тиков = 2 с тишины.
- *  Критерий — уровень det_active: det_count для сплошного сигнала не растёт
- *  (HDL считает фронты окон с детектом), по приросту счётчика судить нельзя. */
-export const FPGA_QUIET_TICKS_MAX = 5;
-
-/** Счётчик тихих тиков: следующее значение по итогам опроса статуса. */
-export function fpgaQuietTicksNext(
-  prev: number,
-  st: { ok?: boolean; det_active?: boolean },
-  armedLive: boolean,
-): number {
-  if (!armedLive || !st.ok) return 0;
-  return st.det_active === false ? prev + 1 : 0;
-}
-
-/** Пул кандидатов handoff конвейера скан→FPGA: живые детекты минус skip-лист
- *  (частота ушедшего сигнала, пока walker её не перепроверит тишиной).
- *  Маску withoutOwnTx сюда не применяем: в скан-фазе ретранслятор выключен,
- *  lastForwardMhz — не «свой TX», а прошлая частота ретрансляции. */
-export function fpgaHandoffPool<T extends { freqMhz: number }>(
-  dets: readonly T[],
-  skipMhz: number | null,
-): T[] {
-  if (skipMhz == null) return [...dets];
-  return dets.filter((d) => !sameBin(d.freqMhz, skipMhz));
+  return `наблюдение: ${gate} · окон с энергией ${st.det_count ?? 0}`;
 }
 
 /**
@@ -171,10 +162,11 @@ export function ncoFtwFromFrac(fj: number): number {
 }
 
 /** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco.
- *  parkMhz — припаркованный LO: на micro шлюз сверяет RFIC FREQUENCY readback. */
+ *  freq_mhz — LO парковки: на micro без неё шлюз честно отказывает (AD9361
+ *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */
 export function fpgaArmCmd(
   mode: "player" | "nco" | "lb_gated" | "lb_always",
-  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number; parkMhz?: number },
+  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number; freqMhz?: number },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
     op: "arm",
@@ -189,8 +181,8 @@ export function fpgaArmCmd(
   if (mode === "nco") {
     cmd.nco_ftw = opts.ncoFtw ?? ncoFtwFromFrac(0.125);
   }
-  if (opts.parkMhz !== undefined) {
-    cmd.park_mhz = opts.parkMhz;
+  if (opts.freqMhz !== undefined && Number.isFinite(opts.freqMhz) && opts.freqMhz > 0) {
+    cmd.freq_mhz = opts.freqMhz;
   }
   return cmd;
 }

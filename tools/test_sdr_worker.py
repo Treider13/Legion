@@ -224,58 +224,6 @@ def main() -> int:
         bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
         check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
-        # --- det_probe: порог из CS16, формула = legion_detector.vhd ---
-        # Окно 16 (shift=4), I=100/Q=0 → avg = (16·100²)>>4 = 10000; K=4 → 40000.
-        win = 16
-        iq_flat = np.tile(np.array([100, 0], dtype=np.int16), win * 64)
-        thr, n_win, med = w.det_thr_from_iq(iq_flat, 4, 4.0)
-        check("det_thr: avg окна = Σ(I²+Q²)>>shift", med == 10000 and n_win == 64)
-        check("det_thr: K×медиана", thr == 40000)
-        # Медиана, не пик: одно «горячее» окно не двигает порог
-        iq_spike = iq_flat.copy()
-        iq_spike[0 : win * 2] = 3000  # первое окно горячее
-        thr2, _, med2 = w.det_thr_from_iq(iq_spike, 4, 4.0)
-        check("det_thr: медиана глуха к одиночному окну", med2 == 10000 and thr2 == 40000)
-        # Вырождение: тишина → порога нет (гейт на шум не открываем)
-        thr0, _, _ = w.det_thr_from_iq(np.zeros(win * 64 * 2, dtype=np.int16), 4, 4.0)
-        check("det_thr: нули → отказ (порог 0)", thr0 is None)
-        # Мало сэмплов → отказ
-        thr_few, n_few, _ = w.det_thr_from_iq(np.zeros(16, dtype=np.int16), 4, 4.0)
-        check("det_thr: < 8 окон → отказ", thr_few is None and n_few == 0)
-        # Переполнение 32 бит → отказ (HDL сравнивает avg(31 downto 0))
-        thr_big, _, _ = w.det_thr_from_iq(
-            np.tile(np.array([32767, 32767], dtype=np.int16), win * 64), 4, 100.0
-        )
-        check("det_thr: > 2^31 → отказ", thr_big is None)
-        # Отрицательные сэмплы: квадрат неотрицателен (как signed×signed в HDL)
-        iq_neg = np.tile(np.array([-100, 100], dtype=np.int16), win * 64)
-        thr_neg, _, med_neg = w.det_thr_from_iq(iq_neg, 4, 2.0)
-        check("det_thr: I²+Q² со знаком", med_neg == 20000 and thr_neg == 40000)
-        # Локстеп с legion_detector_tb.vhd: те же вектора → те же avg
-        _, _, med_tb1 = w.det_thr_from_iq(iq_flat, 4, 4.0)
-        check("det_thr ≡ TB детектора: I=100,Q=0 → avg 10000 (≥ порога 1000 в TB)", med_tb1 == 10000)
-        iq_tb2 = np.tile(np.array([20, 20], dtype=np.int16), win * 64)
-        _, _, med_tb2 = w.det_thr_from_iq(iq_tb2, 4, 4.0)
-        check("det_thr ≡ TB детектора: I=20,Q=20 → avg 800 (< 1000 в TB)", med_tb2 == 800)
-        # shift=8: окно 256, та же формула avg = Σ>>shift
-        iq8 = np.tile(np.array([100, 0], dtype=np.int16), 256 * 64)
-        thr8, n8, med8 = w.det_thr_from_iq(iq8, 8, 2.0)
-        check("det_thr: shift=8, avg = Σ(I²+Q²)>>8", med8 == 10000 and n8 == 64 and thr8 == 20000)
-        # K=1 не принимаем в RPC (дефолт K), но функция честно считает любой K>0
-        thr_k1, _, _ = w.det_thr_from_iq(iq_flat, 4, 1.0)
-        check("det_thr: K=1 → порог = медиана", thr_k1 == 10000)
-
-    # det_probe при живом TX — честный отказ (TX-петля держит _lock на writeStream)
-    r_tx = w.Radio()
-    r_tx.fake = False
-    r_tx.dev = object()
-    r_tx.tx_live = lambda: True  # type: ignore[method-assign]
-    dp_tx = r_tx.det_probe(4, 64, 4.0)
-    check("det_probe при живом TX → отказ", dp_tx.get("ok") is False and "TX" in str(dp_tx.get("reason")))
-    r_tx.dev = None
-    dp_nod = r_tx.det_probe(4, 64, 4.0)
-    check("det_probe без устройства → отказ", dp_nod.get("ok") is False)
-
     check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
     check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")
     check("hw пусто → unknown", w.classify_bladerf_hw("") == "unknown")
@@ -299,6 +247,29 @@ def main() -> int:
         },
     )
     check("FAKE open + require bladerf1 → отказ", need.get("ok") is False and need.get("fake") is True)
+    need2 = rpc(
+        proc,
+        {
+            "op": "open",
+            "args": "driver=fake",
+            "analogBwMhz": 28,
+            "canTx": True,
+            "requireHw": "bladerf2",
+        },
+    )
+    check("FAKE open + require bladerf2 → отказ", need2.get("ok") is False and need2.get("fake") is True)
+    # requireHw проверяет класс для обеих плат (не только bladerf1) — факт кода
+    check(
+        "open(): requireHw bladerf2 реально сверяет класс (не вайб)",
+        'want_class = {"bladerf1": "lms", "bladerf2": "ad9361"}.get(require_hw)' in open(WORKER).read(),
+    )
+    # Успешный open не падает на опечатке в имени атрибута (ревью 2026-08-28:
+    # self.hardwareKey в f-строке — AttributeError на реальном железе после
+    # удачного open; FAKE-путь это не ловил — возвращается раньше).
+    check(
+        "open(): успех читает self.hardware_key (не self.hardwareKey)",
+        "self.hardwareKey}" not in open(WORKER).read(),
+    )
     # вернуть FAKE-открытие для последующих park/tx тестов
     rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 
@@ -320,9 +291,6 @@ def main() -> int:
     none = rpc(proc, {"op": "park", "centerMhz": 2442, "rx": False, "tx": False})
     check("park без RX/TX → отказ", none.get("ok") is False)
 
-    dp = rpc(proc, {"op": "det_probe", "winShift": 4})
-    check("det_probe на FAKE → честный отказ", dp.get("ok") is False and dp.get("fake") is True)
-
     # park() без FAKE: readback LO/fs. Иначе «ok» после set* — вайб.
     class _Dev:
         def __init__(self, rx_hz=None, tx_hz=None, rx_fs=None, tx_fs=None, deaf=False):
@@ -330,6 +298,7 @@ def main() -> int:
             self.rx_hz, self.tx_hz = rx_hz, tx_hz
             self.rx_fs, self.tx_fs = rx_fs, tx_fs
             self.deaf = deaf
+            self.gain_mode = None
 
         def setSampleRate(self, d, _ch, fs):
             self._set[(d, "fs")] = fs
@@ -366,6 +335,23 @@ def main() -> int:
         def getHardwareKey(self):
             return getattr(self, "hw", "bladerf1")
 
+        def setGainMode(self, d, ch, automatic):
+            if getattr(self, "gm_fail", False):
+                raise RuntimeError("setGainMode нет")
+            self.gain_mode = (d, ch, automatic)
+
+        def getGain(self, d, ch):
+            return 42.0
+
+        def setupStream(self, d, f):
+            return object()
+
+        def activateStream(self, s):
+            pass
+
+        def deactivateStream(self, s):
+            pass
+
     def _radio(dev):
         r = w.Radio()
         r.fake = False
@@ -389,22 +375,17 @@ def main() -> int:
     check("park без getFrequency → отказ", pk_deaf.get("ok") is False)
     micro = _Dev()
     micro.hw = "bladerf2"
-    pk_micro = _radio(micro).park(2442, 56, 2e6, True, True)
+    pk_micro = _radio(micro).park(2442, 28, 28e6, True, True)
+    check("park micro/AD9361 → ok (без подмены на x40)", pk_micro.get("ok") is True)
     check(
-        "park micro/AD9361 → ok (2 MSPS, readback)",
-        pk_micro.get("ok") is True
-        and pk_micro.get("rxLo") == 2442e6
-        and pk_micro.get("txFs") == 2e6,
+        "park micro: AGC выкл (ручной gain) + gain readback для ARM",
+        micro.gain_mode == (w.SOAPY_SDR_RX, 0, False) and pk_micro.get("rxGainDb") == 42.0,
     )
-    check(
-        "park micro: BW клампится к fs (56 МГц запрос → 2 МГц)",
-        micro._set.get((w.SOAPY_SDR_RX, "bw")) == 2e6,
-    )
-    check(
-        "park micro: fs=2 MSPS записана на RX и TX",
-        micro._set.get((w.SOAPY_SDR_RX, "fs")) == 2e6
-        and micro._set.get((w.SOAPY_SDR_TX, "fs")) == 2e6,
-    )
+    micro_gm = _Dev()
+    micro_gm.hw = "bladerf2"
+    micro_gm.gm_fail = True
+    pk_gm = _radio(micro_gm).park(2442, 28, 28e6, True, True)
+    check("park micro: AGC не выключается → отказ (порог уплыл бы)", pk_gm.get("ok") is False)
     unknown = _Dev()
     unknown.hw = ""
     pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)
@@ -417,6 +398,52 @@ def main() -> int:
     nobw.bw_fail = True
     pk_nobw = _radio(nobw).park(2442, 28, 28e6, True, True)
     check("park без setBandwidth на эфире → отказ", pk_nobw.get("ok") is False)
+
+    # --- det_capture: порог детектора из шумовой полки (handoff скан→FPGA) ---
+    if w.NUMPY:
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        noise = (
+            (rng.standard_normal(512 * 16) + 1j * rng.standard_normal(512 * 16)) * 0.01
+        ).astype(np.complex64)
+        med_noise = w.window_energy_median(noise, 16)
+        # E ≈ 2·(0.01·2048)² ≈ 839 в единицах SC16Q11 (шкала SoapyBladeRF: /2048)
+        check("det_capture: медиана шума в единицах SC16Q11", 400 < med_noise < 2000)
+        hot = noise.copy().reshape(512, 16)
+        hot[: 512 // 4] *= 50.0  # четверть окон с сильным сигналом
+        med_hot = w.window_energy_median(hot.reshape(-1), 16)
+        check(
+            "det_capture: сигнал в 25% окон не поднимает полку (нижние 60%)",
+            abs(med_hot - med_noise) / med_noise < 0.5,
+        )
+        # Локстеп с legion_detector_tb.vhd: константная энергия проходит
+        # нижние 60% без изменений → avg окна в единицах шины (SC16Q11)
+        # численно равен avg HDL (Σ(I²+Q²)>>shift): I=100,Q=0 → 10000
+        # (в TB ≥ порога 1000 = детект), I=20,Q=20 → 800 (в TB — тишина).
+        tb1 = np.full(16 * 64, complex(100 / w.CF32_FULL_SCALE, 0), dtype=np.complex64)
+        check(
+            "det_capture ≡ TB детектора: I=100,Q=0 → avg 10000",
+            abs(w.window_energy_median(tb1, 16) - 10000) < 1e-6,
+        )
+        tb2 = np.full(
+            16 * 64,
+            complex(20 / w.CF32_FULL_SCALE, 20 / w.CF32_FULL_SCALE),
+            dtype=np.complex64,
+        )
+        check(
+            "det_capture ≡ TB детектора: I=20,Q=20 → avg 800",
+            abs(w.window_energy_median(tb2, 16) - 800) < 1e-6,
+        )
+    else:
+        check("det_capture: numpy есть (CI ставит tools/requirements.txt)", False)
+
+    no_rx = w.Radio()
+    no_rx.fake = False
+    cap_none = no_rx.det_capture(16, 512)
+    check("det_capture без park → честный отказ", cap_none.get("ok") is False)
+    cap_fake = rpc(proc, {"op": "det_capture", "win": 16, "windows": 512})
+    check("det_capture на FAKE → отказ (не эфир)", cap_fake.get("ok") is False)
 
     hd = w.Radio()
     hd.fake = True

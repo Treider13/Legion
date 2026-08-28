@@ -91,6 +91,39 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
   };
 }
 
+/** requireHw под плату: x40 → bladerf1 (LMS6002D), micro → bladerf2 (AD9361).
+ *  Подмены нет: каждая плата паркуется как сама себя. */
+export function requireHwForSdr(sdrId: string): string {
+  if (sdrId === "bladerf-x40") return "bladerf1";
+  if (sdrId === "bladerf-micro-xa4" || sdrId === "bladerf-micro-xa9") return "bladerf2";
+  return "";
+}
+
+/** Захват шумовой полки на припаркованном LO (handoff скан→FPGA):
+ *  медиана нижних 60% энергий окон по win сэмплов, единицы SC16Q11. */
+export async function hostDetCapture(
+  win: number,
+  windows: number,
+): Promise<{ ok: boolean; reason: string; medianEnergy?: number; fsHz?: number }> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
+  try {
+    const r = await hostRpc<{
+      ok?: boolean;
+      reason?: string;
+      medianEnergy?: number;
+      fsHz?: number;
+    }>({ op: "det_capture", win, windows });
+    return {
+      ok: !!r.ok,
+      reason: r.reason ?? "",
+      medianEnergy: r.medianEnergy,
+      fsHz: r.fsHz,
+    };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostPark(
   centerMhz: number,
   bwMhz: number,
@@ -107,6 +140,7 @@ export async function hostPark(
   txLo?: number;
   rxFs?: number;
   txFs?: number;
+  rxGainDb?: number;
 }> {
   if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
   try {
@@ -120,6 +154,7 @@ export async function hostPark(
       txLo?: number;
       rxFs?: number;
       txFs?: number;
+      rxGainDb?: number;
     }>({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
     return {
       ok: !!r.ok,
@@ -131,40 +166,7 @@ export async function hostPark(
       txLo: r.txLo,
       rxFs: r.rxFs,
       txFs: r.txFs,
-    };
-  } catch (e) {
-    return { ok: false, reason: String(e) };
-  }
-}
-
-export interface DetProbeResult {
-  ok: boolean;
-  reason: string;
-  detThr?: number;
-  median?: number;
-  windows?: number;
-  fsHz?: number;
-  fake?: boolean;
-}
-
-/** Захват IQ на припаркованной частоте → det_thr = K × медиана окон I²+Q².
- *  Зовётся между park и отдачей USB агенту FPGA (handoff скан→lb_gated). */
-export async function hostDetProbe(winShift: number, k?: number): Promise<DetProbeResult> {
-  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
-  try {
-    const r = await hostRpc<DetProbeResult & { detThr?: number }>({
-      op: "det_probe",
-      winShift,
-      ...(k !== undefined ? { k } : {}),
-    });
-    return {
-      ok: !!r.ok,
-      reason: r.reason ?? "",
-      detThr: r.detThr,
-      median: r.median,
-      windows: r.windows,
-      fsHz: r.fsHz,
-      fake: !!r.fake,
+      rxGainDb: r.rxGainDb,
     };
   } catch (e) {
     return { ok: false, reason: String(e) };
@@ -223,8 +225,6 @@ export interface FpgaStatus {
   lb_level?: number;
   det_count?: number;
   fake?: boolean;
-  /** Плата по USB PID на шлюзе: bladerf1 (x40) / bladerf2 (micro). */
-  board?: string;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.

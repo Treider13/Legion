@@ -27,6 +27,12 @@
 #define LEGION_REG_LB_SHIFT       0x06  /* сдвиг усиления loopback 0..8 */
 #define LEGION_REG_WD_LIMIT       0x07  /* таймаут: limit × 2^16 тактов tx_clock */
 #define LEGION_REG_WD_KICK        0x08  /* любая запись = heartbeat */
+/* Эфир micro (AD9361) — живут в NIOS, в HDL не пишутся. На bladeRF 1 эфир
+ * поднимает шлюз через CONTROL bit1/2 (bladerf_p.vhd), там эти регистры —
+ * no-op true. */
+#define LEGION_REG_AIR_FREQ_KHZ   0x09  /* LO парковки, кГц (47М..6Г) */
+#define LEGION_REG_AIR_GAIN_DB    0x0A  /* ручной RX gain, дБ (0 = не трогать) */
+#define LEGION_REG_AIR_PREP       0x0B  /* bit0: 1=up/0=standby; bit1: RX; bit2: TX */
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -44,5 +50,12 @@
  * Реализация — в legion_cmds.c; вызывается из pkt_8x32.c (case 0x80). */
 bool legion_reg_write(uint8_t addr, uint32_t data);
 bool legion_reg_read(uint8_t addr, uint32_t *data);
+
+/* Эфир micro: подъём/стендбай воздушного тракта через Nuand RFIC-интерфейс
+ * NIOS (rfic_command_write_immed, devices_rfic.c). На bladeRF 1 — no-op.
+ * Подъём: INIT(ON) → LO/fs/BW/gain → TX unmute → ENABLE. Первый подъём после
+ * питания — полный ad9361_init (сотни мс): хост ждёт длинным таймаутом. */
+bool legion_air_up(bool rx, bool tx);
+bool legion_air_down(void);
 
 #endif /* LEGION_CMDS_H_ */

@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""LEGION FPGA — агент на шлюзе (мини-ПК с USB3 к bladeRF x40).
+"""LEGION FPGA — агент на шлюзе (мини-ПК с USB3 к bladeRF x40 / micro xA4).
 
 Ноутбук (LEGION app → sdr_worker.py) шлёт JSON-строки по TCP; агент
 выполняет их в железо через USB bulk на PERIPHERAL_EP — тот же путь,
 что nios_access.c в libbladeRF (host↔NIOS II через FX3 UART-пакеты).
 
 Команды (по одной JSON-строке на запрос/ответ):
-  {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true}
+  {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
+   "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int}
   {"op":"disarm"}
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
   {"op":"set", "reg":"nco_ftw"|..., "value":int}
   {"op":"ping"}
+
+Плата определяется по USB PID: 0x5246 = bladeRF 1 (эфир через CONTROL
+bit1/2, bladerf_p.vhd), 0x5250 = micro (эфир через AIR-регистры NIOS:
+AD9361 поднимает прошивка — хост при close гасит RFIC, факт из
+libbladeRF rfic_host.c/bladerf2.c).
 
 LEGION_FPGA_FAKE=1 — проверка протокола без железа (не эфир).
 """
@@ -40,7 +46,7 @@ AUTH_TOKEN = os.environ.get("LEGION_FPGA_TOKEN", "").strip()
 #   backend/usb/usb.h: PERIPHERAL_EP_OUT=0x02, PERIPHERAL_EP_IN=0x82,
 #     PERIPHERAL_TIMEOUT_MS=250
 BLADERF_VID = 0x2CF0
-BLADERF_PIDS = (0x5246, 0x5250)  # bladeRF 1, bladeRF 2 micro
+BLADERF_PIDS = {0x5246: "bladerf1", 0x5250: "bladerf2"}  # PID → класс платы
 EP_OUT = 0x02  # PERIPHERAL_EP_OUT
 EP_IN = 0x82   # PERIPHERAL_EP_IN
 TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
@@ -54,18 +60,15 @@ class UsbTransport:
 
         self._usb = usb
         self._dev = None
-        self.board = "unknown"
+        self.board = ""  # bladerf1 | bladerf2 — по PID при acquire
         self._acquire()
 
     def _acquire(self) -> None:
         self._dev = None
-        for pid in BLADERF_PIDS:
+        for pid, board in BLADERF_PIDS.items():
             self._dev = self._usb.core.find(idVendor=BLADERF_VID, idProduct=pid)
             if self._dev is not None:
-                # PID из дескриптора FX3 — факт платы: 0x5246 bladeRF 1
-                # (LMS6002D), 0x5250 micro (AD9361). От этого зависит, чем
-                # включать эфир: CONTROL bit1/2 или RFIC-команды 16x64.
-                self.board = lf.board_name_for_pid(pid)
+                self.board = board
                 break
         if self._dev is None:
             raise RuntimeError("bladeRF не найден по USB (VID %04X, PID %s)"
@@ -86,9 +89,10 @@ class UsbTransport:
         if self._dev is None:
             self._acquire()
 
-    def xfer(self, req: bytes) -> bytes:
-        self._dev.write(EP_OUT, req, timeout=TIMEOUT_MS)
-        resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=TIMEOUT_MS)
+    def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
+        t = TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
+        self._dev.write(EP_OUT, req, timeout=t)
+        resp = self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=t)
         return bytes(resp)
 
 
@@ -101,12 +105,8 @@ class FakeTransport:
         self.control = 0  # штатный CONTROL-регистр FPGA (target 0x01)
         self.released = False
         self.fail_control_read = False
-        self.fail_ctrl_write = False  # честный сбой записи REG_CTRL (тест отката)
-        self.board = board
-        # Модель RFIC (micro): init_state ON?, включённые каналы, LO по каналам
-        self.rfic_on = False
-        self.rfic_enabled: set[int] = set()
-        self.rfic_freq: dict[int, int] = {}
+        self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
+        self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
 
     def release(self) -> None:
         self.released = True
@@ -114,54 +114,18 @@ class FakeTransport:
     def acquire(self) -> None:
         self.released = False
 
-    def _xfer_rfic(self, req: bytes) -> bytes:
-        """16x64 target RFIC: очередь записи мгновенно пуста, успех всегда."""
-        write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
-        addr = req[4] | (req[5] << 8)
-        cmd = addr & 0xFF
-        ch = (addr >> 8) & 0xF
-        data = 0
-        for i in range(8):
-            data |= req[6 + i] << (8 * i)
-        out = 0
-        if write:
-            if cmd == lf.RFIC_CMD_INIT:
-                self.rfic_on = data == lf.RFIC_INIT_ON
-            elif cmd == lf.RFIC_CMD_ENABLE:
-                if data:
-                    self.rfic_enabled.add(ch)
-                else:
-                    self.rfic_enabled.discard(ch)
-            elif cmd == lf.RFIC_CMD_FREQUENCY:
-                self.rfic_freq[ch] = data
-        else:
-            if cmd == lf.RFIC_CMD_STATUS:
-                out = (int(self.rfic_on) << 0) | (1 << 1)  # init + wqsuccess, wqlen=0
-            elif cmd == lf.RFIC_CMD_FREQUENCY:
-                out = self.rfic_freq.get(ch, 0)
-        resp = bytearray(req)
-        resp[2] = (req[2] & 0x1) | lf.NIOS_PKT_8x32_FLAG_SUCCESS
-        for i in range(8):
-            resp[6 + i] = (out >> (8 * i)) & 0xFF
-        return bytes(resp)
-
-    def xfer(self, req: bytes) -> bytes:
+    def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
+        del timeout_ms  # FAKE отвечает мгновенно; параметр — для USB-транспорта
         # Отпущенный USB = честный отказ (как pyusb после dispose_resources)
         if self.released:
             raise RuntimeError("USB отпущен (release) — устройство не наше")
-        if len(req) != lf.NIOS_PKT_LEN:
-            return bytes(16)
-        if req[0] == lf.NIOS_PKT_16x64_MAGIC:
-            return self._xfer_rfic(req)
         # Разбор как в NIOS: magic 'C', target, flags, addr, data
-        if req[0] != lf.NIOS_PKT_8x32_MAGIC:
+        if len(req) != lf.NIOS_PKT_LEN or req[0] != lf.NIOS_PKT_8x32_MAGIC:
             return bytes(16)
         target = req[1]
         write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
         addr = req[4]
         data = int.from_bytes(req[5:9], "little")
-        if write and self.fail_ctrl_write and target == lf.LEGION_TARGET and addr == lf.REG_CTRL:
-            return bytes(16)  # нет SUCCESS: запись CTRL в FPGA не прошла
         resp = bytearray(16)
         resp[0] = lf.NIOS_PKT_8x32_MAGIC
         resp[1] = req[1]
@@ -175,12 +139,22 @@ class FakeTransport:
             resp[5:9] = self.control.to_bytes(4, "little")
             return bytes(resp)
         if write:
+            # Сбой записи CTRL (откат эфира в ARM проверяется этим)
+            if addr == lf.REG_CTRL and self.fail_ctrl_write:
+                return bytes(16)
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
                 if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:
                     self.cap_done = True
             self.regs[addr] = data
         else:
+            if addr == lf.REG_AIR_PREP:
+                # Модель readback'а NIOS: bit0 = эфир поднят (по последней
+                # записи AIR_PREP), bit1 = частота задана.
+                air = int(bool(self.regs.get(lf.REG_AIR_PREP, 0) & 0x1))
+                freq = int(self.regs.get(lf.REG_AIR_FREQ_KHZ, 0) != 0)
+                resp[5:9] = (air | (freq << 1)).to_bytes(4, "little")
+                return bytes(resp)
             ctrl = self.regs.get(lf.REG_CTRL, 0)
             armed = bool(ctrl & lf.CTRL_ARM)
             mode = (ctrl >> 1) & 0x7
@@ -202,83 +176,25 @@ class LegionGateway:
 
     Один владелец USB на шлюзе (факт из дескриптора FX3: интерфейс один,
     alt-settings; peripheral EP внутри RF alt) — SoapySDRServer и этот
-    агент одновременно на одном x40 не работают (см. fpga/README.md)."""
+    агент одновременно на одном bladeRF не работают (см. fpga/README.md)."""
 
     def __init__(self, fake: bool) -> None:
         self.fpga = lf.LegionFpga(FakeTransport() if fake else UsbTransport())
         self.fake = fake
+        # bladerf1 = LMS6002D (эфир через CONTROL bit1/2), bladerf2 = micro
+        # AD9361 (эфир через AIR-регистры NIOS — CONTROL там не существует)
+        self.board = getattr(self.fpga._t, "board", "") or "bladerf1"
         self.last_kick = 0.0
         self.det_thr_set = False  # порог детектора записывался в этой сессии
         self._rx_by_us = False    # analog RX включён нами — снять при disarm
         self._tx_by_us = False    # analog TX включён нами — снять при disarm
+        self._armed = False       # CTRL.ARM записан и не снят (по нашим командам)
 
     # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
     # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
-    # (факт: pack() в bladerf_p.vhd дерева Nuand). Только bladeRF 1: на micro
-    # target 0x01 — это rffe_gpo (пины AD9361 enable/txnrx/reset_n, pack() в
-    # platforms/bladerf-micro/vhdl/bladerf_p.vhd) — LMS-биты туда писать нельзя.
+    # (факт: pack() в bladerf_p.vhd дерева Nuand).
     LMS_RX_EN = 0x2
     LMS_TX_EN = 0x4
-
-    def _board(self) -> str:
-        return getattr(self.fpga._t, "board", "unknown")
-
-    # --- micro (AD9361): включение эфира RFIC-командами 16x64 ---
-    # После закрытия Soapy libbladeRF уводит RFIC в STANDBY (bladerf2_close →
-    # rfic->standby: «shut down any current RF activity, but will not lose the
-    # RF state»). Поэтому агент сам поднимает INIT=ON (из STANDBY паркованный
-    # LO/rate сохраняются — devices_rfic_cmds.c пер-настраивает только из OFF)
-    # и включает каналы ENABLE. Частоту сверяем readback'ом с park_mhz.
-
-    def _rfic_ensure_on(self) -> tuple[bool, str]:
-        init = self.fpga.rfic_is_initialized()
-        if init is None:
-            return False, "RFIC STATUS не ответил (образ без RFIC-очереди?)"
-        if not init and not self.fpga.rfic_initialize():
-            return False, "RFIC INIT=ON не выполнен (spinwait/очередь)"
-        return True, ""
-
-    def _rfic_air_enable(self, rx: bool, tx: bool,
-                         park_mhz: float | None = None) -> tuple[bool, str]:
-        ok, why = self._rfic_ensure_on()
-        if not ok:
-            return False, why
-        if park_mhz is not None and park_mhz > 0:
-            # 1 МГц — тот же допуск, что park() воркера: ловит «LO не тот».
-            f = self.fpga.rfic_frequency_hz(lf.RFIC_CH_RX0)
-            if f is None:
-                return False, "RFIC FREQUENCY RX не ответил — park не подтвердить"
-            if abs(f - park_mhz * 1e6) > 1e6:
-                return False, (f"RFIC LO {f / 1e6:.3f} МГц ≠ park {park_mhz:.3f} — "
-                               "FPGA ретранслировал бы чужую частоту, отказ")
-        if rx and not self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, True):
-            return False, "RFIC ENABLE RX0 не выполнен"
-        if tx and not self.fpga.rfic_enable_channel(lf.RFIC_CH_TX0, True):
-            if rx:
-                # TX не встал — включённый RX не оставляем сиротой
-                self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, False)
-            return False, "RFIC ENABLE TX0 не выполнен"
-        return True, ""
-
-    def _rfic_air_disable(self, rx: bool, tx: bool) -> bool:
-        ok = True
-        if rx:
-            ok = self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, False) and ok
-        if tx:
-            ok = self.fpga.rfic_enable_channel(lf.RFIC_CH_TX0, False) and ok
-        return ok
-
-    def _analog_disable_ours(self) -> None:
-        """Снять то, что включали мы (флаги _rx/_tx_by_us), по плате."""
-        if self._board() == "bladerf2":
-            self._rfic_air_disable(self._rx_by_us, self._tx_by_us)
-        else:
-            self._lms_enable(
-                rx=False if self._rx_by_us else None,
-                tx=False if self._tx_by_us else None,
-            )
-        self._rx_by_us = False
-        self._tx_by_us = False
 
     def _control_read(self) -> int | None:
         """None = пакет не принят. Нельзя подставлять 0: бит 0 = lms_reset,
@@ -307,15 +223,51 @@ class LegionGateway:
         return self._control_write(ctrl & 0xFFFFFFFF)
 
     def _rx_enable(self, on: bool) -> bool:
-        if self._board() == "bladerf2":
-            ok, _ = self._rfic_ensure_on()
-            return ok and self.fpga.rfic_enable_channel(lf.RFIC_CH_RX0, on)
         return self._lms_enable(rx=on)
+
+    def _air_enable(self, mode: int, msg: dict) -> tuple[bool, str]:
+        """Включить аналоговый тракт под режим. Возвращает (ok, reason).
+
+        bladeRF 1 (LMS6002D): штатный CONTROL bit1/2 (bladerf_p.vhd), RMW.
+        micro (AD9361): CONTROL там не существует — хост при закрытии USB
+        гасит RFIC (bladerf2_close → rfic->standby, факт libbladeRF), поэтому
+        тракт поднимает NIOS-прошивка через AIR-регистры (RFIC-интерфейс
+        Nuand FPGA-tuning). Частота LO обязательна — без неё эфир чужой.
+        """
+        if mode == lf.MODE_PASS:
+            return True, ""
+        rx = mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS)
+        if self.board == "bladerf2":
+            freq = msg.get("freq_mhz")
+            if freq is None:
+                return False, "micro: ARM требует freq_mhz (LO парковки для AD9361)"
+            if not self.fpga.set_air_freq_mhz(float(freq)):
+                return False, "micro: запись AIR_FREQ_KHZ не удалась"
+            gain = msg.get("gain_db")
+            if gain is not None and not self.fpga.set_air_gain_db(int(gain)):
+                return False, "micro: запись AIR_GAIN_DB не удалась"
+            # Первый подъём — полный ad9361_init на NIOS (сотни мс, длинный
+            # таймаут внутри air_prepare); дальше — тёплый рестор из standby.
+            if not self.fpga.air_prepare(True, rx=rx, tx=True):
+                return False, "micro: AIR_PREP отказ — RFIC не поднялся (init/enable)"
+            self._rx_by_us = rx
+            self._tx_by_us = True
+            return True, ""
+        if rx:
+            if not self._lms_enable(rx=True, tx=True):
+                return False, "CONTROL: не включить RX+TX (lms_*_enable)"
+            self._rx_by_us = True
+            self._tx_by_us = True
+        elif mode in (lf.MODE_NCO, lf.MODE_PLAYER):
+            if not self._lms_enable(tx=True):
+                return False, "CONTROL: не включить TX (lms_tx_enable)"
+            self._tx_by_us = True
+        return True, ""
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
         if op == "ping":
-            return {"ok": True, "fake": self.fake, "board": self._board()}
+            return {"ok": True, "fake": self.fake}
         if op == "arm":
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
@@ -336,55 +288,74 @@ class LegionGateway:
                 # Панель без FTW = DC. Шлюз ставит fs/8, не ноль.
                 if not self.fpga.set_nco_freq(2.0e6 / 8.0):
                     return {"ok": False, "reason": "NCO FTW по умолчанию (fs/8) не записался"}
-            # Analog: lb_* = антенна + усилитель, nco/player = только TX.
-            # bladeRF 1: CONTROL bit1/2 (LMS6002D). micro: RFIC ENABLE по 16x64
-            # (AD9361; CONTROL там — пины RFFE, не трогаем). park_mhz — readback
-            # LO на micro: ARM на чужой частоте = ретрансляция не туда.
-            micro = self._board() == "bladerf2"
-            park_mhz = msg.get("park_mhz")
-            park_mhz = float(park_mhz) if isinstance(park_mhz, (int, float)) else None
-            if mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS):
-                if micro:
-                    ok, why = self._rfic_air_enable(True, True, park_mhz)
-                    if not ok:
-                        return {"ok": False, "reason": f"RFIC: {why}"}
-                elif not self._lms_enable(rx=True, tx=True):
-                    return {"ok": False, "reason": "CONTROL: не включить RX+TX (lms_*_enable)"}
-                self._rx_by_us = True
-                self._tx_by_us = True
-            elif mode in (lf.MODE_NCO, lf.MODE_PLAYER):
-                if micro:
-                    ok, why = self._rfic_air_enable(False, True)
-                    if not ok:
-                        return {"ok": False, "reason": f"RFIC: {why}"}
-                elif not self._lms_enable(tx=True):
-                    return {"ok": False, "reason": "CONTROL: не включить TX (lms_tx_enable)"}
-                self._tx_by_us = True
+            # Аналог: x40 — CONTROL bit1/2; micro — AIR-регистры NIOS (AD9361).
+            # Цифровой IQ после close Soapy держит HDL/RFIC, не USB-линк.
+            air_ok, air_why = self._air_enable(mode, msg)
+            if not air_ok:
+                return {"ok": False, "reason": air_why}
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
-            if not ok and (self._rx_by_us or self._tx_by_us):
-                # CTRL не записался — включённый нами эфир не оставляем сиротой.
-                self._analog_disable_ours()
-            return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась — эфир откачен"}
+            if ok:
+                self._armed = True
+            elif (self._rx_by_us or self._tx_by_us) and not self._armed:
+                # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
+                # подняли, а ARM не взвёлся — тракт под током не оставляем
+                # (на micro PASS-мукс отдал бы DAC статику = несущая LO на
+                # усилитель, на x40 — LMS TX под CONTROL битом). При живом
+                # предыдущем ARM откат снял бы эфир у него — нельзя.
+                if self.board == "bladerf2":
+                    self.fpga.air_prepare(False, rx=False, tx=False)
+                else:
+                    self._lms_enable(
+                        rx=False if self._rx_by_us else None,
+                        tx=False if self._tx_by_us else None,
+                    )
+                self._rx_by_us = False
+                self._tx_by_us = False
+            return {
+                "ok": ok,
+                "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась — эфир откачен",
+            }
         if op == "disarm":
             ok = self.fpga.disarm()
-            if ok and (self._rx_by_us or self._tx_by_us):
-                self._analog_disable_ours()
+            if ok:
+                self._armed = False
+            # micro: NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c),
+            # флаги там информационные. x40: CONTROL снимаем как раньше —
+            # при сбое флаги держим, следующий disarm повторит.
+            if self.board == "bladerf2":
+                self._rx_by_us = False
+                self._tx_by_us = False
+            elif ok and (self._rx_by_us or self._tx_by_us):
+                self._lms_enable(
+                    rx=False if self._rx_by_us else None,
+                    tx=False if self._tx_by_us else None,
+                )
+                self._rx_by_us = False
+                self._tx_by_us = False
             return {"ok": ok, "reason": "DISARM"}
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
+            if st.get("ok") and self.board == "bladerf2":
+                # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
+                ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
+                if ok2:
+                    st["air_up"] = bool(air & 0x1)
+                    st["air_freq_set"] = bool(air & 0x2)
             return st
         if op == "kick":
             self.last_kick = time.monotonic()
             return {"ok": self.fpga.heartbeat()}
         if op == "rx":
-            # Включить/выключить RX (для мониторинга детектора без lb_*:
-            # NCO-тон с кабеля и т.п.). x40 — CONTROL bit1, micro — RFIC ENABLE.
+            # Включить/выключить RX штатным CONTROL-регистром (для мониторинга
+            # детектора без lb_*: NCO-тон с кабеля и т.п.) — только bladeRF 1.
+            if self.board == "bladerf2":
+                return {"ok": False,
+                        "reason": "micro: CONTROL не существует — RX поднимает AIR_PREP (AD9361)"}
             on = bool(msg.get("on"))
             ok = self._rx_enable(on)
             self._rx_by_us = bool(on) if ok else self._rx_by_us
-            via = "RFIC ENABLE" if self._board() == "bladerf2" else "CONTROL bit1"
-            return {"ok": ok, "reason": f"RX {'on' if on else 'off'} ({via})"}
+            return {"ok": ok, "reason": f"RX {'on' if on else 'off'} (CONTROL bit1)"}
         if op == "usb":
             # Один владелец USB: release → отдать устройство стрим-серверу
             # (SoapySDRServer), acquire → забрать обратно. Регистры FPGA при
@@ -411,6 +382,8 @@ class LegionGateway:
                 "det_shift": lf.REG_DET_SHIFT, "player_len": lf.REG_PLAYER_LEN,
                 "player_ctl": lf.REG_PLAYER_CTL, "lb_shift": lf.REG_LB_SHIFT,
                 "wd_limit": lf.REG_WD_LIMIT,
+                "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
+                "air_prep": lf.REG_AIR_PREP,
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}
@@ -451,7 +424,7 @@ def main() -> int:
     gw = LegionGateway(FAKE)
     with _Server(("0.0.0.0", port), _Handler) as srv:
         srv.gw = gw  # type: ignore[attr-defined]
-        mode = "FAKE (не эфир)" if FAKE else f"USB {gw.fpga._t.board}"
+        mode = "FAKE (не эфир)" if FAKE else f"USB {gw.board}"
         print(f"legion-gateway: порт {port}, транспорт: {mode}", flush=True)
         srv.serve_forever()
     return 0

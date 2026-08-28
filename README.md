@@ -28,7 +28,7 @@ ESP32 принимает её и физически настраивает чи�
 | Прошивка ESP32 | `firmware/` | PlatformIO; 6 плат: classic / S3 / S2 / C3 / C6 / H2 |
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
-| FPGA-ревизия x40 | `fpga/` | ревизия `legion` для bladeRF 1 x40 и micro: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; см. `fpga/README.md` |
+| FPGA-ревизия legion | `fpga/` | ревизия `legion` для bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза, NIOS-подъём эфира на micro (AIR-регистры); цикл «сканер → handoff → lb_gated» — режим FPGA+СКАНЕР; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; см. `fpga/README.md` |
 | Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 
@@ -64,6 +64,9 @@ ESP32 принимает её и физически настраивает чи�
   1. **SDR (Ethernet)** — каталог bladeRF (x40, micro xA4/xA9) / HackRF /
      Lime / Pluto / USRP / RTL-SDR, официальные образы FPGA, SCAN RX,
      TX LO / baseband-волна на RF out → усилитель. ESP32 в этом тракте нет.
+     На bladeRF с ревизией legion — режим **FPGA+СКАНЕР**: сканер находит
+     пик, LO паркуется, FPGA ретранслирует RX→TX по энергии за микросекунды
+     (lb_gated), при потере сигнала — возврат к скану (см. `fpga/README.md`).
   2. **ESP32 (USB)** — синтезатор ADF4351, коридор, ток PA, интерлок 50 Ом.
 
 ## Быстрый старт (реальное железо)

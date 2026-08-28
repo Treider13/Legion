@@ -90,106 +90,6 @@ else:
           f"не найдено: {hdr} — задайте BLADERF_TREE")
 
 # ---------------------------------------------------------------------------
-# 1б. Золотой тест 16x64 (RFIC на micro) против реального nios_pkt_16x64.h
-# ---------------------------------------------------------------------------
-C_SRC_16x64 = r"""
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <string.h>
-#include "nios_pkt_16x64.h"
-
-int main(void) {
-    uint8_t buf[16];
-    uint8_t targets[] = {NIOS_PKT_16x64_TARGET_RFIC, 0x80};
-    uint16_t addrs[] = {0x0000, 0x0102, 0xFFFF};
-    uint64_t datas[] = {0, 1, 0xDEADBEEFCAFEBABEULL, 0xFFFFFFFFFFFFFFFFULL};
-    for (int t = 0; t < 2; t++)
-        for (int w = 0; w < 2; w++)
-            for (int a = 0; a < 3; a++)
-                for (int d = 0; d < 4; d++) {
-                    nios_pkt_16x64_pack(buf, targets[t], w, addrs[a], datas[d]);
-                    for (int i = 0; i < 16; i++) printf("%02x", buf[i]);
-                    printf("\n");
-                }
-    return 0;
-}
-"""
-
-hdr16 = os.path.join(NUAND, "fpga_common", "include", "nios_pkt_16x64.h")
-if os.path.isfile(hdr16):
-    with tempfile.TemporaryDirectory() as td:
-        src = os.path.join(td, "ref16.c")
-        exe = os.path.join(td, "ref16")
-        with open(src, "w") as f:
-            f.write(C_SRC_16x64)
-        cc = subprocess.run(["gcc", "-I", os.path.dirname(hdr16), src, "-o", exe],
-                            capture_output=True, text=True)
-        check("gcc собрал реальный nios_pkt_16x64.h", cc.returncode == 0, cc.stderr[-200:])
-        if cc.returncode == 0:
-            ref = subprocess.run([exe], capture_output=True, text=True).stdout.strip().split("\n")
-            mine = []
-            for t in (lf.NIOS_PKT_16x64_TARGET_RFIC, 0x80):
-                for w in (False, True):
-                    for a in (0x0000, 0x0102, 0xFFFF):
-                        for d in (0, 1, 0xDEADBEEFCAFEBABE, 0xFFFFFFFFFFFFFFFF):
-                            mine.append(lf.pack_16x64(t, w, a, d).hex())
-            check(f"16x64 байт-в-байт совпадение с Nuand C ({len(ref)} векторов)",
-                  ref == mine, f"ref={len(ref)} mine={len(mine)}")
-else:
-    check("дерево Nuand (fpga_common/include/nios_pkt_16x64.h)", False,
-          f"не найдено: {hdr16}")
-
-# ---------------------------------------------------------------------------
-# 1в. RFIC-константы против вендоренного bladerf2_common.h / libbladeRF.h
-# ---------------------------------------------------------------------------
-b2c = os.path.join(NUAND, "fpga_common", "include", "bladerf2_common.h")
-if os.path.isfile(b2c):
-    src = open(b2c, encoding="utf-8").read()
-
-    def enum_val(name: str) -> int | None:
-        m = re.search(rf"{name}\s*=\s*0x([0-9A-Fa-f]+)", src)
-        return int(m.group(1), 16) if m else None
-
-    for name, py in (("BLADERF_RFIC_COMMAND_STATUS", lf.RFIC_CMD_STATUS),
-                     ("BLADERF_RFIC_COMMAND_INIT", lf.RFIC_CMD_INIT),
-                     ("BLADERF_RFIC_COMMAND_ENABLE", lf.RFIC_CMD_ENABLE),
-                     ("BLADERF_RFIC_COMMAND_SAMPLERATE", lf.RFIC_CMD_SAMPLERATE),
-                     ("BLADERF_RFIC_COMMAND_FREQUENCY", lf.RFIC_CMD_FREQUENCY),
-                     ("BLADERF_RFIC_COMMAND_BANDWIDTH", lf.RFIC_CMD_BANDWIDTH)):
-        check(f"RFIC {name} == py", enum_val(name) == py,
-              f"nuand={enum_val(name)} py={py}")
-    # INIT-state — enum без явных значений: порядок OFF, ON, STANDBY = 0,1,2
-    m = re.search(r"typedef\s+enum\s*\{([^}]*BLADERF_RFIC_INIT_STATE_OFF[^}]*)\}", src)
-    order = re.findall(r"(BLADERF_RFIC_INIT_STATE_\w+)", m.group(1)) if m else []
-    check("RFIC INIT_STATE порядок OFF,ON,STANDBY = 0,1,2",
-          order == ["BLADERF_RFIC_INIT_STATE_OFF", "BLADERF_RFIC_INIT_STATE_ON",
-                    "BLADERF_RFIC_INIT_STATE_STANDBY"]
-          and lf.RFIC_INIT_ON == 1 and lf.RFIC_INIT_STANDBY == 2)
-
-    def define_val(src_text: str, name: str) -> int | None:
-        m = re.search(rf"#define\s+{name}\s+0x([0-9A-Fa-f]+)", src_text)
-        if m:
-            return int(m.group(1), 16)
-        m = re.search(rf"#define\s+{name}\s+(\d+)\s*$", src_text, re.M)
-        return int(m.group(1)) if m else None
-
-    check("RFIC STATUS WQLEN shift/mask",
-          define_val(src, "BLADERF_RFIC_STATUS_WQLEN_SHIFT") == lf.RFIC_STATUS_WQLEN_SHIFT
-          and define_val(src, "BLADERF_RFIC_STATUS_WQLEN_MASK") == lf.RFIC_STATUS_WQLEN_MASK)
-else:
-    check("дерево Nuand (fpga_common/include/bladerf2_common.h)", False, f"нет {b2c}")
-
-lbrf = os.path.join(NUAND, "host", "libraries", "libbladeRF", "include", "libbladeRF.h")
-if os.path.isfile(lbrf):
-    lsrc = open(lbrf, encoding="utf-8").read()
-    check("каналы RX=(ch<<1), TX=(ch<<1)|1 (libbladeRF.h)",
-          "(((ch) << 1) | 0x0)" in lsrc and "(((ch) << 1) | 0x1)" in lsrc
-          and lf.RFIC_CH_RX0 == 0 and lf.RFIC_CH_TX0 == 1)
-else:
-    check("libbladeRF.h (каналы RX/TX)", False, f"нет {lbrf}")
-
-# ---------------------------------------------------------------------------
 # 2. Зеркало регистровой карты: Python vs VHDL vs NIOS-C
 # ---------------------------------------------------------------------------
 def vhdl_consts() -> dict:
@@ -218,6 +118,9 @@ py_map = {
     "LEGION_REG_LB_SHIFT": lf.REG_LB_SHIFT,
     "LEGION_REG_WD_LIMIT": lf.REG_WD_LIMIT,
     "LEGION_REG_WD_KICK": lf.REG_WD_KICK,
+    "LEGION_REG_AIR_FREQ_KHZ": lf.REG_AIR_FREQ_KHZ,
+    "LEGION_REG_AIR_GAIN_DB": lf.REG_AIR_GAIN_DB,
+    "LEGION_REG_AIR_PREP": lf.REG_AIR_PREP,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -236,58 +139,6 @@ ok, data = lf.unpack_8x32_resp(bytes(resp))
 check("unpack: success+data", ok and data == 0xDEADBEEF)
 ok2, _ = lf.unpack_8x32_resp(bytes(16))
 check("unpack: неверный magic → fail", not ok2)
-
-# unpack 16x64: roundtrip data64 + чужой magic
-resp16 = bytearray(lf.pack_16x64(lf.NIOS_PKT_16x64_TARGET_RFIC, False, 0x0102, 0))
-resp16[2] |= lf.NIOS_PKT_8x32_FLAG_SUCCESS
-for i in range(8):
-    resp16[6 + i] = (0x0102030405060708 >> (8 * i)) & 0xFF
-ok16, data16 = lf.unpack_16x64_resp(bytes(resp16))
-check("16x64 unpack: success + data64", ok16 and data16 == 0x0102030405060708)
-check("16x64 unpack: magic 8x32 → fail", not lf.unpack_16x64_resp(lf.pack_8x32(0x80, False, 0, 0))[0])
-check("board_name_for_pid: 0x5246/0x5250/чужой",
-      lf.board_name_for_pid(0x5246) == "bladerf1"
-      and lf.board_name_for_pid(0x5250) == "bladerf2"
-      and lf.board_name_for_pid(0x1234) == "unknown")
-
-# ---------------------------------------------------------------------------
-# 3.7. RFIC spinwait: осушение очереди, WQSUCCESS, таймаут (rfic_fpga.c Nuand)
-# ---------------------------------------------------------------------------
-class _ScriptedRfic:
-    """Транспорт 16x64: очередь записи осушается после drain_after опросов."""
-
-    def __init__(self, drain_after: int, wqsuccess: bool = True) -> None:
-        self.drain_after = drain_after
-        self.wqsuccess = wqsuccess
-        self.polls = 0
-        self.board = "bladerf2"
-
-    def xfer(self, req: bytes) -> bytes:
-        write = bool(req[2] & lf.NIOS_PKT_8x32_FLAG_WRITE)
-        cmd = (req[4] | (req[5] << 8)) & 0xFF
-        out = 0
-        if write:
-            self.polls = 0
-        elif cmd == lf.RFIC_CMD_STATUS:
-            self.polls += 1
-            wqlen = 1 if self.polls <= self.drain_after else 0
-            out = 1 | (int(self.wqsuccess) << 1) | (wqlen << lf.RFIC_STATUS_WQLEN_SHIFT)
-        resp = bytearray(req)
-        resp[2] = (req[2] & 0x1) | lf.NIOS_PKT_8x32_FLAG_SUCCESS
-        for i in range(8):
-            resp[6 + i] = (out >> (8 * i)) & 0xFF
-        return bytes(resp)
-
-
-f_dr = lf.LegionFpga(_ScriptedRfic(drain_after=3))
-check("spinwait: очередь осушена за 3 опроса → ok",
-      f_dr.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is True)
-f_to = lf.LegionFpga(_ScriptedRfic(drain_after=99))
-check("spinwait: очередь не осушается → timeout (False)",
-      f_to.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is False)
-f_ws = lf.LegionFpga(_ScriptedRfic(drain_after=0, wqsuccess=False))
-check("spinwait: WQSUCCESS=0 (команда не удалась) → False",
-      f_ws.rfic_cmd(lf.RFIC_CMD_ENABLE, lf.RFIC_CH_RX0, 1) is False)
 
 # ---------------------------------------------------------------------------
 # 3.5. USB-константы шлюза против реальных заголовков Nuand (без памяти!)
@@ -452,86 +303,94 @@ check("CONTROL read fail → arm отказ", r.get("ok") is False)
 check("CONTROL не затёрт в 0 при сбое чтения", gw.fpga._t.control == 0x1)
 gw.fpga._t.fail_control_read = False
 
-# ---------------------------------------------------------------------------
-# 4б. micro (AD9361): эфир через RFIC 16x64, CONTROL (пины RFFE) не трогаем
-# ---------------------------------------------------------------------------
-gw.fpga._t.board = "bladerf2"
-gw.fpga._t.rfic_on = False  # как после close Soapy: RFIC в standby
-gw.fpga._t.rfic_enabled = set()
-gw.fpga._t.rfic_freq = {}
-gw.fpga._t.control = 0
-gw._rx_by_us = False
-gw._tx_by_us = False
-
-r = rpc({"op": "ping"})
-check("ping несёт board", r.get("board") == "bladerf2")
-
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "park_mhz": 2442.0})
-check("micro: ARM без припаркованного LO → отказ", r.get("ok") is False)
-check("micro: отказ честно про LO", "RFIC" in str(r.get("reason")))
-check("micro: каналы не включены при отказе", gw.fpga._t.rfic_enabled == set())
-check("micro: CONTROL (RFFE AD9361) не тронут", gw.fpga._t.control == 0)
-
-# Эмулируем park: RFIC стоит на 2442 МГц (Soapy поставил, close → standby)
-gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2442e6)
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "park_mhz": 2442.0})
-check("micro: ARM с припаркованным LO → ok", r.get("ok") is True)
-check("micro: RFIC поднят из standby (INIT=ON)", gw.fpga._t.rfic_on is True)
-check("micro: ENABLE RX0+TX0", gw.fpga._t.rfic_enabled == {lf.RFIC_CH_RX0, lf.RFIC_CH_TX0})
-check("micro: CTRL ARM|LB_GATED|WD", gw.fpga._t.regs.get(lf.REG_CTRL) ==
-      lf.CTRL_ARM | (lf.MODE_LB_GATED << 1) | lf.CTRL_WD_EN)
-check("micro: CONTROL по-прежнему не тронут", gw.fpga._t.control == 0)
-
-r = rpc({"op": "disarm"})
-check("micro: disarm ok", r.get("ok") is True)
-check("micro: disarm снял ENABLE RX/TX", gw.fpga._t.rfic_enabled == set())
-
-# LO уехал от park (чужая частота) — честный отказ
-gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2400e6)
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.0})
-check("micro: LO ≠ park → отказ", r.get("ok") is False)
-
-# LO в допуске (0.5 МГц < 1 МГц) → ок
-gw.fpga._t.rfic_freq[lf.RFIC_CH_RX0] = int(2442.5e6)
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.0})
-check("micro: LO в допуске 1 МГц → ok", r.get("ok") is True)
-rpc({"op": "disarm"})
-
-# rx op на micro — RFIC ENABLE RX0, CONTROL (пины RFFE) не трогаем
-r = rpc({"op": "rx", "on": True})
-check("micro: rx on → RFIC ENABLE RX0", r.get("ok") is True
-      and lf.RFIC_CH_RX0 in gw.fpga._t.rfic_enabled)
-check("micro: rx on — CONTROL не тронут", gw.fpga._t.control == 0)
-r = rpc({"op": "rx", "on": False})
-check("micro: rx off → RX0 снят", lf.RFIC_CH_RX0 not in gw.fpga._t.rfic_enabled)
-
-# nco на micro — только TX через RFIC
+# Откат эфира при сбое записи CTRL (x40): CONTROL bit2 взвели под nco,
+# CTRL не записался — бит обязан быть снят (TX не остаётся под током).
+gw.fpga._t.control = 0x1
+gw.fpga._t.fail_ctrl_write = True
 r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
-check("micro: arm nco ok", r.get("ok") is True)
-check("micro: nco — только TX0 через RFIC", gw.fpga._t.rfic_enabled == {lf.RFIC_CH_TX0})
-check("micro: nco — CONTROL не тронут", gw.fpga._t.control == 0)
+check("x40: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("x40: CONTROL bit2 откачен (TX не под током)", not (gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
+
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир предыдущего ARM.
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("x40: arm nco ok (для re-arm теста)", r.get("ok") is True and bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "player"})
+check("x40: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("x40: эфир предыдущего ARM жив (bit2 не откачен)", bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
 rpc({"op": "disarm"})
-
-# Откат эфира при сбое записи CTRL — micro
-gw.fpga._t.fail_ctrl_write = True
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "park_mhz": 2442.5})
-check("micro: CTRL write fail → ARM отказ", r.get("ok") is False)
-check("micro: RFIC ENABLE откачен при сбое CTRL", gw.fpga._t.rfic_enabled == set())
-check("micro: флаги наши сняты", not gw._rx_by_us and not gw._tx_by_us)
-gw.fpga._t.fail_ctrl_write = False
-
-# Откат эфира при сбое записи CTRL — x40 (CONTROL path)
-gw.fpga._t.board = "bladerf1"
-gw.fpga._t.control = 0
-gw.fpga._t.fail_ctrl_write = True
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
-check("x40: CTRL write fail → ARM отказ", r.get("ok") is False)
-check("x40: CONTROL bit1/2 откачены при сбое CTRL", gw.fpga._t.control == 0)
-check("x40: флаги наши сняты", not gw._rx_by_us and not gw._tx_by_us)
-gw.fpga._t.fail_ctrl_write = False
 
 srv.shutdown()
 srv.server_close()
+
+# ---------------------------------------------------------------------------
+# 4.5. Шлюз на micro (bladerf2/AD9361): эфир через AIR-регистры, не CONTROL
+# ---------------------------------------------------------------------------
+gw_m = lg.LegionGateway(fake=True)
+gw_m.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf2"))
+gw_m.board = "bladerf2"
+srv_m = lg._Server(("127.0.0.1", 0), lg._Handler)
+srv_m.gw = gw_m
+_th.Thread(target=srv_m.serve_forever, daemon=True).start()
+port_m = srv_m.server_address[1]
+
+
+def rpcm(msg: dict) -> dict:
+    with _socket.create_connection(("127.0.0.1", port_m), timeout=3) as s:
+        s.sendall((json_dumps(msg) + "\n").encode())
+        return json_loads(s.makefile("rb").readline().decode())
+
+
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
+check("micro: ARM lb_gated без freq_mhz → отказ (LO обязателен)", r.get("ok") is False)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5, "gain_db": 42})
+check("micro: ARM lb_gated с freq_mhz → ok", r.get("ok") is True)
+check("micro: AIR_FREQ_KHZ = 2442500", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2442500)
+check("micro: AIR_GAIN_DB = 1042 (код = gain + 1000, сентинел не сталкивается)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_GAIN_DB) == 1042)
+check("micro: AIR_PREP up+RX+TX (0x7)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+st_m = rpcm({"op": "status"})
+check("micro: status несёт readback эфира (air_up)",
+      st_m.get("ok") is True and st_m.get("air_up") is True and st_m.get("air_freq_set") is True)
+check("micro: CONTROL не тронут (AD9361 не кормится LMS-битами)",
+      gw_m.fpga._t.control == 0)
+check("micro: CTRL ARM lb_gated записан",
+      gw_m.fpga._t.regs.get(lf.REG_CTRL) == lf.CTRL_ARM | (lf.MODE_LB_GATED << 1) | lf.CTRL_WD_EN)
+r = rpcm({"op": "rx", "on": True})
+check("micro: op rx → честный отказ (нет CONTROL)", r.get("ok") is False)
+r = rpcm({"op": "disarm"})
+check("micro: disarm ok, CONTROL по-прежнему 0", r.get("ok") is True and gw_m.fpga._t.control == 0)
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2450.0})
+check("micro: ARM nco с freq_mhz → ok", r.get("ok") is True)
+check("micro: AIR_PREP для nco = up+TX (0x5)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x5)
+r = rpcm({"op": "arm", "mode": "nco"})
+check("micro: ARM nco без freq_mhz → отказ", r.get("ok") is False)
+rpcm({"op": "disarm"})  # снять nco ARM выше: дальше тестируем откат без живого ARM
+
+# Откат эфира при сбое записи CTRL: эфир подняли, ARM не взвёлся, живого
+# ARM нет — тракт под током не оставляем (micro: AIR_PREP down).
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("micro: эфир откачен (AIR_PREP=0)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0)
+check("micro: флаги эфира сняты", not gw_m._rx_by_us and not gw_m._tx_by_us)
+gw_m.fpga._t.fail_ctrl_write = False
+
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир — он нужен предыдущему.
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: повторный ARM lb_gated ok", r.get("ok") is True)
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("micro: эфир предыдущего ARM жив (AIR_PREP не откачен)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+gw_m.fpga._t.fail_ctrl_write = False
+rpcm({"op": "disarm"})
+
+srv_m.shutdown()
+srv_m.server_close()
 
 # ---------------------------------------------------------------------------
 # 5. Авторизация шлюза токеном (LEGION_FPGA_TOKEN)

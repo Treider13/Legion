@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""LEGION FPGA — автоматическая приёмка E1–E6 на стенде (bladeRF 1 x40).
+"""LEGION FPGA — автоматическая приёмка E1–E6 на стенде (bladeRF 1 x40;
+на micro xA4/xA9 — с отличиями ниже).
 
-Запускается на ноутбуке, подключённом по Ethernet к шлюзу с x40
+Запускается на ноутбуке, подключённом по Ethernet к шлюзу с платой
 (на шлюзе: legion_gateway.py). Кабель TX→RX через аттенюатор — для E2/E4
 (самостимул: тон NCO/стрима петлёй возвращается в RX).
+
+micro (AD9361): E2 «rx on» честно отказывает (CONTROL не существует — RX
+поднимает AIR_PREP), ARM требует freq_mhz, первый ARM после питания длиннее
+(полный ad9361_init в NIOS). Скрипт написан под x40; порт под micro —
+отдельная работа (см. fpga/README.md «Этапы приёмки»).
 
   python3 fpga/test/acceptance_bench.py --gw 192.168.1.20 [--port 5531]
       [--worker tools/sdr_worker.py] [--skip-e6]
