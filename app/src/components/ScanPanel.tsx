@@ -6,6 +6,9 @@ import {
   type AutoDispatch,
 } from "../sense/modes";
 import type { ScanPattern } from "../sense/scan";
+import { detectorWindowUs, parkSpanMhz } from "../sense/fpgaFastpath";
+import { catalogCaps } from "../sdr/hostClient";
+import { parseBand } from "../policy/allowlist";
 import { waveMeta } from "../sdr/waveforms";
 import { useLegion } from "../state/store";
 
@@ -17,17 +20,24 @@ export function ScanPanel() {
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
   const auto = scannerParticipates(s.scanPattern);
   const busy = s.scanRunning || s.transmitArmed;
+  const analogBw = catalogCaps(s.sdrId).analogBwMhz;
+  const fpgaBands = s.sdrBands.length
+    ? s.sdrBands
+    : (() => {
+        const b = parseBand(s.sdrF1, s.sdrF2);
+        return b ? [b] : [];
+      })();
+  const fpgaSpan = parkSpanMhz(fpgaBands);
+  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift);
 
   return (
     <section className="panel">
       <span className="panel-title">РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА</span>
       <p className="panel-note">
-        АВТО: антенна RX находит сигнал, ПЕРЕДАТЬ — на усилитель до стопа.
-        Приоритет — на усилителе сильнейшая: появилась сильнее — переключаемся.
-        Обычный — по очереди,
-        каждая выдержка. Хост Soapy не ставит 0.3 мс: минимум 1 мс.
-        Качание / сплошная / случайная — без сканера.
-        СБРОСИТЬ — оператор. ESP32 сюда не входит.
+        АВТО + ПЕРЕДАТЬ — хост-скан (FFT на ноутбуке), задержка миллисекунды.
+        Микросекунды: FPGA ЭФИР — детектор I²+Q² внутри чипа, RX→TX на усилитель.
+        Полоса должна влезть в analog BW (x40 = 28 МГц). Хост-скан и FPGA
+        вместе не работают (один USB). СБРОСИТЬ — оператор. ESP32 сюда не входит.
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -189,7 +199,30 @@ export function ScanPanel() {
         >
           СБРОСИТЬ
         </button>
+        {s.fpgaArmed ? (
+          <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+            СТОП FPGA ЭФИР
+          </button>
+        ) : (
+          <button
+            className="btn-primary"
+            disabled={s.fpgaBusy}
+            onClick={() => {
+              s.setFpgaMode("lb_gated");
+              void s.fpgaArm();
+            }}
+          >
+            FPGA ЭФИР ({fpgaWindowUs.toFixed(0)} µs)
+          </button>
+        )}
       </div>
+      <p className="sens-hint">
+        FPGA эфир: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
+        {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
+        {fpgaSpan > analogBw
+          ? " — F1…F2 шире analog: детектор видит только текущее LO-окно, hop = мс"
+          : " — детектор внутри FPGA, не FFT ноутбука"}
+      </p>
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полоса из F1…F2 при старте, либо добавьте вручную</li>}
         {s.sdrBands.map((b, i) => (

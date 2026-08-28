@@ -41,6 +41,13 @@ import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
+  FPGA_DEFAULT_DET_THR,
+  FPGA_US_DET_SHIFT,
+  clampDetShift,
+  fpgaArmCmd,
+  planFpgaAir,
+} from "../sense/fpgaFastpath";
+import {
   heldHitAlive,
   pickArmedAutoTarget,
   refreshSkipMhz,
@@ -195,6 +202,10 @@ interface LegionStore {
   fpgaStatus: FpgaStatus | null;
   /** Токен шлюза (LEGION_FPGA_TOKEN на агенте); пустой = открытая LAN стенда. */
   fpgaToken: string;
+  /** Порог средней энергии I²+Q² для lb_gated. 0 шлюз отвергает. */
+  fpgaDetThr: number;
+  /** win_shift 4..12. По умолчанию 4 → 16 сэмплов @ 2 МГц = 8 µs. */
+  fpgaDetShift: number;
   // журнал
   log: LogEntry[];
 
@@ -265,6 +276,8 @@ interface LegionStore {
   disarmTxWave(): void;
   setFpgaMode(m: "player" | "nco" | "lb_gated" | "lb_always"): void;
   setFpgaToken(v: string): void;
+  setFpgaDetThr(v: number): void;
+  setFpgaDetShift(v: number): void;
   fpgaArm(): Promise<void>;
   fpgaDisarm(): Promise<void>;
   fpgaPollStatus(): Promise<void>;
@@ -522,6 +535,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     gTxWalk = setInterval(stepTx, walker.tickMs);
   };
 
+  const bandsForFpgaAir = (): AllowBand[] => {
+    const s = get();
+    if (s.sdrBands.length > 0) return s.sdrBands;
+    const band = parseBand(s.sdrF1, s.sdrF2);
+    return band ? [band] : [];
+  };
+
   const ensureSdrBand = (): boolean => {
     const s = get();
     if (s.sdrBands.length > 0) return true;
@@ -626,6 +646,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaBusy: false,
     fpgaStatus: null,
     fpgaToken: "",
+    fpgaDetThr: FPGA_DEFAULT_DET_THR,
+    fpgaDetShift: FPGA_US_DET_SHIFT,
     log: [],
 
     setTransportKind: (k) =>
@@ -1146,6 +1168,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
+      if (s.fpgaArmed) {
+        pushLog("sys", "ЗАШИТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
+        return;
+      }
       if (s.scanRunning) {
         pushLog("sys", "ЗАШИТЬ: сканер работает — сначала СТОП на вкладке СКАН + TX SDR");
         return;
@@ -1224,6 +1250,10 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setFpgaToken: (v) => set({ fpgaToken: v }),
 
+    setFpgaDetThr: (v) => set({ fpgaDetThr: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 }),
+
+    setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
+
     fpgaArm: async () => {
       const s = get();
       if (s.fpgaBusy) return;
@@ -1235,11 +1265,44 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA ARM: ревизия legion собрана под bladeRF 1 x40 — выберите её на вкладке SDR");
         return;
       }
+      if (s.fpgaMode === "lb_gated") {
+        const air = planFpgaAir({
+          sdrId: s.sdrId,
+          analogBwMhz: catalogCaps(s.sdrId).analogBwMhz,
+          bands: bandsForFpgaAir(),
+          loadOk: s.sdrLoadOk,
+          detThr: s.fpgaDetThr,
+          detShift: s.fpgaDetShift,
+        });
+        if (!air.ok) {
+          pushLog("sys", air.reason);
+          return;
+        }
+      }
+      // Хост-скан и FPGA не делят USB x40. µs-тракт забирает TX у Soapy.
+      if (s.scanRunning) get().stopScan();
+      if (s.transmitArmed || s.signalTxActive) await get().stopTransmit();
       set({ fpgaBusy: true });
       try {
-        const r = await hostFpga({ op: "arm", mode: get().fpgaMode, wd: true, token: get().fpgaToken }, get().sdrGateway);
+        const cmd = fpgaArmCmd(get().fpgaMode, {
+          detThr: get().fpgaDetThr,
+          detShift: get().fpgaDetShift,
+          token: get().fpgaToken,
+        });
+        const r = await hostFpga(cmd, get().sdrGateway);
         pushLog("sys", `FPGA ARM (${get().fpgaMode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (r.ok) {
+          if (get().fpgaMode === "lb_gated") {
+            const air = planFpgaAir({
+              sdrId: get().sdrId,
+              analogBwMhz: catalogCaps(get().sdrId).analogBwMhz,
+              bands: bandsForFpgaAir(),
+              loadOk: get().sdrLoadOk,
+              detThr: get().fpgaDetThr,
+              detShift: get().fpgaDetShift,
+            });
+            set({ lastCueReason: air.reason });
+          }
           set({ fpgaArmed: true });
           // Deadman end-to-end: heartbeat с ЭТОГО ноутбука, 2 Гц.
           // Замерло любое звено (app/TCP/шлюз/USB) → watchdog в FPGA гасит TX.
@@ -1513,6 +1576,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", blocked);
           return;
         }
+        if (s.fpgaArmed) {
+          pushLog("sys", "СКАНИРОВАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Хост-скан = мс, не µs");
+          return;
+        }
         if (s.signalTxActive) {
           pushLog("sys", "СКАНИРОВАТЬ: идёт TX сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
           return;
@@ -1672,6 +1739,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const blocked = modeConflict("sdr", s.corridorRunning, false);
       if (blocked) {
         pushLog("sys", blocked);
+        return;
+      }
+      if (s.fpgaArmed) {
+        pushLog("sys", "ПЕРЕДАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Это хост-путь (мс), не µs");
         return;
       }
       if (s.signalTxActive) {

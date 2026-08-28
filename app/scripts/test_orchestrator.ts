@@ -24,6 +24,15 @@ import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs 
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
+  FPGA_DEFAULT_DET_THR,
+  FPGA_US_DET_SHIFT,
+  clampDetShift,
+  detectorWindowUs,
+  fpgaArmCmd,
+  parkSpanMhz,
+  planFpgaAir,
+} from "../src/sense/fpgaFastpath";
+import {
   heldHitAlive,
   nextAfterOperatorReset,
   pickArmedAutoTarget,
@@ -1058,6 +1067,50 @@ function main(): void {
   mockX40.open("bladerf-x40");
   check("x40 мок TX в диапазоне", mockX40.txWave(2450, "otfs").ok === true);
   check("x40 мок TX 100 МГц вне диапазона", mockX40.txWave(100, "otfs").ok === false);
+
+  // --- FPGA эфир: микросекунды только внутри чипа, не хост-скан ---
+  check("shift=4 @ 2 МГц = 8 µs", detectorWindowUs(4) === 8);
+  check("shift=8 @ 2 МГц = 128 µs", detectorWindowUs(8) === 128);
+  check("дефолт окна = 8 µs", FPGA_US_DET_SHIFT === 4 && detectorWindowUs(FPGA_US_DET_SHIFT) === 8);
+  check("кламп shift 3→4, 15→12", clampDetShift(3) === 4 && clampDetShift(15) === 12);
+  check("span 2400–2500 = 100", parkSpanMhz([{ f1Mhz: 2400, f2Mhz: 2500 }]) === 100);
+  const airOk = planFpgaAir({
+    sdrId: "bladerf-x40",
+    analogBwMhz: 28,
+    bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true,
+    detThr: FPGA_DEFAULT_DET_THR,
+    detShift: FPGA_US_DET_SHIFT,
+  });
+  check("FPGA эфир в 28 МГц окне ok", airOk.ok && airOk.windowUs === 8);
+  const airWide = planFpgaAir({
+    sdrId: "bladerf-x40",
+    analogBwMhz: 28,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    loadOk: true,
+    detThr: FPGA_DEFAULT_DET_THR,
+    detShift: FPGA_US_DET_SHIFT,
+  });
+  check(
+    "FPGA эфир 100 МГц: ARM ок, честно про hop",
+    airWide.ok === true && airWide.reason.includes("не сканируется"),
+  );
+  check("FPGA эфир без нагрузки отказ", planFpgaAir({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: false, detThr: 5000, detShift: 4,
+  }).ok === false);
+  check("FPGA эфир порог 0 отказ", planFpgaAir({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true, detThr: 0, detShift: 4,
+  }).ok === false);
+  check("FPGA эфир не x40 отказ", planFpgaAir({
+    sdrId: "hackrf-one", analogBwMhz: 20, bands: [{ f1Mhz: 2436, f2Mhz: 2450 }],
+    loadOk: true, detThr: 5000, detShift: 4,
+  }).ok === false);
+  const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
+  check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
+  const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
+  check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

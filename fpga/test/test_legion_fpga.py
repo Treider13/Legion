@@ -237,9 +237,11 @@ check("gateway arm неизвестного mode → отказ", r.get("ok") is
 # lb_gated без порога → честный отказ (порог 0 = гейт на шум)
 r = rpc({"op": "arm", "mode": "lb_gated"})
 check("lb_gated без det_thr → отказ", r.get("ok") is False)
-r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
+check("det_shift=4 (окно 16 сэмплов = 8 µs @ 2 МГц)",
+      gw.fpga._t.regs.get(lf.REG_DET_SHIFT) == 4)
 # RX включён штатным CONTROL-регистром (бит 1 = lms_rx_enable, bladerf_p.vhd)
 check("lb_gated: RX включён через CONTROL RMW (бит1)",
       bool(gw.fpga._t.control & 0x2))
