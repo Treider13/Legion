@@ -218,10 +218,12 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 Перед сборкой: `fpga/check_toolchain.sh` — проверит Quartus 20.1.1,
 nios2_command_shell, bladeRF-cli, pyusb (честные FAIL с инструкциями).
 
-Отличия micro (xA4/xA9) от x40 при приёмке: `{"op":"rx"}` на micro честно
-отказывает (CONTROL не существует — RX поднимает AIR_PREP); ARM требует
-`freq_mhz` (LO для AD9361); первый ARM после питания длиннее (полный
-ad9361_init в NIOS при AIR_PREP). Остальные этапы те же.
+Отличия micro (xA4/xA9) от x40 при приёмке скрипт закрывает сам
+(`--board micro` или авто-детект по `ping.board`): вместо `{"op":"rx"}`
+(CONTROL на micro не существует) RX для детектора поднимается записью
+`air_prep=0x7` после ARM; ARM всегда с `freq_mhz` (LO для AD9361); первый
+ARM после питания длиннее (полный ad9361_init в NIOS при AIR_PREP).
+Остальные этапы те же.
 
 Сборка micro: AIR_PREP живёт в NIOS и требует `BLADERF_NIOS_LIBAD936X`
 (RAM_SPAN ≥ 128 KiB, devices.h — как у штатного FPGA-tuning; стоковая
@@ -233,16 +235,17 @@ ARM lb_* на micro не взведётся (и это видно в ответ�
 
 ```bash
 pip install -r fpga/requirements.txt
-python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--skip-e6]
+python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--board micro] [--skip-e6]
+# --board можно не давать: агент отвечает board в ping, скрипт сам определит.
 ```
 
 | Этап | Что скрипт делает | Критерий |
 |---|---|---|
 | E1 | ping агента + запись регистров | канал/образ живы |
-| E2 | NCO 250 кГц из FPGA; RX on (CONTROL bit1); det_count | растёт с кабелем (без кабеля — SKIP с подсказкой) |
+| E2 | NCO 250 кГц из FPGA; RX on (x40: CONTROL bit1; micro: air_prep=0x7 после ARM); det_count | растёт с кабелем (без кабеля — SKIP с подсказкой) |
 | E3 | capture_arm → usb release → стрим QPSK (воркер/SoapyRemote) → acquire → capture_done → arm player | playing=1, волна в RAM FPGA |
 | E4 | det_thr → стрим тона → det_count | вырос (гейт TX — по HDL-симуляции, на стенде вторым приёмником) |
-| E5 | перестаём слать kick → ждём ~1.6 с | wd_fired=1 (TX погашен железом) |
+| E5 | перестаём слать kick → опрос до wd_fired (дедлайн 4 с) | wd_fired=1; латентность измеряется: x40 ~1.0 с, micro ~2.0 с при дефолтном WD_LIMIT=61 |
 | E6 | оператор: `bladeRF-cli -L`, power cycle | канал жив после перезагрузки (наш образ) |
 
 Один владелец USB: скрипт сам гоняет `usb release/acquire` агента вокруг

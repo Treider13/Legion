@@ -46,6 +46,7 @@ import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
   FPGA_AIR_GONE_POLLS,
   FPGA_DEFAULT_DET_THR,
+  FPGA_DET_THR_FLOOR,
   FPGA_DET_THR_K,
   FPGA_DET_WIN_SAMPLES,
   FPGA_DET_WINDOWS,
@@ -908,11 +909,18 @@ export const useLegion = create<LegionStore>((set, get) => {
       gHandoffFailAt = Date.now();
       if (skip) {
         gHandoffStrikes = 0;
-        gSkipMhz = mhz; // refreshSkipMhz снимет, когда частота замолчит и оживёт
       }
+      // Ранняя поломка после парковки захвата оставляет RX на 2 MSPS (а сбой
+      // park после setSampleRate — железо на 2 MSPS при кэше 40): скан по
+      // дизайну 40 MSPS (DIO-sys). Закрываем устройство — отложенный startScan
+      // в fpgaReturnToScan переоткроет его чистым (close() воркера сбрасывает
+      // _rx_fs/_rx_hz). Поздние отказы (после releaseSoapyForFpga) — no-op.
+      if (gLive) await releaseSoapyForFpga();
       // Отозванный в полёте handoff (СТОП/closeSdr/…): чистимся, но скан
       // не рестартим — оператор уже решил (ревью 2026-08-28).
-      await fpgaReturnToScan(null, !revoked());
+      // skip частоты идёт ТОЛЬКО через параметр fpgaReturnToScan: прямое
+      // присвоение gSkipMhz до вызова затиралось бы его `gSkipMhz = skipMhz`.
+      await fpgaReturnToScan(skip ? mhz : null, !revoked());
     };
     // Отзыв намерения в полёте (паттерн gTxGen из runHandoffAsync): СТОП
     // (gFpgaAirGen) или closeSdr/stopTransmit/снятие нагрузки (gTxGen).
@@ -954,8 +962,14 @@ export const useLegion = create<LegionStore>((set, get) => {
       const detThr = cap.ok ? detThrFromMedian(cap.medianEnergy ?? 0) : 0;
       if (!cap.ok || !(detThr > 0)) {
         // detThrFromMedian режет и ноль, и деградированный захват ниже floor —
-        // в обоих случаях ARM = гейт на шум.
-        await fail(cap.ok ? `порог ниже floor/0 (медиана полки ${cap.medianEnergy})` : cap.reason);
+        // в обоих случаях ARM = гейт на шум. Полка > 0, но ниже floor =
+        // RX глухой (тракт/антенна) — говорим оператору, что проверять.
+        const why = cap.ok
+          ? (cap.medianEnergy ?? 0) > 0
+            ? `RX глухой: полка ${cap.medianEnergy} → порог ниже floor ${FPGA_DET_THR_FLOOR} (тракт/антенна?)`
+            : `порог 0 (медиана полки ${cap.medianEnergy})`
+          : cap.reason;
+        await fail(why);
         return;
       }
       mark(`det_thr=${detThr}`);
@@ -1807,10 +1821,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
-      }
       if (get().fpgaMode === "lb_gated") {
         const airPlan = planFpgaAir({
           sdrId: get().sdrId,
@@ -1965,10 +1975,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (!board.ok) {
         pushLog("sys", board.reason);
         return false;
-      }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
       }
       // Solo: любой конечный F1…F2. parseBand — синтезатор ESP32 34.375–4400,
       // его сюда не мешаем. Эфир+FPGA по-прежнему через allowlist.
