@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""LEGION FPGA — автоматическая приёмка E1–E6 на стенде (bladeRF 1 x40;
-на micro xA4/xA9 — с отличиями ниже).
+"""LEGION FPGA — автоматическая приёмка E1–E6 на стенде (bladeRF 1 x40 и
+bladeRF 2.0 micro xA4/xA9).
 
 Запускается на ноутбуке, подключённом по Ethernet к шлюзу с платой
 (на шлюзе: legion_gateway.py). Кабель TX→RX через аттенюатор — для E2/E4
 (самостимул: тон NCO/стрима петлёй возвращается в RX).
 
-micro (AD9361): E2 «rx on» честно отказывает (CONTROL не существует — RX
-поднимает AIR_PREP), ARM требует freq_mhz, первый ARM после питания длиннее
-(полный ad9361_init в NIOS). Скрипт написан под x40; порт под micro —
-отдельная работа (см. fpga/README.md «Этапы приёмки»).
+Плата: --board x40|micro; по умолчанию авто-детект — агент отвечает
+board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
+«rx on» не существует (CONTROL там нет — RX поднимает AIR_PREP записью
+регистра), ARM требует freq_mhz, первый ARM после питания длиннее
+(полный ad9361_init в NIOS — таймаут AIR_PREP у шлюза 10 с).
 
   python3 fpga/test/acceptance_bench.py --gw 192.168.1.20 [--port 5531]
-      [--worker tools/sdr_worker.py] [--skip-e6]
+      [--board micro] [--worker tools/sdr_worker.py] [--skip-e6]
 
 Этапы (зеркало fpga/README.md):
   E1 канал/образ живы: ping + VERSION (штатный пакет target 0x00)
   E2 NCO из FPGA: arm nco → (кабель) det_count растёт
+     (micro: arm nco с freq_mhz поднимает AIR_PREP up+TX, RX дожимается
+      записью air_prep=0x7 — CONTROL на micro не существует)
   E3 плеер: capture_arm → стрим волны (воркер через SoapyRemote) →
      capture_done → arm player → playing=1
   E4 детектор: det_thr → стрим тона → det_count вырос (гейт — по HDL-симу)
@@ -87,8 +90,10 @@ class Worker:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gw", required=True, help="IP шлюза с x40")
+    ap.add_argument("--gw", required=True, help="IP шлюза с платой")
     ap.add_argument("--port", type=int, default=5531)
+    ap.add_argument("--board", choices=("x40", "micro"), default="",
+                    help="плата на шлюзе; пусто = авто-детект по ping.board")
     ap.add_argument("--worker", default=str(Path(__file__).resolve().parents[2] / "tools" / "sdr_worker.py"))
     ap.add_argument("--skip-e6", action="store_true")
     args = ap.parse_args()
@@ -111,6 +116,10 @@ def main() -> int:
     print("== E1: канал и образ ==")
     r = gw({"op": "ping"})
     check("агент шлюза отвечает", r.get("ok") is True, str(r))
+    board = args.board or ("micro" if r.get("board") == "bladerf2" else "x40")
+    print(f"  плата: {board}" + (" (авто-детект по ping)" if not args.board else ""))
+    # micro: ARM без freq_mhz честно отказывает (LO для AD9361 обязателен).
+    arm_freq = {"freq_mhz": 2450.0} if board == "micro" else {}
     r = gw({"op": "set", "reg": "det_shift", "value": 8})
     check("запись регистра через агента (det_shift)", r.get("ok") is True, str(r))
     r = gw({"op": "set", "reg": "det_thr", "value": 1000})
@@ -119,10 +128,19 @@ def main() -> int:
     print("== E2: NCO из FPGA ==")
     r = gw({"op": "set", "reg": "nco_ftw", "value": int(0.25e6 / 2e6 * 2**32)})
     check("FTW записан (250 кГц при fs=2 МГц)", r.get("ok") is True, str(r))
-    r = gw({"op": "rx", "on": True})
-    check("RX включён (CONTROL bit1) — детектор слышит", r.get("ok") is True, str(r))
-    r = gw({"op": "arm", "mode": "nco"})
-    check("ARM nco", r.get("ok") is True, str(r))
+    if board == "micro":
+        # CONTROL на micro не существует: ARM nco поднимает AIR_PREP up+TX,
+        # RX для детектора дожимаем записью AIR_PREP up+RX+TX (NIOS, тёплый
+        # подъём — freq/fs/BW статики уже заданы ARM'ом).
+        r = gw({"op": "arm", "mode": "nco", **arm_freq})
+        check("ARM nco (micro: freq_mhz обязателен)", r.get("ok") is True, str(r))
+        r = gw({"op": "set", "reg": "air_prep", "value": 0x7})
+        check("micro: AIR_PREP up+RX+TX — детектор слышит", r.get("ok") is True, str(r))
+    else:
+        r = gw({"op": "rx", "on": True})
+        check("RX включён (CONTROL bit1) — детектор слышит", r.get("ok") is True, str(r))
+        r = gw({"op": "arm", "mode": "nco"})
+        check("ARM nco", r.get("ok") is True, str(r))
     d0 = gw({"op": "status"}).get("det_count", 0) or 0
     time.sleep(1.2)
     st = gw({"op": "status"})
@@ -133,7 +151,8 @@ def main() -> int:
     else:
         print("  SKIP  кабель TX→RX не подключён (det_count не растёт) — RF-проверка на стенде")
     gw({"op": "disarm"})
-    gw({"op": "rx", "on": False})
+    if board != "micro":
+        gw({"op": "rx", "on": False})
 
     print("== E3: плеер (capture → play) ==")
     gw({"op": "set", "reg": "player_len", "value": 4095})
@@ -159,7 +178,7 @@ def main() -> int:
     check("агент занял USB обратно", r.get("ok") is True, str(r))
     st = gw({"op": "status"})
     check("capture_done=1 (волна в RAM FPGA)", st.get("capture_done") is True, str(st))
-    r = gw({"op": "arm", "mode": "player"})
+    r = gw({"op": "arm", "mode": "player", **arm_freq})
     st = gw({"op": "status"})
     check("PLAYER играет из RAM автономно", r.get("ok") is True and st.get("playing") is True,
           f"{r} / {st}")
@@ -189,7 +208,7 @@ def main() -> int:
     check("детектор FPGA засёк тон (det_count вырос)", d1 > d0, f"{d0} → {d1}")
 
     print("== E5: watchdog (deadman) ==")
-    r = gw({"op": "arm", "mode": "nco"})
+    r = gw({"op": "arm", "mode": "nco", **arm_freq})
     check("ARM для watchdog-теста", r.get("ok") is True, str(r))
     print("  … heartbeat останавливаем — ждём срабатывания (~1.5 с)")
     kick_stop.set()  # имитация смерти ноутбука/сети
@@ -200,7 +219,8 @@ def main() -> int:
 
     if not args.skip_e6:
         print("== E6: autoload (оператор) ==")
-        print("  … на шлюзе: bladeRF-cli -L legion_x40.rbf; питание off/on; Enter")
+        rbf = "legion_xA4.rbf" if board == "micro" else "legion_x40.rbf"
+        print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
         input()
         r = gw({"op": "ping"})
         check("канал жив после power cycle (наш образ autoload)", r.get("ok") is True, str(r))
