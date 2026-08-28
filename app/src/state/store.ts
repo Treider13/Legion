@@ -885,6 +885,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `FPGA handoff ${mhz.toFixed(3)} МГц: ${why} — возврат к скану`);
       gHandoffFailMhz = mhz;
       gHandoffFailAt = Date.now();
+      // Ранняя поломка после парковки захвата оставляет RX на 2 MSPS (а сбой
+      // park после setSampleRate — железо на 2 MSPS при кэше 40): скан по
+      // дизайну 40 MSPS (DIO-sys). Закрываем устройство — отложенный startScan
+      // в fpgaReturnToScan переоткроет его чистым (close() воркера сбрасывает
+      // _rx_fs/_rx_hz). Поздние отказы (после releaseSoapyForFpga) — no-op.
+      if (gLive) await releaseSoapyForFpga();
       // Отозванный в полёте handoff (СТОП/closeSdr/…): чистимся, но скан
       // не рестартим — оператор уже решил (ревью 2026-08-28).
       await fpgaReturnToScan(null, !revoked());
