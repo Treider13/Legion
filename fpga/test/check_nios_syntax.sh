@@ -39,16 +39,17 @@ check_cfg() { # $1=имя, $2=исходник, остальное — дефа�
 }
 
 for src in ../nios/legion_cmds.c "$NIOS_SRC/legion_cmds.c"; do
-    check_cfg "x40        " "$src" -DRAM_SPAN=65536
+    check_cfg "x40        " "$src" -DBOARD_BLADERF -DRAM_SPAN=65536
     check_cfg "micro-nolib" "$src" -DBOARD_BLADERF_MICRO -DRAM_SPAN=65536
     check_cfg "micro-rfic " "$src" -DBOARD_BLADERF_MICRO -DRAM_SPAN=131072
 done
 
 # Main-loop обеих платформ с хуком legion_work() (под LEGION_FPGA, как в
 # NIOS Makefile интеграции). Платформенный каталог — ради fpga_version.h.
+# Дефайны платформы — как в реальных Makefile (x40: BOARD_BLADERF).
 X40_SRC=$VENDOR/hdl/fpga/platforms/bladerf/software/bladeRF_nios/src
-check_cfg "main x40   " "$X40_SRC/bladeRF_nios.c" -DRAM_SPAN=65536 -DLEGION_FPGA \
-    -I "$X40_SRC"
+check_cfg "main x40   " "$X40_SRC/bladeRF_nios.c" -DBOARD_BLADERF \
+    -DRAM_SPAN=65536 -DLEGION_FPGA -I "$X40_SRC"
 check_cfg "main micro " "$MICRO_SRC/bladeRF_nios.c" -DBOARD_BLADERF_MICRO \
     -DRAM_SPAN=131072 -DLEGION_FPGA -I "$MICRO_SRC"
 
@@ -70,7 +71,7 @@ if gcc $CFLAGS $INCS -DBOARD_BLADERF_MICRO -DRAM_SPAN=131072 \
 else
     echo "  FAIL  зонд: RFIC-ветка мертва в micro-rfic (gate!)"; FAIL=1
 fi
-if gcc $CFLAGS $INCS -DRAM_SPAN=65536 -c nios_probe_rfic.c -o /dev/null 2>/dev/null; then
+if gcc $CFLAGS $INCS -DBOARD_BLADERF -DRAM_SPAN=65536 -c nios_probe_rfic.c -o /dev/null 2>/dev/null; then
     echo "  OK    зонд: RFIC-ветка выключена на x40"
 else
     echo "  FAIL  зонд: RFIC-ветка протекла в x40"; FAIL=1

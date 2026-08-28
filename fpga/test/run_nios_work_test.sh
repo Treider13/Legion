@@ -36,7 +36,7 @@ run_cfg() { # $1=имя, остальное — дефайны
     rm -f "$bin"
 }
 
-run_cfg "x40       " -DRAM_SPAN=65536
+run_cfg "x40       " -DBOARD_BLADERF -DRAM_SPAN=65536
 run_cfg "micro-rfic" -DBOARD_BLADERF_MICRO -DRAM_SPAN=131072
 
 [ "$FAIL" = "0" ] && echo "NIOS WORK: ALL PASS" || { echo "NIOS WORK: FAILURES"; exit 1; }
