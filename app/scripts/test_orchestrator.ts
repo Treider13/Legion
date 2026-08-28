@@ -2,6 +2,9 @@
 // LEGION — хостовые тесты фазы 11: каталог SDR, прошивка, allowlist, скан, CUE.
 // Запуск: npx tsx scripts/test_orchestrator.ts
 // ============================================================================
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { detectFromBins, estimateNoiseFloor, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
@@ -21,7 +24,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -40,10 +43,15 @@ import {
   FPGA_SOLO_MICRO_ANALOG_MHZ,
   clampSoloAnalogMhz,
   clampSoloDwellMs,
+  makeSoloWalker,
   planFpgaSoloWalk,
+  soloHopAllowed,
+  soloParkOpts,
+  soloTuneCmd,
   soloWalkLineRu,
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
+import { runSmartStart } from "../src/components/cinema/run";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -1220,6 +1228,78 @@ function main(): void {
   check("пустой коридор отказ", planFpgaSoloWalk({ f1Mhz: 2500, f2Mhz: 2400, windowMhz: 10 }).ok === false);
   check("окно 0 отказ", planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 0 }).ok === false);
   check("сетка не вылезает за F2", w50.centers.every((c) => c >= 2400 && c <= 2500));
+
+  // --- FPGA solo: walker / ARM / tune (не recapture) ---
+  const walk100 = makeSoloWalker(w100);
+  check("walker 100 МГц: одна стоянка (сетка не сжата к 56)", walk100.centers.length === 1);
+  const walk50 = makeSoloWalker(w50);
+  check("walker 50 МГц: две стоянки", walk50.centers.length === 2 && walk50.centers[0] === 2425);
+  const firstSweep = walk50.next();
+  check("sweep: первая стоянка = next(), не mid коридора", firstSweep.centerMhz === 2425);
+  const hopPlan = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 20, pattern: "hop" });
+  const hopW = makeSoloWalker(hopPlan, 7);
+  const hopFirst = hopW.next();
+  const hopSecond = hopW.next();
+  check("hop: первая стоянка из next() в коридоре", hopFirst.centerMhz >= 2400 && hopFirst.centerMhz <= 2500);
+  check("hop: второй шаг тоже в коридоре (не recapture)", hopSecond.centerMhz >= 2400 && hopSecond.centerMhz <= 2500);
+  const park = soloParkOpts(w50);
+  check("park solo: fs/BW = окно 50, не 2 МГц", park.fsHz === 50e6 && park.analogMhz === 50 && park.spanMhz === 50);
+  const tune = soloTuneCmd(2475, w50, "tok");
+  check("tune: op=tune без USB/capture", tune.op === "tune" && tune.freq_mhz === 2475);
+  check("tune несёт fs/bw окна", tune.fs_hz === 50e6 && tune.bw_mhz === 50);
+  check("tune не несёт player_ctl", tune.player_ctl === undefined && tune.wave === undefined);
+  check("прыжки на micro xA4", soloHopAllowed("bladerf-micro-xa4") === true);
+  check("прыжки на x40 запрещены", soloHopAllowed("bladerf-x40") === false);
+
+  const soloArm = fpgaArmCmd("player", {
+    detThr: 5000, detShift: 4, token: "t", freqMhz: 2425, fsHz: 20e6, bwMhz: 20,
+  });
+  check("ARM player solo несёт fs_hz и bw_mhz", soloArm.fs_hz === 20e6 && soloArm.bw_mhz === 20 && soloArm.freq_mhz === 2425);
+  const airArm = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 });
+  check("ARM эфир без fs_hz/bw_mhz", airArm.fs_hz === undefined && airArm.bw_mhz === undefined);
+  check("ARM эфир всё ещё несёт det_thr", airArm.det_thr === 5000 && airArm.freq_mhz === 2442.5);
+  const ncoArm = fpgaArmCmd("nco", {
+    detThr: 5000, detShift: 4, token: "", freqMhz: 2450, fsHz: 10e6, bwMhz: 10, ncoFtw: 1,
+  });
+  check("ARM nco solo несёт fs/bw", ncoArm.fs_hz === 10e6 && ncoArm.bw_mhz === 10 && ncoArm.nco_ftw === 1);
+
+  const st0 = useLegion.getState();
+  check("store: окно по умолчанию 10", st0.fpgaSoloWindowMhz === "10");
+  check("store: задержка по умолчанию 500", st0.fpgaSoloDwellMs === "500");
+  check("store: ход по умолчанию sweep", st0.fpgaSoloPattern === "sweep");
+  st0.setFpgaSoloWindowMhz("50");
+  st0.setFpgaSoloDwellMs("800");
+  st0.setFpgaSoloPattern("hop");
+  check("store: сеттеры окна/задержки/хода",
+    useLegion.getState().fpgaSoloWindowMhz === "50"
+    && useLegion.getState().fpgaSoloDwellMs === "800"
+    && useLegion.getState().fpgaSoloPattern === "hop");
+  useLegion.getState().setSdrLoad(true);
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  const started = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "solo",
+    windowMhz: "20", dwellMs: "400", pattern: "sweep",
+  });
+  const after = useLegion.getState();
+  check("cinema записал окно/задержку/ход до ARM",
+    after.fpgaSoloWindowMhz === "20" && after.fpgaSoloDwellMs === "400" && after.fpgaSoloPattern === "sweep");
+  check("без шлюза solo не ARM (как air)", started === false && after.fpgaArmed === false);
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const storeSrc = readFileSync(join(here, "../src/state/store.ts"), "utf8");
+  const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
+  check("эфир park остаётся FPGA_FS_HZ", storeSrc.includes("fsHz: FPGA_FS_HZ"));
+  const airBlock = storeSrc.slice(storeSrc.indexOf('if (path === "air")'), storeSrc.indexOf("const kind = get().txWaveKind"));
+  check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
+  check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
+  check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
+  check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
+  check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
+  const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
+  check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
+  check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
+  check("cinema: air стартует сразу после path", gateSrc.includes('if (path === "air")') && gateSrc.includes("await startSmart()"));
+  check("cinema: туда-сюда и случайно", gateSrc.includes("Туда-сюда") && gateSrc.includes("Случайно"));
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

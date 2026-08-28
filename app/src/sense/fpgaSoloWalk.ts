@@ -6,7 +6,7 @@
 // Эфир + сканер сюда не входят.
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
-import { planCenters } from "./scan";
+import { ScanWalker, planCenters } from "./scan";
 
 /** Nuand bladeRF 2.0 micro: RF Bandwidth Filter max 56 MHz (IBW). */
 export const FPGA_SOLO_MICRO_ANALOG_MHZ = 56;
@@ -143,4 +143,40 @@ export function soloWalkLineRu(p: FpgaSoloWalkPlan, idx = 0): string {
   if (!p.ok || p.centers.length === 0) return p.reason;
   const mhz = p.centers[Math.min(Math.max(idx, 0), p.centers.length - 1)];
   return `стоянка ${idx + 1}/${p.hops} · ${mhz.toFixed(3)} МГц · окно ${p.analogMhz} МГц`;
+}
+
+/** Сетка = окно оператора. analog платы сюда не кладём: иначе 100 МГц
+ *  окно сжалось бы до 56 и hop-сетка разъехалась бы с планом. */
+export function makeSoloWalker(plan: FpgaSoloWalkPlan, seed?: number): ScanWalker {
+  return new ScanWalker({
+    bands: plan.bands,
+    pattern: plan.pattern,
+    windowMhz: plan.hopWindowMhz,
+    analogBwMhz: plan.hopWindowMhz,
+    dwellMs: plan.dwellMs,
+    seed,
+  });
+}
+
+export function soloParkOpts(plan: FpgaSoloWalkPlan): { analogMhz: number; spanMhz: number; fsHz: number } {
+  return { analogMhz: plan.analogMhz, spanMhz: plan.analogMhz, fsHz: plan.fsHz };
+}
+
+export function soloTuneCmd(
+  freqMhz: number,
+  plan: FpgaSoloWalkPlan,
+  token: string,
+): Record<string, unknown> {
+  return {
+    op: "tune",
+    freq_mhz: freqMhz,
+    fs_hz: plan.fsHz,
+    bw_mhz: plan.analogMhz,
+    token,
+  };
+}
+
+/** Прыжки — только micro: шлюз tune пишет AIR_* без USB. x40 — одна стоянка. */
+export function soloHopAllowed(sdrId: string): boolean {
+  return sdrId === "bladerf-micro-xa4" || sdrId === "bladerf-micro-xa9";
 }

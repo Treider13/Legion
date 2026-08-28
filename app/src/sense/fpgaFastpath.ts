@@ -166,7 +166,17 @@ export function ncoFtwFromFrac(fj: number): number {
  *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */
 export function fpgaArmCmd(
   mode: "player" | "nco" | "lb_gated" | "lb_always",
-  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number; freqMhz?: number },
+  opts: {
+    detThr: number;
+    detShift: number;
+    token: string;
+    wd?: boolean;
+    ncoFtw?: number;
+    freqMhz?: number;
+    /** Solo: fs/BW окна. Эфир не передаёт — NIOS оставит 2 МГц. */
+    fsHz?: number;
+    bwMhz?: number;
+  },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
     op: "arm",
@@ -183,6 +193,12 @@ export function fpgaArmCmd(
   }
   if (opts.freqMhz !== undefined && Number.isFinite(opts.freqMhz) && opts.freqMhz > 0) {
     cmd.freq_mhz = opts.freqMhz;
+  }
+  if (opts.fsHz !== undefined && Number.isFinite(opts.fsHz) && opts.fsHz > 0) {
+    cmd.fs_hz = Math.round(opts.fsHz);
+  }
+  if (opts.bwMhz !== undefined && Number.isFinite(opts.bwMhz) && opts.bwMhz > 0) {
+    cmd.bw_mhz = opts.bwMhz;
   }
   return cmd;
 }

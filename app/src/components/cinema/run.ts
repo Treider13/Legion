@@ -1,5 +1,6 @@
 // Главный старт: ESP32-коридор или FPGA-ревизия legion (не хостовый скан).
 import type { WaveKind } from "../../sdr/waveforms";
+import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
@@ -11,6 +12,9 @@ export async function runSmartStart(opts: {
   wave: WaveKind;
   loadOk: boolean;
   path: FpgaStartPath;
+  windowMhz?: string;
+  dwellMs?: string;
+  pattern?: FpgaSoloPattern;
 }): Promise<boolean> {
   const s = useLegion.getState();
   s.setWorkspace("scan");
@@ -19,6 +23,9 @@ export async function runSmartStart(opts: {
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
   s.armTxWave(opts.wave);
+  if (opts.windowMhz !== undefined) s.setFpgaSoloWindowMhz(opts.windowMhz);
+  if (opts.dwellMs !== undefined) s.setFpgaSoloDwellMs(opts.dwellMs);
+  if (opts.pattern !== undefined) s.setFpgaSoloPattern(opts.pattern);
   return s.startFpgaPath(opts.path);
 }
 
