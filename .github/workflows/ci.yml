@@ -179,6 +179,10 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ghdl
       - name: GHDL testbenches
         run: fpga/tb/run_ghdl.sh
+      - name: NIOS C syntax (3 конфига × мастер/вендор + main-loop + drift + зонд RFIC-ветки)
+        run: fpga/test/check_nios_syntax.sh
+      - name: NIOS behavioral (legion_work deadman, AIR_PREP порядок/readback)
+        run: fpga/test/run_nios_work_test.sh
       - name: Vendor drift check (fpga/hdl == vendored копии)
         run: |
           for f in fpga/hdl/legion_*.vhd; do

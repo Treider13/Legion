@@ -44,4 +44,36 @@ for src in ../nios/legion_cmds.c "$NIOS_SRC/legion_cmds.c"; do
     check_cfg "micro-rfic " "$src" -DBOARD_BLADERF_MICRO -DRAM_SPAN=131072
 done
 
+# Main-loop обеих платформ с хуком legion_work() (под LEGION_FPGA, как в
+# NIOS Makefile интеграции). Платформенный каталог — ради fpga_version.h.
+X40_SRC=$VENDOR/hdl/fpga/platforms/bladerf/software/bladeRF_nios/src
+check_cfg "main x40   " "$X40_SRC/bladeRF_nios.c" -DRAM_SPAN=65536 -DLEGION_FPGA \
+    -I "$X40_SRC"
+check_cfg "main micro " "$MICRO_SRC/bladeRF_nios.c" -DBOARD_BLADERF_MICRO \
+    -DRAM_SPAN=131072 -DLEGION_FPGA -I "$MICRO_SRC"
+
+# Drift: мастер fpga/nios == вендоренная копия (CI ловит расхождение)
+for f in legion_cmds.c legion_cmds.h; do
+    if diff -q "../nios/$f" "$NIOS_SRC/$f" > /dev/null; then
+        echo "  OK    drift $f (мастер == вендор)"
+    else
+        echo "  FAIL  drift $f: fpga/nios/ != вендоренная копия"; FAIL=1
+    fi
+done
+
+# Зонд невакуумности: gate LEGION_HAVE_RFIC в legion_cmds.c обязан быть
+# активен ровно в конфиге micro-rfic (без devices.h он был мёртв и в этой
+# проверке, и в реальной сборке — Makefile micro не задаёт LIBAD936X).
+if gcc $CFLAGS $INCS -DBOARD_BLADERF_MICRO -DRAM_SPAN=131072 \
+        -DLEGION_PROBE_EXPECT_RFIC -c nios_probe_rfic.c -o /dev/null 2>/dev/null; then
+    echo "  OK    зонд: RFIC-ветка активна в micro-rfic"
+else
+    echo "  FAIL  зонд: RFIC-ветка мертва в micro-rfic (gate!)"; FAIL=1
+fi
+if gcc $CFLAGS $INCS -DRAM_SPAN=65536 -c nios_probe_rfic.c -o /dev/null 2>/dev/null; then
+    echo "  OK    зонд: RFIC-ветка выключена на x40"
+else
+    echo "  FAIL  зонд: RFIC-ветка протекла в x40"; FAIL=1
+fi
+
 [ "$FAIL" = "0" ] && echo "NIOS SYNTAX: ALL PASS" || { echo "NIOS SYNTAX: FAILURES"; exit 1; }

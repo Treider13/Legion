@@ -27,6 +27,7 @@
 #include <altera_avalon_pio_regs.h>
 
 #include "debug.h"
+#include "devices.h"  /* control_reg_read/write — x40: снять lms_*_enable при deadman */
 
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 #include "devices_rfic.h"
@@ -48,6 +49,9 @@ static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
 static uint32_t legion_air_fs_hz;
 static uint32_t legion_air_bw_hz;
 static bool     legion_air_is_up;
+/* CTRL.ARM, как записан хостом (нужен legion_work: в STATUS бита armed нет —
+ * там playing/cap_done/det_active/wd_fired, legion_regs.vhd). */
+static bool     legion_armed;
 
 bool legion_air_up(bool rx, bool tx)
 {
@@ -240,6 +244,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 }
             }
 #endif
+            legion_armed = (data & 0x1) != 0;
             if ((data & 0x1) == 0 && legion_air_is_up) {
                 /* DISARM: эфир гасим сами — шлюз про RFIC не знает */
                 legion_air_down();
@@ -267,4 +272,29 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
     return true;
+}
+
+void legion_work(void)
+{
+    /* Deadman без хоста: watchdog в FPGA сработал (heartbeat пропал), а ARM
+     * жив → сам DISARM. Цифру mux уже заглушил (нули с каденсом); здесь
+     * гасим остальное: CTRL=0 снимает ARM (expired липкий — без этого
+     * следующий ARM молчал бы навсегда), на micro тот же CTRL=0 уводит
+     * RFIC в standby (case LEGION_REG_CTRL выше), на x40 снимаем
+     * lms_rx_enable|lms_tx_enable в CONTROL (NIOS — хозяин этого PIO,
+     * devices_inline.h; шлюз ходит в него через NIOS-пакеты target 0x01).
+     * USB NIOS не отпускает — он не хозяин линка; release делает шлюз
+     * (сторож по kick_age), а при живом ноутбуке — приложение. */
+    if (!legion_armed) {
+        return;
+    }
+    if ((IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE) &
+         LEGION_STATUS_WD_FIRED) == 0) {
+        return;
+    }
+    DBG("LEGION: wd_fired при живом ARM — автономный DISARM\n");
+    legion_reg_write(LEGION_REG_CTRL, 0);
+#if !defined(BOARD_BLADERF_MICRO)
+    control_reg_write(control_reg_read() & ~0x6u);
+#endif
 }
