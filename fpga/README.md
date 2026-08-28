@@ -115,7 +115,10 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   bit1/2 (`bladerf_p.vhd`). micro AD9361 этими битами не кормится — ARM
   эфира на micro не включаем. Soapy паркует RX и TX LO на одну частоту
   при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
-  FAKE park и сбой park → ARM нет. NCO/player паркуют 2 MSPS — под FTW.
+  FAKE park, FAKE шлюз (`LEGION_FPGA_FAKE`) и сбой park → ARM нет.
+  park читает getFrequency/getSampleRate; RX и TX fs должны совпасть
+  (loopback FIFO). Локальный USB открывается `driver=bladerf`, не первая
+  плата Soapy. HackRF/Pluto не подменяются на x40. NCO/player — 2 MSPS.
 - **Усиление loopback** — грубый сдвиг `lb_shift` (0..8): переполнение 16 бит
   заворачивает знак (wrap), насыщения (saturation) в этой ревизии нет.
   Подбирать с осциллографом/сканом на стенде, начиная с 0.

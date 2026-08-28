@@ -309,9 +309,47 @@ function stopFpgaKick(): void {
 }
 
 /** Ревизия legion есть и на micro, но analog enable здесь — LMS6002D CONTROL
- *  (bladerf_p.vhd bit1/2). micro = AD9361, те биты не поднимают эфир. */
-const FPGA_LMS_BOARD = "bladerf-x40";
-const LEGION_FPGA_BOARDS = new Set([FPGA_LMS_BOARD, "bladerf-micro-xa4", "bladerf-micro-xa9"]);
+ *  (bladerf_p.vhd bit1/2). micro = AD9361, те биты не поднимают эфир.
+ *  HackRF/Pluto/N210 этим трактом не кормятся — не подменяем каталог на x40. */
+export const FPGA_LMS_BOARD = "bladerf-x40";
+const FPGA_MICRO_BOARDS = new Set(["bladerf-micro-xa4", "bladerf-micro-xa9"]);
+
+export function fpgaBoardPlan(sdrId: string): {
+  ok: boolean;
+  sdrId: string;
+  switched: boolean;
+  reason: string;
+} {
+  if (sdrId === FPGA_LMS_BOARD) {
+    return { ok: true, sdrId, switched: false, reason: "" };
+  }
+  if (FPGA_MICRO_BOARDS.has(sdrId)) {
+    return {
+      ok: true,
+      sdrId: FPGA_LMS_BOARD,
+      switched: true,
+      reason:
+        "FPGA: micro = AD9361, analog enable этого тракта — LMS6002D. Выбран bladeRF 1 x40",
+    };
+  }
+  return {
+    ok: false,
+    sdrId,
+    switched: false,
+    reason: `FPGA: ${sdrId} не LMS6002D — нужен bladeRF 1 x40 (CONTROL bit1/2), не подмена каталога`,
+  };
+}
+
+export function fpgaGatewayRefused(ping: {
+  ok?: boolean;
+  fake?: boolean;
+  reason?: string;
+}): string | null {
+  if (!ping.ok) return ping.reason ?? "FPGA шлюз не отвечает (нужен desktop + legion_gateway)";
+  if (ping.fake) return "FPGA: шлюз в FAKE — регистры не железо, ARM нельзя";
+  return null;
+}
+
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
 const FPGA_DET_SHIFT_FAST = 4;
 /** Сырой порог энергии (не дБ). 0 открывает гейт на шум. */
@@ -323,8 +361,8 @@ function waitMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function ncoFtw(freqHz: number): number {
-  return (Math.round((freqHz / FPGA_FS_HZ) * 2 ** 32) >>> 0);
+function ncoFtw(freqHz: number, fsHz = FPGA_FS_HZ): number {
+  return (Math.round((freqHz / Math.max(fsHz, 1)) * 2 ** 32) >>> 0);
 }
 
 function detWindowUs(fsHz: number, shift = FPGA_DET_SHIFT_FAST): number {
@@ -1355,13 +1393,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA ARM: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
         return;
       }
-      if (s.sdrId !== FPGA_LMS_BOARD) {
-        if (!LEGION_FPGA_BOARDS.has(s.sdrId)) {
-          pushLog("sys", "FPGA ARM: нужен bladeRF 1 x40 (LMS6002D CONTROL bit1/2, не AD9361)");
-          return;
-        }
-        get().setSdrId(FPGA_LMS_BOARD);
-        pushLog("sys", "FPGA ARM: micro/AD9361 этот CONTROL не кормит — выбран bladeRF 1 x40");
+      const board = fpgaBoardPlan(s.sdrId);
+      if (!board.ok) {
+        pushLog("sys", board.reason);
+        return;
+      }
+      if (board.switched) {
+        get().setSdrId(board.sdrId);
+        pushLog("sys", board.reason);
       }
       get().stopScan();
       if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
@@ -1376,6 +1415,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       const air = mode === "lb_gated" || mode === "lb_always";
       const gw = (cmd: Record<string, unknown>) =>
         hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+      const ping = await gw({ op: "ping" });
+      const pingNo = fpgaGatewayRefused(ping);
+      if (pingNo) {
+        pushLog("sys", pingNo);
+        return;
+      }
       set({ fpgaBusy: true });
       try {
         const pk = await parkFpgaLo({
@@ -1425,14 +1470,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: подтвердите нагрузку 50 Ом на выходе усилителя");
         return false;
       }
-      if (s0.sdrId !== FPGA_LMS_BOARD) {
-        get().setSdrId(FPGA_LMS_BOARD);
-        pushLog(
-          "sys",
-          s0.sdrId.startsWith("bladerf-micro")
-            ? "FPGA: micro = AD9361, analog enable этого тракта — LMS6002D. Выбран bladeRF 1 x40"
-            : "FPGA: выбран bladeRF 1 x40 (ревизия legion, LMS CONTROL)",
-        );
+      const board = fpgaBoardPlan(s0.sdrId);
+      if (!board.ok) {
+        pushLog("sys", board.reason);
+        return false;
+      }
+      if (board.switched) {
+        get().setSdrId(board.sdrId);
+        pushLog("sys", board.reason);
       }
       if (!ensureSdrBand()) return false;
 
@@ -1456,8 +1501,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
 
       const ping = await gw({ op: "ping" });
-      if (!ping.ok) {
-        pushLog("sys", ping.reason ?? "FPGA шлюз не отвечает (нужен desktop + legion_gateway)");
+      const pingNo = fpgaGatewayRefused(ping);
+      if (pingNo) {
+        pushLog("sys", pingNo);
         return false;
       }
 
@@ -1516,7 +1562,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             return false;
           }
           const fj = Number(get().signalParams.fj) || 0;
-          await gw({ op: "set", reg: "nco_ftw", value: ncoFtw(Math.abs(fj) * FPGA_FS_HZ) });
+          await gw({ op: "set", reg: "nco_ftw", value: ncoFtw(Math.abs(fj) * pk.fsHz, pk.fsHz) });
           const r = await gw({ op: "arm", mode: "nco", wd: true });
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (!r.ok) {

@@ -52,7 +52,11 @@ try:
     SOAPY_SDR_UNDERFLOW = int(getattr(SoapySDR, "SOAPY_SDR_UNDERFLOW", SOAPY_SDR_UNDERFLOW))
 except ImportError:
     SoapySDR = None  # type: ignore
-    SOAPY_SDR_CF32 = SOAPY_SDR_RX = SOAPY_SDR_TX = None  # type: ignore
+    # Constants.h: TX=0 RX=1 — те же числа без модуля, чтобы park() и тесты
+    # с mock-Device не сравнивали направление с None.
+    SOAPY_SDR_CF32 = "CF32"
+    SOAPY_SDR_TX = 0
+    SOAPY_SDR_RX = 1
     SOAPY = False
 
 try:
@@ -1033,27 +1037,53 @@ class Radio:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
 
+    def _soapy_get_hz(self, direction: int) -> float | None:
+        try:
+            hz = float(self.dev.getFrequency(direction, 0))
+        except Exception:
+            return None
+        return hz if hz > 0 else None
+
+    def _soapy_get_fs(self, direction: int) -> float | None:
+        try:
+            rate = float(self.dev.getSampleRate(direction, 0))
+        except Exception:
+            return None
+        return rate if rate > 0 else None
+
     def park(self, center_mhz: float, bw_mhz: float, fs_hz: float, rx: bool, tx: bool) -> dict[str, Any]:
         """Поставить RX/TX LO без FFT и без USB-стрима. FPGA потом забирает USB.
 
         hostScan здесь нельзя: он поднимает 40 MSPS и не трогает TX LO —
         loopback ушёл бы на чужой TX PLL.
+
+        После set* читаем getFrequency/getSampleRate. «ok» без readback —
+        вайб: драйвер мог проглотить запись, TX PLL остался на другой частоте.
         """
         fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(FPGA_PARK_FS_HZ)
         hz = float(center_mhz) * 1e6
         bw = max(0.2, float(bw_mhz)) * 1e6
+        base = {"freqMhz": center_mhz, "fsHz": fs}
         if not rx and not tx:
-            return {"ok": False, "reason": "park: нужен RX и/или TX", "freqMhz": center_mhz, "fsHz": fs}
+            return {"ok": False, "reason": "park: нужен RX и/или TX", **base}
         if self.fake:
             return {
                 "ok": True,
                 "reason": f"FAKE park {center_mhz:.3f} МГц · {fs / 1e6:.1f} MSPS",
-                "freqMhz": center_mhz,
-                "fsHz": fs,
                 "fake": True,
+                **base,
             }
         if self.dev is None:
-            return {"ok": False, "reason": "SDR не открыт", "freqMhz": center_mhz, "fsHz": fs}
+            return {"ok": False, "reason": "SDR не открыт", **base}
+
+        def _fail(why: str) -> dict[str, Any]:
+            return {"ok": False, "reason": why, **base}
+
+        # 1 МГц: ловит «не записалось» (0 / другой ГГц), не фазовый шум PLL.
+        lo_tol = 1e6
+        fs_req_tol = 0.15
+        fs_match_tol = 0.02
+        rx_lo = tx_lo = rx_fs = tx_fs = None
         got = fs
         try:
             with self._lock:
@@ -1064,14 +1094,23 @@ class Radio:
                         self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(bw, fs))
                     except Exception:
                         pass
-                    try:
-                        read = float(self.dev.getSampleRate(SOAPY_SDR_RX, 0))
-                        if read > 0:
-                            got = read
-                    except Exception:
-                        pass
-                    self._rx_hz = hz
-                    self._rx_fs = got
+                    rx_lo = self._soapy_get_hz(SOAPY_SDR_RX)
+                    rx_fs = self._soapy_get_fs(SOAPY_SDR_RX)
+                    if rx_lo is None:
+                        return _fail("park: getFrequency RX не ответил")
+                    if abs(rx_lo - hz) > lo_tol:
+                        return _fail(
+                            f"park: RX LO {rx_lo / 1e6:.3f} ≠ {center_mhz:.3f} МГц"
+                        )
+                    if rx_fs is None:
+                        return _fail("park: getSampleRate RX не ответил")
+                    if abs(rx_fs - fs) / fs > fs_req_tol:
+                        return _fail(
+                            f"park: RX fs {rx_fs / 1e6:.1f} MSPS ≠ запрошенные {fs / 1e6:.1f}"
+                        )
+                    got = rx_fs
+                    self._rx_hz = rx_lo
+                    self._rx_fs = rx_fs
                 if tx:
                     self.dev.setSampleRate(SOAPY_SDR_TX, 0, fs)
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, hz)
@@ -1079,22 +1118,47 @@ class Radio:
                         self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(bw, fs))
                     except Exception:
                         pass
+                    tx_lo = self._soapy_get_hz(SOAPY_SDR_TX)
+                    tx_fs = self._soapy_get_fs(SOAPY_SDR_TX)
+                    if tx_lo is None:
+                        return _fail("park: getFrequency TX не ответил")
+                    if abs(tx_lo - hz) > lo_tol:
+                        return _fail(
+                            f"park: TX LO {tx_lo / 1e6:.3f} ≠ {center_mhz:.3f} МГц"
+                        )
+                    if tx_fs is None:
+                        return _fail("park: getSampleRate TX не ответил")
+                    if abs(tx_fs - fs) / fs > fs_req_tol:
+                        return _fail(
+                            f"park: TX fs {tx_fs / 1e6:.1f} MSPS ≠ запрошенные {fs / 1e6:.1f}"
+                        )
                     if not rx:
-                        try:
-                            read = float(self.dev.getSampleRate(SOAPY_SDR_TX, 0))
-                            if read > 0:
-                                got = read
-                        except Exception:
-                            pass
+                        got = tx_fs
+                if rx and tx and rx_fs and tx_fs:
+                    if abs(rx_fs - tx_fs) / max(rx_fs, tx_fs) > fs_match_tol:
+                        return _fail(
+                            f"park: RX {rx_fs / 1e6:.1f} и TX {tx_fs / 1e6:.1f} MSPS "
+                            "разъехались — loopback FIFO не сойдётся"
+                        )
+                    got = rx_fs
         except Exception as e:
-            return {"ok": False, "reason": f"park LO: {e}", "freqMhz": center_mhz, "fsHz": fs}
+            return _fail(f"park LO: {e}")
         sides = "+".join(p for p, on in (("RX", rx), ("TX", tx)) if on)
-        return {
+        out: dict[str, Any] = {
             "ok": True,
             "reason": f"park {sides} {center_mhz:.3f} МГц · {got / 1e6:.1f} MSPS",
-            "freqMhz": center_mhz,
+            "freqMhz": (rx_lo or tx_lo or hz) / 1e6,
             "fsHz": got,
         }
+        if rx_lo is not None:
+            out["rxLo"] = rx_lo
+        if tx_lo is not None:
+            out["txLo"] = tx_lo
+        if rx_fs is not None:
+            out["rxFs"] = rx_fs
+        if tx_fs is not None:
+            out["txFs"] = tx_fs
+        return out
 
     def _scan_extra(self) -> dict[str, Any]:
         out: dict[str, Any] = {"txLive": self.tx_live()}

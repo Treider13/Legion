@@ -94,7 +94,9 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. ПЕРЕДАТЬ в
   настройках — синтез волны на найденной частоте, не IQ с антенны.
   Микросекунды detect→TX: FPGA `lb_gated` только на bladeRF 1 x40
-  (LMS6002D CONTROL bit1/2). micro AD9361 этим трактом не кормится.
+  (LMS6002D CONTROL bit1/2). micro AD9361 этим трактом не кормится —
+  каталог micro переключается на x40; HackRF/Pluto/N210 не подменяются.
   Энергия в окне 16 сэмплов / fs (при analog 28 MSPS ≈ 0.57 мкс), затем
-  тот же RX IQ на TX SMA / усилитель. FAKE park → ARM нет. `CUE` —
+  тот же RX IQ на TX SMA / усилитель. FAKE park или FAKE шлюз → ARM нет.
+  park читает LO и RX/TX fs; без readback ARM нет. `CUE` —
   команда режима ESP32 (`synth_apply_fast`).

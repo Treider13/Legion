@@ -241,6 +241,61 @@ def main() -> int:
     none = rpc(proc, {"op": "park", "centerMhz": 2442, "rx": False, "tx": False})
     check("park без RX/TX → отказ", none.get("ok") is False)
 
+    # park() без FAKE: readback LO/fs. Иначе «ok» после set* — вайб.
+    class _Dev:
+        def __init__(self, rx_hz=None, tx_hz=None, rx_fs=None, tx_fs=None, deaf=False):
+            self._set = {}
+            self.rx_hz, self.tx_hz = rx_hz, tx_hz
+            self.rx_fs, self.tx_fs = rx_fs, tx_fs
+            self.deaf = deaf
+
+        def setSampleRate(self, d, _ch, fs):
+            self._set[(d, "fs")] = fs
+
+        def setFrequency(self, d, _ch, hz):
+            self._set[(d, "hz")] = hz
+
+        def setBandwidth(self, d, _ch, bw):
+            self._set[(d, "bw")] = bw
+
+        def getSampleRate(self, d, _ch):
+            if d == w.SOAPY_SDR_RX and self.rx_fs is not None:
+                return self.rx_fs
+            if d == w.SOAPY_SDR_TX and self.tx_fs is not None:
+                return self.tx_fs
+            return self._set.get((d, "fs"), 0)
+
+        def getFrequency(self, d, _ch):
+            if self.deaf:
+                raise RuntimeError("getFrequency нет")
+            if d == w.SOAPY_SDR_RX and self.rx_hz is not None:
+                return self.rx_hz
+            if d == w.SOAPY_SDR_TX and self.tx_hz is not None:
+                return self.tx_hz
+            return self._set.get((d, "hz"), 0)
+
+    def _radio(dev):
+        r = w.Radio()
+        r.fake = False
+        r.dev = dev
+        return r
+
+    pk_ok = _radio(_Dev()).park(2442, 28, 28e6, True, True)
+    check(
+        "park readback RX+TX",
+        pk_ok.get("ok") is True
+        and pk_ok.get("rxLo") == 2442e6
+        and pk_ok.get("txLo") == 2442e6
+        and pk_ok.get("rxFs") == 28e6
+        and pk_ok.get("txFs") == 28e6,
+    )
+    pk_lo = _radio(_Dev(rx_hz=300e6)).park(2442, 28, 28e6, True, True)
+    check("park RX LO чужой → отказ", pk_lo.get("ok") is False)
+    pk_fs = _radio(_Dev(rx_fs=28e6, tx_fs=27e6)).park(2442, 28, 28e6, True, True)
+    check("park RX/TX fs разъехались → отказ", pk_fs.get("ok") is False)
+    pk_deaf = _radio(_Dev(deaf=True)).park(2442, 28, 28e6, True, True)
+    check("park без getFrequency → отказ", pk_deaf.get("ok") is False)
+
     hd = w.Radio()
     hd.fake = True
     hd.full_duplex = False
