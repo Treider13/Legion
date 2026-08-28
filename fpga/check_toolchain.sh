@@ -23,7 +23,10 @@ else
 fi
 
 echo "== NIOS II shell =="
-NS=$(ls "$HOME"/intelFPGA_lite/*/nios2eds/nios2_command_shell.sh 2>/dev/null | head -1)
+# Тот же выбор, что у сборки (legion_build.rs pick_nios_shell): сначала пин
+# 23.1, иначе первая найденная — иначе preflight показывал бы не ту версию.
+NS=$(ls -d "$HOME"/intelFPGA_lite/23.1*/nios2eds/nios2_command_shell.sh 2>/dev/null | head -1)
+[ -z "$NS" ] && NS=$(ls "$HOME"/intelFPGA_lite/*/nios2eds/nios2_command_shell.sh 2>/dev/null | head -1)
 if [ -n "$NS" ]; then
   echo "  OK: $NS"
 else

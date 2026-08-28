@@ -1533,6 +1533,9 @@ async function main(): Promise<void> {
     (gwSrc.match(/self\._legion = None/g) ?? []).length === 4);
   check("шлюз: сбой старта flash-потока откатывает running",
     gwSrc.includes("flash: поток не стартовал"));
+  const toolchainSrc = readFileSync(join(here, "../../fpga/check_toolchain.sh"), "utf8");
+  check("preflight и сборка выбирают shell одинаково (пин 23.1 сначала)",
+    toolchainSrc.includes("intelFPGA_lite/23.1*/nios2eds") && legionRust.includes('contains("intelFPGA_lite/23.1")'));
   check("store: ARM проверяет legion до парковки", storeSrc.includes("fpgaLegionMissing(ping)"));
   check("store: статус обновляет fpgaLegion", storeSrc.includes("fpgaLegion: r.legion"));
   check("store: fpgaLegion из ping на всех трёх точках ARM/скан",
