@@ -42,7 +42,7 @@ SOAPY_SDR_UNDERFLOW = -7
 
 try:
     import SoapySDR
-    from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_RX, SOAPY_SDR_TX
+    from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_CS16, SOAPY_SDR_RX, SOAPY_SDR_TX
 
     SOAPY = True
     SOAPY_SDR_TIMEOUT = int(getattr(SoapySDR, "SOAPY_SDR_TIMEOUT", SOAPY_SDR_TIMEOUT))
@@ -55,6 +55,7 @@ except ImportError:
     # Constants.h: TX=0 RX=1 — те же числа без модуля, чтобы park() и тесты
     # с mock-Device не сравнивали направление с None.
     SOAPY_SDR_CF32 = "CF32"
+    SOAPY_SDR_CS16 = "CS16"
     SOAPY_SDR_TX = 0
     SOAPY_SDR_RX = 1
     SOAPY = False
@@ -118,6 +119,10 @@ def classify_bladerf_hw(hardware_key: str, info: dict[str, str] | None = None) -
     if "bladerf1" in blob:
         return "lms"
     return "unknown"
+
+
+# require_hw → ожидаемый класс платы (getHardwareKey, не драйвер — он общий).
+REQUIRE_HW_CLASS = {"bladerf1": "lms", "bladerf2": "ad9361"}
 
 
 def soapy_hw_snapshot(dev: Any) -> dict[str, Any]:
@@ -934,7 +939,8 @@ class Radio:
             if not kw:
                 kw = full
         candidates = [kw]
-        if require_hw == "bladerf1":
+        # require_hw: bladerf1 = LMS6002D (x40), bladerf2 = AD9361 (micro xA4/xA9).
+        if require_hw in REQUIRE_HW_CLASS:
             # Soapy enumerate не пишет board name. Открываем каждую bladeRF
             # и смотрим getHardwareKey (bladerf1 vs bladerf2).
             try:
@@ -972,10 +978,11 @@ class Radio:
             snap = soapy_hw_snapshot(self.dev)
             self.hardware_key = str(snap["hardwareKey"])
             last_hw = self.hardware_key
-            if require_hw == "bladerf1" and snap["class"] != "lms":
+            want_cls = REQUIRE_HW_CLASS.get(require_hw)
+            if want_cls and snap["class"] != want_cls:
                 last_err = RuntimeError(
                     f"открыт {self.hardware_key or 'плата без hardwareKey'} — "
-                    "нужен bladerf1 (LMS6002D), не micro/AD9361"
+                    f"нужен {require_hw} ({want_cls}), не {snap['class']}"
                 )
                 self._unmake()
                 continue
@@ -1215,10 +1222,10 @@ class Radio:
             return {"ok": False, "reason": why, **base}
 
         snap = soapy_hw_snapshot(self.dev)
-        if snap["class"] != "lms":
+        if snap["class"] not in ("lms", "ad9361"):
             return _fail(
                 f"park: {snap['hardwareKey'] or 'плата без hardwareKey'} — "
-                "FPGA эфир только bladerf1 (LMS6002D CONTROL), не micro/AD9361"
+                "FPGA эфир только на bladeRF (LMS6002D / AD9361)"
             )
 
         # 1 МГц: ловит «не записалось» (0 / другой ГГц), не фазовый шум PLL.
@@ -1320,6 +1327,91 @@ class Radio:
         if tx_fs is not None:
             out["txFs"] = tx_fs
         return out
+
+    def det_probe(self, win_shift: int, windows: int, k: float) -> dict[str, Any]:
+        """Захват IQ на припаркованной частоте → det_thr для lb_gated.
+
+        Зовётся после park() и до отдачи USB агенту FPGA. Свой поток CS16:
+        сырые слова шины (их же видит детектор в FPGA), не CF32-кольцо сканера.
+        closeStream при выходе гасит RX-модуль (SoapyBladeRF) — не страшно:
+        агент поднимет эфир сам (LMS CONTROL на x40 / RFIC ENABLE на micro)."""
+        base: dict[str, Any] = {"winShift": win_shift}
+        if self.fake:
+            return {"ok": False, "reason": "FAKE det_probe — не эфир", "fake": True, **base}
+        if self.dev is None:
+            return {"ok": False, "reason": "det_probe: SDR не открыт", **base}
+        if not NUMPY:
+            return {"ok": False, "reason": "det_probe: нужен numpy", **base}
+        win_shift = max(4, min(12, int(win_shift)))
+        windows = max(64, min(16384, int(windows)))
+        k = float(k) if k and k > 1.0 else DET_PROBE_K
+        need = windows << win_shift
+        fs = self._rx_fs or 0.0
+        try:
+            with self._lock:
+                self._stop_rx_capture()
+                if self.rx is not None:
+                    try:
+                        self.dev.deactivateStream(self.rx)
+                        self.dev.closeStream(self.rx)
+                    except Exception:
+                        pass
+                    self.rx = None
+                    self._rx_on = False
+                stream = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CS16, [0])
+                self.dev.activateStream(stream)
+                try:
+                    buf = np.zeros(TRANSFER_SAMPLES * 2, dtype=np.int16)
+                    timeout = max(50_000, int(8.0 * TRANSFER_SAMPLES / max(fs, 1.0) * 1e6))
+                    # Конвейер USB после setupStream: выбросить глубину буферов
+                    # (settle_samples = 32×4096, как после смены LO в скане).
+                    # settle-сэмплы идут первыми — измерительные это хвост потока.
+                    left = settle_samples(fs) + need
+                    out = np.empty(need * 2, dtype=np.int16)
+                    got = 0
+                    deadline = time.monotonic() + 5.0
+                    while left > 0 and got < need and time.monotonic() < deadline:
+                        with self._rx_io:
+                            sr = self.dev.readStream(stream, [buf], TRANSFER_SAMPLES, timeoutUs=timeout)
+                        ret = stream_ret(sr)
+                        if stream_kind(ret) != "ok" or ret <= 0:
+                            continue
+                        left -= ret
+                        meas = min(ret, max(0, need - left), need - got)
+                        if meas > 0:
+                            out[got * 2 : (got + meas) * 2] = buf[(ret - meas) * 2 : ret * 2]
+                            got += meas
+                    if got < need:
+                        return {
+                            "ok": False,
+                            "reason": f"det_probe: захват {got}/{need} сэмплов за 5 с — поток мёртв?",
+                            **base,
+                        }
+                finally:
+                    try:
+                        self.dev.deactivateStream(stream)
+                        self.dev.closeStream(stream)
+                    except Exception:
+                        pass
+        except Exception as e:
+            return {"ok": False, "reason": f"det_probe: {e}", **base}
+        thr, n_win, med = det_thr_from_iq(out, win_shift, k)
+        if thr is None:
+            return {
+                "ok": False,
+                "reason": f"det_probe: вырожденный захват (окон {n_win}, медиана {med:.0f})",
+                **base,
+            }
+        return {
+            "ok": True,
+            "detThr": thr,
+            "median": med,
+            "windows": n_win,
+            "k": k,
+            "fsHz": fs,
+            "reason": f"det_thr={thr} = {k:g}×медиана {med:.0f} ({n_win} окон по {1 << win_shift})",
+            **base,
+        }
 
     def _scan_extra(self) -> dict[str, Any]:
         out: dict[str, Any] = {"txLive": self.tx_live()}
@@ -1627,6 +1719,37 @@ def estimate_noise_floor(db: Any) -> float:
     return float(np.median(lower))
 
 
+# det_probe: порог lb_gated из живого захвата на припаркованной частоте.
+# Окно 2^shift сэмплов, avg = Σ(I²+Q²) >> shift — формула legion_detector.vhd
+# (acc>>shift в конце окна). Порог = K × медиана(avg по окнам): K > 1 — запас
+# над текущей энергетикой эфира, чтобы гейт не открывался на шум.
+DET_PROBE_WINDOWS = 1024  # окон в медиане (1024 × 16 сэмплов @ 2 MSPS ≈ 8 мс)
+DET_PROBE_K = 4.0         # ≈ +6 дБ к медианной энергии окна
+
+
+def det_thr_from_iq(iq: Any, win_shift: int, k: float) -> tuple[int | None, int, float]:
+    """Порог детектора из сырых CS16 (int16, interleaved I,Q) — тех же 16-битных
+    слов, что тапает legion_detector в FPGA (SoapyBladeRF CS16 = bus без
+    конверсии, факт bladeRF_Streaming.cpp readStream: не-CF32 идёт напрямую).
+
+    Возвращает (det_thr, n_windows, median_avg). det_thr=None — захват
+    вырожденный (мало окон / медиана 0 / переполнение 32 бит)."""
+    if not NUMPY:
+        return None, 0, 0.0
+    win = 1 << int(win_shift)
+    n_win = int(len(iq) // 2) // win
+    if n_win < 8:
+        return None, n_win, 0.0
+    pairs = np.asarray(iq[: n_win * win * 2], dtype=np.int64).reshape(n_win, win, 2)
+    energy = pairs[..., 0] * pairs[..., 0] + pairs[..., 1] * pairs[..., 1]
+    avg = energy.sum(axis=1) >> int(win_shift)
+    med = float(np.median(avg))
+    thr = int(med * float(k))
+    if not (0 < thr < 2**31):
+        return None, n_win, med
+    return thr, n_win, med
+
+
 def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
     if len(db) <= n:
         return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
@@ -1746,6 +1869,12 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             float(msg.get("fsHz") or FPGA_PARK_FS_HZ),
             bool(msg.get("rx", True)),
             bool(msg.get("tx", True)),
+        )
+    if op == "det_probe":
+        return radio.det_probe(
+            int(msg.get("winShift") or 4),
+            int(msg.get("windows") or DET_PROBE_WINDOWS),
+            float(msg.get("k") or DET_PROBE_K),
         )
     if op == "tx":
         return radio.tx_cue(float(msg["freqMhz"]))

@@ -224,6 +224,34 @@ def main() -> int:
         bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
         check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
+        # --- det_probe: порог из CS16, формула = legion_detector.vhd ---
+        # Окно 16 (shift=4), I=100/Q=0 → avg = (16·100²)>>4 = 10000; K=4 → 40000.
+        win = 16
+        iq_flat = np.tile(np.array([100, 0], dtype=np.int16), win * 64)
+        thr, n_win, med = w.det_thr_from_iq(iq_flat, 4, 4.0)
+        check("det_thr: avg окна = Σ(I²+Q²)>>shift", med == 10000 and n_win == 64)
+        check("det_thr: K×медиана", thr == 40000)
+        # Медиана, не пик: одно «горячее» окно не двигает порог
+        iq_spike = iq_flat.copy()
+        iq_spike[0 : win * 2] = 3000  # первое окно горячее
+        thr2, _, med2 = w.det_thr_from_iq(iq_spike, 4, 4.0)
+        check("det_thr: медиана глуха к одиночному окну", med2 == 10000 and thr2 == 40000)
+        # Вырождение: тишина → порога нет (гейт на шум не открываем)
+        thr0, _, _ = w.det_thr_from_iq(np.zeros(win * 64 * 2, dtype=np.int16), 4, 4.0)
+        check("det_thr: нули → отказ (порог 0)", thr0 is None)
+        # Мало сэмплов → отказ
+        thr_few, n_few, _ = w.det_thr_from_iq(np.zeros(16, dtype=np.int16), 4, 4.0)
+        check("det_thr: < 8 окон → отказ", thr_few is None and n_few == 0)
+        # Переполнение 32 бит → отказ (HDL сравнивает avg(31 downto 0))
+        thr_big, _, _ = w.det_thr_from_iq(
+            np.tile(np.array([32767, 32767], dtype=np.int16), win * 64), 4, 100.0
+        )
+        check("det_thr: > 2^31 → отказ", thr_big is None)
+        # Отрицательные сэмплы: квадрат неотрицателен (как signed×signed в HDL)
+        iq_neg = np.tile(np.array([-100, 100], dtype=np.int16), win * 64)
+        thr_neg, _, med_neg = w.det_thr_from_iq(iq_neg, 4, 2.0)
+        check("det_thr: I²+Q² со знаком", med_neg == 20000 and thr_neg == 40000)
+
     check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
     check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")
     check("hw пусто → unknown", w.classify_bladerf_hw("") == "unknown")
@@ -267,6 +295,9 @@ def main() -> int:
     check("park эфир 28 MSPS", air.get("ok") is True and air.get("fsHz") == 28e6)
     none = rpc(proc, {"op": "park", "centerMhz": 2442, "rx": False, "tx": False})
     check("park без RX/TX → отказ", none.get("ok") is False)
+
+    dp = rpc(proc, {"op": "det_probe", "winShift": 4})
+    check("det_probe на FAKE → честный отказ", dp.get("ok") is False and dp.get("fake") is True)
 
     # park() без FAKE: readback LO/fs. Иначе «ok» после set* — вайб.
     class _Dev:
@@ -334,8 +365,13 @@ def main() -> int:
     check("park без getFrequency → отказ", pk_deaf.get("ok") is False)
     micro = _Dev()
     micro.hw = "bladerf2"
-    pk_micro = _radio(micro).park(2442, 28, 28e6, True, True)
-    check("park micro/AD9361 → отказ", pk_micro.get("ok") is False)
+    pk_micro = _radio(micro).park(2442, 2, 2e6, True, True)
+    check(
+        "park micro/AD9361 → ok (2 MSPS, readback)",
+        pk_micro.get("ok") is True
+        and pk_micro.get("rxLo") == 2442e6
+        and pk_micro.get("txFs") == 2e6,
+    )
     unknown = _Dev()
     unknown.hw = ""
     pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)
