@@ -26,11 +26,16 @@ import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
+  FPGA_QUIET_TICKS_MAX,
   FPGA_US_DET_SHIFT,
   clampDetShift,
   detectorWindowUs,
+  fpgaAirFsHz,
+  fpgaAirHw,
+  fpgaAirSupported,
   fpgaArmCmd,
   fpgaObserveLine,
+  fpgaQuietTicksNext,
   ncoFtwFromFrac,
   parkSpanMhz,
   planFpgaAir,
@@ -138,9 +143,25 @@ function main(): void {
   check("пустой host HackRF → driver=hackrf", sdrOpenArgs("hackrf-one", "") === "driver=hackrf");
   check("x40 выбран для FPGA", FPGA_LMS_BOARD === "bladerf-x40");
   check("FPGA x40 без смены", fpgaBoardPlan("bladerf-x40").ok && !fpgaBoardPlan("bladerf-x40").switched);
-  check("FPGA micro → x40", fpgaBoardPlan("bladerf-micro-xa4").ok && fpgaBoardPlan("bladerf-micro-xa4").sdrId === "bladerf-x40");
+  check(
+    "FPGA micro xA4 нативно, без подмены на x40",
+    fpgaBoardPlan("bladerf-micro-xa4").ok
+      && !fpgaBoardPlan("bladerf-micro-xa4").switched
+      && fpgaBoardPlan("bladerf-micro-xa4").sdrId === "bladerf-micro-xa4",
+  );
+  check(
+    "FPGA micro xA9 нативно",
+    fpgaBoardPlan("bladerf-micro-xa9").ok && fpgaBoardPlan("bladerf-micro-xa9").sdrId === "bladerf-micro-xa9",
+  );
   check("FPGA HackRF отказ, каталог не трогаем", !fpgaBoardPlan("hackrf-one").ok && fpgaBoardPlan("hackrf-one").sdrId === "hackrf-one");
   check("FPGA Pluto отказ", !fpgaBoardPlan("plutosdr").ok);
+  check("fpgaAirHw: x40→bladerf1, xa4→bladerf2, hackrf→null",
+    fpgaAirHw("bladerf-x40") === "bladerf1"
+      && fpgaAirHw("bladerf-micro-xa4") === "bladerf2"
+      && fpgaAirHw("hackrf-one") === null);
+  check("fpgaAirSupported", fpgaAirSupported("bladerf-micro-xa9") && !fpgaAirSupported("usrp-n210"));
+  check("fpgaAirFsHz: micro = 2 MSPS (окно 16 = 8 µs)", fpgaAirFsHz("bladerf-micro-xa4", 56) === 2_000_000);
+  check("fpgaAirFsHz: x40 = analog BW", fpgaAirFsHz("bladerf-x40", 28) === 28_000_000);
   check("шлюз ok не FAKE", fpgaGatewayRefused({ ok: true, fake: false }) === null);
   check("шлюз FAKE → отказ", (fpgaGatewayRefused({ ok: true, fake: true }) ?? "").includes("FAKE"));
   check("шлюз мёртв → отказ", fpgaGatewayRefused({ ok: false, reason: "down" }) === "down");
@@ -1129,7 +1150,19 @@ function main(): void {
     detThr: FPGA_DEFAULT_DET_THR,
     detShift: FPGA_US_DET_SHIFT,
   });
-  check("FPGA эфир в 28 МГц окне ok", airOk.ok && airOk.windowUs === 8);
+  check(
+    "FPGA эфир x40: окно на fs=28 МГц ≈ 0.57 µs, не 8",
+    airOk.ok && Math.abs(airOk.windowUs - 16 / 28) < 0.01,
+  );
+  const airMicro = planFpgaAir({
+    sdrId: "bladerf-micro-xa4",
+    analogBwMhz: 56,
+    bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true,
+    detThr: FPGA_DEFAULT_DET_THR,
+    detShift: FPGA_US_DET_SHIFT,
+  });
+  check("FPGA эфир micro: окно 8 µs @ 2 MSPS", airMicro.ok && airMicro.windowUs === 8);
   const airWide = planFpgaAir({
     sdrId: "bladerf-x40",
     analogBwMhz: 28,
@@ -1150,10 +1183,14 @@ function main(): void {
     sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
     loadOk: true, detThr: 0, detShift: 4,
   }).ok === false);
-  check("FPGA эфир не x40 отказ", planFpgaAir({
+  check("FPGA эфир не bladeRF → отказ", planFpgaAir({
     sdrId: "hackrf-one", analogBwMhz: 20, bands: [{ f1Mhz: 2436, f2Mhz: 2450 }],
     loadOk: true, detThr: 5000, detShift: 4,
   }).ok === false);
+  check("FPGA эфир micro xA4 → ok (AD9361, 2 MSPS)", planFpgaAir({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true, detThr: 5000, detShift: 4,
+  }).ok === true);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
@@ -1171,6 +1208,25 @@ function main(): void {
     fpgaObserveLine({ ok: true, det_active: true, det_count: 3 }).includes("RX→TX"),
   );
   check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
+
+  // Выход «энергия пропала»: N подряд тиков det_active=0 (уровень, не счётчик)
+  check("ARM lb_gated несёт park_mhz для readback на micro",
+    fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", parkMhz: 2442 }).park_mhz === 2442);
+  check("ARM player без park_mhz",
+    fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" }).park_mhz === undefined);
+  let qt = 0;
+  for (let i = 0; i < FPGA_QUIET_TICKS_MAX - 1; i++) {
+    qt = fpgaQuietTicksNext(qt, { ok: true, det_active: false }, true);
+  }
+  check("тихие тики считаются, но ещё не выход", qt === FPGA_QUIET_TICKS_MAX - 1);
+  qt = fpgaQuietTicksNext(qt, { ok: true, det_active: true }, true);
+  check("энергия сбрасывает счётчик", qt === 0);
+  for (let i = 0; i < FPGA_QUIET_TICKS_MAX; i++) {
+    qt = fpgaQuietTicksNext(qt, { ok: true, det_active: false }, true);
+  }
+  check("N тиков гейт закрыт → выход", qt >= FPGA_QUIET_TICKS_MAX);
+  check("не armed/live — счётчик в 0", fpgaQuietTicksNext(3, { ok: true, det_active: false }, false) === 0);
+  check("статус не ок — счётчик в 0", fpgaQuietTicksNext(3, { ok: false }, true) === 0);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

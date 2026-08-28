@@ -137,6 +137,40 @@ export async function hostPark(
   }
 }
 
+export interface DetProbeResult {
+  ok: boolean;
+  reason: string;
+  detThr?: number;
+  median?: number;
+  windows?: number;
+  fsHz?: number;
+  fake?: boolean;
+}
+
+/** Захват IQ на припаркованной частоте → det_thr = K × медиана окон I²+Q².
+ *  Зовётся между park и отдачей USB агенту FPGA (handoff скан→lb_gated). */
+export async function hostDetProbe(winShift: number, k?: number): Promise<DetProbeResult> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
+  try {
+    const r = await hostRpc<DetProbeResult & { detThr?: number }>({
+      op: "det_probe",
+      winShift,
+      ...(k !== undefined ? { k } : {}),
+    });
+    return {
+      ok: !!r.ok,
+      reason: r.reason ?? "",
+      detThr: r.detThr,
+      median: r.median,
+      windows: r.windows,
+      fsHz: r.fsHz,
+      fake: !!r.fake,
+    };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostTx(freqMhz: number): Promise<TxCueResult> {
   const r = await hostRpc<{
     ok: boolean;
@@ -189,6 +223,8 @@ export interface FpgaStatus {
   lb_level?: number;
   det_count?: number;
   fake?: boolean;
+  /** Плата по USB PID на шлюзе: bladerf1 (x40) / bladerf2 (micro). */
+  board?: string;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.

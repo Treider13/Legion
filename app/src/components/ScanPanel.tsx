@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { detectorWindowUs, FPGA_AIR_SDR_ID, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
+import { detectorWindowUs, fpgaAirFsHz, fpgaAirSupported, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -34,7 +34,8 @@ export function ScanPanel() {
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);
-  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift);
+  // Окно детектора на реальной fs платы: x40 = analog BW, micro = 2 MSPS.
+  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift, fpgaAirFsHz(s.sdrId, analogBw));
 
   return (
     <section className="panel">
@@ -264,13 +265,17 @@ export function ScanPanel() {
         )}
         {fpgaAir || taskLive ? (
           s.fpgaArmed ? (
-            <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+            <button
+              className="btn-danger"
+              disabled={s.fpgaBusy}
+              onClick={() => void s.fpgaDisarm({ resumeScan: fpgaAir })}
+            >
               СТОП FPGA
             </button>
           ) : (
             <button
               className="btn-primary"
-              disabled={s.fpgaBusy || s.sdrId !== FPGA_AIR_SDR_ID}
+              disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
               onClick={() => void s.startScan()}
             >
               СТАРТ FPGA+СКАНЕР
@@ -311,8 +316,8 @@ export function ScanPanel() {
         <p className="sens-hint">
           FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
-          {s.sdrId !== FPGA_AIR_SDR_ID
-            ? " — нужен bladeRF 1 x40 на вкладке SDR"
+          {!fpgaAirSupported(s.sdrId)
+            ? " — нужен bladeRF x40 или micro xA4/xA9 на вкладке SDR"
             : fpgaSpan > analogBw
               ? " — F1…F2 шире analog: детектор видит только текущее LO-окно"
               : " — конвейер на SDR, ноутбук наблюдает"}
@@ -396,8 +401,8 @@ export function ScanPanel() {
             ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер сканера"
             : fpgaAir
               ? s.lastCueReason ||
-                (s.sdrId !== FPGA_AIR_SDR_ID
-                  ? "FPGA+сканер: выберите bladeRF 1 x40 на вкладке SDR"
+                (!fpgaAirSupported(s.sdrId)
+                  ? "FPGA+сканер: выберите bladeRF x40 или micro xA4/xA9 на вкладке SDR"
                   : "FPGA+сканер: СТАРТ — конвейер на SDR, ноутбук наблюдает")
               : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>

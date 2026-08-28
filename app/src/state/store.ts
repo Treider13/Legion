@@ -20,6 +20,7 @@ import { hostOpenAllowed, usableImagePath } from "../sdr/host";
 import {
   catalogCaps,
   hostClose,
+  hostDetProbe,
   hostEsp32ChipId,
   hostEsp32Flash,
   hostFlash,
@@ -43,10 +44,15 @@ import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
+  FPGA_QUIET_TICKS_MAX,
   FPGA_US_DET_SHIFT,
   clampDetShift,
+  fpgaAirFsHz,
+  fpgaAirHw,
+  fpgaAirSupported,
   fpgaArmCmd,
   fpgaObserveLine,
+  fpgaQuietTicksNext,
   ncoFtwFromFrac,
   planFpgaAir,
 } from "../sense/fpgaFastpath";
@@ -58,6 +64,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  isFpgaAirLive,
   isFpgaAirPattern,
   modeConflict,
   modeOf,
@@ -71,6 +78,7 @@ import {
   markForwarded,
   mergeDetections,
   pickStrongest,
+  sameBin,
   withoutOwnTx,
 } from "../sense/orchestrator";
 import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
@@ -289,7 +297,9 @@ interface LegionStore {
   fpgaArm(): Promise<void>;
   /** Главный кадр: ARM ревизии legion. air = lb_gated, solo = nco/player. */
   startFpgaPath(path: "solo" | "air"): Promise<boolean>;
-  fpgaDisarm(): Promise<void>;
+  /** resumeScan — после DISARM вернуть USB хосту и возобновить скан-фазу
+   *  (выходы из конвейера скан→FPGA); skipMhz — частота в skip-лист сканера. */
+  fpgaDisarm(opts?: { resumeScan?: boolean; skipMhz?: number | null }): Promise<void>;
   fpgaPollStatus(): Promise<void>;
   clearLog(): void;
 }
@@ -315,6 +325,11 @@ let gTxWatch: ReturnType<typeof setInterval> | null = null;
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
 /** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
 let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
+/** Подряд идущие опросы статуса с det_active=0 (гейт закрыт). Выход из ARM. */
+let gFpgaQuietTicks = 0;
+/** После неудачного handoff пауза перед повтором — иначе тик скана зациклит попытки. */
+let gFpgaHandoffRetryAfter = 0;
+const FPGA_HANDOFF_RETRY_MS = 5000;
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
@@ -333,11 +348,12 @@ function stopFpgaObserve(): void {
   }
 }
 
-/** Ревизия legion есть и на micro, но analog enable здесь — LMS6002D CONTROL
- *  (bladerf_p.vhd bit1/2). micro = AD9361, те биты не поднимают эфир.
- *  HackRF/Pluto/N210 этим трактом не кормятся — не подменяем каталог на x40. */
+/** Ревизия legion собирается под x40 (LMS6002D) и под micro xA4/xA9 (AD9361).
+ *  Эфир lb_*: x40 — CONTROL bit1/2 (lms_*_enable); micro — RFIC-команды 16x64
+ *  на шлюзе (после close Soapy RFIC в standby — bladerf2_close; агент поднимает
+ *  INIT=ON + ENABLE сам, LO из park сохраняется). Подмены каталога нет.
+ *  HackRF/Pluto/N210 этим трактом не кормятся. */
 export const FPGA_LMS_BOARD = "bladerf-x40";
-const FPGA_MICRO_BOARDS = new Set(["bladerf-micro-xa4", "bladerf-micro-xa9"]);
 
 export function fpgaBoardPlan(sdrId: string): {
   ok: boolean;
@@ -345,23 +361,14 @@ export function fpgaBoardPlan(sdrId: string): {
   switched: boolean;
   reason: string;
 } {
-  if (sdrId === FPGA_LMS_BOARD) {
+  if (fpgaAirSupported(sdrId)) {
     return { ok: true, sdrId, switched: false, reason: "" };
-  }
-  if (FPGA_MICRO_BOARDS.has(sdrId)) {
-    return {
-      ok: true,
-      sdrId: FPGA_LMS_BOARD,
-      switched: true,
-      reason:
-        "FPGA: micro = AD9361, analog enable этого тракта — LMS6002D. Выбран bladeRF 1 x40",
-    };
   }
   return {
     ok: false,
     sdrId,
     switched: false,
-    reason: `FPGA: ${sdrId} не LMS6002D — нужен bladeRF 1 x40 (CONTROL bit1/2), не подмена каталога`,
+    reason: `FPGA: ${sdrId} без ревизии legion — нужен bladeRF x40 или micro xA4/xA9, не подмена каталога`,
   };
 }
 
@@ -682,7 +689,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     spanMhz: number;
     rx: boolean;
     fsHz: number;
+    /** hardwareKey, который обязан открыться: bladerf1 (x40) / bladerf2 (micro). */
+    requireHw: string;
     gw: (cmd: Record<string, unknown>) => Promise<FpgaStatus>;
+    /** Хук после удачного park, ПОКА USB ещё у хоста (det_probe). false → отказ. */
+    beforeRelease?: () => Promise<boolean>;
   }): Promise<{ ok: boolean; fsHz: number }> => {
     let fsHz = opts.fsHz;
     const rel = await opts.gw({ op: "usb", action: "release" });
@@ -696,7 +707,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA: Soapy нет — LO не паркуем, ARM без частоты нельзя");
         return { ok: false, fsHz };
       }
-      await get().openSdr({ requireHw: "bladerf1" });
+      await get().openSdr({ requireHw: opts.requireHw });
       if (!gLive) {
         pushLog("sys", "FPGA: SDR не открылся — LO не поставлен");
         return { ok: false, fsHz };
@@ -710,6 +721,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         return { ok: false, fsHz };
       }
       if (pk.fsHz && pk.fsHz > 0) fsHz = pk.fsHz;
+      if (opts.beforeRelease && !(await opts.beforeRelease())) {
+        return { ok: false, fsHz };
+      }
       parked = true;
     } finally {
       await releaseSoapyForFpga();
@@ -720,6 +734,119 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
     }
     return { ok: parked, fsHz };
+  };
+
+  /** Выход из FPGA-конвейера: USB хосту → открыть SDR → скан-фаза.
+   *  skipMhz — частота ушедшего сигнала, чтобы не перехватить мёртвый пик. */
+  const resumeScanAfterFpga = async (skipMhz: number | null): Promise<void> => {
+    if (!isFpgaAirPattern(get().scanPattern)) return;
+    if (get().flashBusy) return;
+    if (skipMhz != null) gSkipMhz = skipMhz;
+    const rel = await hostFpga(
+      { op: "usb", action: "release", token: get().fpgaToken },
+      get().sdrGateway,
+    );
+    if (!rel.ok) pushLog("sys", `FPGA→скан: USB release — ${rel.reason ?? "отказ"}`);
+    await get().openSdr();
+    if (!get().sdrOpened && !get().sdrEmulation) {
+      pushLog("sys", "FPGA→скан: SDR не открылся — скан не возобновлён");
+      return;
+    }
+    pushLog("sys", "FPGA→скан: USB хосту, скан возобновлён");
+    get().startScan();
+  };
+
+  /** Handoff «скан → FPGA»: парковка LO на ПИК (не середину полосы),
+   *  det_thr из живого захвата (K × медиана окон I²+Q²), ARM lb_gated.
+   *  Отказ на любом шаге → USB хосту → возврат к скану. */
+  const runFpgaHandoff = async (mhz: number): Promise<void> => {
+    if (get().fpgaBusy || get().fpgaArmed) return;
+    if (!get().sdrLoadOk) return;
+    const board = fpgaBoardPlan(get().sdrId);
+    if (!board.ok) {
+      pushLog("sys", board.reason);
+      return;
+    }
+    const hw = fpgaAirHw(get().sdrId);
+    if (!hw) return;
+    set({ fpgaBusy: true });
+    // Возврат к скану — только ПОСЛЕ finally (fpgaBusy=false): startScan в
+    // fpga-паттерне честно отказывает при занятом FPGA, из try он бы не встал.
+    let failWhy: string | null = null;
+    try {
+      pushLog("sys", `FPGA handoff: пик ${mhz.toFixed(3)} МГц → стоп скана, парковка LO`);
+      get().stopScan();
+      if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
+      const gw = (cmd: Record<string, unknown>) =>
+        hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+      const ping = await gw({ op: "ping" });
+      const pingNo = fpgaGatewayRefused(ping);
+      if (pingNo) {
+        failWhy = pingNo;
+        return;
+      }
+      if (ping.board && ping.board !== hw) {
+        failWhy = `шлюз видит ${ping.board}, а выбран ${get().sdrId} (${hw})`;
+        return;
+      }
+      const analog = catalogCaps(get().sdrId).analogBwMhz;
+      let detThr = 0;
+      const pk = await parkFpgaLo({
+        midMhz: mhz,
+        analogMhz: analog,
+        spanMhz: 0,
+        rx: true,
+        fsHz: fpgaAirFsHz(get().sdrId, analog),
+        requireHw: hw,
+        gw,
+        beforeRelease: async () => {
+          const probe = await hostDetProbe(clampDetShift(get().fpgaDetShift));
+          if (!probe.ok || !probe.detThr) {
+            pushLog("sys", `FPGA handoff: ${probe.reason || "det_probe без порога"}`);
+            return false;
+          }
+          pushLog("sys", `FPGA handoff: ${probe.reason}`);
+          detThr = probe.detThr;
+          return true;
+        },
+      });
+      if (!pk.ok || detThr <= 0) {
+        failWhy = pk.ok ? "порог не рассчитан" : "park/USB не удался";
+        return;
+      }
+      set({ fpgaDetThr: detThr });
+      const r = await gw({
+        op: "arm",
+        mode: "lb_gated",
+        wd: true,
+        det_thr: detThr,
+        det_shift: clampDetShift(get().fpgaDetShift),
+        park_mhz: mhz,
+      });
+      pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+      if (!r.ok) {
+        failWhy = "ARM отклонён шлюзом";
+        return;
+      }
+      gFpgaHandoffRetryAfter = 0;
+      gFpgaQuietTicks = 0;
+      set({
+        fpgaArmed: true,
+        fpgaPath: "air",
+        fpgaMode: "lb_gated",
+        lastForwardMhz: mhz,
+        lastSdrTxUs: null,
+        lastCueReason: `FPGA lb_gated · ${mhz.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)} · det_thr=${detThr}`,
+      });
+      beginFpgaKick();
+    } finally {
+      set({ fpgaBusy: false });
+    }
+    if (failWhy !== null) {
+      pushLog("sys", `FPGA handoff: ${failWhy} — возврат к скану`);
+      gFpgaHandoffRetryAfter = Date.now() + FPGA_HANDOFF_RETRY_MS;
+      await resumeScanAfterFpga(null);
+    }
   };
 
   return {
@@ -1502,10 +1629,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
-      }
       if (get().fpgaMode === "lb_gated") {
         const airPlan = planFpgaAir({
           sdrId: get().sdrId,
@@ -1554,7 +1677,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           analogMhz: analog,
           spanMhz: span,
           rx: air,
-          fsHz: air ? analog * 1e6 : FPGA_FS_HZ,
+          fsHz: air ? fpgaAirFsHz(get().sdrId, analog) : FPGA_FS_HZ,
+          requireHw: fpgaAirHw(get().sdrId) ?? "bladerf1",
           gw,
         });
         if (!pk.ok) {
@@ -1566,6 +1690,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           detShift: get().fpgaDetShift,
           token: get().fpgaToken,
           ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
+          parkMhz: air ? mid : undefined,
         });
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -1617,10 +1742,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", board.reason);
         return false;
       }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
-      }
       if (!ensureSdrBand()) return false;
 
       get().stopScan();
@@ -1671,7 +1792,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             analogMhz: analog,
             spanMhz: span,
             rx: true,
-            fsHz: analog * 1e6,
+            fsHz: fpgaAirFsHz(get().sdrId, analog),
+            requireHw: fpgaAirHw(get().sdrId) ?? "bladerf1",
             gw,
           });
           if (!pk.ok) {
@@ -1684,6 +1806,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             wd: true,
             det_thr: get().fpgaDetThr,
             det_shift: get().fpgaDetShift,
+            park_mhz: mid,
           });
           pushLog("sys", `FPGA ARM (lb_gated): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (!r.ok) {
@@ -1710,6 +1833,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             spanMhz: span,
             rx: false,
             fsHz: FPGA_FS_HZ,
+            requireHw: fpgaAirHw(get().sdrId) ?? "bladerf1",
             gw,
           });
           if (!pk.ok) {
@@ -1739,7 +1863,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await gw({ op: "set", reg: "player_ctl", value: 1 });
         await gw({ op: "usb", action: "release" });
         if (!get().sdrEmulation && hostSdrAvailable()) {
-          await get().openSdr({ requireHw: "bladerf1" });
+          await get().openSdr({ requireHw: fpgaAirHw(get().sdrId) ?? "bladerf1" });
           if (!gLive) {
             pushLog("sys", "FPGA player: SDR не открылся — capture отменён");
             set({ fpgaPath: null });
@@ -1808,9 +1932,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
     },
 
-    fpgaDisarm: async () => {
+    fpgaDisarm: async (opts) => {
       stopFpgaKick();
       stopFpgaObserve();
+      gFpgaQuietTicks = 0;
       set({ fpgaBusy: true });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
@@ -1818,6 +1943,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (r.ok) set({ fpgaArmed: false, fpgaPath: null });
       } finally {
         set({ fpgaBusy: false });
+      }
+      // Выход из конвейера скан→FPGA: USB хосту, скан-фаза возобновляется.
+      if (opts?.resumeScan) {
+        await resumeScanAfterFpga(opts.skipMhz ?? null);
       }
     },
 
@@ -1828,11 +1957,36 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.ok && get().fpgaArmed && get().fpgaMode === "lb_gated") {
         set({ lastCueReason: fpgaObserveLine(r) });
       }
+      // Выход «энергия пропала»: N подряд опросов гейт закрыт (det_active=0).
+      // det_count для сплошного сигнала не растёт (счётчик фронтов в HDL) —
+      // критерий именно уровень det_active, не прирост счётчика.
+      if (r.ok && isFpgaAirLive(get().fpgaArmed, get().fpgaMode)) {
+        gFpgaQuietTicks = fpgaQuietTicksNext(gFpgaQuietTicks, r, true);
+        if (gFpgaQuietTicks >= FPGA_QUIET_TICKS_MAX) {
+          gFpgaQuietTicks = 0;
+          const mhz = get().lastForwardMhz;
+          pushLog(
+            "sys",
+            `FPGA: энергия пропала (${FPGA_QUIET_TICKS_MAX} тиков гейт закрыт) — ` +
+              `DISARM, ${mhz != null ? `${mhz.toFixed(3)} МГц` : "частота"} в skip, возврат к скану`,
+          );
+          await get().fpgaDisarm({ resumeScan: true, skipMhz: mhz });
+          return;
+        }
+      } else {
+        gFpgaQuietTicks = fpgaQuietTicksNext(gFpgaQuietTicks, r, false);
+      }
       if (r.ok && r.wd_fired && get().fpgaArmed) {
+        const wasAir = get().fpgaPath === "air";
         stopFpgaKick();
         stopFpgaObserve();
         set({ fpgaArmed: false, fpgaPath: null });
         pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
+        if (wasAir) {
+          // CTRL в FPGA ещё ARM — чистим регистр, затем USB хосту и скан.
+          await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
+          await resumeScanAfterFpga(null);
+        }
       }
     },
 
@@ -2077,10 +2231,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       void (async () => {
         const s = get();
         if (isFpgaAirPattern(s.scanPattern)) {
+          // Конвейер скан→FPGA: здесь запускается скан-фаза; handoff на пик
+          // и ARM lb_gated делает tickScan → runFpgaHandoff.
           if (s.fpgaArmed || s.fpgaBusy) return;
           set({ fpgaMode: "lb_gated" });
-          await get().fpgaArm();
-          return;
         }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
@@ -2188,6 +2342,20 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           if (bins.length > 0) set({ scanBins: bins });
           const cur = get();
+          if (isFpgaAirPattern(cur.scanPattern)) {
+            // Конвейер скан→FPGA: пик → handoff (парковка на пик, не на середину
+            // полосы). Без живого Soapy handoff не пытаемся — честный скан.
+            gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
+            if (!gLive || cur.fpgaBusy || cur.fpgaArmed) return;
+            if (Date.now() < gFpgaHandoffRetryAfter) return;
+            const pool =
+              gSkipMhz == null
+                ? detections
+                : detections.filter((d) => !sameBin(d.freqMhz, gSkipMhz as number));
+            const hit = pickStrongest(pool);
+            if (hit) void runFpgaHandoff(hit.freqMhz);
+            return;
+          }
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
           gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
           const held = gGate.lastCuedMhz;
@@ -2251,9 +2419,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     startTransmit: async () => {
       const s = get();
       if (isFpgaAirPattern(s.scanPattern)) {
+        // ПЕРЕДАТЬ в режиме FPGA+сканер = запустить конвейер со скан-фазы.
         if (s.fpgaArmed || s.fpgaBusy) return;
         set({ fpgaMode: "lb_gated" });
-        await get().fpgaArm();
+        get().startScan();
         return;
       }
       if (s.flashBusy) {

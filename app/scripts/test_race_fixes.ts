@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   check("после STOP телеметрия флаг не воскресила", !s().corridorRunning);
   await s().disconnect();
 
-  // FPGA: HackRF/Pluto не подменяем на x40. micro — да (CONTROL = LMS6002D).
+  // FPGA: HackRF/Pluto не подменяем на x40. micro xA4 — нативно (AD9361, RFIC).
   // Без Tauri шлюз честно мёртв — ARM не ставим.
   s().setSdrLoad(true);
   s().setSdrId("hackrf-one");
@@ -93,8 +93,25 @@ async function main(): Promise<void> {
 
   s().setSdrId("bladerf-micro-xa4");
   const micro = await s().startFpgaPath("air");
-  check("micro → x40 перед попыткой ARM", s().sdrId === "bladerf-x40");
+  check("micro xA4 не подменяется на x40", s().sdrId === "bladerf-micro-xa4");
   check("micro без шлюза не ARM", micro === false && !s().fpgaArmed);
+
+  // Конвейер скан→FPGA: СТАРТ запускает скан-фазу (не мгновенный ARM);
+  // handoff без живого Soapy (Tauri) честно не дёргается, скан не ломается.
+  s().setScanPattern("fpga");
+  s().startScan();
+  await waitFor("fpga-конвейер: скан-фаза пошла", () => s().scanRunning);
+  check("fpga-конвейер: ARM только по детекту, не по кнопке", !s().fpgaArmed);
+  s().injectDemoTone();
+  await new Promise((r) => setTimeout(r, 400));
+  check("fpga-конвейер: скан видит тон", s().detections.length > 0);
+  check(
+    "fpga-конвейер: без живого Soapy handoff не пытался ARM",
+    !s().fpgaArmed && !s().fpgaBusy,
+  );
+  s().stopScan();
+  check("fpga-конвейер: СТОП СКАН гасит скан-фазу", !s().scanRunning);
+  s().setScanPattern("auto");
 
   console.log(failures === 0 ? "\nRACE FIXES: ALL PASS" : `\nRACE FIXES: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
