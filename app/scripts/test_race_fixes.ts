@@ -78,6 +78,24 @@ async function main(): Promise<void> {
   check("после STOP телеметрия флаг не воскресила", !s().corridorRunning);
   await s().disconnect();
 
+  // FPGA: HackRF/Pluto не подменяем на x40. micro — да (CONTROL = LMS6002D).
+  // Без Tauri шлюз честно мёртв — ARM не ставим.
+  s().setSdrLoad(true);
+  s().setSdrId("hackrf-one");
+  const hack = await s().startFpgaPath("air");
+  check("HackRF Эфир+FPGA отказан", hack === false);
+  check("HackRF не подменён на x40", s().sdrId === "hackrf-one");
+  check("HackRF не ARM", !s().fpgaArmed);
+
+  s().setSdrId("plutosdr");
+  await s().fpgaArm();
+  check("Pluto ARM отказан, каталог тот же", s().sdrId === "plutosdr" && !s().fpgaArmed);
+
+  s().setSdrId("bladerf-micro-xa4");
+  const micro = await s().startFpgaPath("air");
+  check("micro → x40 перед попыткой ARM", s().sdrId === "bladerf-x40");
+  check("micro без шлюза не ARM", micro === false && !s().fpgaArmed);
+
   console.log(failures === 0 ? "\nRACE FIXES: ALL PASS" : `\nRACE FIXES: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
 }

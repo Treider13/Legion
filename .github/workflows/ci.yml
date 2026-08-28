@@ -157,7 +157,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: |
-          pip install pyserial
+          pip install -r tools/requirements.txt
           python3 -m py_compile tools/legion_cli.py tools/sdr_worker.py tools/test_sdr_worker.py
           python3 tools/legion_cli.py --list
           python3 tools/test_sdr_worker.py

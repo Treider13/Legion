@@ -197,21 +197,19 @@ export class MockSdrBackend implements SdrBackend {
   }
 }
 
-/** Хост-FFT: 40 MSPS, кепка analog BW платы. Не ширина окна Walker. */
-export function hostScanSpanMhz(analogBwMhz: number): number {
-  const cap = analogBwMhz > 0 ? analogBwMhz : 20;
-  return Math.min(40, cap);
+/** Хост-FFT как DIO-sys: 40 MSPS. analog BW — фильтр LMS, не ось спектра. */
+export function hostScanSpanMhz(_analogBwMhz?: number): number {
+  return 40;
 }
 
-/** Медиана нижних 60% мощности — пол окна. Не 20-й перцентиль. */
-export function estimateNoiseFloor(powers: readonly number[]): number {
-  if (powers.length === 0) return 0;
-  const sorted = [...powers].sort((a, b) => a - b);
+/** DIO-sys/spectrum_analyzer: медиана нижних 60%. */
+export function estimateNoiseFloor(bins: readonly ScanBin[]): number {
+  if (bins.length === 0) return 0;
+  const sorted = [...bins].map((b) => b.powerDbm).sort((a, b) => a - b);
   const n = Math.max(1, Math.floor(sorted.length * 0.6));
-  const slice = sorted.slice(0, n);
-  const mid = Math.floor(slice.length / 2);
-  if (slice.length % 2 === 0) return (slice[mid - 1] + slice[mid]) / 2;
-  return slice[mid];
+  const lower = sorted.slice(0, n);
+  const mid = Math.floor(lower.length / 2);
+  return lower.length % 2 === 0 ? (lower[mid - 1] + lower[mid]) / 2 : lower[mid];
 }
 
 export function detectFromBins(
@@ -219,7 +217,7 @@ export function detectFromBins(
   thresholdDb: number,
 ): Detection[] {
   if (bins.length === 0) return [];
-  const noiseDbm = estimateNoiseFloor(bins.map((b) => b.powerDbm));
+  const noiseDbm = estimateNoiseFloor(bins);
   const hits: Detection[] = [];
   for (const b of bins) {
     const snr = b.powerDbm - noiseDbm;

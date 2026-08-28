@@ -21,6 +21,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
+import { FPGA_LMS_BOARD, fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -132,7 +133,20 @@ function main(): void {
     "Pluto Ethernet = hostname ADI",
     sdrOpenArgs("plutosdr", "192.168.2.1") === "driver=plutosdr,hostname=192.168.2.1",
   );
-  check("пустой host xA4 → локальный USB", sdrOpenArgs("bladerf-micro-xa4", "") === "");
+  check("пустой host xA4 → driver=bladerf (не enumerate[0])", sdrOpenArgs("bladerf-micro-xa4", "") === "driver=bladerf");
+  check("пустой host x40 → driver=bladerf", sdrOpenArgs("bladerf-x40", "") === "driver=bladerf");
+  check("пустой host HackRF → driver=hackrf", sdrOpenArgs("hackrf-one", "") === "driver=hackrf");
+  check("x40 выбран для FPGA", FPGA_LMS_BOARD === "bladerf-x40");
+  check("FPGA x40 без смены", fpgaBoardPlan("bladerf-x40").ok && !fpgaBoardPlan("bladerf-x40").switched);
+  check("FPGA micro → x40", fpgaBoardPlan("bladerf-micro-xa4").ok && fpgaBoardPlan("bladerf-micro-xa4").sdrId === "bladerf-x40");
+  check("FPGA HackRF отказ, каталог не трогаем", !fpgaBoardPlan("hackrf-one").ok && fpgaBoardPlan("hackrf-one").sdrId === "hackrf-one");
+  check("FPGA Pluto отказ", !fpgaBoardPlan("plutosdr").ok);
+  check("шлюз ok не FAKE", fpgaGatewayRefused({ ok: true, fake: false }) === null);
+  check("шлюз FAKE → отказ", (fpgaGatewayRefused({ ok: true, fake: true }) ?? "").includes("FAKE"));
+  check("шлюз мёртв → отказ", fpgaGatewayRefused({ ok: false, reason: "down" }) === "down");
+  check("player capture_done → можно ARM", fpgaPlayerReady({ ok: true, capture_done: true }) === null);
+  check("player без capture_done → отказ", (fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("capture_done"));
+  check("player статус мёртв → отказ", fpgaPlayerReady({ ok: false, reason: "usb" }) === "usb");
   check("кабель xA4 = шлюз", planEthernet("bladerf-micro-xa4", "1.2.3.4").cable === "gateway-rj45");
   check("кабель N210 = RJ45 в SDR", planEthernet("usrp-n210", "").cable === "sdr-rj45");
   check("кабель Pluto = usb-gadget", planEthernet("plutosdr", "").cable === "usb-gadget");
@@ -261,9 +275,18 @@ function main(): void {
   const bins = sdr.scanWindow(2442, 20, 64);
   const dets = detectFromBins(bins, 12);
   check("energy detection ловит несущую", dets.some((d) => Math.abs(d.freqMhz - 2442) < 0.5));
-  check("пол = медиана нижних 60%", estimateNoiseFloor([-90, -88, -86, -84, -10]) === -88);
-  check("хост FFT span x40 = 28", hostScanSpanMhz(28) === 28);
-  check("хост FFT span xa4 = 40", hostScanSpanMhz(56) === 40);
+  check(
+    "пол = медиана нижних 60%",
+    estimateNoiseFloor([
+      { freqMhz: 1, powerDbm: -90 },
+      { freqMhz: 2, powerDbm: -88 },
+      { freqMhz: 3, powerDbm: -86 },
+      { freqMhz: 4, powerDbm: -84 },
+      { freqMhz: 5, powerDbm: -10 },
+    ]) === -88,
+  );
+  check("хост FFT span = ADC 40, не analog 28", hostScanSpanMhz(28) === 40);
+  check("хост FFT span xa4 тоже 40", hostScanSpanMhz(56) === 40);
 
   const centers = planCenters(ism, 20);
   check("план скана непустой", centers.length >= 5);

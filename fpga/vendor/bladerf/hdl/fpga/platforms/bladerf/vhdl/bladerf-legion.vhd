@@ -319,6 +319,10 @@ architecture legion of bladerf is
     signal lg_mux_i         : signed(15 downto 0);
     signal lg_mux_q         : signed(15 downto 0);
     signal lg_mux_valid     : std_logic;
+    -- Цифровой IQ LMS без USB: после close Soapy FX3 DMA rx/tx_enable = 0.
+    -- lms6002d гейтит сэмплы этими enable — без OR детектор глухой, на PA тишина.
+    signal lms_rx_digital_en : std_logic;
+    signal lms_tx_digital_en : std_logic;
 
 begin
 
@@ -1076,11 +1080,16 @@ begin
     rx_sample_i(15 downto 12) <= (others => rx_sample_i(11)) ;
     rx_sample_q(15 downto 12) <= (others => rx_sample_q(11)) ;
 
+    -- Analog RX (CONTROL bit1, уже на rx_clock) держит цифровой RX.
+    -- ARM FPGA держит цифровой TX. fifo_reader/writer остаются на FX3.
+    lms_rx_digital_en <= rx_enable or lms_rx_enable_qualified_rxclk;
+    lms_tx_digital_en <= tx_enable or lg_tx_arm;
+
     U_lms6002d : entity work.lms6002d
       port map (
         rx_clock            =>  rx_clock,
         rx_reset            =>  rx_reset,
-        rx_enable           =>  rx_enable,
+        rx_enable           =>  lms_rx_digital_en,
 
         rx_lms_data         =>  lms_rx_data_reg,
         rx_lms_iq_sel       =>  lms_rx_iq_select_reg,
@@ -1092,7 +1101,7 @@ begin
 
         tx_clock            =>  tx_clock,
         tx_reset            =>  tx_reset,
-        tx_enable           =>  tx_enable,
+        tx_enable           =>  lms_tx_digital_en,
 
         tx_sample_i         =>  tx_sample_i(11 downto 0),
         tx_sample_q         =>  tx_sample_q(11 downto 0),

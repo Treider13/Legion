@@ -101,18 +101,27 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
   x40 не работают**. Порядок: стрим-режим = SoapySDRServer; FPGA-режим =
   наш агент (стрим-сервер остановить). Прошивка: стоп агент →
   `bladeRF-cli -l/-L` → старт агент.
-- **RX в lb_*-режимах включается штатным CONTROL-регистром** (target 0x01,
-  бит 1 = `lms_rx_enable` — факт из `pack()` в `bladerf_p.vhd`), RMW,
-  без libbladeRF: агент делает это сам при ARM и снимает при DISARM.
-  Сэмплы при этом не читает никто — FIFO переполняется (косметика),
-  тап детектора стоит до FIFO и работает.
-
-- **Режим `lb_gated`/`lb_always` требует включённого RX** (rx_enable): детектор
-  и loopback питаются от RX-потока. RX-стрим активирует и дочитывает воркер
-  на ноутбуке (SoapyRemote, он же владелец устройства — агент шлюза устройство
-  не делит): либо работает СКАН, либо drain-чтение. Если никто не читает —
-  RX FIFO переполняется (флаг overflow — безвреден для тракта: тап детектора
-  стоит до FIFO, но статус засоряется).
+- **Analog RX+TX в lb_*-режимах** включается штатным CONTROL-регистром
+  (target 0x01, бит 1 = `lms_rx_enable`, бит 2 = `lms_tx_enable` — факт из
+  `pack()` в `bladerf_p.vhd`), RMW, без libbladeRF. nco/player включают
+  только TX. Снимается при DISARM. Без бита 2 LMS аналог на TX SMA молчит —
+  mux может считать, а усилитель ничего не получит.
+- **Цифровой IQ LMS не зависит от USB после ARM.** `lms6002d` гейтит сэмплы
+  `rx_enable`/`tx_enable` с FX3 DMA. После `park` Soapy закрывается — DMA
+  выключен. HDL держит цифровой RX, пока analog RX (CONTROL bit1) жив, и
+  цифровой TX, пока FPGA ARM. `fifo_reader`/`fifo_writer` остаются на FX3:
+  USB FIFO может overflow/underflow (косметика), тап детектора и mux — до них.
+- **Эфир+FPGA — только bladeRF 1 x40 (LMS6002D).** Analog RX/TX = CONTROL
+  bit1/2 (`bladerf_p.vhd`). micro AD9361 этими битами не кормится — ARM
+  эфира на micro не включаем. Soapy паркует RX и TX LO на одну частоту
+  при fs = analog BW (x40: 28 MSPS). Окно детектора = 16/fs (≈ 0.57 мкс).
+  FAKE park, FAKE шлюз (`LEGION_FPGA_FAKE`) и сбой park → ARM нет.
+  Player ARM только при `capture_done` (HDL: иначе нули на DAC). sleep не считается.
+  park читает getFrequency/getSampleRate; RX и TX fs должны совпасть
+  (loopback FIFO).   Локальный USB открывается `driver=bladerf`, не первая
+  плата Soapy; после open `getHardwareKey` должен быть `bladerf1`
+  (libbladeRF / SoapyBladeRF). `bladerf2` (micro) — отказ, даже если
+  каталог уже x40. HackRF/Pluto не подменяются на x40. NCO/player — 2 MSPS.
 - **Усиление loopback** — грубый сдвиг `lb_shift` (0..8): переполнение 16 бит
   заворачивает знак (wrap), насыщения (saturation) в этой ревизии нет.
   Подбирать с осциллографом/сканом на стенде, начиная с 0.

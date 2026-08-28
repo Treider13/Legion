@@ -256,10 +256,9 @@ export function SignalPanel() {
           </p>
         ) : (
           <p className="panel-note">
-            Ноутбук ставит задачу (волна из RAM, тон NCO или постоянный RX→TX),
-            SDR играет сам. Сканер и I²+Q²-гейт сюда не входят — это режим
-            FPGA+СКАНЕР на вкладке СКАН. Watchdog: пропал heartbeat ~1 с → TX
-            гаснет. Требует ревизии legion. PLAYER/NCO/LOOPBACK перекрывают хост-стрим.
+            Ноутбук ставит задачу (PLAYER / NCO / loopback всегда). Сканер и
+            I²+Q²-гейт сюда не входят. ARM паркует LO; PLAYER без capture_done
+            не стартует. Watchdog ~1 с. NCO — TX DDS, FTW с fj (0 → fs/8, не DC).
           </p>
         )}
         {!isFpgaAirLive(s.fpgaArmed, s.fpgaMode) && (

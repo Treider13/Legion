@@ -15,7 +15,9 @@ API сверен с:
   MeasureDelay.py: if status.ret != len(tx_pulse): raise.
   SoapyRemote: enumerate/open с driver=remote,remote=tcp://host:55132.
 
-Режим 1: RX FFT (energy) + TX CW на LO → RF out. ESP32 сюда не входит.
+Режим 1: RX как DIO-sys/spectrum_analyzer — непрерывный захват в кольцо
+(40 MSPS, 4096/USB, без overflow), Hann, Welch-8, |X|²/N², сглаживание DC
++ TX CW на LO → RF out. ESP32 сюда не входит.
 LEGION_SDR_FAKE=1 — только проверка протокола (не эфир).
 """
 from __future__ import annotations
@@ -50,7 +52,11 @@ try:
     SOAPY_SDR_UNDERFLOW = int(getattr(SoapySDR, "SOAPY_SDR_UNDERFLOW", SOAPY_SDR_UNDERFLOW))
 except ImportError:
     SoapySDR = None  # type: ignore
-    SOAPY_SDR_CF32 = SOAPY_SDR_RX = SOAPY_SDR_TX = None  # type: ignore
+    # Constants.h: TX=0 RX=1 — те же числа без модуля, чтобы park() и тесты
+    # с mock-Device не сравнивали направление с None.
+    SOAPY_SDR_CF32 = "CF32"
+    SOAPY_SDR_TX = 0
+    SOAPY_SDR_RX = 1
     SOAPY = False
 
 try:
@@ -92,15 +98,160 @@ def kwargs_str(kw: dict[str, str]) -> str:
 
 
 TX_FS = 2.0e6
+# NCO FTW / solo-park. Эфир+FPGA передаёт fs = analog BW, не эту константу.
+FPGA_PARK_FS_HZ = 2_000_000
+# libbladeRF bladerf_get_board_name / SoapyBladeRF getHardwareKey():
+#   bladerf1 = LMS6002D (x40/x115, CONTROL bit1/2)
+#   bladerf2 = AD9361 micro (этими битами не кормится)
+
+
+def classify_bladerf_hw(hardware_key: str, info: dict[str, str] | None = None) -> str:
+    """lms | ad9361 | unknown. Не угадываем по драйверу bladerf — он общий."""
+    key = (hardware_key or "").strip().lower()
+    if key == "bladerf1":
+        return "lms"
+    if key == "bladerf2":
+        return "ad9361"
+    blob = " ".join([key, *(str(v).lower() for v in (info or {}).values())])
+    if "bladerf2" in blob:
+        return "ad9361"
+    if "bladerf1" in blob:
+        return "lms"
+    return "unknown"
+
+
+def soapy_hw_snapshot(dev: Any) -> dict[str, Any]:
+    key = ""
+    info: dict[str, str] = {}
+    try:
+        key = str(dev.getHardwareKey() or "")
+    except Exception:
+        key = ""
+    try:
+        raw = dev.getHardwareInfo()
+        info = {str(k): str(v) for k, v in dict(raw).items()}
+    except Exception:
+        pass
+    return {"hardwareKey": key, "info": info, "class": classify_bladerf_hw(key, info)}
+
+
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
-FFT_MIN = 1024  # wiki PythonSupport: буфер 1024, не 64 бина UI
-# Хост-анализатор: фиксированный ADC, не окно Walker. Кепка — analog BW платы.
-SCAN_FS_HZ = 40e6
-SCAN_FFT_N = 1024
+# DIO-sys/spectrum_analyzer: FFT 1024/2048/4096, Welch 8 кадров, Hann, |X|²/N².
+# capture.hpp: 40 MSPS, 4096 сэмплов/USB, 32 буфера; main.cpp: кольцо 2^18.
+FFT_SIZES = (1024, 2048, 4096)
 WELCH_FRAMES = 8
-RING_CHUNK = 4096
-DISCARD_CHUNKS = 32  # 32×4096 ≈ 3.28 мс @ 40 MSPS — слив USB, не ФАПЧ
+FFT_MIN = 1024
+DIO_SAMPLE_RATE_HZ = 40_000_000
+DIO_BANDWIDTH_HZ = 40_000_000
+TRANSFER_SAMPLES = 4096
+USB_RX_BUFFERS = 32
+RING_CAP = 1 << 18
+RX_GAIN_DB = 30
+
+
+def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
+    """DIO-sys capture.hpp SAMPLE_RATE_HZ = 40e6.
+    analog BW платы (x40: 28 МГц) — это фильтр, не частота дискретизации."""
+    return float(DIO_SAMPLE_RATE_HZ)
+
+
+def rx_is_parked(
+    rx_on: bool,
+    rx_hz: float | None,
+    rx_fs: float | None,
+    center_hz: float,
+    fs: float,
+    discard_left: int,
+    capture_alive: bool,
+) -> bool:
+    """DIO-sys capture.cpp: USB-команды только если частота/gain реально сменились."""
+    return (
+        bool(rx_on)
+        and capture_alive
+        and discard_left <= 0
+        and rx_hz == center_hz
+        and rx_fs == fs
+    )
+
+
+def settle_samples(_fs: float = 0.0) -> int:
+    """После смены LO сброс равен глубине USB DIO-sys: 32 × 4096 (capture.cpp sync_config).
+    Отдельной константы ФАПЧ в их репозитории нет — ничего не добавляем."""
+    return USB_RX_BUFFERS * TRANSFER_SAMPLES
+
+
+class IqRing:
+    """Кольцо DIO-sys CircularBuffer: SPSC, ёмкость 2^n, старое затирается."""
+
+    def __init__(self, capacity: int) -> None:
+        if not NUMPY:
+            raise RuntimeError("numpy required")
+        if capacity < 2 or (capacity & (capacity - 1)) != 0:
+            raise ValueError("IqRing: ёмкость должна быть степенью двойки")
+        self.buf = np.zeros(capacity, dtype=np.complex64)
+        self.cap = int(capacity)
+        self.mask = int(capacity - 1)
+        self._w = 0
+        self._r = 0
+        self._lock = threading.Lock()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._w = 0
+            self._r = 0
+
+    def available(self) -> int:
+        with self._lock:
+            return int(self._w - self._r)
+
+    def push_block(self, samples: Any) -> None:
+        n = int(len(samples))
+        if n <= 0:
+            return
+        with self._lock:
+            w = self._w
+            start = w & self.mask
+            end = start + n
+            if end <= self.cap:
+                self.buf[start:end] = samples
+            else:
+                first = self.cap - start
+                self.buf[start:] = samples[:first]
+                self.buf[: n - first] = samples[first:]
+            w += n
+            r = self._r
+            if w - r > self.cap:
+                r = w - self.cap
+            self._w = w
+            self._r = r
+
+    def pop_batch(self, n: int) -> Any:
+        n = int(n)
+        with self._lock:
+            if self._w - self._r < n:
+                return None
+            out = np.empty(n, dtype=np.complex64)
+            r = self._r
+            start = r & self.mask
+            end = start + n
+            if end <= self.cap:
+                out[:] = self.buf[start:end]
+            else:
+                first = self.cap - start
+                out[:first] = self.buf[start:]
+                out[first:] = self.buf[: n - first]
+            self._r = r + n
+            return out
+
+    def drop_oldest(self, n: int) -> int:
+        """Выбросить хвост — как processing thread DIO, который всегда на самом свежем IQ."""
+        n = max(0, int(n))
+        with self._lock:
+            have = int(self._w - self._r)
+            n = min(n, have)
+            self._r += n
+            return n
 
 
 def cw_lo_hz(rf_hz: float, fs: float = TX_FS) -> float:
@@ -658,20 +809,24 @@ class Radio:
         self.full_duplex = True
         self.analog_bw = 20.0
         self._rx_on = False
-        # Кэш применённых RX-параметров: SoapyBladeRF setSampleRate при КАЖДОМ
-        # вызове перепрограммирует clock chain AD9361 (libbladeRF не кэширует)
-        # и сбрасывает hardware-time — на живом потоке это роняет RX
-        # (buf_ready timeout 1000 ms на стенде 2026-08-27). Перестраиваем
-        # только при реальной смене fs/bw/center.
+        # Кольцо DIO-sys + кэш fs/bw/LO. SoapyBladeRF setSampleRate при каждом
+        # вызове перепрограммирует clock chain (стенд 2026-08-27: buf_ready
+        # timeout 1000 ms). USB-команды только если значение реально сменилось.
+        self._rx_hz: float | None = None
         self._rx_fs: float | None = None
         self._rx_bw: float | None = None
-        self._rx_center: float | None = None
+        self._rx_cap_stop = threading.Event()
+        self._rx_cap_stop.set()
+        self._rx_pause = threading.Event()
+        self._rx_cap_thr: threading.Thread | None = None
+        self._ring: IqRing | None = None
+        self._discard_left = 0
+        self._rx_gen = 0
+        self._rx_io = threading.Lock()
         self._tone = None
         self.tx_error: str | None = None
         self.tx_fail = 0
-        self._discard_left = 0
-        self._ring_gen = 0
-        self._psd_gen = 0
+        self.hardware_key = ""
 
     def tx_live(self) -> bool:
         if self.tx_mhz is None or self.tx_error:
@@ -682,6 +837,11 @@ class Radio:
 
     def close(self) -> None:
         self.tx_off()
+        self._stop_rx_capture()
+        self._rx_hz = None
+        self._rx_fs = None
+        self._rx_bw = None
+        self._discard_left = 0
         with self._lock:
             if self.dev is not None and SOAPY:
                 try:
@@ -708,17 +868,34 @@ class Radio:
             self._rx_on = False
             self._rx_fs = None
             self._rx_bw = None
-            self._rx_center = None
-            self._discard_left = 0
-            self._ring_gen = 0
-            self._psd_gen = 0
             self.args = ""
             self.tx_error = None
+            self.hardware_key = ""
         # Soapy-Device держит USB-handle до GC: без принудительного сбора
         # быстрый re-open ловит -7 NODEV (поймано на стенде 2026-08-27).
         gc.collect()
 
-    def open(self, args: str, analog_bw: float, can_tx: bool, full_duplex: bool) -> dict[str, Any]:
+    def _unmake(self) -> None:
+        with self._lock:
+            if self.dev is not None and SOAPY:
+                try:
+                    self.dev.close()
+                except Exception:
+                    pass
+            self.dev = None
+            self.rx = None
+            self.tx = None
+            self._rx_on = False
+        gc.collect()
+
+    def open(
+        self,
+        args: str,
+        analog_bw: float,
+        can_tx: bool,
+        full_duplex: bool,
+        require_hw: str = "",
+    ) -> dict[str, Any]:
         self.close()
         self.analog_bw = analog_bw if analog_bw > 0 else 20.0
         self.can_tx = can_tx
@@ -726,7 +903,14 @@ class Radio:
         self.args = args
         if self.fake or args.startswith("driver=fake"):
             self.fake = True
-            return {"ok": True, "reason": "FAKE worker — не эфир", "fake": True}
+            if require_hw:
+                return {
+                    "ok": False,
+                    "reason": "FAKE worker — не эфир, FPGA ARM нельзя",
+                    "fake": True,
+                    "hardwareKey": "",
+                }
+            return {"ok": True, "reason": "FAKE worker — не эфир", "fake": True, "hardwareKey": ""}
         if not SOAPY:
             return {"ok": False, "reason": "SoapySDR Python не установлен (пакет python3-soapysdr / pip SoapySDR)"}
         if not NUMPY:
@@ -749,63 +933,211 @@ class Radio:
             kw = {k: full[k] for k in ("driver", "serial") if k in full}
             if not kw:
                 kw = full
+        candidates = [kw]
+        if require_hw == "bladerf1":
+            # Soapy enumerate не пишет board name. Открываем каждую bladeRF
+            # и смотрим getHardwareKey (bladerf1 vs bladerf2).
+            try:
+                filt = dict(kw) if kw.get("remote") else {"driver": "bladerf"}
+                rows = list(SoapySDR.Device.enumerate(filt))
+                found_kw: list[dict[str, str]] = []
+                for row in rows:
+                    full = {str(k): str(v) for k, v in dict(row).items()}
+                    sel = {k: full[k] for k in ("driver", "serial") if k in full}
+                    if kw.get("remote"):
+                        sel = {**kw, **sel}
+                    if sel:
+                        found_kw.append(sel)
+                if found_kw:
+                    candidates = found_kw
+            except Exception:
+                pass
         last_err: Exception | None = None
-        for _ in range(4):
-            try:
-                self.dev = SoapySDR.Device(kwargs_str(kw))
-                _setup_front_end(self.dev, self.can_tx)
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                self.dev = None  # если Device() успел создаться — отпустить до retry
-                gc.collect()
-                time.sleep(0.4)
-        if self.dev is None:
-            return {"ok": False, "reason": f"Soapy Device(): {last_err}"}
-        return {"ok": True, "reason": f"открыт Soapy {kw}", "fake": False}
+        last_hw = ""
+        for cand in candidates:
+            self.dev = None
+            for _ in range(4):
+                try:
+                    self.dev = SoapySDR.Device(kwargs_str(cand))
+                    _setup_front_end(self.dev, self.can_tx)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    self.dev = None
+                    gc.collect()
+                    time.sleep(0.4)
+            if self.dev is None:
+                continue
+            snap = soapy_hw_snapshot(self.dev)
+            self.hardware_key = str(snap["hardwareKey"])
+            last_hw = self.hardware_key
+            if require_hw == "bladerf1" and snap["class"] != "lms":
+                last_err = RuntimeError(
+                    f"открыт {self.hardware_key or 'плата без hardwareKey'} — "
+                    "нужен bladerf1 (LMS6002D), не micro/AD9361"
+                )
+                self._unmake()
+                continue
+            return {
+                "ok": True,
+                "reason": f"открыт Soapy {cand}"
+                + (f" · {self.hardware_key}" if self.hardware_key else ""),
+                "fake": False,
+                "hardwareKey": self.hardware_key,
+            }
+        return {
+            "ok": False,
+            "reason": f"Soapy Device(): {last_err}",
+            "hardwareKey": last_hw,
+        }
 
-    def _ensure_rx(self, fs: float, center_hz: float) -> None:
+    def _stop_rx_capture(self) -> None:
+        self._rx_cap_stop.set()
+        self._rx_pause.set()
+        thr = self._rx_cap_thr
+        if thr is not None and thr.is_alive():
+            thr.join(timeout=2.5)
+        self._rx_cap_thr = None
+
+    def _start_rx_capture(self) -> None:
+        if self.fake or not NUMPY:
+            return
+        if self._ring is None:
+            self._ring = IqRing(RING_CAP)
+        self._rx_cap_stop.clear()
+        if self._rx_cap_thr is not None and self._rx_cap_thr.is_alive():
+            return
+        self._rx_cap_thr = threading.Thread(
+            target=self._rx_capture_loop, name="legion-sdr-rx", daemon=True
+        )
+        self._rx_cap_thr.start()
+
+    def _rx_capture_loop(self) -> None:
+        """DIO-sys CaptureThread: непрерывный readStream в кольцо — иначе overflow."""
+        if not NUMPY:
+            return
+        buf = np.zeros(TRANSFER_SAMPLES, dtype=np.complex64)
+        while not self._rx_cap_stop.is_set():
+            if self._rx_pause.is_set() or not self._rx_on or self.dev is None or self.rx is None:
+                time.sleep(0.0002)
+                continue
+            fs = self._rx_fs or float(DIO_SAMPLE_RATE_HZ)
+            timeout = max(50_000, int(8.0 * TRANSFER_SAMPLES / max(fs, 1.0) * 1e6))
+            with self._rx_io:
+                if self._rx_pause.is_set() or not self._rx_on or self.dev is None or self.rx is None:
+                    continue
+                try:
+                    sr = self.dev.readStream(self.rx, [buf], TRANSFER_SAMPLES, timeoutUs=timeout)
+                except Exception:
+                    time.sleep(0.001)
+                    continue
+                if self._rx_pause.is_set():
+                    continue
+                ret = stream_ret(sr)
+                kind = stream_kind(ret)
+                if kind in ("error", "overflow"):
+                    # overflow: этот блок дырявый, следующий уже из живого USB.
+                    continue
+                if ret <= 0:
+                    continue
+                chunk = buf[:ret]
+                left = self._discard_left
+                if left > 0:
+                    take = min(left, ret)
+                    self._discard_left = left - take
+                    if take < ret and self._ring is not None:
+                        self._ring.push_block(chunk[take:])
+                    if self._discard_left <= 0:
+                        self._rx_gen += 1
+                    continue
+                if self._ring is not None:
+                    self._ring.push_block(chunk)
+
+    def _apply_dio_rx_clock(self, fs: float) -> float:
+        """DIO-sys configure_device: 40 MSPS + 40 МГц. Фактический rate — из Soapy."""
         assert self.dev is not None
-        bw = min(fs, self.analog_bw * 1e6)
-        rate_changed = self._rx_fs != fs or self._rx_bw != bw
-        lo_changed = self._rx_center != center_hz
-        # bladeRF2: смена rate на живом потоке валит streamer — чистая
-        # остановка перед перестройкой, запуск после (паттерн libbladeRF).
-        if rate_changed and self.rx is not None and self._rx_on:
-            try:
-                self.dev.deactivateStream(self.rx)
-            except Exception:
-                pass
-            self._rx_on = False
-        if rate_changed:
-            self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
-            try:
-                self.dev.setBandwidth(SOAPY_SDR_RX, 0, bw)
-            except Exception:
-                pass
-            self._rx_fs = fs
-            self._rx_bw = bw
-        if lo_changed:
-            # LO retune на живом потоке безопасен (datapath не сбрасывается).
-            self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
-            self._rx_center = center_hz
-        if self.rx is None:
-            self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
-            self.dev.activateStream(self.rx)
-            self._rx_on = True
-        elif not self._rx_on:
-            # half-duplex: после TX поток есть, но deactivate — wiki: activate снова
-            self.dev.activateStream(self.rx)
-            self._rx_on = True
-        if rate_changed or lo_changed:
-            # Слив USB-кольца. Аналоговый хвост ФАПЧ здесь не моделируется.
-            self._ring_gen += 1
-            self._discard_left = DISCARD_CHUNKS * RING_CHUNK
+        self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
+        try:
+            self.dev.setBandwidth(SOAPY_SDR_RX, 0, float(DIO_BANDWIDTH_HZ))
+            self._rx_bw = float(DIO_BANDWIDTH_HZ)
+        except Exception:
+            self.dev.setBandwidth(SOAPY_SDR_RX, 0, fs)
+            self._rx_bw = fs
+        try:
+            got = float(self.dev.getSampleRate(SOAPY_SDR_RX, 0))
+            if got > 0:
+                return got
+        except Exception:
+            pass
+        return fs
+
+    def _ensure_rx(self, fs: float, center_hz: float) -> int:
+        """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий.
+
+        setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
+        Rate — только при смене, через deactivate→перестройка→activate.
+        LO (setFrequency) на живом потоке безопасен.
+        """
+        assert self.dev is not None
+        alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
+        if rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive):
+            return self._rx_gen
+        retuned = self._rx_hz != center_hz or self._rx_fs != fs or not self._rx_on
+        self._rx_pause.set()
+        try:
+            with self._rx_io, self._lock:
+                rate_changed = self._rx_fs != fs or not self._rx_on
+                if rate_changed and self.rx is not None and self._rx_on:
+                    try:
+                        self.dev.deactivateStream(self.rx)
+                    except Exception:
+                        pass
+                    self._rx_on = False
+                if rate_changed:
+                    fs = self._apply_dio_rx_clock(fs)
+                if self._rx_hz != center_hz:
+                    self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
+                if self.rx is None:
+                    self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
+                    self.dev.activateStream(self.rx)
+                    self._rx_on = True
+                elif not self._rx_on:
+                    self.dev.activateStream(self.rx)
+                    self._rx_on = True
+                self._rx_hz = center_hz
+                self._rx_fs = fs
+                if self._ring is None and NUMPY:
+                    self._ring = IqRing(RING_CAP)
+                if retuned:
+                    if self._ring is not None:
+                        self._ring.reset()
+                    self._discard_left = settle_samples(fs)
+                    pending = self._rx_gen + 1
+                else:
+                    pending = self._rx_gen
+                if self._rx_on:
+                    self._start_rx_capture()
+                return pending
+        finally:
+            self._rx_pause.clear()
+
+    def _wait_psd(self, gen: int, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
+        fft_n = _pick_fft_size(n)
+        need = WELCH_FRAMES * fft_n
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            if (
+                self._rx_gen >= gen
+                and self._ring is not None
+                and self._ring.available() >= need
+            ):
+                return _psd_from_ring(self._ring, n, fs, center_mhz)
+            time.sleep(0.0005)
+        raise RuntimeError("RX: нет полного кадра FFT после настройки LO (шлюз/кабель/прошивка?)")
 
     def scan(self, center_mhz: float, bw_mhz: float, bins: int) -> dict[str, Any]:
-        n = max(8, min(int(bins) if bins else SCAN_FFT_N, 4096))
-        bw = max(0.2, float(bw_mhz))
+        n = max(8, min(int(bins), 4096))
         extra = self._scan_extra()
         if not self.full_duplex and self.tx_mhz is not None:
             # GSG HackRF — half-duplex. RX+TX сразу ломает тракт (каталог fullDuplex: false).
@@ -817,62 +1149,177 @@ class Radio:
                 **extra,
             }
         if self.fake:
-            # Тот же span, что у живого ADC: не окно Walker (bw_mhz).
-            span = scan_fs_hz(self.analog_bw) / 1e6
-            return {"ok": True, "bins": _fake_bins(center_mhz, span, n), "centerMhz": center_mhz, **extra}
+            # Живой scan() игнорирует bw: ось = fs = 40 MSPS. FAKE не должен врать 20 МГц.
+            adc_mhz = DIO_SAMPLE_RATE_HZ / 1e6
+            return {"ok": True, "bins": _fake_bins(center_mhz, adc_mhz, n), "centerMhz": center_mhz, **extra}
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
-        # ADC 40 MSPS / фильтр 40 МГц, не ширина окна Walker. Кепка — analog BW.
-        fs = scan_fs_hz(self.analog_bw)
-        with self._lock:
-            try:
-                self._ensure_rx(fs, center_mhz * 1e6)
-                spec = self._psd_from_ring(n, fs, center_mhz)
-            except Exception as e:
-                return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
+        # DIO-sys capture.hpp: 40 MSPS / 40 МГц, не окно walker и не analog-фильтр.
+        fs = self._rx_fs if self._rx_fs else dio_rx_rate()
+        try:
+            gen = self._ensure_rx(fs, center_mhz * 1e6)
+            spec = self._wait_psd(gen, n, self._rx_fs or fs, center_mhz)
+        except Exception as e:
+            return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
 
-    def _wait_psd(self, fs: float) -> None:
-        """Дождаться слива после смены LO/fs. USB-буферы, не ФАПЧ."""
-        tries = 0
-        while self._discard_left > 0 and tries < DISCARD_CHUNKS * 4:
-            want = min(RING_CHUNK, self._discard_left)
-            got = _read_iq(self.dev, self.rx, want, fs)
-            if got is None:
-                tries += 1
-                continue
-            self._discard_left -= len(got)
-            tries = 0
-        if self._discard_left > 0:
-            raise RuntimeError(
-                f"слив после LO не дочитан ({self._discard_left} сэмплов) — спектр не строим на старом IQ"
+    def _soapy_get_hz(self, direction: int) -> float | None:
+        try:
+            hz = float(self.dev.getFrequency(direction, 0))
+        except Exception:
+            return None
+        return hz if hz > 0 else None
+
+    def _soapy_get_fs(self, direction: int) -> float | None:
+        try:
+            rate = float(self.dev.getSampleRate(direction, 0))
+        except Exception:
+            return None
+        return rate if rate > 0 else None
+
+    def _soapy_get_bw(self, direction: int) -> float | None:
+        try:
+            bw = float(self.dev.getBandwidth(direction, 0))
+        except Exception:
+            return None
+        return bw if bw > 0 else None
+
+    def park(self, center_mhz: float, bw_mhz: float, fs_hz: float, rx: bool, tx: bool) -> dict[str, Any]:
+        """Поставить RX/TX LO без FFT и без USB-стрима. FPGA потом забирает USB.
+
+        hostScan здесь нельзя: он поднимает 40 MSPS и не трогает TX LO —
+        loopback ушёл бы на чужой TX PLL.
+
+        После set* читаем getFrequency/getSampleRate. «ok» без readback —
+        вайб: драйвер мог проглотить запись, TX PLL остался на другой частоте.
+        """
+        fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(FPGA_PARK_FS_HZ)
+        hz = float(center_mhz) * 1e6
+        bw = max(0.2, float(bw_mhz)) * 1e6
+        base = {"freqMhz": center_mhz, "fsHz": fs}
+        if not rx and not tx:
+            return {"ok": False, "reason": "park: нужен RX и/или TX", **base}
+        if self.fake:
+            return {
+                "ok": True,
+                "reason": f"FAKE park {center_mhz:.3f} МГц · {fs / 1e6:.1f} MSPS",
+                "fake": True,
+                **base,
+            }
+        if self.dev is None:
+            return {"ok": False, "reason": "SDR не открыт", **base}
+
+        def _fail(why: str) -> dict[str, Any]:
+            return {"ok": False, "reason": why, **base}
+
+        snap = soapy_hw_snapshot(self.dev)
+        if snap["class"] != "lms":
+            return _fail(
+                f"park: {snap['hardwareKey'] or 'плата без hardwareKey'} — "
+                "FPGA эфир только bladerf1 (LMS6002D CONTROL), не micro/AD9361"
             )
 
-    def _psd_from_ring(self, nfft: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-        self._wait_psd(fs)
-        frames = [self._read_exact(nfft, fs) for _ in range(WELCH_FRAMES)]
-        self._psd_gen = self._ring_gen
-        return welch_dbm(frames, fs, center_mhz)
-
-    def _read_exact(self, n: int, fs: float) -> Any:
-        acc: list[Any] = []
-        need = n
-        for _ in range(24):
-            chunk = _read_iq(self.dev, self.rx, min(need, RING_CHUNK), fs)
-            if chunk is None:
-                continue
-            acc.append(chunk)
-            need -= len(chunk)
-            if need <= 0:
-                break
-        if not acc:
-            raise RuntimeError("readStream: нет сэмплов (шлюз/кабель/прошивка?)")
-        x = np.concatenate(acc)[:n]
-        if len(x) < n:
-            raise RuntimeError("readStream: мало сэмплов для Welch")
-        return x
+        # 1 МГц: ловит «не записалось» (0 / другой ГГц), не фазовый шум PLL.
+        lo_tol = 1e6
+        fs_req_tol = 0.15
+        fs_match_tol = 0.02
+        bw_min_frac = 0.5
+        want_bw = min(bw, fs)
+        rx_lo = tx_lo = rx_fs = tx_fs = None
+        got = fs
+        try:
+            with self._lock:
+                if rx:
+                    self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
+                    self.dev.setFrequency(SOAPY_SDR_RX, 0, hz)
+                    try:
+                        self.dev.setBandwidth(SOAPY_SDR_RX, 0, want_bw)
+                    except Exception as e:
+                        return _fail(f"park: setBandwidth RX: {e}")
+                    rx_bw = self._soapy_get_bw(SOAPY_SDR_RX)
+                    if rx_bw is None:
+                        return _fail("park: getBandwidth RX не ответил")
+                    if rx_bw < bw_min_frac * want_bw:
+                        return _fail(
+                            f"park: RX BW {rx_bw / 1e6:.1f} МГц << {want_bw / 1e6:.1f} — "
+                            "окно не analog (LMS дефолт ~1.5 МГц)"
+                        )
+                    rx_lo = self._soapy_get_hz(SOAPY_SDR_RX)
+                    rx_fs = self._soapy_get_fs(SOAPY_SDR_RX)
+                    if rx_lo is None:
+                        return _fail("park: getFrequency RX не ответил")
+                    if abs(rx_lo - hz) > lo_tol:
+                        return _fail(
+                            f"park: RX LO {rx_lo / 1e6:.3f} ≠ {center_mhz:.3f} МГц"
+                        )
+                    if rx_fs is None:
+                        return _fail("park: getSampleRate RX не ответил")
+                    if abs(rx_fs - fs) / fs > fs_req_tol:
+                        return _fail(
+                            f"park: RX fs {rx_fs / 1e6:.1f} MSPS ≠ запрошенные {fs / 1e6:.1f}"
+                        )
+                    got = rx_fs
+                    self._rx_hz = rx_lo
+                    self._rx_fs = rx_fs
+                if tx:
+                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, fs)
+                    self.dev.setFrequency(SOAPY_SDR_TX, 0, hz)
+                    try:
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, want_bw)
+                    except Exception as e:
+                        if rx:
+                            return _fail(f"park: setBandwidth TX: {e}")
+                    if rx:
+                        tx_bw = self._soapy_get_bw(SOAPY_SDR_TX)
+                        if tx_bw is None:
+                            return _fail("park: getBandwidth TX не ответил")
+                        if tx_bw < bw_min_frac * want_bw:
+                            return _fail(
+                                f"park: TX BW {tx_bw / 1e6:.1f} МГц << {want_bw / 1e6:.1f}"
+                            )
+                    tx_lo = self._soapy_get_hz(SOAPY_SDR_TX)
+                    tx_fs = self._soapy_get_fs(SOAPY_SDR_TX)
+                    if tx_lo is None:
+                        return _fail("park: getFrequency TX не ответил")
+                    if abs(tx_lo - hz) > lo_tol:
+                        return _fail(
+                            f"park: TX LO {tx_lo / 1e6:.3f} ≠ {center_mhz:.3f} МГц"
+                        )
+                    if tx_fs is None:
+                        return _fail("park: getSampleRate TX не ответил")
+                    if abs(tx_fs - fs) / fs > fs_req_tol:
+                        return _fail(
+                            f"park: TX fs {tx_fs / 1e6:.1f} MSPS ≠ запрошенные {fs / 1e6:.1f}"
+                        )
+                    if not rx:
+                        got = tx_fs
+                if rx and tx and rx_fs and tx_fs:
+                    if abs(rx_fs - tx_fs) / max(rx_fs, tx_fs) > fs_match_tol:
+                        return _fail(
+                            f"park: RX {rx_fs / 1e6:.1f} и TX {tx_fs / 1e6:.1f} MSPS "
+                            "разъехались — loopback FIFO не сойдётся"
+                        )
+                    got = rx_fs
+        except Exception as e:
+            return _fail(f"park LO: {e}")
+        sides = "+".join(p for p, on in (("RX", rx), ("TX", tx)) if on)
+        out: dict[str, Any] = {
+            "ok": True,
+            "reason": f"park {sides} {center_mhz:.3f} МГц · {got / 1e6:.1f} MSPS",
+            "freqMhz": (rx_lo or tx_lo or hz) / 1e6,
+            "fsHz": got,
+        }
+        if rx_lo is not None:
+            out["rxLo"] = rx_lo
+        if tx_lo is not None:
+            out["txLo"] = tx_lo
+        if rx_fs is not None:
+            out["rxFs"] = rx_fs
+        if tx_fs is not None:
+            out["txFs"] = tx_fs
+        return out
 
     def _scan_extra(self) -> dict[str, Any]:
         out: dict[str, Any] = {"txLive": self.tx_live()}
@@ -887,45 +1334,53 @@ class Radio:
         успевает выпустить старую волну на новой частоте."""
         timeout = stream_timeout_us(len(buf), TX_FS)
         created = False
-        with self._lock:
-            try:
-                if not self.full_duplex and self.rx is not None and self._rx_on:
-                    self.dev.deactivateStream(self.rx)
-                    self._rx_on = False
-                self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
+        if not self.full_duplex:
+            self._rx_pause.set()
+            # Тот же порядок, что _ensure_rx: сначала _rx_io, потом _lock.
+            self._rx_io.acquire()
+        try:
+            with self._lock:
                 try:
-                    # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
-                    # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.
-                    self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(TX_FS, self.analog_bw * 1e6))
-                except Exception:
-                    pass
-                self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
-                if self.tx is None:
-                    self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
-                    self.dev.activateStream(self.tx)
-                    created = True
-                # MeasureDelay: if status.ret != len(tx_pulse): raise
-                sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
-                ret = stream_ret(sr)
-                kind = stream_kind(ret)
-                if ret != len(buf):
-                    if prev_mhz is not None:
-                        self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
-                    elif created and self.tx is not None:
-                        try:
-                            self.dev.deactivateStream(self.tx)
-                            self.dev.closeStream(self.tx)
-                        except Exception:
-                            pass
-                        self.tx = None
-                    return {
-                        "ok": False,
-                        "reason": f"writeStream {kind} ret={ret} (ждали {len(buf)}) — сигнала на RF out нет",
-                        "latencyUs": 0,
-                    }
-                self._tone = buf
-            except Exception as e:
-                return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
+                    if not self.full_duplex and self.rx is not None and self._rx_on:
+                        self.dev.deactivateStream(self.rx)
+                        self._rx_on = False
+                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, TX_FS)
+                    try:
+                        # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
+                        # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(TX_FS, self.analog_bw * 1e6))
+                    except Exception:
+                        pass
+                    self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
+                    if self.tx is None:
+                        self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
+                        self.dev.activateStream(self.tx)
+                        created = True
+                    # MeasureDelay: if status.ret != len(tx_pulse): raise
+                    sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
+                    ret = stream_ret(sr)
+                    kind = stream_kind(ret)
+                    if ret != len(buf):
+                        if prev_mhz is not None:
+                            self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, TX_FS))
+                        elif created and self.tx is not None:
+                            try:
+                                self.dev.deactivateStream(self.tx)
+                                self.dev.closeStream(self.tx)
+                            except Exception:
+                                pass
+                            self.tx = None
+                        return {
+                            "ok": False,
+                            "reason": f"writeStream {kind} ret={ret} (ждали {len(buf)}) — сигнала на RF out нет",
+                            "latencyUs": 0,
+                        }
+                    self._tone = buf
+                except Exception as e:
+                    return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
+        finally:
+            if not self.full_duplex:
+                self._rx_io.release()
         return None
 
     def _tx_commit(self, buf: Any, freq_mhz: float, t0: float, label: str) -> dict[str, Any]:
@@ -991,6 +1446,7 @@ class Radio:
                 "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц",
                 "latencyUs": us,
                 "freqMhz": freq_mhz,
+                "fake": True,
             }
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
@@ -1085,9 +1541,7 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
 
 
 def _setup_front_end(dev: Any, can_tx: bool) -> None:
-    """Антенна + фиксированный RX gain. AGC не включаем (setGainMode False).
-    Если драйвер проглотил False — железо может остаться в AGC; в коде True нет.
-    cal lms / cal dc / rxvga2 отсюда не вызываются."""
+    """Антенна/gain/DC как DIO-sys capture.cpp. AGC не включаем — на антенне качает пол."""
     try:
         rx_ants = list(dev.listAntennas(SOAPY_SDR_RX, 0) or [])
         pick = next((a for a in rx_ants if str(a).upper() in ("RX", "RX1", "RX2", "LNAL", "LNAH")), None)
@@ -1100,17 +1554,16 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
     except Exception:
         pass
     try:
-        dev.setGain(SOAPY_SDR_RX, 0, 30)
+        dev.setGain(SOAPY_SDR_RX, 0, RX_GAIN_DB)
+    except Exception:
+        pass
+    # DIO-sys: bladerf_set_correction DCOFF_I/Q = 0, дальше интерполяция DC-бина.
+    try:
+        dev.setDCOffsetMode(SOAPY_SDR_RX, 0, False)
     except Exception:
         pass
     try:
-        if hasattr(dev, "setDCOffsetMode"):
-            dev.setDCOffsetMode(SOAPY_SDR_RX, 0, False)
-    except Exception:
-        pass
-    try:
-        if hasattr(dev, "setDCOffset"):
-            dev.setDCOffset(SOAPY_SDR_RX, 0, 0.0)
+        dev.setDCOffset(SOAPY_SDR_RX, 0, 0.0 + 0.0j)
     except Exception:
         pass
     if not can_tx:
@@ -1133,57 +1586,48 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
             pass
 
 
-def scan_fs_hz(analog_bw_mhz: float) -> float:
-    """40 MSPS, но не шире analog BW платы (x40 = 28 МГц)."""
-    cap = max(float(analog_bw_mhz) * 1e6, 1e6)
-    return min(SCAN_FS_HZ, cap)
+def _pick_fft_size(n: int) -> int:
+    """DIO-sys dropdown: 1024 / 2048 / 4096."""
+    want = max(int(n), FFT_MIN)
+    for size in FFT_SIZES:
+        if want <= size:
+            return size
+    return FFT_SIZES[-1]
 
 
-def hann_window(n: int) -> Any:
-    """0.5·(1−cos(2πn/(N−1))) — то же, что np.hanning для N>1."""
-    if n <= 1:
-        return np.ones(n, dtype=np.float64)
-    k = np.arange(n, dtype=np.float64)
-    return 0.5 * (1.0 - np.cos(2.0 * np.pi * k / (n - 1)))
+def _hann(n: int) -> Any:
+    """w[n] = 0.5 * (1 − cos(2πn / (N−1))) — processing.cpp rebuild_plan."""
+    idx = np.arange(n, dtype=np.float64)
+    return (0.5 * (1.0 - np.cos(2.0 * np.pi * idx / (n - 1)))).astype(np.float32)
 
 
-def welch_dbm(frames: list[Any], fs: float, center_mhz: float) -> list[dict[str, float]]:
-    """Welch-8, |X|²/N², fftshift, DC-бин = среднее соседей.
-    Имя powerDbm — ярлык: нет dBFS→дБм и нет учёта gain."""
-    if not frames:
-        raise RuntimeError("welch: нет кадров")
-    n = int(len(frames[0]))
-    win = hann_window(n)
-    acc = None
-    for x in frames:
-        spec = np.fft.fftshift(np.fft.fft(np.asarray(x) * win))
-        p = (np.abs(spec) ** 2) / float(n * n)
-        acc = p if acc is None else acc + p
-    acc = acc / float(len(frames))
-    db = 10.0 * np.log10(acc + 1e-12)
-    mid = n // 2
-    if n >= 3:
-        db[mid] = 0.5 * (db[mid - 1] + db[mid + 1])
-    # (center − fs/2) + k·(fs/N) после fftshift
-    freqs = (center_mhz - (fs / 2.0) / 1e6) + np.arange(n) * ((fs / n) / 1e6)
-    return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
+def welch_dbm(frames: Any) -> Any:
+    """DIO-sys convert_to_dbm + fftshift + интерполяция DC.
+    frames: (WELCH_FRAMES, N) complex. power = |X|² / N²."""
+    n = int(frames.shape[1])
+    win = _hann(n)
+    accum = np.zeros(n, dtype=np.float64)
+    for i in range(frames.shape[0]):
+        x = frames[i] * win
+        spec = np.fft.fft(x)
+        accum += np.abs(spec) ** 2
+    avg = accum / float(frames.shape[0])
+    power = np.maximum(avg / (n * n), 1e-20)
+    db = 10.0 * np.log10(power)
+    db = np.fft.fftshift(db)
+    half = n // 2
+    db[half] = 0.5 * (db[half - 1] + db[half + 1])
+    return db
 
 
-def _read_iq(dev: Any, rx: Any, n: int, fs: float) -> Any:
-    buf = np.zeros(int(n), dtype=np.complex64)
-    timeout = stream_timeout_us(len(buf), fs)
-    sr = dev.readStream(rx, [buf], len(buf), timeoutUs=timeout)
-    ret = stream_ret(sr)
-    kind = stream_kind(ret)
-    if kind == "error":
-        raise RuntimeError(f"readStream {kind} ret={ret}")
-    if ret <= 0:
-        return None
-    return buf[:ret].copy()
+def estimate_noise_floor(db: Any) -> float:
+    """DIO-sys psd_plot.estimate_noise_floor: медиана нижних 60%."""
+    sorted_vals = np.sort(np.asarray(db, dtype=np.float64))
+    lower = sorted_vals[: max(1, int(len(sorted_vals) * 0.60))]
+    return float(np.median(lower))
 
 
 def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
-    """Только тесты. scan() полный FFT не пулит — max-pool врал центр окна в LO."""
     if len(db) <= n:
         return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
     edges = np.linspace(0, len(db), n + 1, dtype=int)
@@ -1195,6 +1639,29 @@ def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
         j = int(a + np.argmax(db[a:b]))
         out.append({"freqMhz": float(freqs[j]), "powerDbm": float(db[j])})
     return out
+
+
+def _psd_from_ring(ring: IqRing, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
+    """PSD как DIO-sys: Hann + Welch-8 + |X|²/N² + DC-bin, полный FFT без pooling."""
+    if not NUMPY:
+        raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
+    fft_n = _pick_fft_size(n)
+    need = WELCH_FRAMES * fft_n
+    extra = ring.available() - need
+    if extra > 0:
+        ring.drop_oldest(extra)
+    frames = np.zeros((WELCH_FRAMES, fft_n), dtype=np.complex64)
+    for i in range(WELCH_FRAMES):
+        batch = ring.pop_batch(fft_n)
+        if batch is None:
+            raise RuntimeError("кольцо RX: нет полного кадра FFT")
+        frames[i] = batch
+    db = welch_dbm(frames)
+    # display.cpp: freq[k] = (center − fs/2) + k * (fs / N).
+    # linspace(..., N) даёт шаг fs/(N−1) — DC-бин (k=N/2) уезжает с LO.
+    span = fs / 1e6
+    freqs = (center_mhz - span / 2.0) + np.arange(fft_n, dtype=np.float64) * (span / fft_n)
+    return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
 
 
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
@@ -1268,9 +1735,18 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             float(msg.get("analogBwMhz") or 20),
             bool(msg.get("canTx", True)),
             bool(msg.get("fullDuplex", True)),
+            str(msg.get("requireHw") or ""),
         )
     if op == "scan":
-        return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or SCAN_FFT_N))
+        return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
+    if op == "park":
+        return radio.park(
+            float(msg["centerMhz"]),
+            float(msg.get("bwMhz") or 2),
+            float(msg.get("fsHz") or FPGA_PARK_FS_HZ),
+            bool(msg.get("rx", True)),
+            bool(msg.get("tx", True)),
+        )
     if op == "tx":
         return radio.tx_cue(float(msg["freqMhz"]))
     if op == "tx_wave":
