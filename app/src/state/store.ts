@@ -762,12 +762,15 @@ export const useLegion = create<LegionStore>((set, get) => {
   const runFpgaHandoff = async (mhz: number): Promise<void> => {
     if (get().fpgaBusy || get().fpgaArmed) return;
     if (!get().sdrLoadOk) return;
-    const board = fpgaBoardPlan(get().sdrId);
+    // Плату фиксируем на входе: смена sdrId оператором посреди handoff не
+    // должна менять hw/fs/допуски на полпути (park и ARM — про одну плату).
+    const sdrId = get().sdrId;
+    const board = fpgaBoardPlan(sdrId);
     if (!board.ok) {
       pushLog("sys", board.reason);
       return;
     }
-    const hw = fpgaAirHw(get().sdrId);
+    const hw = fpgaAirHw(sdrId);
     if (!hw) return;
     set({ fpgaBusy: true });
     // Возврат к скану — только ПОСЛЕ finally (fpgaBusy=false): startScan в
@@ -786,17 +789,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       if (ping.board && ping.board !== hw) {
-        failWhy = `шлюз видит ${ping.board}, а выбран ${get().sdrId} (${hw})`;
+        failWhy = `шлюз видит ${ping.board}, а выбран ${sdrId} (${hw})`;
         return;
       }
-      const analog = catalogCaps(get().sdrId).analogBwMhz;
+      const analog = catalogCaps(sdrId).analogBwMhz;
       let detThr = 0;
       const pk = await parkFpgaLo({
         midMhz: mhz,
         analogMhz: analog,
         spanMhz: 0,
         rx: true,
-        fsHz: fpgaAirFsHz(get().sdrId, analog),
+        fsHz: fpgaAirFsHz(sdrId, analog),
         requireHw: hw,
         gw,
         beforeRelease: async () => {

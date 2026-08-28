@@ -251,6 +251,12 @@ def main() -> int:
         iq_neg = np.tile(np.array([-100, 100], dtype=np.int16), win * 64)
         thr_neg, _, med_neg = w.det_thr_from_iq(iq_neg, 4, 2.0)
         check("det_thr: I²+Q² со знаком", med_neg == 20000 and thr_neg == 40000)
+        # Локстеп с legion_detector_tb.vhd: те же вектора → те же avg
+        _, _, med_tb1 = w.det_thr_from_iq(iq_flat, 4, 4.0)
+        check("det_thr ≡ TB детектора: I=100,Q=0 → avg 10000 (≥ порога 1000 в TB)", med_tb1 == 10000)
+        iq_tb2 = np.tile(np.array([20, 20], dtype=np.int16), win * 64)
+        _, _, med_tb2 = w.det_thr_from_iq(iq_tb2, 4, 4.0)
+        check("det_thr ≡ TB детектора: I=20,Q=20 → avg 800 (< 1000 в TB)", med_tb2 == 800)
         # shift=8: окно 256, та же формула avg = Σ>>shift
         iq8 = np.tile(np.array([100, 0], dtype=np.int16), 256 * 64)
         thr8, n8, med8 = w.det_thr_from_iq(iq8, 8, 2.0)
