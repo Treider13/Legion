@@ -263,6 +263,13 @@ def main() -> int:
         "open(): requireHw bladerf2 реально сверяет класс (не вайб)",
         'want_class = {"bladerf1": "lms", "bladerf2": "ad9361"}.get(require_hw)' in open(WORKER).read(),
     )
+    # Успешный open не падает на опечатке в имени атрибута (ревью 2026-08-28:
+    # self.hardwareKey в f-строке — AttributeError на реальном железе после
+    # удачного open; FAKE-путь это не ловил — возвращается раньше).
+    check(
+        "open(): успех читает self.hardware_key (не self.hardwareKey)",
+        "self.hardwareKey}" not in open(WORKER).read(),
+    )
     # вернуть FAKE-открытие для последующих park/tx тестов
     rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 

@@ -753,6 +753,11 @@ export const useLegion = create<LegionStore>((set, get) => {
   const fpgaReturnToScan = async (skipMhz: number | null, restart = true): Promise<void> => {
     if (gFpgaReturnBusy) return; // два опроса подряд — один возврат
     gFpgaReturnBusy = true;
+    // Поколения на входе: отложенный startScan сверит их при срабатывании —
+    // СТОП/closeSdr/интерлок за окном возврата (disarm+release — десятки мс
+    // сети, живое окно для клика) отменяют рестарт скана (ревью 2026-08-28).
+    const airGen = gFpgaAirGen;
+    const txGen = gTxGen;
     try {
       stopFpgaKick();
       stopFpgaObserve();
@@ -772,6 +777,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // Отложенно: из fpgaHandoff.fail мы ещё внутри handoff (gFpgaHandoffBusy),
         // и startScan честно отказал бы — пусть finally сначала снимет флаги.
         setTimeout(() => {
+          if (gFpgaAirGen !== airGen || gTxGen !== txGen) return; // оператор успел
           if (isFpgaAirPattern(get().scanPattern) && !get().fpgaArmed && !get().fpgaBusy) {
             get().startScan();
           }

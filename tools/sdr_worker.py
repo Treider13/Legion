@@ -990,7 +990,7 @@ class Radio:
             return {
                 "ok": True,
                 "reason": f"открыт Soapy {cand}"
-                + (f" · {self.hardwareKey}" if self.hardware_key else ""),
+                + (f" · {self.hardware_key}" if self.hardware_key else ""),
                 "fake": False,
                 "hardwareKey": self.hardware_key,
             }
