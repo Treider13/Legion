@@ -1776,10 +1776,6 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", blocked);
         return;
       }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
-      }
       if (get().fpgaMode === "lb_gated") {
         const airPlan = planFpgaAir({
           sdrId: get().sdrId,
@@ -1934,10 +1930,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (!board.ok) {
         pushLog("sys", board.reason);
         return false;
-      }
-      if (board.switched) {
-        get().setSdrId(board.sdrId);
-        pushLog("sys", board.reason);
       }
       // Solo: любой конечный F1…F2. parseBand — синтезатор ESP32 34.375–4400,
       // его сюда не мешаем. Эфир+FPGA по-прежнему через allowlist.
