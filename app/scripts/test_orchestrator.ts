@@ -1338,9 +1338,18 @@ async function main(): Promise<void> {
   useLegion.getState().clearSdrBands();
   useLegion.getState().setSdrAllowField("sdrF1", "20");
   useLegion.getState().setSdrAllowField("sdrF2", "80");
+  const airGenBeforeReject = peekFpgaAirGen();
   const lowAir = await useLegion.getState().startFpgaPath("air");
   const lowAirLog = useLegion.getState().log.at(-1)?.text ?? "";
   check("air 20–80 по-прежнему parseBand", lowAir === false && lowAirLog.includes("задайте начало и конец полосы"));
+  check("air 20–80 не бампает air gen (не срывает FPGA+сканер)", peekFpgaAirGen() === airGenBeforeReject);
+
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "2400");
+  useLegion.getState().setSdrAllowField("sdrF2", "2500");
+  const airGenBeforePing = peekFpgaAirGen();
+  await useLegion.getState().startFpgaPath("air");
+  check("air после parseBand бампает gen (отзыв Стоп на ping/park)", peekFpgaAirGen() === airGenBeforePing + 1);
 
   const idleLive = {
     scanRunning: false, transmitArmed: false, corridorRunning: false,
@@ -1374,6 +1383,10 @@ async function main(): Promise<void> {
   check("air start не шлёт fs_hz в ARM", airBlock.includes("FPGA_FS_HZ") && !airBlock.includes("fs_hz") && !airBlock.includes("bw_mhz"));
   check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked") && airBlock.includes("FPGA_FS_HZ"));
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
+  const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
+  check("air gen после ensureSdrBand, не до валидации",
+    startFn.indexOf('if (path === "air" && !ensureSdrBand())') < startFn.indexOf("gFpgaAirGen += 1")
+    && startFn.indexOf("gFpgaAirGen += 1") < startFn.indexOf("get().stopScan()"));
   check("отзыв после ARM снимает TX до set(fpgaArmed)", storeSrc.includes("abortAirIfRevoked(!!r.ok)") && storeSrc.includes("abortSoloIfRevoked(!!r.ok)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));

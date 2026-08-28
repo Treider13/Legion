@@ -1863,12 +1863,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         gFpgaSoloGen += 1;
         soloGen = gFpgaSoloGen;
       }
-      if (path === "air") {
-        gFpgaAirGen += 1;
-        airGen = gFpgaAirGen;
-      }
       const soloRevoked = (): boolean => path === "solo" && gFpgaSoloGen !== soloGen;
-      const airRevoked = (): boolean => path === "air" && gFpgaAirGen !== airGen;
+      const airRevoked = (): boolean => path === "air" && airGen !== 0 && gFpgaAirGen !== airGen;
       if (s0.rfOn || s0.paOn) {
         pushLog("sys", "FPGA: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
         return false;
@@ -1894,6 +1890,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Solo: любой конечный F1…F2. parseBand — синтезатор ESP32 34.375–4400,
       // его сюда не мешаем. Эфир+FPGA по-прежнему через allowlist.
       if (path === "air" && !ensureSdrBand()) return false;
+      /* Поколение эфира — только после валидации. Бамп до parseBand/нагрузки
+       * срывал отложенный startScan FPGA+сканер (fpgaReturnToScan сверяет
+       * gFpgaAirGen), хотя cinema-эфир даже не дошёл до ping. */
+      if (path === "air") {
+        gFpgaAirGen += 1;
+        airGen = gFpgaAirGen;
+      }
 
       get().stopScan();
       if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
