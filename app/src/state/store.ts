@@ -231,6 +231,9 @@ interface LegionStore {
   // FPGA-ревизия legion (bladeRF 1 x40): автономный тракт в FPGA
   fpgaMode: "player" | "nco" | "lb_gated" | "lb_always";
   fpgaArmed: boolean;
+  /** lb_gated ARM из авто-цикла сканера (handoff), не кино/панели —
+   *  ему одному положен автовозврат в скан (стагнация/watchdog/heartbeat). */
+  fpgaAutoCycle: boolean;
   fpgaBusy: boolean;
   fpgaStatus: FpgaStatus | null;
   /** Токен шлюза (LEGION_FPGA_TOKEN на агенте); пустой = открытая LAN стенда. */
@@ -499,11 +502,8 @@ let gSkipMhz: number | null = null;
  *  (fpgaReturnToScan обнуляет lastForwardMhz) — от неё берётся следующая по
  *  кругу. Сброс — операторский/эпохальный стоп (fpgaDisarm), не автовозврат. */
 let gFpgaTurnLastMhz: number | null = null;
-/** Источник lb_gated ARM: true — авто-цикл сканера (handoff из tickScan),
- *  false — кино/панель (автономный эфир). Автовозврат в скан (стагнация
- *  det_count, watchdog, обрыв heartbeat) — только у авто-цикла: в автономном
- *  обходе тихая стоянка штатна, а не «энергия пропала». */
-let gFpgaAirAutoCycle = false;
+/** Источник lb_gated ARM живёт в сторе (fpgaAutoCycle): его читает и UI
+ *  (hero/панель), не только тики. */
 /** FPGA+сканер: handoff в полёте (один за раз — USB и LO общие). */
 let gFpgaHandoffBusy = false;
 /** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
@@ -633,7 +633,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
         if (!kr.ok) {
           pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
-          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && gFpgaAirAutoCycle) {
+          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
             // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
             void fpgaReturnToScan(null);
           } else {
@@ -937,12 +937,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopFpgaKick();
       stopFpgaObserve();
       stopAirWalk();
-      gFpgaAirAutoCycle = false;
       if (get().fpgaArmed) {
         // На micro NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c).
         await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
       }
-      set({ fpgaArmed: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
+      set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
@@ -1116,10 +1115,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       gFpgaTurnLastMhz = mhz;
-      // Авто-цикл сканера: ему одному положен автовозврат в скан.
-      gFpgaAirAutoCycle = true;
       set({
         fpgaArmed: true,
+        // Авто-цикл сканера: ему одному положен автовозврат в скан.
+        fpgaAutoCycle: true,
         fpgaPath: "air",
         lastForwardMhz: mhz,
         lastForwardPowerDbm: powerDbm,
@@ -1226,6 +1225,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     txWaveParams: {},
     fpgaMode: "player",
     fpgaArmed: false,
+    fpgaAutoCycle: false,
     fpgaBusy: false,
     fpgaStatus: null,
     fpgaToken: "",
@@ -2051,6 +2051,7 @@ export const useLegion = create<LegionStore>((set, get) => {
                 : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
+            fpgaAutoCycle: false,
             fpgaPath: air ? "air" : "solo",
             lastForwardMhz: mid,
             lastCueReason: cue,
@@ -2137,12 +2138,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const mid = (f1 + f2) / 2;
       const analog = catalogCaps(get().sdrId).analogBwMhz;
       const span = Math.max(f2 - f1, 0);
-      if (path === "air" && span > analog) {
-        pushLog(
-          "sys",
-          `FPGA: коридор ${span.toFixed(1)} МГц шире окна ${analog} МГц — чип видит центр ${mid.toFixed(3)}, не обход F1–F2`,
-        );
-      }
+      // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
+      // коридор шире канала либо ходится по стоянкам (micro), либо честно
+      // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
 
       const gw = (cmd: Record<string, unknown>) =>
         hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
@@ -2268,9 +2266,9 @@ export const useLegion = create<LegionStore>((set, get) => {
               set({ fpgaPath: null });
               return false;
             }
-            gFpgaAirAutoCycle = false;
             set({
               fpgaArmed: true,
+              fpgaAutoCycle: false,
               lastForwardMhz: mid,
               lastSdrTxUs: null,
               lastCueReason: `${airPlan.reason} · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`,
@@ -2358,9 +2356,9 @@ export const useLegion = create<LegionStore>((set, get) => {
             set({ fpgaPath: null });
             return false;
           }
-          gFpgaAirAutoCycle = false;
           set({
             fpgaArmed: true,
+            fpgaAutoCycle: false,
             lastForwardMhz: first,
             lastSdrTxUs: null,
             lastCueReason:
@@ -2581,8 +2579,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Операторский/эпохальный стоп: очередь ОБЫЧНОГО начинается заново.
       // Автовозврат (fpgaReturnToScan) сюда не приходит — порядок держится.
       gFpgaTurnLastMhz = null;
-      gFpgaAirAutoCycle = false;
-      set({ fpgaBusy: true });
+      set({ fpgaBusy: true, fpgaAutoCycle: false });
       try {
         const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
         pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -2629,7 +2626,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         isFpgaAirPattern(get().scanPattern) &&
         get().fpgaArmed &&
         get().fpgaMode === "lb_gated" &&
-        gFpgaAirAutoCycle;
+        get().fpgaAutoCycle;
       if (r.ok && r.wd_fired && get().fpgaArmed) {
         pushLog("sys", "FPGA: watchdog погасил TX (heartbeat пропадал) — UI снял ARM");
         // CTRL.ARM в FPGA после wd_fired всё ещё взведён, а expired липкий —

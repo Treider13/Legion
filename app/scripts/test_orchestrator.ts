@@ -1477,8 +1477,13 @@ async function main(): Promise<void> {
     storeSrc.includes("walk.centers.indexOf(first)") && storeSrc.includes("detThr: thrTable[firstIdx]"));
   check("air-обход: время калибровки логируется", storeSrc.includes("мс/стоянка"));
   check("air-обход: micro-only честно", storeSrc.includes("airHopBlockedReason(get().sdrId, walk.hop)"));
-  check("автовозврат в скан — только авто-цикл сканера (gFpgaAirAutoCycle)",
-    storeSrc.includes("gFpgaAirAutoCycle = true") && storeSrc.includes("&& gFpgaAirAutoCycle"));
+  check("автовозврат в скан — только авто-цикл сканера (fpgaAutoCycle в сторе)",
+    storeSrc.includes("fpgaAutoCycle: true") && storeSrc.includes("&& get().fpgaAutoCycle"));
+  check("нет устаревшего «чип видит центр, не обход» (air-обход существует)",
+    !storeSrc.includes("не обход F1–F2"));
+  const appSrc = readFileSync(join(here, "../src/App.tsx"), "utf8");
+  check("hero различает авто-цикл сканера и автономный эфир",
+    appSrc.includes("fpgaAutoCycle") && appSrc.includes("ЭФИР→УСИЛИТЕЛЬ · НАБЛЮДЕНИЕ"));
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
   check("air gen после ensureSdrBand, не до валидации",
