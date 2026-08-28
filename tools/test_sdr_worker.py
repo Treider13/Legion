@@ -247,6 +247,29 @@ def main() -> int:
         },
     )
     check("FAKE open + require bladerf1 → отказ", need.get("ok") is False and need.get("fake") is True)
+    need2 = rpc(
+        proc,
+        {
+            "op": "open",
+            "args": "driver=fake",
+            "analogBwMhz": 28,
+            "canTx": True,
+            "requireHw": "bladerf2",
+        },
+    )
+    check("FAKE open + require bladerf2 → отказ", need2.get("ok") is False and need2.get("fake") is True)
+    # requireHw проверяет класс для обеих плат (не только bladerf1) — факт кода
+    check(
+        "open(): requireHw bladerf2 реально сверяет класс (не вайб)",
+        'want_class = {"bladerf1": "lms", "bladerf2": "ad9361"}.get(require_hw)' in open(WORKER).read(),
+    )
+    # Успешный open не падает на опечатке в имени атрибута (ревью 2026-08-28:
+    # self.hardwareKey в f-строке — AttributeError на реальном железе после
+    # удачного open; FAKE-путь это не ловил — возвращается раньше).
+    check(
+        "open(): успех читает self.hardware_key (не self.hardwareKey)",
+        "self.hardwareKey}" not in open(WORKER).read(),
+    )
     # вернуть FAKE-открытие для последующих park/tx тестов
     rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 
@@ -275,6 +298,7 @@ def main() -> int:
             self.rx_hz, self.tx_hz = rx_hz, tx_hz
             self.rx_fs, self.tx_fs = rx_fs, tx_fs
             self.deaf = deaf
+            self.gain_mode = None
 
         def setSampleRate(self, d, _ch, fs):
             self._set[(d, "fs")] = fs
@@ -311,6 +335,23 @@ def main() -> int:
         def getHardwareKey(self):
             return getattr(self, "hw", "bladerf1")
 
+        def setGainMode(self, d, ch, automatic):
+            if getattr(self, "gm_fail", False):
+                raise RuntimeError("setGainMode нет")
+            self.gain_mode = (d, ch, automatic)
+
+        def getGain(self, d, ch):
+            return 42.0
+
+        def setupStream(self, d, f):
+            return object()
+
+        def activateStream(self, s):
+            pass
+
+        def deactivateStream(self, s):
+            pass
+
     def _radio(dev):
         r = w.Radio()
         r.fake = False
@@ -335,7 +376,16 @@ def main() -> int:
     micro = _Dev()
     micro.hw = "bladerf2"
     pk_micro = _radio(micro).park(2442, 28, 28e6, True, True)
-    check("park micro/AD9361 → отказ", pk_micro.get("ok") is False)
+    check("park micro/AD9361 → ok (без подмены на x40)", pk_micro.get("ok") is True)
+    check(
+        "park micro: AGC выкл (ручной gain) + gain readback для ARM",
+        micro.gain_mode == (w.SOAPY_SDR_RX, 0, False) and pk_micro.get("rxGainDb") == 42.0,
+    )
+    micro_gm = _Dev()
+    micro_gm.hw = "bladerf2"
+    micro_gm.gm_fail = True
+    pk_gm = _radio(micro_gm).park(2442, 28, 28e6, True, True)
+    check("park micro: AGC не выключается → отказ (порог уплыл бы)", pk_gm.get("ok") is False)
     unknown = _Dev()
     unknown.hw = ""
     pk_unk = _radio(unknown).park(2442, 28, 28e6, True, True)
@@ -348,6 +398,34 @@ def main() -> int:
     nobw.bw_fail = True
     pk_nobw = _radio(nobw).park(2442, 28, 28e6, True, True)
     check("park без setBandwidth на эфире → отказ", pk_nobw.get("ok") is False)
+
+    # --- det_capture: порог детектора из шумовой полки (handoff скан→FPGA) ---
+    if w.NUMPY:
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        noise = (
+            (rng.standard_normal(512 * 16) + 1j * rng.standard_normal(512 * 16)) * 0.01
+        ).astype(np.complex64)
+        med_noise = w.window_energy_median(noise, 16)
+        # E ≈ 2·(0.01·2048)² ≈ 839 в единицах SC16Q11 (шкала SoapyBladeRF: /2048)
+        check("det_capture: медиана шума в единицах SC16Q11", 400 < med_noise < 2000)
+        hot = noise.copy().reshape(512, 16)
+        hot[: 512 // 4] *= 50.0  # четверть окон с сильным сигналом
+        med_hot = w.window_energy_median(hot.reshape(-1), 16)
+        check(
+            "det_capture: сигнал в 25% окон не поднимает полку (нижние 60%)",
+            abs(med_hot - med_noise) / med_noise < 0.5,
+        )
+    else:
+        check("det_capture: numpy есть (CI ставит tools/requirements.txt)", False)
+
+    no_rx = w.Radio()
+    no_rx.fake = False
+    cap_none = no_rx.det_capture(16, 512)
+    check("det_capture без park → честный отказ", cap_none.get("ok") is False)
+    cap_fake = rpc(proc, {"op": "det_capture", "win": 16, "windows": 512})
+    check("det_capture на FAKE → отказ (не эфир)", cap_fake.get("ok") is False)
 
     hd = w.Radio()
     hd.fake = True

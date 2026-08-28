@@ -39,7 +39,8 @@ export function walkPatternArmsTx(): boolean {
 }
 
 export function scannerParticipates(pattern: SdrWalkPattern): boolean {
-  return pattern === "auto";
+  // fpga: сканер — глаза цикла (детект → handoff в FPGA). UI скана нужен.
+  return pattern === "auto" || pattern === "fpga";
 }
 
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
@@ -96,10 +97,12 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
 } {
   if (pattern === "fpga") {
     return {
-      useScanner: false,
+      useScanner: true,
       openLoopTx: false,
       useFpgaAir: true,
-      reason: "FPGA+сканер: конвейер I²+Q²→RX→TX на SDR (µs). Ноутбук только наблюдает и может стопнуть",
+      reason:
+        "FPGA+сканер: сканер находит пик → парковка LO → ARM lb_gated (конвейер I²+Q²→RX→TX на SDR, µs). " +
+        "Энергия пропала / watchdog / СТОП → DISARM и возврат к скану. Ноутбук наблюдает и стопит",
     };
   }
   if (pattern === "auto") {

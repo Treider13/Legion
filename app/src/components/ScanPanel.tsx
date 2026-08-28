@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { detectorWindowUs, FPGA_AIR_SDR_ID, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
+import { detectorWindowUs, fpgaAirSupported, fpgaObserveLine, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -49,7 +49,7 @@ export function ScanPanel() {
         {taskLive
           ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (PLAYER/NCO/LOOPBACK). Это не конвейер I²+Q² и не хост-скан. Стоп — там или кнопкой ниже."
           : fpgaAir
-            ? "Конвейер I²+Q² → RX→TX крутится на SDR за микросекунды. Ноутбук только наблюдает статус и может стопнуть. Хост-FFT и ПЕРЕДАТЬ в этом режиме не участвуют."
+            ? "Сканер (Welch-8, 40 MSPS) находит пик → LO паркуется на него (2 MSPS) → порог от шумовой полки → FPGA ретранслирует RX→TX за микросекунды. Энергия пропала, watchdog или СТОП — возврат к скану. ПЕРЕДАТЬ не нужен: цикл автономный."
             : "АВТО + ПЕРЕДАТЬ — хост-скан (Welch-8 на ноутбуке), задержка миллисекунды. Микросекунды: режим FPGA+СКАНЕР. Хост-скан и FPGA вместе не работают (один USB)."}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
@@ -264,13 +264,23 @@ export function ScanPanel() {
         )}
         {fpgaAir || taskLive ? (
           s.fpgaArmed ? (
-            <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
+            <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.stopFpgaAir()}>
               СТОП FPGA
+            </button>
+          ) : fpgaAir && s.fpgaBusy ? (
+            // Handoff в полёте (парк/захват/USB/ARM — на micro до секунд на
+            // первом подъёме): отмена по поколению, handoff откатится сам.
+            <button className="btn-danger" onClick={() => void s.stopFpgaAir()}>
+              СТОП (отмена handoff)
+            </button>
+          ) : s.scanRunning && fpgaAir ? (
+            <button className="btn-danger" onClick={() => s.stopScan()}>
+              СТОП СКАН
             </button>
           ) : (
             <button
               className="btn-primary"
-              disabled={s.fpgaBusy || s.sdrId !== FPGA_AIR_SDR_ID}
+              disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
               onClick={() => void s.startScan()}
             >
               СТАРТ FPGA+СКАНЕР
@@ -311,11 +321,9 @@ export function ScanPanel() {
         <p className="sens-hint">
           FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
-          {s.sdrId !== FPGA_AIR_SDR_ID
-            ? " — нужен bladeRF 1 x40 на вкладке SDR"
-            : fpgaSpan > analogBw
-              ? " — F1…F2 шире analog: детектор видит только текущее LO-окно"
-              : " — конвейер на SDR, ноутбук наблюдает"}
+          {!fpgaAirSupported(s.sdrId)
+            ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
+            : " — скан → парковка пика → ARM lb_gated · пропала энергия/watchdog → возврат к скану"}
         </p>
       )}
       <ul className="allow-list">
@@ -396,16 +404,16 @@ export function ScanPanel() {
             ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер сканера"
             : fpgaAir
               ? s.lastCueReason ||
-                (s.sdrId !== FPGA_AIR_SDR_ID
-                  ? "FPGA+сканер: выберите bladeRF 1 x40 на вкладке SDR"
-                  : "FPGA+сканер: СТАРТ — конвейер на SDR, ноутбук наблюдает")
+                (!fpgaAirSupported(s.sdrId)
+                  ? "FPGA+сканер: выберите bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
+                  : "FPGA+сканер: СТАРТ — сканер ищет пик, FPGA ретранслирует, ноутбук наблюдает")
               : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>
       {airLive && s.fpgaStatus && (
         <div className="sdr-facts">
           <div>
             {s.fpgaStatus.ok
-              ? `наблюдение · det=${s.fpgaStatus.det_active ? "энергия" : "тишина"} · детектов=${s.fpgaStatus.det_count ?? 0} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
+              ? `наблюдение · det=${s.fpgaStatus.det_active ? "энергия" : "тишина"} · окон с энергией=${s.fpgaStatus.det_count ?? 0} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
               : `наблюдение недоступно: ${s.fpgaStatus.reason ?? "?"}`}
           </div>
         </div>

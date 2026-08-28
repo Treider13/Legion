@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""LEGION FPGA — хост-сторона регистрового канала bladeRF 1 x40.
+"""LEGION FPGA — хост-сторона регистрового канала bladeRF 1 x40 и
+bladeRF 2.0 micro xA4/xA9.
 
 Формат пакета — байт-в-байт nios_pkt_8x32_pack() из
 fpga_common/include/nios_pkt_8x32.h (Nuand): 16 байт, magic 'C',
@@ -9,6 +10,11 @@ fpga/test/test_legion_fpga.py против реального C-заголовк
 
 Транспорт: USB bulk на PERIPHERAL_EP (как nios_access.c в libbladeRF).
 Реализация транспорта — в legion_gateway.py (pyusb на шлюзе).
+
+Эфирные регистры AIR_* (micro/AD9361): живут только в NIOS
+(legion_cmds.c) — частота/усиление парковки и подъём тракта через
+rfic_command_write_immed (Nuand FPGA-tuning интерфейс). На bladeRF 1
+эфир поднимает шлюз через CONTROL bit1/2, AIR_* там no-op.
 """
 from __future__ import annotations
 
@@ -29,6 +35,10 @@ REG_PLAYER_CTL = 0x05
 REG_LB_SHIFT = 0x06
 REG_WD_LIMIT = 0x07
 REG_WD_KICK = 0x08
+# Эфир micro (AD9361) — только NIOS, HDL не декодирует (зеркало legion_pkg.vhd)
+REG_AIR_FREQ_KHZ = 0x09
+REG_AIR_GAIN_DB = 0x0A
+REG_AIR_PREP = 0x0B  # bit0: 1=поднять тракт / 0=standby; bit1: RX; bit2: TX
 
 # Режимы MODE (CTRL bits 3:1)
 MODE_PASS = 0x0
@@ -74,12 +84,20 @@ class LegionFpga:
     def __init__(self, transport):
         self._t = transport
 
-    def write_reg(self, addr: int, data: int) -> bool:
-        ok, _ = unpack_8x32_resp(self._t.xfer(pack_8x32(LEGION_TARGET, True, addr, data)))
+    def write_reg(self, addr: int, data: int, timeout_ms: int | None = None) -> bool:
+        req = pack_8x32(LEGION_TARGET, True, addr, data)
+        if timeout_ms is None:
+            ok, _ = unpack_8x32_resp(self._t.xfer(req))
+        else:
+            ok, _ = unpack_8x32_resp(self._t.xfer(req, timeout_ms))
         return ok
 
+    def read_reg(self, addr: int) -> tuple[bool, int]:
+        """Чтение регистра (status — addr 0; AIR_PREP — состояние эфира NIOS)."""
+        return unpack_8x32_resp(self._t.xfer(pack_8x32(LEGION_TARGET, False, addr, 0)))
+
     def read_status(self) -> dict:
-        ok, data = unpack_8x32_resp(self._t.xfer(pack_8x32(LEGION_TARGET, False, 0, 0)))
+        ok, data = self.read_reg(0)
         if not ok:
             return {"ok": False}
         return {
@@ -123,3 +141,27 @@ class LegionFpga:
 
     def heartbeat(self) -> bool:
         return self.write_reg(REG_WD_KICK, 1)
+
+    # ---- Эфир micro (AD9361): параметры парковки + подъём тракта в NIOS ----
+
+    def set_air_freq_mhz(self, freq_mhz: float) -> bool:
+        """LO парковки в кГц (32 бита: 47 МГц..6 ГГц влезают с запасом)."""
+        khz = int(round(freq_mhz * 1000.0))
+        if khz <= 0:
+            return False
+        return self.write_reg(REG_AIR_FREQ_KHZ, khz & 0xFFFFFFFF)
+
+    def set_air_gain_db(self, gain_db: int) -> bool:
+        """Ручной RX gain, дБ — ровно тот, при котором хост мерил полку.
+        Код = gain + 1000 (смещение): сентинел «не задан» в NIOS = 0xFFFFFFFF,
+        а легальные 0/−1 дБ не должны с ним сталкиваться."""
+        return self.write_reg(REG_AIR_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
+
+    def air_prepare(self, up: bool, rx: bool, tx: bool) -> bool:
+        """Подъём/стендбай воздушного тракта на micro. На x40 — no-op true.
+
+        Первый подъём после подачи питания — полный ad9361_init на NIOS
+        (сотни мс): длинный таймаут, ответ придёт по готовности.
+        """
+        data = (1 if up else 0) | (0x2 if rx else 0) | (0x4 if tx else 0)
+        return self.write_reg(REG_AIR_PREP, data, timeout_ms=10_000)

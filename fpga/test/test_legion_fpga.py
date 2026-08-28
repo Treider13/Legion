@@ -118,6 +118,9 @@ py_map = {
     "LEGION_REG_LB_SHIFT": lf.REG_LB_SHIFT,
     "LEGION_REG_WD_LIMIT": lf.REG_WD_LIMIT,
     "LEGION_REG_WD_KICK": lf.REG_WD_KICK,
+    "LEGION_REG_AIR_FREQ_KHZ": lf.REG_AIR_FREQ_KHZ,
+    "LEGION_REG_AIR_GAIN_DB": lf.REG_AIR_GAIN_DB,
+    "LEGION_REG_AIR_PREP": lf.REG_AIR_PREP,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -300,8 +303,94 @@ check("CONTROL read fail → arm отказ", r.get("ok") is False)
 check("CONTROL не затёрт в 0 при сбое чтения", gw.fpga._t.control == 0x1)
 gw.fpga._t.fail_control_read = False
 
+# Откат эфира при сбое записи CTRL (x40): CONTROL bit2 взвели под nco,
+# CTRL не записался — бит обязан быть снят (TX не остаётся под током).
+gw.fpga._t.control = 0x1
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("x40: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("x40: CONTROL bit2 откачен (TX не под током)", not (gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
+
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир предыдущего ARM.
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000})
+check("x40: arm nco ok (для re-arm теста)", r.get("ok") is True and bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "arm", "mode": "player"})
+check("x40: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("x40: эфир предыдущего ARM жив (bit2 не откачен)", bool(gw.fpga._t.control & 0x4))
+gw.fpga._t.fail_ctrl_write = False
+rpc({"op": "disarm"})
+
 srv.shutdown()
 srv.server_close()
+
+# ---------------------------------------------------------------------------
+# 4.5. Шлюз на micro (bladerf2/AD9361): эфир через AIR-регистры, не CONTROL
+# ---------------------------------------------------------------------------
+gw_m = lg.LegionGateway(fake=True)
+gw_m.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf2"))
+gw_m.board = "bladerf2"
+srv_m = lg._Server(("127.0.0.1", 0), lg._Handler)
+srv_m.gw = gw_m
+_th.Thread(target=srv_m.serve_forever, daemon=True).start()
+port_m = srv_m.server_address[1]
+
+
+def rpcm(msg: dict) -> dict:
+    with _socket.create_connection(("127.0.0.1", port_m), timeout=3) as s:
+        s.sendall((json_dumps(msg) + "\n").encode())
+        return json_loads(s.makefile("rb").readline().decode())
+
+
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
+check("micro: ARM lb_gated без freq_mhz → отказ (LO обязателен)", r.get("ok") is False)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5, "gain_db": 42})
+check("micro: ARM lb_gated с freq_mhz → ok", r.get("ok") is True)
+check("micro: AIR_FREQ_KHZ = 2442500", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2442500)
+check("micro: AIR_GAIN_DB = 1042 (код = gain + 1000, сентинел не сталкивается)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_GAIN_DB) == 1042)
+check("micro: AIR_PREP up+RX+TX (0x7)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+st_m = rpcm({"op": "status"})
+check("micro: status несёт readback эфира (air_up)",
+      st_m.get("ok") is True and st_m.get("air_up") is True and st_m.get("air_freq_set") is True)
+check("micro: CONTROL не тронут (AD9361 не кормится LMS-битами)",
+      gw_m.fpga._t.control == 0)
+check("micro: CTRL ARM lb_gated записан",
+      gw_m.fpga._t.regs.get(lf.REG_CTRL) == lf.CTRL_ARM | (lf.MODE_LB_GATED << 1) | lf.CTRL_WD_EN)
+r = rpcm({"op": "rx", "on": True})
+check("micro: op rx → честный отказ (нет CONTROL)", r.get("ok") is False)
+r = rpcm({"op": "disarm"})
+check("micro: disarm ok, CONTROL по-прежнему 0", r.get("ok") is True and gw_m.fpga._t.control == 0)
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2450.0})
+check("micro: ARM nco с freq_mhz → ok", r.get("ok") is True)
+check("micro: AIR_PREP для nco = up+TX (0x5)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x5)
+r = rpcm({"op": "arm", "mode": "nco"})
+check("micro: ARM nco без freq_mhz → отказ", r.get("ok") is False)
+rpcm({"op": "disarm"})  # снять nco ARM выше: дальше тестируем откат без живого ARM
+
+# Откат эфира при сбое записи CTRL: эфир подняли, ARM не взвёлся, живого
+# ARM нет — тракт под током не оставляем (micro: AIR_PREP down).
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: сбой CTRL → ARM отказ", r.get("ok") is False)
+check("micro: эфир откачен (AIR_PREP=0)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0)
+check("micro: флаги эфира сняты", not gw_m._rx_by_us and not gw_m._tx_by_us)
+gw_m.fpga._t.fail_ctrl_write = False
+
+# Re-arm при ЖИВОМ ARM: сбой CTRL не откатывает эфир — он нужен предыдущему.
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: повторный ARM lb_gated ok", r.get("ok") is True)
+gw_m.fpga._t.fail_ctrl_write = True
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+check("micro: re-arm при живом ARM — сбой CTRL → отказ", r.get("ok") is False)
+check("micro: эфир предыдущего ARM жив (AIR_PREP не откачен)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+gw_m.fpga._t.fail_ctrl_write = False
+rpcm({"op": "disarm"})
+
+srv_m.shutdown()
+srv_m.server_close()
 
 # ---------------------------------------------------------------------------
 # 5. Авторизация шлюза токеном (LEGION_FPGA_TOKEN)
