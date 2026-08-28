@@ -68,7 +68,10 @@ export function StartGate({ mode, onClose }: Props) {
   const airWalkReason = walkPlan.ok
     ? `коридор ${walkPlan.spanMhz} МГц · канал ${walkPlan.hopWindowMhz} МГц → ${walkPlan.hops} ${standingWordRu(walkPlan.hops)} · ${
         walkPlan.hop ? (pattern === "hop" ? "случайно" : "туда-сюда") : "без прыжков"
-      } · ретрансляция эфира на каждой стоянке`
+      } · ретрансляция эфира на каждой стоянке` +
+      // ADI: скачок LO > 100 МГц перезапускает QEC/DC-калибровки (десятки мс
+      // вместо ~0.25 мс) — в выдержку влезает, но честно предупреждаем.
+      (walkPlan.spanMhz > 100 ? " · скачки > 100 МГц = калибровки AD9361, десятки мс" : "")
     : walkPlan.reason;
 
   useEffect(() => {

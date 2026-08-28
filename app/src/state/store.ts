@@ -2232,6 +2232,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           const walker = makeSoloWalker(walk);
           const first = walker.next().centerMhz;
+          // hop: первая стоянка — СЛУЧАЙНАЯ из сетки, не centers[0] (SoloWalker
+          // hop берёт centres[floor(rng·len)]). Порог ARM — по её индексу,
+          // иначе на стартовой частоте до первого шага стоит чужой порог.
+          const firstIdx = Math.max(0, walk.centers.indexOf(first));
 
           if (!walk.hop) {
             const pk = await parkFpgaLo({
@@ -2337,7 +2341,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             return false;
           }
           const armCmd = fpgaArmCmd("lb_gated", {
-            detThr: thrTable[0],
+            detThr: thrTable[firstIdx],
             detShift: tract.detShift,
             token: get().fpgaToken,
             freqMhz: first,

@@ -1340,6 +1340,13 @@ async function main(): Promise<void> {
   const hop50w = makeSoloWalker(hop50, 3);
   const hop50samples = Array.from({ length: 20 }, () => hop50w.next().centerMhz);
   check("hop 50 МГц только 2425/2475, не 2450", hop50samples.every((c) => c === 2425 || c === 2475));
+  check("hop: первая стоянка бывает не centers[0] (порог ARM по индексу обязателен)", (() => {
+    for (let seed = 1; seed < 50; seed++) {
+      const w = makeSoloWalker(hopPlan, seed);
+      if (w.next().centerMhz !== hopPlan.centers[0]) return true;
+    }
+    return false;
+  })());
   const hostHop = Array.from({ length: 30 }, () => hopCenterInBand([{ f1Mhz: 2400, f2Mhz: 2500 }], 50, mulberry32(1)));
   check("хост hopCenterInBand ≠ сетка solo (не мешаем)", hostHop.some((c) => c !== 2425 && c !== 2475));
   check("parseBand 20–80 — синтезатор, отказ", parseBand("20", "80") === null);
@@ -1466,6 +1473,8 @@ async function main(): Promise<void> {
   check("air-обход: таймер beginAirWalk после ARM",
     storeSrc.includes("beginAirWalk(walker, walk, tract, thrTable, walk.centers, gw)"));
   check("air-обход: порог стоянки едет внутри tune", storeSrc.includes("det_thr: thr,"));
+  check("air-обход: стартовый порог по индексу первой стоянки (hop ≠ centers[0])",
+    storeSrc.includes("walk.centers.indexOf(first)") && storeSrc.includes("detThr: thrTable[firstIdx]"));
   check("air-обход: время калибровки логируется", storeSrc.includes("мс/стоянка"));
   check("air-обход: micro-only честно", storeSrc.includes("airHopBlockedReason(get().sdrId, walk.hop)"));
   check("автовозврат в скан — только авто-цикл сканера (gFpgaAirAutoCycle)",
