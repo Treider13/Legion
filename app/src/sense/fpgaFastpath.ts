@@ -4,6 +4,8 @@
 // Окно детектора: 2^shift сэмплов I²+Q². Ревизия legion: fs = 2 МГц.
 // shift=4 → 16 сэмплов → 8 µs. shift=8 (дефолт шлюза) → 256 → 128 µs.
 // Полоса должна влезть в analog BW (x40 = 28 МГц): hop ФАПЧ ≠ микросекунды.
+// Платы: bladeRF 2.0 micro xA4/xA9 (AD9361, эфир поднимает NIOS через
+// AIR-регистры) и bladeRF 1 x40 (LMS6002D, CONTROL bit1/2 со шлюза).
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
 
@@ -12,7 +14,48 @@ export const LEGION_FPGA_FS_HZ = 2_000_000;
 export const FPGA_US_DET_SHIFT = 4;
 /** Стартовый порог средней энергии; 0 открывает гейт на шум (шлюз отказывает). */
 export const FPGA_DEFAULT_DET_THR = 5000;
-export const FPGA_AIR_SDR_ID = "bladerf-x40";
+/** Платы с ревизией legion и эфирным трактом lb_*. Подмены каталога нет:
+ *  micro паркуется через AD9361 как сама себя, x40 — через LMS6002D. */
+export const FPGA_AIR_SDR_IDS: readonly string[] = [
+  "bladerf-micro-xa4",
+  "bladerf-micro-xa9",
+  "bladerf-x40",
+];
+
+export function fpgaAirSupported(sdrId: string): boolean {
+  return FPGA_AIR_SDR_IDS.includes(sdrId);
+}
+
+/** Окно детектора для захвата порога: 16 сэмплов = 8 мкс на 2 MSPS. */
+export const FPGA_DET_WIN_SAMPLES = 1 << FPGA_US_DET_SHIFT;
+/** Окон в захвате шумовой полки (512 × 16 = 8192 сэмпла ≈ 4 мс на 2 MSPS). */
+export const FPGA_DET_WINDOWS = 512;
+/** Множитель над медианой нижних 60% энергий окон. Окно 16 сэмплов — χ² с 32
+ *  степенями: разброс среднего ~25%, K=4 ≈ +6 дБ над полкой. Тюнинг на стенде. */
+export const FPGA_DET_THR_K = 4;
+/** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик). */
+export const FPGA_AIR_GONE_POLLS = 3;
+
+/** det_thr из захваченной шумовой полки: медиана × K, в единицы регистра. */
+export function detThrFromMedian(medianEnergy: number, k = FPGA_DET_THR_K): number {
+  if (!Number.isFinite(medianEnergy) || medianEnergy <= 0) return 0;
+  const thr = Math.round(medianEnergy * k);
+  return Math.min(0xffffffff, Math.max(0, thr));
+}
+
+/** LO для захвата шумовой полки: на 3.2 МГц В СТОРОНУ от пика.
+ *  Захват на самом пике для непрерывного сигнала дал бы энергию сигнала,
+ *  а не шума (тон живёт в каждом окне) — порог стал бы глухим навсегда.
+ *  3.2 МГц: вне окна 2 МГц (±1 МГц), внутри полосы чипа; у края диапазона
+ *  уходим в минус. */
+export const FPGA_DET_CAP_DELTA_MHZ = 3.2;
+
+export function captureParkMhz(peakMhz: number, rxHiMhz: number, rxLoMhz: number): number {
+  const up = peakMhz + FPGA_DET_CAP_DELTA_MHZ;
+  if (up <= rxHiMhz) return up;
+  const down = peakMhz - FPGA_DET_CAP_DELTA_MHZ;
+  return down >= rxLoMhz ? down : up; // край чипа: лучше up с клипом, чем вне диапазона
+}
 
 export function clampDetShift(shift: number): number {
   if (!Number.isFinite(shift)) return FPGA_US_DET_SHIFT;
@@ -63,8 +106,8 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
     detShift,
     spanMhz,
   });
-  if (i.sdrId !== FPGA_AIR_SDR_ID) {
-    return fail("FPGA эфир: ревизия legion только на bladeRF 1 x40");
+  if (!fpgaAirSupported(i.sdrId)) {
+    return fail("FPGA эфир: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
   }
   if (!i.loadOk) {
     return fail("FPGA эфир: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
@@ -116,10 +159,12 @@ export function ncoFtwFromFrac(fj: number): number {
   return Math.round(frac * 2 ** 32) >>> 0;
 }
 
-/** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco. */
+/** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco.
+ *  freq_mhz — LO парковки: на micro без неё шлюз честно отказывает (AD9361
+ *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */
 export function fpgaArmCmd(
   mode: "player" | "nco" | "lb_gated" | "lb_always",
-  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number },
+  opts: { detThr: number; detShift: number; token: string; wd?: boolean; ncoFtw?: number; freqMhz?: number },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
     op: "arm",
@@ -133,6 +178,9 @@ export function fpgaArmCmd(
   }
   if (mode === "nco") {
     cmd.nco_ftw = opts.ncoFtw ?? ncoFtwFromFrac(0.125);
+  }
+  if (opts.freqMhz !== undefined && Number.isFinite(opts.freqMhz) && opts.freqMhz > 0) {
+    cmd.freq_mhz = opts.freqMhz;
   }
   return cmd;
 }

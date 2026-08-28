@@ -21,13 +21,14 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { FPGA_LMS_BOARD, fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaPlayerReady } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
   FPGA_DEFAULT_DET_THR,
   FPGA_US_DET_SHIFT,
   clampDetShift,
+  detThrFromMedian,
   detectorWindowUs,
   fpgaArmCmd,
   fpgaObserveLine,
@@ -136,9 +137,9 @@ function main(): void {
   check("пустой host xA4 → driver=bladerf (не enumerate[0])", sdrOpenArgs("bladerf-micro-xa4", "") === "driver=bladerf");
   check("пустой host x40 → driver=bladerf", sdrOpenArgs("bladerf-x40", "") === "driver=bladerf");
   check("пустой host HackRF → driver=hackrf", sdrOpenArgs("hackrf-one", "") === "driver=hackrf");
-  check("x40 выбран для FPGA", FPGA_LMS_BOARD === "bladerf-x40");
   check("FPGA x40 без смены", fpgaBoardPlan("bladerf-x40").ok && !fpgaBoardPlan("bladerf-x40").switched);
-  check("FPGA micro → x40", fpgaBoardPlan("bladerf-micro-xa4").ok && fpgaBoardPlan("bladerf-micro-xa4").sdrId === "bladerf-x40");
+  check("FPGA micro xA4 как сама (без подмены)", fpgaBoardPlan("bladerf-micro-xa4").ok && fpgaBoardPlan("bladerf-micro-xa4").sdrId === "bladerf-micro-xa4");
+  check("FPGA micro xA9 как сама", fpgaBoardPlan("bladerf-micro-xa9").ok && !fpgaBoardPlan("bladerf-micro-xa9").switched);
   check("FPGA HackRF отказ, каталог не трогаем", !fpgaBoardPlan("hackrf-one").ok && fpgaBoardPlan("hackrf-one").sdrId === "hackrf-one");
   check("FPGA Pluto отказ", !fpgaBoardPlan("plutosdr").ok);
   check("шлюз ok не FAKE", fpgaGatewayRefused({ ok: true, fake: false }) === null);
@@ -418,7 +419,7 @@ function main(): void {
   check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
-  check("FPGA+сканер — не хост-сканер", scannerParticipates("fpga") === false);
+  check("FPGA+сканер: сканер — глаза цикла (детект → handoff)", scannerParticipates("fpga") === true);
   check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
@@ -428,7 +429,7 @@ function main(): void {
   check("PLAYER+ARM = задача, не сканер", isFpgaTaskLive(true, "player") && !isFpgaAirLive(true, "player"));
   check("без ARM нет живой задачи", isFpgaTaskLive(false, "player") === false);
   const fpgaWork = planSdrWork("fpga");
-  check("planSdrWork FPGA: конвейер на SDR", fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
+  check("planSdrWork FPGA: скан→конвейер на SDR", fpgaWork.useFpgaAir && fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));
   check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
   check(
@@ -1154,6 +1155,13 @@ function main(): void {
     sdrId: "hackrf-one", analogBwMhz: 20, bands: [{ f1Mhz: 2436, f2Mhz: 2450 }],
     loadOk: true, detThr: 5000, detShift: 4,
   }).ok === false);
+  check("FPGA эфир micro xA4 ok (AD9361, без подмены)", planFpgaAir({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+    loadOk: true, detThr: 5000, detShift: 4,
+  }).ok === true);
+  check("detThrFromMedian: полка × K", detThrFromMedian(1200, 4) === 4800);
+  check("detThrFromMedian: ноль/мусор → 0 (шлюз откажет)", detThrFromMedian(0) === 0 && detThrFromMedian(Number.NaN) === 0);
+  check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });

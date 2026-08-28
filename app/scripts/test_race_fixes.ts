@@ -78,7 +78,8 @@ async function main(): Promise<void> {
   check("после STOP телеметрия флаг не воскресила", !s().corridorRunning);
   await s().disconnect();
 
-  // FPGA: HackRF/Pluto не подменяем на x40. micro — да (CONTROL = LMS6002D).
+  // FPGA: HackRF/Pluto не подменяем на x40. micro тоже не подменяем —
+  // паркуется через AD9361 как сама себя (эфир поднимает NIOS, AIR-регистры).
   // Без Tauri шлюз честно мёртв — ARM не ставим.
   s().setSdrLoad(true);
   s().setSdrId("hackrf-one");
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
 
   s().setSdrId("bladerf-micro-xa4");
   const micro = await s().startFpgaPath("air");
-  check("micro → x40 перед попыткой ARM", s().sdrId === "bladerf-x40");
+  check("micro остаётся micro (подмены каталога нет)", s().sdrId === "bladerf-micro-xa4");
   check("micro без шлюза не ARM", micro === false && !s().fpgaArmed);
 
   console.log(failures === 0 ? "\nRACE FIXES: ALL PASS" : `\nRACE FIXES: ${failures} FAILURES`);
