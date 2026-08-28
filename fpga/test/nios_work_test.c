@@ -182,6 +182,15 @@ int main(void)
     /* ARM lb_* без эфира — существующий guard не сломан */
     CHECK("ARM lb_gated без эфира → отказ (guard цел)",
           !legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    /* Изоляция guard'а: отклонённый ARM не должен взвести legion_armed —
+     * иначе wd_fired сейчас вызвал бы DISARM (найдено перепроверкой,
+     * раунд 6: без этого шага баг маскировался бы последующим re-ARM). */
+    pio_mark = pio_n; rfic_mark = rfic_n;
+    t_status = LEGION_STATUS_WD_FIRED;
+    legion_work();
+    CHECK("A1: отклонённый guard'ом ARM + wd_fired → legion_work молчит",
+          pio_n == pio_mark && rfic_n == rfic_mark);
+    t_status = 0;
 
     /* re-ARM (с эфиром) снимает латч */
     legion_reg_write(LEGION_REG_AIR_PREP, 0x7);
