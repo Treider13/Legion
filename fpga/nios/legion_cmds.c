@@ -68,6 +68,19 @@ bool legion_air_up(bool rx, bool tx)
         return false;
     }
 
+    /* TX глушим сразу после INIT, ДО любых перестроек. Раньше нельзя:
+     * TXMUTE требует init_state==ON (RFIC_CMD_INIT_REQD, devices_rfic.c).
+     * RFIC-апдейты (FREQUENCY/SAMPLERATE) могут перезапускать
+     * TX-калибровку — апстрим Nuand позже ввёл для этого guard TX_RECAL;
+     * в нашем дереве его нет, держим mute сами до конца последовательности.
+     * (INIT из OFF сам кратко отмыкает TX на attenuation из init-params —
+     * 10 дБ, ad936x_params.c — это поведение апстрима, не нашего тракта.) */
+    if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                        BLADERF_CHANNEL_TX(0), 1)) {
+        DBG("LEGION: RFIC TX mute — отказ\n");
+        return false;
+    }
+
     uint32_t const fs_hz = legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
     uint32_t const bw_hz = legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
 
@@ -85,6 +98,15 @@ bool legion_air_up(bool rx, bool tx)
             DBG("LEGION: RFIC RX cfg — отказ\n");
             return false;
         }
+        /* Readback GAINMODE: записанный MGC без подтверждения — вайб (как
+         * readback LO/fs в park). Молча живой AGC уплыл бы после ARM. */
+        uint64_t gm = 0;
+        if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_GAINMODE,
+                                     BLADERF_CHANNEL_RX(0), &gm) ||
+            gm != BLADERF_GAIN_MGC) {
+            DBG("LEGION: RFIC GAINMODE readback != MGC — отказ\n");
+            return false;
+        }
         /* Усиление — ровно то, при котором хост мерил шумовую полку:
          * парк пиннит MGC, читает gain и шлёт его в ARM (gain_db).
          * На проводе — смещение +1000 (сентинел 0xFFFFFFFF = «не задан»). */
@@ -100,14 +122,13 @@ bool legion_air_up(bool rx, bool tx)
     }
 
     if (tx) {
+        /* TX уже заглушён (сразу после INIT). Unmute — после ENABLE. */
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
                                       BLADERF_CHANNEL_TX(0), freq_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
                                       BLADERF_CHANNEL_TX(0), fs_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
-                                      BLADERF_CHANNEL_TX(0), bw_hz) ||
-            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
-                                      BLADERF_CHANNEL_TX(0), 0)) {
+                                      BLADERF_CHANNEL_TX(0), bw_hz)) {
             DBG("LEGION: RFIC TX cfg — отказ\n");
             return false;
         }
@@ -123,6 +144,14 @@ bool legion_air_up(bool rx, bool tx)
     if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_ENABLE,
                                         BLADERF_CHANNEL_TX(0), 1)) {
         DBG("LEGION: RFIC TX enable — отказ\n");
+        return false;
+    }
+
+    /* Unmute последним: вся перестройка (и возможная TX-cal внутри неё)
+     * прошла при заглушённом TX. */
+    if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                        BLADERF_CHANNEL_TX(0), 0)) {
+        DBG("LEGION: RFIC TX unmute — отказ\n");
         return false;
     }
 
