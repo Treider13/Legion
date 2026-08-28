@@ -105,6 +105,12 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 
 ## Эксплуатация
 
+0. Прошивка ревизии в плату: вкладка **КАСТОМ FPGA** в приложении
+   (СОБРАТЬ из `fpga/` — нужен Quartus 23.1.1 на этом ПК — затем ПРОШИТЬ:
+   `bladeRF-cli -l` локально или `{"op":"flash","path":"/abs/legionxA4.rbf",
+   "action":"load"}` на шлюзе, файл заранее на машине шлюза). Шлюз при
+   acquire читает 0x80: hosted отвечает invalid id → `ping`/`status` несут
+   `legion:false` и ARM отказывает с причиной (не молчаливый отказ).
 1. На шлюзе: `python3 legion_gateway.py` (порт 5531; `LEGION_FPGA_FAKE=1` —
    проверка протокола без железа). **Авторизация:** задайте
    `LEGION_FPGA_TOKEN=<секрет>` на агенте — тогда каждая команда (кроме ping)

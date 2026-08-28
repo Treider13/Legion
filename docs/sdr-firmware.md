@@ -60,9 +60,17 @@ TX LO на RF out → усилитель; для конвейера «скан �
 FX3 `.img` без FPGA задачу не закрывает.
 Имена вроде RF-Clown / BlueJammer / nRF24 отклоняются на хосте.
 
-Запись в железо — вкладки **ПРОШИВКА SDR** и **ПРОШИВКА ESP32** (не одна кнопка).
-SDR: только вендорский CLI (`bladeRF-cli -l/-L/-f`, `uhd_image_loader`,
-`hackrf_spiflash`) после `validateFlashJob` + галочки. ESP32: только
+Запись в железо — вкладки **ПРОШИВКА SDR**, **КАСТОМ FPGA** и **ПРОШИВКА ESP32**
+(не одна кнопка).
+SDR (hosted): только вендорский CLI (`bladeRF-cli -l/-L/-f`, `uhd_image_loader`,
+`hackrf_spiflash`) после `validateFlashJob` + галочки. Кастом (ревизия legion):
+вкладка КАСТОМ FPGA — СОБРАТЬ (`build_bladerf.sh -r legion` через
+`nios2_command_shell`, Quartus 23.1.1 на этом ПК, лог потоком) → ПРОШИТЬ
+(`bladeRF-cli -l` RAM / `-L` flash; локальный USB или `{"op":"flash"}` на
+шлюзе, файл заранее на машине шлюза). Плата = суффикс артефакта
+(`legionx40/xA4/xA9.rbf`), A4↔A9 и x40↔micro — отказ. Шлюз после acquire
+детектит ревизию чтением 0x80: hosted → `ping/status` несут `legion:false`,
+ARM отказывает с причиной. ESP32: только
 `pio run -e <allowlist> --target upload` после `esptool chip_id` и совпадения
 кристалла с env. Чужой домен / RF-Clown / native env — отказ.
 Проверка имени ≠ запись. Без desktop LEGION команда не запускается.
