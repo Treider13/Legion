@@ -1916,6 +1916,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
           return;
         }
+        if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
         const pingNo = fpgaGatewayRefused(ping);
         if (pingNo) {
           pushLog("sys", pingNo);
@@ -2119,6 +2120,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       const ping = await gw({ op: "ping" });
       if (await abortSoloIfRevoked()) return false;
       if (await abortAirIfRevoked()) return false;
+      if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
       const pingNo = fpgaGatewayRefused(ping);
       if (pingNo) {
         pushLog("sys", pingNo);
@@ -2743,6 +2745,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", plan.reason);
         return;
       }
+      if (target === "gateway" && !s.sdrGateway.trim()) {
+        // Иначе closeSdr уже закрыл бы сессию, а flash упал бы на «нет IP шлюза».
+        const reason = "прошивка через шлюз: укажите IP шлюза (вкладка SDR) или выберите «локальный USB»";
+        set({ lastLegionFlash: { ok: false, reason } });
+        pushLog("sys", reason);
+        return;
+      }
       if (!hostSdrAvailable()) {
         const reason = `команда не запущена (нет desktop LEGION): ${plan.reason}`;
         set({ lastLegionFlash: { ok: false, reason }, legionFlashConfirm: false });
@@ -2901,6 +2910,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (!s.sdrEmulation) {
             // Шлюз нужен только на ARM; без него сканируем и ждём — честно в лог.
             const ping = await hostFpga({ op: "ping", token: s.fpgaToken }, s.sdrGateway);
+            if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
             const no = fpgaGatewayRefused(ping);
             if (no) {
               pushLog("sys", `FPGA+сканер: ${no} — сканируем, ARM начнётся когда шлюз оживёт`);

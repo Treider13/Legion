@@ -1532,6 +1532,12 @@ async function main(): Promise<void> {
   check("шлюз: release обнуляет знание ревизии", gwSrc.includes("self._legion = None"));
   check("store: ARM проверяет legion до парковки", storeSrc.includes("fpgaLegionMissing(ping)"));
   check("store: статус обновляет fpgaLegion", storeSrc.includes("fpgaLegion: r.legion"));
+  check("store: fpgaLegion из ping на всех трёх точках ARM/скан",
+    (storeSrc.match(/if \(ping\.legion !== undefined\) set\(\{ fpgaLegion/g) ?? []).length === 3);
+  const legionFlashBlock = storeSrc.slice(storeSrc.indexOf("legionFlash: async"), storeSrc.indexOf("probeEsp32Chip: async"));
+  check("прошивка через шлюз без IP — отказ ДО closeSdr",
+    legionFlashBlock.includes("укажите IP шлюза")
+    && legionFlashBlock.indexOf("укажите IP шлюза") < legionFlashBlock.indexOf("closeSdr()"));
   const buildFn = storeSrc.slice(storeSrc.indexOf("legionBuildStart: async"), storeSrc.indexOf("legionBuildCancel: async"));
   check("сборка legion НЕ занимает flashBusy (часовой синтез не глушит скан)",
     !buildFn.includes("flashBusy: true") && !buildFn.includes("flashBusy: false"));
