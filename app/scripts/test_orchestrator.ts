@@ -1545,6 +1545,8 @@ async function main(): Promise<void> {
     && legionRust.includes(".stdin(Stdio::null())") && !legionRust.includes('.arg("-c")'));
   check("rust: артефакт только этой сборки (mtime ≥ старт, не файл прошлого прогона)",
     legionRust.includes("artifact_fresh") && legionRust.includes("find_artifact(&st.quartus_dir, &st.size, st.started)"));
+  check("сборка legion: причина сбоя опроса статуса не теряется",
+    storeSrc.includes("st.reason ?? `exit ${st.exit"));
   check("rust: один лок на проверку+spawn (нет TOCTOU двойного старта)",
     legionRust.includes("Один лок на проверку «уже идёт» + spawn + запись"));
 

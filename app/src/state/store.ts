@@ -2712,7 +2712,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           );
         } else {
           set({ legionBuildPhase: "failed" });
-          pushLog("sys", `сборка legion: exit ${st.exit ?? "?"} — артефакт не найден, хвост лога на вкладке`);
+          // st.reason — сбой самого опроса (invoke/lock), st.exit — код процесса.
+          pushLog(
+            "sys",
+            `сборка legion: ${st.reason ?? `exit ${st.exit ?? "?"}`} — артефакт не найден, хвост лога на вкладке`,
+          );
         }
         return;
       }
