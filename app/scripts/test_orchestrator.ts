@@ -52,6 +52,7 @@ import {
   autoForwardAllowed,
   bandListFor,
   isFpgaAirPattern,
+  isFpgaTaskMode,
   modeConflict,
   modeOf,
   patternLabelRu,
@@ -374,6 +375,8 @@ function main(): void {
   check("конфликт: коридор при SDR TX", modeConflict("esp32", false, true) !== null);
   check("конфликт: SDR при коридоре", modeConflict("sdr", true, false) !== null);
   check("нет конфликта", modeConflict("sdr", false, false) === null);
+  check("конфликт: ESP32 при FPGA ARM", modeConflict("esp32", false, false, true) !== null);
+  check("конфликт FPGA: текст про ОСТАНОВИТЬ FPGA", (modeConflict("esp32", false, false, true) ?? "").includes("FPGA"));
   check("обход полосы сам TX не включает", walkPatternArmsTx() === false);
   check("авто — сканер участвует", scannerParticipates("auto") === true);
   check("случайная — сканер не участвует", scannerParticipates("hop") === false);
@@ -389,6 +392,8 @@ function main(): void {
   check("FPGA+сканер — не хост-сканер", scannerParticipates("fpga") === false);
   check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
+  check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
+  check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
   const fpgaWork = planSdrWork("fpga");
   check("planSdrWork FPGA: конвейер на SDR", fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));

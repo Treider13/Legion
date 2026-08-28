@@ -16,9 +16,6 @@ import {
   waveMeta,
   type WaveKind,
 } from "../sdr/waveforms";
-import { detectorWindowUs, parkSpanMhz } from "../sense/fpgaFastpath";
-import { catalogCaps } from "../sdr/hostClient";
-import { parseBand } from "../policy/allowlist";
 import { useLegion } from "../state/store";
 
 const ACCENT = "#2dd4bf";
@@ -140,16 +137,7 @@ export function SignalPanel() {
     }
   }, [s.signalKind, params, constellation]);
 
-  const busy = s.transmitArmed || s.scanRunning;
-  const fpgaWindowUs = detectorWindowUs(s.fpgaDetShift);
-  const fpgaBands = s.sdrBands.length
-    ? s.sdrBands
-    : (() => {
-        const b = parseBand(s.sdrF1, s.sdrF2);
-        return b ? [b] : [];
-      })();
-  const fpgaSpan = parkSpanMhz(fpgaBands);
-  const analogBw = catalogCaps(s.sdrId).analogBwMhz;
+  const busy = s.transmitArmed || s.scanRunning || s.fpgaArmed;
 
   return (
     <section className="panel">
@@ -259,59 +247,27 @@ export function SignalPanel() {
       {s.lastCueReason && <p className="sens-hint">{s.lastCueReason}</p>}
 
       <div className="fpga-block">
-        <span className="panel-title">FPGA (bladeRF 1 x40) // АВТОНОМНЫЙ ТРАКТ</span>
+        <span className="panel-title">FPGA (bladeRF 1 x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
         <p className="panel-note">
-          Микросекунды — только здесь, не хост-скан. LOOPBACK по детектору:
-          I²+Q² внутри FPGA открывает RX→TX, ноутбук не в тракте данных.
-          Полоса F1…F2 должна влезть в analog BW (x40 = 28 МГц) — hop ФАПЧ
-          это уже миллисекунды. Watchdog: пропал heartbeat ~1 с → TX гаснет сам.
-          Требует ревизии legion (fpga/README.md). PLAYER/NCO/LOOPBACK
-          перекрывают хост-стрим.
+          Ноутбук ставит задачу (волна из RAM, тон NCO или постоянный RX→TX),
+          SDR играет сам. Сканер и I²+Q²-гейт сюда не входят — это режим
+          FPGA+СКАНЕР на вкладке СКАН. Watchdog: пропал heartbeat ~1 с → TX
+          гаснет. Требует ревизии legion. PLAYER/NCO/LOOPBACK перекрывают хост-стрим.
         </p>
         <div className="corr-grid">
           <label>
             РЕЖИМ FPGA
             <select
               aria-label="Режим FPGA"
-              value={s.fpgaMode}
+              value={s.fpgaMode === "lb_gated" ? "player" : s.fpgaMode}
               onChange={(e) => s.setFpgaMode(e.target.value as typeof s.fpgaMode)}
               disabled={s.fpgaArmed || s.fpgaBusy}
             >
               <option value="player">PLAYER — волна из RAM FPGA</option>
               <option value="nco">NCO — тон DDS из FPGA</option>
-              <option value="lb_gated">LOOPBACK по детектору (µs, RX→TX)</option>
-              <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
+              <option value="lb_always">LOOPBACK постоянный (RX→TX, без детектора)</option>
             </select>
           </label>
-          {s.fpgaMode === "lb_gated" && (
-            <>
-              <label>
-                ПОРОГ DET (I²+Q²)
-                <input
-                  aria-label="Порог детектора FPGA"
-                  type="number"
-                  min={1}
-                  step={100}
-                  value={s.fpgaDetThr}
-                  onChange={(e) => s.setFpgaDetThr(parseFloat(e.target.value))}
-                  disabled={s.fpgaArmed || s.fpgaBusy}
-                />
-              </label>
-              <label>
-                ОКНО SHIFT (4=8µs)
-                <input
-                  aria-label="Окно детектора FPGA"
-                  type="number"
-                  min={4}
-                  max={12}
-                  step={1}
-                  value={s.fpgaDetShift}
-                  onChange={(e) => s.setFpgaDetShift(parseFloat(e.target.value))}
-                  disabled={s.fpgaArmed || s.fpgaBusy}
-                />
-              </label>
-            </>
-          )}
           <label>
             ТОКЕН ШЛЮЗА (если задан на агенте)
             <input
@@ -331,7 +287,14 @@ export function SignalPanel() {
               ОСТАНОВИТЬ FPGA
             </button>
           ) : (
-            <button className="btn-primary" disabled={s.fpgaBusy} onClick={() => void s.fpgaArm()}>
+            <button
+              className="btn-primary"
+              disabled={s.fpgaBusy}
+              onClick={() => {
+                if (s.fpgaMode === "lb_gated") s.setFpgaMode("player");
+                void s.fpgaArm();
+              }}
+            >
               ЗАПУСТИТЬ FPGA
             </button>
           )}
@@ -339,13 +302,6 @@ export function SignalPanel() {
             СТАТУС
           </button>
         </div>
-        {s.fpgaMode === "lb_gated" && (
-          <p className="sens-hint">
-            окно детектора {fpgaWindowUs.toFixed(1)} µs @ 2 МГц · полоса{" "}
-            {fpgaSpan > 0 ? `${fpgaSpan.toFixed(1)}` : "—"} МГц / analog {analogBw} МГц
-            {fpgaSpan > analogBw ? " · слишком широко — hop только на хосте" : ""}
-          </p>
-        )}
         {s.fpgaStatus && (
           <div className="sdr-facts">
             <div>

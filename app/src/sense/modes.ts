@@ -146,12 +146,21 @@ export function modeConflict(
   want: LegionMode,
   corridorRunning: boolean,
   sdrTransmit: boolean,
+  fpgaArmed = false,
 ): string | null {
-  if (want === "esp32" && sdrTransmit) {
-    return "режим ESP32 занят: сначала СТОП ПЕРЕДАЧУ в режиме SDR";
+  const sdrLive = sdrTransmit || fpgaArmed;
+  if (want === "esp32" && sdrLive) {
+    return fpgaArmed
+      ? "режим ESP32 занят: сначала ОСТАНОВИТЬ FPGA"
+      : "режим ESP32 занят: сначала СТОП ПЕРЕДАЧУ в режиме SDR";
   }
   if (want === "sdr" && corridorRunning) {
     return "режим SDR занят: сначала СТОП коридора ESP32";
   }
   return null;
+}
+
+/** FPGA без сканера: ноутбук ставит контент, SDR играет. Не lb_gated. */
+export function isFpgaTaskMode(mode: "player" | "nco" | "lb_gated" | "lb_always"): boolean {
+  return mode === "player" || mode === "nco" || mode === "lb_always";
 }

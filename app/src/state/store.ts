@@ -891,7 +891,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setFrequency: async () => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -926,7 +926,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setRf: async (on) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -974,7 +974,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     corridorStart: async () => {
       if (!gClient) return;
-      const blocked = modeConflict("esp32", false, get().transmitArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -1101,6 +1101,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gGate.reset();
         if (gLive) void hostTxOff();
         else gSdr.txOff();
+        if (get().fpgaArmed) void get().fpgaDisarm();
         set({
           lastForwardMhz: null,
           lastForwardPowerDbm: null,
@@ -1277,6 +1278,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA ARM: ревизия legion собрана под bladeRF 1 x40 — выберите её на вкладке SDR");
         return;
       }
+      const blocked = modeConflict("sdr", s.corridorRunning, false);
+      if (blocked) {
+        pushLog("sys", blocked);
+        return;
+      }
       if (s.fpgaMode === "lb_gated") {
         const air = planFpgaAir({
           sdrId: s.sdrId,
@@ -1357,7 +1363,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
-      if (r.ok && get().fpgaArmed) {
+      if (r.ok && get().fpgaArmed && get().fpgaMode === "lb_gated") {
         set({ lastCueReason: fpgaObserveLine(r) });
       }
       if (r.ok && r.wd_fired && get().fpgaArmed) {

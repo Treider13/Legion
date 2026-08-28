@@ -11,8 +11,8 @@ const ESP32: Array<{ id: WorkspaceId; title: string; hint: string }> = [
 
 const SDR: Array<{ id: WorkspaceId; title: string; hint: string }> = [
   { id: "sdr", title: "SDR", hint: "Ethernet · офиц. FPGA" },
-  { id: "scan", title: "СКАН + TX SDR", hint: "антенна и усилитель на SDR" },
-  { id: "signal", title: "ТИП СИГНАЛА", hint: "baseband → SDR · нагрузка 50Ω" },
+  { id: "scan", title: "СКАН + TX SDR", hint: "FPGA+сканер или хост АВТО" },
+  { id: "signal", title: "ТИП СИГНАЛА", hint: "FPGA без сканера · волна" },
   { id: "sdrFlash", title: "ПРОШИВКА SDR", hint: "офиц. FPGA/FX3 · не ESP32" },
 ];
 

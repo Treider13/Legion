@@ -58,10 +58,14 @@ export function ScanPanel() {
                 : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц · {fpgaAir ? (s.fpgaStatus?.det_active ? "энергия FPGA" : "окно FPGA") : auto ? "energy" : "сканер выкл"}
+            {fpgaAir
+              ? s.fpgaStatus?.det_active
+                ? "энергия в окне"
+                : "окно FPGA"
+              : `МГц · ${auto ? "energy" : "сканер выкл"}`}
           </span>
         </div>
-        <div className={`freq-hud-card tx ${s.lastForwardMhz != null ? "live" : ""}`}>
+        <div className={`freq-hud-card tx ${fpgaAir ? (s.fpgaArmed && s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
           <span className="freq-hud-k">{fpgaAir ? "КОНВЕЙЕР SDR" : "НА TX SDR"}</span>
           <span className="freq-hud-v">
             {fpgaAir
@@ -75,21 +79,21 @@ export function ScanPanel() {
                 : "—"}
           </span>
           <span className="freq-hud-u">
-            МГц ·{" "}
             {fpgaAir
               ? s.fpgaArmed
                 ? s.fpgaStatus?.det_active
-                  ? "RX→TX на усилитель"
+                  ? `RX→TX · ${fpgaWindowUs.toFixed(0)} µs`
                   : "гейт закрыт"
                 : "конвейер выкл"
-              : auto
-                ? s.autoDispatch === "priority"
-                  ? "приоритет"
-                  : "очередь"
-                : "открытый TX"}
-            {!fpgaAir && s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}
-            {fpgaAir && s.fpgaArmed ? ` · ${fpgaWindowUs.toFixed(0)} µs FPGA` : ""}
-            {!fpgaAir && s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""}
+              : `МГц · ${
+                  auto
+                    ? s.autoDispatch === "priority"
+                      ? "приоритет"
+                      : "очередь"
+                    : "открытый TX"
+                }${s.lastForwardMhz != null ? ` · ${holdSec} с` : ""}${
+                  s.lastSdrTxUs != null ? ` · ${s.lastSdrTxUs} µs host` : ""
+                }`}
           </span>
         </div>
       </div>
@@ -168,22 +172,26 @@ export function ScanPanel() {
             disabled={busy}
           />
         </label>
-        <label>
-          {auto ? "ОКНО RX МГц" : "ШАГ TX МГц"}
-          <input
-            value={s.scanWindowMhz}
-            onChange={(e) => s.setScanWindowMhz(e.target.value)}
-            disabled={busy}
-          />
-        </label>
-        <label>
-          ВЫДЕРЖКА мс
-          <input
-            value={s.scanDwellMs}
-            onChange={(e) => s.setScanDwellMs(e.target.value)}
-            disabled={busy}
-          />
-        </label>
+        {!fpgaAir && (
+          <>
+            <label>
+              {auto ? "ОКНО RX МГц" : "ШАГ TX МГц"}
+              <input
+                value={s.scanWindowMhz}
+                onChange={(e) => s.setScanWindowMhz(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <label>
+              ВЫДЕРЖКА мс
+              <input
+                value={s.scanDwellMs}
+                onChange={(e) => s.setScanDwellMs(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+          </>
+        )}
       </div>
       <p className="sens-hint">
         {fpgaAir
@@ -194,12 +202,14 @@ export function ScanPanel() {
               : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
             : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
-      <p className="sens-hint">
-        TX-контент:{" "}
-        {s.txWaveKind !== null
-          ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА)`
-          : "CW тон · сменить — вкладка ТИП СИГНАЛА"}
-      </p>
+      {!fpgaAir && (
+        <p className="sens-hint">
+          TX-контент:{" "}
+          {s.txWaveKind !== null
+            ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА)`
+            : "CW тон · сменить — вкладка ТИП СИГНАЛА"}
+        </p>
+      )}
       {auto && (
         <>
           <div className="sens-row">
@@ -281,33 +291,18 @@ export function ScanPanel() {
             >
               СБРОСИТЬ
             </button>
-            {s.fpgaArmed ? (
-              <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
-                СТОП FPGA ЭФИР
-              </button>
-            ) : (
-              <button
-                className="btn-primary"
-                disabled={s.fpgaBusy}
-                onClick={() => {
-                  s.setScanPattern("fpga");
-                  s.setFpgaMode("lb_gated");
-                  void s.fpgaArm();
-                }}
-              >
-                FPGA ЭФИР ({fpgaWindowUs.toFixed(0)} µs)
-              </button>
-            )}
           </>
         )}
       </div>
-      <p className="sens-hint">
-        FPGA эфир: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
-        {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
-        {fpgaSpan > analogBw
-          ? " — F1…F2 шире analog: детектор видит только текущее LO-окно, hop = мс"
-          : " — детектор внутри FPGA, не FFT ноутбука"}
-      </p>
+      {fpgaAir && (
+        <p className="sens-hint">
+          FPGA+сканер: окно {fpgaWindowUs.toFixed(1)} µs · полоса{" "}
+          {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
+          {fpgaSpan > analogBw
+            ? " — F1…F2 шире analog: детектор видит только текущее LO-окно"
+            : " — конвейер на SDR, ноутбук наблюдает"}
+        </p>
+      )}
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полоса из F1…F2 при старте, либо добавьте вручную</li>}
         {s.sdrBands.map((b, i) => (
