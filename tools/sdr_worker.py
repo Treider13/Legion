@@ -102,16 +102,36 @@ FFT_SIZES = (1024, 2048, 4096)
 WELCH_FRAMES = 8
 FFT_MIN = 1024
 DIO_SAMPLE_RATE_HZ = 40_000_000
+DIO_BANDWIDTH_HZ = 40_000_000
 TRANSFER_SAMPLES = 4096
 USB_RX_BUFFERS = 32
 RING_CAP = 1 << 18
 RX_GAIN_DB = 30
 
 
-def dio_rx_rate(analog_bw_mhz: float) -> float:
-    """DIO-sys SAMPLE_RATE_HZ=40e6, кепка — analog BW платы (x40=28, HackRF=20)."""
-    cap = max(float(analog_bw_mhz) * 1e6, 1e6)
-    return min(float(DIO_SAMPLE_RATE_HZ), cap)
+def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
+    """DIO-sys capture.hpp SAMPLE_RATE_HZ = 40e6.
+    analog BW платы (x40: 28 МГц) — это фильтр, не частота дискретизации."""
+    return float(DIO_SAMPLE_RATE_HZ)
+
+
+def rx_is_parked(
+    rx_on: bool,
+    rx_hz: float | None,
+    rx_fs: float | None,
+    center_hz: float,
+    fs: float,
+    discard_left: int,
+    capture_alive: bool,
+) -> bool:
+    """DIO-sys capture.cpp: USB-команды только если частота/gain реально сменились."""
+    return (
+        bool(rx_on)
+        and capture_alive
+        and discard_left <= 0
+        and rx_hz == center_hz
+        and rx_fs == fs
+    )
 
 
 def settle_samples(fs: float) -> int:
@@ -183,6 +203,15 @@ class IqRing:
                 out[first:] = self.buf[: n - first]
             self._r = r + n
             return out
+
+    def drop_oldest(self, n: int) -> int:
+        """Выбросить хвост — как processing thread DIO, который всегда на самом свежем IQ."""
+        n = max(0, int(n))
+        with self._lock:
+            have = int(self._w - self._r)
+            n = min(n, have)
+            self._r += n
+            return n
 
 
 def cw_lo_hz(rf_hz: float, fs: float = TX_FS) -> float:
@@ -906,19 +935,37 @@ class Radio:
                 if self._ring is not None:
                     self._ring.push_block(chunk)
 
+    def _apply_dio_rx_clock(self, fs: float) -> float:
+        """DIO-sys configure_device: 40 MSPS + 40 МГц. Фактический rate — из Soapy."""
+        assert self.dev is not None
+        self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
+        try:
+            self.dev.setBandwidth(SOAPY_SDR_RX, 0, float(DIO_BANDWIDTH_HZ))
+        except Exception:
+            self.dev.setBandwidth(SOAPY_SDR_RX, 0, fs)
+        try:
+            got = float(self.dev.getSampleRate(SOAPY_SDR_RX, 0))
+            if got > 0:
+                return got
+        except Exception:
+            pass
+        return fs
+
     def _ensure_rx(self, fs: float, center_hz: float) -> int:
         """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий."""
         assert self.dev is not None
+        alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
+        if rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive):
+            return self._rx_gen
         retuned = self._rx_hz != center_hz or self._rx_fs != fs or not self._rx_on
         self._rx_pause.set()
         try:
             with self._rx_io, self._lock:
-                self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
-                try:
-                    self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(fs, self.analog_bw * 1e6))
-                except Exception:
-                    pass
-                self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
+                rate_changed = self._rx_fs != fs or not self._rx_on
+                if rate_changed:
+                    fs = self._apply_dio_rx_clock(fs)
+                if self._rx_hz != center_hz or not self._rx_on:
+                    self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
                 if self.rx is None:
                     self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
                     self.dev.activateStream(self.rx)
@@ -976,11 +1023,11 @@ class Radio:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
-        # DIO-sys всегда 40 MSPS / 40 МГц, не окно walker. Кепка — analog BW платы.
-        fs = dio_rx_rate(self.analog_bw)
+        # DIO-sys capture.hpp: 40 MSPS / 40 МГц, не окно walker и не analog-фильтр.
+        fs = self._rx_fs if self._rx_fs else dio_rx_rate()
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6)
-            spec = self._wait_psd(gen, n, fs, center_mhz)
+            spec = self._wait_psd(gen, n, self._rx_fs or fs, center_mhz)
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
@@ -1309,6 +1356,10 @@ def _psd_from_ring(ring: IqRing, n: int, fs: float, center_mhz: float) -> list[d
     if not NUMPY:
         raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
     fft_n = _pick_fft_size(n)
+    need = WELCH_FRAMES * fft_n
+    extra = ring.available() - need
+    if extra > 0:
+        ring.drop_oldest(extra)
     frames = np.zeros((WELCH_FRAMES, fft_n), dtype=np.complex64)
     for i in range(WELCH_FRAMES):
         batch = ring.pop_batch(fft_n)

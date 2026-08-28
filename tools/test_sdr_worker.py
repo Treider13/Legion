@@ -85,12 +85,27 @@ def main() -> int:
         check("кольцо: затирает при переполнении", ring.available() == 16)
         full = ring.pop_batch(16)
         check("кольцо: pop после overwrite", full is not None and float(np.max(np.abs(full))) == 1.0)
+        keep = w.IqRing(32)
+        keep.push_block(np.arange(32, dtype=np.complex64))
+        check("drop_oldest", keep.drop_oldest(24) == 24 and keep.available() == 8)
 
-        check("DIO rate x40 = 28e6", w.dio_rx_rate(28) == 28e6)
-        check("DIO rate micro = 40e6", w.dio_rx_rate(56) == 40e6)
-        check("DIO rate HackRF = 20e6", w.dio_rx_rate(20) == 20e6)
+        check("DIO rate = 40e6 (не analog BW)", w.dio_rx_rate(28) == 40e6)
+        check("DIO rate micro тоже 40e6", w.dio_rx_rate(56) == 40e6)
+        check("DIO BW 40e6", w.DIO_BANDWIDTH_HZ == 40_000_000)
         check("settle ≥ 32×4096", w.settle_samples(40e6) >= 32 * 4096)
         check("settle = pipeline + 2 мс", w.settle_samples(40e6) == 32 * 4096 + int(0.002 * 40e6))
+        check(
+            "parked: тот же LO не ретунит",
+            w.rx_is_parked(True, 915e6, 40e6, 915e6, 40e6, 0, True) is True,
+        )
+        check(
+            "hop: другой LO — не parked",
+            w.rx_is_parked(True, 915e6, 40e6, 2442e6, 40e6, 0, True) is False,
+        )
+        check(
+            "после hop discard — не parked",
+            w.rx_is_parked(True, 2442e6, 40e6, 2442e6, 40e6, 100, True) is False,
+        )
 
         frames_n = w.WELCH_FRAMES * 1024
         src = (0.05 + 0.2 * np.exp(1j * 2 * np.pi * 80 * np.arange(frames_n) / 1024)).astype(np.complex64)
@@ -126,6 +141,20 @@ def main() -> int:
         check("Welch: пик на тоне", abs(peak - expect) <= 1)
         floor = w.estimate_noise_floor(psd)
         check("пол = медиана нижних 60%", psd[peak] - floor > 20)
+
+        # Lockstep с DIO-sys/spectrum_analyzer python/psd_plot.py compute_psd_welch
+        # (окно np.hanning ≡ 0.5*(1-cos(2πn/(N-1))), |X|²/N², fftshift, DC-бин).
+        dio_win = np.hanning(n).astype(np.float32)
+        check("Hann ≡ np.hanning DIO", np.allclose(hann, dio_win, atol=1e-6))
+        accum = np.zeros(n, dtype=np.float64)
+        for fr in frames:
+            accum += np.abs(np.fft.fft(fr * dio_win)) ** 2
+        dio_psd = 10.0 * np.log10(np.maximum((accum / w.WELCH_FRAMES) / (n * n), 1e-20))
+        dio_psd = np.fft.fftshift(dio_psd)
+        dio_psd[half] = 0.5 * (dio_psd[half - 1] + dio_psd[half + 1])
+        check("welch_dbm ≡ DIO convert_to_dbm", np.allclose(psd, dio_psd, atol=1e-5, rtol=1e-5))
+        dio_floor = float(np.median(np.sort(dio_psd)[: int(len(dio_psd) * 0.60)]))
+        check("шум ≡ DIO estimate_noise_floor", abs(floor - dio_floor) < 1e-9)
 
         # --- ТИП СИГНАЛА: синтез всех волн ---
         all_ok = True
