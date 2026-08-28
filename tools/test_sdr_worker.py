@@ -347,6 +347,32 @@ def main() -> int:
     paused = hd.scan(2442, 20, 16)
     check("half-duplex RX пауза при TX", paused.get("ok") is True and paused.get("bins") == [])
 
+    # --- _ensure_rx: кэш rate/bw/center, deactivate только при смене rate ---
+    class _MockDev:
+        def __init__(self):
+            self.calls = {"rate": 0, "bw": 0, "freq": 0, "setup": 0, "act": 0, "deact": 0}
+        def setSampleRate(self, d, c, v): self.calls["rate"] += 1
+        def setBandwidth(self, d, c, v): self.calls["bw"] += 1
+        def setFrequency(self, d, c, v): self.calls["freq"] += 1
+        def setupStream(self, d, f): self.calls["setup"] += 1; return object()
+        def activateStream(self, s): self.calls["act"] += 1
+        def deactivateStream(self, s): self.calls["deact"] += 1
+
+    md = w.Radio()
+    md.dev = _MockDev()
+    md._ensure_rx(4e6, 2454e6)
+    md._ensure_rx(4e6, 2454e6)  # тот же тик — без перестройки
+    check("кэш rate: 2-й тик без setSampleRate", md.dev.calls["rate"] == 1)
+    check("кэш center: 2-й тик без setFrequency", md.dev.calls["freq"] == 1)
+    md._ensure_rx(4e6, 2455e6)  # смена center — только LO, поток жив
+    check("смена center: setFrequency снова", md.dev.calls["freq"] == 2)
+    check("смена center: rate не тронут", md.dev.calls["rate"] == 1)
+    check("смена center: поток не останавливался", md.dev.calls["deact"] == 0)
+    md._ensure_rx(1e6, 2455e6)  # смена fs — deactivate → перестройка → activate
+    check("смена fs: deactivate перед перестройкой", md.dev.calls["deact"] == 1)
+    check("смена fs: setSampleRate снова", md.dev.calls["rate"] == 2)
+    check("смена fs: activate после", md.dev.calls["act"] == 2)
+
     tx = rpc(proc, {"op": "tx", "freqMhz": 2442.5})
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
     check("tx latency число", isinstance(tx.get("latencyUs"), int))

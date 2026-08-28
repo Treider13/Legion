@@ -809,8 +809,12 @@ class Radio:
         self.full_duplex = True
         self.analog_bw = 20.0
         self._rx_on = False
+        # Кольцо DIO-sys + кэш fs/bw/LO. SoapyBladeRF setSampleRate при каждом
+        # вызове перепрограммирует clock chain (стенд 2026-08-27: buf_ready
+        # timeout 1000 ms). USB-команды только если значение реально сменилось.
         self._rx_hz: float | None = None
         self._rx_fs: float | None = None
+        self._rx_bw: float | None = None
         self._rx_cap_stop = threading.Event()
         self._rx_cap_stop.set()
         self._rx_pause = threading.Event()
@@ -836,6 +840,7 @@ class Radio:
         self._stop_rx_capture()
         self._rx_hz = None
         self._rx_fs = None
+        self._rx_bw = None
         self._discard_left = 0
         with self._lock:
             if self.dev is not None and SOAPY:
@@ -861,6 +866,8 @@ class Radio:
             self.rx = None
             self.tx = None
             self._rx_on = False
+            self._rx_fs = None
+            self._rx_bw = None
             self.args = ""
             self.tx_error = None
             self.hardware_key = ""
@@ -1053,8 +1060,10 @@ class Radio:
         self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
         try:
             self.dev.setBandwidth(SOAPY_SDR_RX, 0, float(DIO_BANDWIDTH_HZ))
+            self._rx_bw = float(DIO_BANDWIDTH_HZ)
         except Exception:
             self.dev.setBandwidth(SOAPY_SDR_RX, 0, fs)
+            self._rx_bw = fs
         try:
             got = float(self.dev.getSampleRate(SOAPY_SDR_RX, 0))
             if got > 0:
@@ -1064,7 +1073,12 @@ class Radio:
         return fs
 
     def _ensure_rx(self, fs: float, center_hz: float) -> int:
-        """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий."""
+        """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий.
+
+        setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
+        Rate — только при смене, через deactivate→перестройка→activate.
+        LO (setFrequency) на живом потоке безопасен.
+        """
         assert self.dev is not None
         alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
         if rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive):
@@ -1074,9 +1088,15 @@ class Radio:
         try:
             with self._rx_io, self._lock:
                 rate_changed = self._rx_fs != fs or not self._rx_on
+                if rate_changed and self.rx is not None and self._rx_on:
+                    try:
+                        self.dev.deactivateStream(self.rx)
+                    except Exception:
+                        pass
+                    self._rx_on = False
                 if rate_changed:
                     fs = self._apply_dio_rx_clock(fs)
-                if self._rx_hz != center_hz or not self._rx_on:
+                if self._rx_hz != center_hz:
                     self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
                 if self.rx is None:
                     self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
