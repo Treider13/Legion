@@ -451,6 +451,8 @@ let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
  *  kick. Status-опрос сюда НЕ входит: чтение STATUS не кормит watchdog —
  *  при полудуплексном отказе USB (запись мертва, чтение живо) опросы
  *  продлевали бы доказательство вечно, хотя FPGA уже погасила TX.
+ *  Часы — performance.now() (монотонные): скачок NTP по Date.now() не должен
+ *  ни продлевать, ни подделывать доказательство.
  *  Тишина дольше FPGA_DEADMAN_PROOF_MS — железо погашено своими слоями
  *  (FPGA ~1 с независимо от ноутбука и шлюза; сторож шлюза 2.5 с), и
  *  зависший локальный fpgaArmed можно снять честно (см. fpgaDisarm). */
@@ -701,11 +703,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     stopFpgaObserve();
     // ARM только что подтвердился ответом шлюза, а enable 0→1 сбросил
     // счётчик watchdog в железе — это точка отсчёта deadman-доказательства.
-    gLastKickOkMs = Date.now();
+    gLastKickOkMs = performance.now();
     gFpgaKick = setInterval(() => {
       void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
         if (kr.ok) {
-          gLastKickOkMs = Date.now();
+          gLastKickOkMs = performance.now();
           return;
         }
         pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
@@ -1014,7 +1016,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopAirWalk();
       if (get().fpgaArmed) {
         // На micro NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c).
-        await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
+        const d = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
+        // Отказ не прячем: состояние снимаем всё равно (цикл обязан жить),
+        // а железо за это время гаснет своим watchdog — но в логе честно.
+        if (!d.ok) pushLog("sys", `FPGA DISARM при возврате к скану: ${d.reason ?? "отказ"} — TX гаснет watchdog железа`);
       }
       set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
       gLastDetCount = null;
@@ -2712,7 +2717,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (!rel.ok) pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
         } else if (
           gLastKickOkMs != null &&
-          Date.now() - gLastKickOkMs > FPGA_DEADMAN_PROOF_MS
+          performance.now() - gLastKickOkMs > FPGA_DEADMAN_PROOF_MS
         ) {
           // Шлюз молчит дольше всех слоёв deadman: TX погашен железом сам
           // (FPGA watchdog не зависит от ноутбука и шлюза). Держать fpgaArmed

@@ -1726,6 +1726,14 @@ async function main(): Promise<void> {
     storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят") < storeSrc.indexOf("airThrTable(medians)"));
   check("air-обход: первопричина калибровки не маскируется сбоем acquire",
     storeSrc.indexOf('pushLog("sys", calibWhy)') < storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят"));
+  // Возврат к скану: сбой DISARM не прячется (состояние снимается по
+  // deadman-дизайну цикла, но отказ обязан быть в логе).
+  const retScanFn = storeSrc.slice(storeSrc.indexOf("const fpgaReturnToScan"), storeSrc.indexOf("const fpgaHandoff"));
+  check("возврат к скану: сбой DISARM честно в логе", retScanFn.includes("FPGA DISARM при возврате к скану"));
+  // Deadman-доказательство на монотонных часах: скачок NTP не подделывает тишину.
+  check("deadman-доказательство на монотонных часах (performance.now)",
+    storeSrc.includes("gLastKickOkMs = performance.now()") &&
+    !storeSrc.includes("gLastKickOkMs = Date.now()"));
   // Находка 4: оценка времени калибровки — в логе до прохода и в UI до старта.
   check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
   check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));
@@ -1733,11 +1741,11 @@ async function main(): Promise<void> {
   // Находка 5 (поведение, без Tauri — hostFpga честно падает «нет desktop»):
   // мёртвый шлюз не клинит fpgaArmed, когда deadman железа доказан временем.
   useLegion.setState({ fpgaArmed: true, fpgaPath: "air", fpgaToken: "", sdrGateway: "", lastForwardMhz: 2442 });
-  pokeLastKickOkMs(Date.now()); // свежий kick — deadman НЕ доказан
+  pokeLastKickOkMs(performance.now()); // свежий kick — deadman НЕ доказан
   await L().fpgaDisarm();
   check("мёртвый шлюз, свежий kick → ARM честно держим", L().fpgaArmed === true);
   useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442 });
-  pokeLastKickOkMs(Date.now() - 10_000); // тишина > 3 с: FPGA WD + сторож шлюза уже отработали
+  pokeLastKickOkMs(performance.now() - 10_000); // тишина > 3 с: FPGA WD + сторож шлюза уже отработали
   await L().fpgaDisarm();
   check("мёртвый шлюз, deadman доказан → локальный ARM снят",
     L().fpgaArmed === false && L().fpgaPath === null && L().lastForwardMhz === null);
