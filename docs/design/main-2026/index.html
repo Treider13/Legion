@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<!--
+  LEGION — макеты в эстетике американского кино (ситуационная комната / NORAD / Houston).
+  3D-глаз — плейсхолдер. CyborgEye / Scene не копируем.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEGION — American cinema console</title>
+<style>
+  :root {
+    --walnut: #1b130d;
+    --walnut-2: #2a1c12;
+    --brass: #c9a36a;
+    --brass-hi: #e8d2a4;
+    --cream: #f4ead6;
+    --ink: #140e0a;
+    --crimson: #8f1d1d;
+    --navy: #0a1628;
+    --screen: #071018;
+    --dim: #b8a88c;
+    --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --serif: "Times New Roman", "Palatino Linotype", Palatino, serif;
+    --mono: "Courier New", "Lucida Console", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #000; color: var(--cream); font-family: var(--font); }
+  body { overflow: hidden; }
+
+  .letter {
+    position: fixed; left: 0; right: 0; height: 46px; background: #000; z-index: 30;
+  }
+  .letter.top { top: 0; }
+  .letter.bot { bottom: 0; }
+  .grain, .grade {
+    position: fixed; inset: 0; pointer-events: none; z-index: 25;
+  }
+  .grain {
+    opacity: .14;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  }
+  .grade {
+    background: radial-gradient(70% 60% at 50% 40%, transparent 40%, rgba(0,0,0,.45) 100%);
+  }
+
+  .room {
+    position: absolute; inset: 46px 0;
+    display: flex; flex-direction: column;
+    padding: 18px 28px 16px;
+  }
+
+  /* ===== V1 SITROOM — Белый дом / Пентагон ===== */
+  body.v1 .room {
+    background:
+      radial-gradient(90% 70% at 50% 0%, rgba(201,163,106,.14), transparent 50%),
+      linear-gradient(180deg, #3a2618 0%, #1b130d 38%, #120d0a 100%);
+  }
+  body.v1 .room::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(90deg, rgba(80,48,24,.18) 0 2px, transparent 2px 7px);
+    opacity: .18;
+    mix-blend-mode: multiply;
+  }
+
+  /* ===== V2 NORAD — Шайенн / WarGames ===== */
+  body.v2 {
+    --brass: #d7a11a; --brass-hi: #ffd56a; --cream: #ffe7b0; --dim: #c4a45a; --crimson: #ff4d2a;
+  }
+  body.v2 .room {
+    background:
+      radial-gradient(80% 50% at 50% 100%, rgba(215,161,26,.08), transparent 45%),
+      linear-gradient(180deg, #14110c, #070806);
+  }
+
+  /* ===== V3 HOUSTON — NASA mission control ===== */
+  body.v3 {
+    --brass: #7eb6ff; --brass-hi: #d6e8ff; --cream: #eef4ff; --dim: #9bb3d3;
+    --crimson: #e23b3b; --navy: #071833; --screen: #041022;
+    --serif: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  body.v3 .room {
+    background:
+      radial-gradient(70% 40% at 50% 0%, rgba(30,80,180,.28), transparent 55%),
+      linear-gradient(180deg, #10203a, #071018);
+  }
+
+  .banner {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .22em;
+    color: var(--brass-hi); text-transform: uppercase; z-index: 2;
+  }
+  .banner b { color: var(--cream); font-weight: 700; }
+  .stars {
+    display: flex; gap: 3px; align-items: center;
+  }
+  .stars i {
+    width: 7px; height: 7px; background: var(--brass);
+    clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  }
+  body.v3 .stars i { background: #fff; }
+
+  .head {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: end;
+    margin: 10px 0 8px; z-index: 2;
+  }
+  .brand .k { font-size: 9px; letter-spacing: .32em; color: var(--dim); }
+  .brand .name {
+    font-family: var(--serif); font-size: 34px; letter-spacing: .28em;
+    font-weight: 700; color: var(--cream);
+    text-shadow: 0 2px 0 rgba(0,0,0,.45);
+  }
+  body.v1 .brand .name { color: #f6e7c8; }
+  .modes {
+    display: flex; border: 1px solid rgba(201,163,106,.45);
+    background: rgba(0,0,0,.28);
+  }
+  .modes button {
+    border: 0; background: transparent; color: var(--dim);
+    font: 600 10px/1 var(--font); letter-spacing: .16em;
+    padding: 10px 16px; text-transform: uppercase;
+  }
+  .modes button.on { background: var(--brass); color: #1a120c; }
+  body.v3 .modes { border-color: rgba(126,182,255,.4); }
+  body.v3 .modes button.on { background: #1d4ed8; color: #fff; }
+  .gear {
+    justify-self: end; border: 1px solid rgba(201,163,106,.4);
+    background: rgba(0,0,0,.25); color: var(--brass-hi);
+    font: 600 10px/1 var(--font); letter-spacing: .18em;
+    padding: 10px 16px; text-transform: uppercase;
+  }
+
+  .hero {
+    flex: 0 0 auto; height: 24vh; min-height: 150px;
+    display: grid; place-items: center; position: relative;
+  }
+  .porthole {
+    width: min(168px, 20vw); aspect-ratio: 1; border-radius: 50%;
+    padding: 8px;
+    background:
+      radial-gradient(circle at 30% 25%, #e8d2a4, #8a6a38 45%, #3b2a16 78%, #1a120c);
+    box-shadow:
+      0 18px 40px rgba(0,0,0,.55),
+      inset 0 1px 0 rgba(255,255,255,.35);
+  }
+  body.v2 .porthole {
+    background: radial-gradient(circle at 30% 25%, #ffd56a, #8a5a10 50%, #1a1408);
+  }
+  body.v3 .porthole {
+    background: radial-gradient(circle at 30% 25%, #d6e8ff, #3b6aa8 50%, #071833);
+  }
+  .eye {
+    width: 100%; height: 100%; border-radius: 50%;
+    background:
+      radial-gradient(circle at 50% 50%, #c9a36a 0 18%, #0b1a22 19% 100%);
+    box-shadow: inset 0 0 24px #000, 0 0 28px rgba(201,163,106,.28);
+    position: relative;
+  }
+  body.v2 .eye { background: radial-gradient(circle at 50% 50%, #ffb000 0 18%, #081006 19% 100%); }
+  body.v3 .eye { background: radial-gradient(circle at 50% 50%, #7eb6ff 0 18%, #041022 19% 100%); }
+  .eye::after {
+    content: ""; position: absolute; inset: 10%; border-radius: 50%;
+    border: 1px dashed rgba(244,234,214,.28);
+  }
+  .eye-cap {
+    position: absolute; bottom: 4px; font-size: 8px; letter-spacing: .2em;
+    color: var(--dim); text-transform: uppercase;
+  }
+
+  .board {
+    position: relative; flex: 1 1 auto; min-height: 0;
+    border: 10px solid #2c2118;
+    box-shadow:
+      0 20px 50px rgba(0,0,0,.55),
+      inset 0 0 0 1px #6a5340,
+      inset 0 0 80px rgba(0,0,0,.35);
+    background: var(--screen);
+  }
+  body.v2 .board { border-color: #221c10; box-shadow: 0 20px 60px #000, inset 0 0 0 1px #6a5018; }
+  body.v3 .board { border-color: #1a2a44; box-shadow: 0 16px 40px #000, inset 0 0 0 1px #3a5a88; }
+  .board-tag {
+    position: absolute; top: 8px; left: 12px; right: 12px;
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .18em; color: var(--dim); z-index: 2;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .axis {
+    position: absolute; left: 14px; right: 14px; bottom: 8px;
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+  }
+  .axis .cur { color: #ff6a4a; }
+
+  .console {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 18px; margin-top: 12px; flex: 0 0 auto; z-index: 2;
+  }
+  .read { display: flex; gap: 28px; }
+  .k { font-size: 8px; letter-spacing: .22em; color: var(--dim); text-transform: uppercase; }
+  .v { font-family: var(--mono); font-size: 26px; color: var(--cream); margin-top: 2px; }
+  .v.hot { color: #ff6a4a; }
+  .btns { display: flex; gap: 10px; }
+  .btn {
+    font: 700 12px/1 var(--font); letter-spacing: .2em; text-transform: uppercase;
+    padding: 14px 28px; border: 1px solid var(--brass);
+  }
+  .btn-go { background: var(--brass); color: #1a120c; }
+  .btn-stop { background: transparent; color: #ff6a4a; border-color: #ff6a4a; }
+  body.v3 .btn-go { background: #1d4ed8; color: #fff; border-color: #60a5fa; }
+
+  .sheet {
+    display: none; position: absolute; inset: 46px 0; z-index: 12;
+    place-items: center;
+    background: rgba(10,6,3,.55);
+  }
+  body.sheet .sheet { display: grid; }
+  .dossier {
+    width: min(760px, 92%);
+    background:
+      linear-gradient(180deg, #f6ecd8, #e8d7b6);
+    color: #2a1c10;
+    border: 1px solid #c4a574;
+    box-shadow: 0 30px 80px rgba(0,0,0,.65);
+    padding: 22px 26px 20px;
+  }
+  body.v3 .dossier { background: #eef4ff; color: #0b1b33; border-color: #7eb6ff; }
+  .dossier h2 {
+    font-family: var(--serif); letter-spacing: .2em; font-size: 16px;
+    border-bottom: 2px solid #8f1d1d; padding-bottom: 8px; margin-bottom: 14px;
+  }
+  body.v3 .dossier h2 { border-color: #1d4ed8; }
+  .stamp {
+    float: right; font: 700 9px/1 var(--mono); letter-spacing: .16em;
+    color: #8f1d1d; border: 2px solid #8f1d1d; padding: 6px 8px; transform: rotate(-6deg);
+  }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field label { display: block; font-size: 9px; letter-spacing: .16em; color: #6a5340; margin-bottom: 4px; }
+  .field .box { background: #fffaf0; border: 1px solid #c4a574; padding: 9px 12px; font-family: var(--mono); }
+  .waves { margin-top: 12px; display: grid; gap: 8px; }
+  .wave { border: 1px solid #c4a574; padding: 10px 12px; background: rgba(255,255,255,.35); }
+  .wave.on { outline: 2px solid #8f1d1d; background: #fff; }
+  .wave b { display: block; letter-spacing: .08em; font-size: 12px; }
+  .wave span { display: block; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #4a3828; }
+  .check { margin: 12px 0; font-size: 12px; }
+  .actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .ghost { border: 1px solid #6a5340; background: transparent; color: #4a3828;
+    font: 700 11px/1 var(--font); letter-spacing: .16em; padding: 12px 16px; }
+
+  .badge {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
+    font: 10px/1 var(--mono); letter-spacing: .18em; color: #8a8a8a;
+  }
+  body.still .eye::after { animation: none; }
+</style>
+</head>
+<body class="v1">
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  if (![...q.keys()].length) return;
+  var v = ["v1","v2","v3"].indexOf(q.get("v")) >= 0 ? q.get("v") : "v1";
+  document.body.className = [v, q.get("sheet") === "1" ? "sheet" : "", q.get("still") === "1" ? "still" : ""].filter(Boolean).join(" ");
+})();
+</script>
+<div class="letter top"></div>
+<div class="letter bot"></div>
+<div class="grain"></div>
+<div class="grade"></div>
+<div class="badge" id="badge"></div>
+
+<div class="room">
+  <div class="banner">
+    <span class="stars"><i></i><i></i><i></i><i></i><i></i></span>
+    <span>NATIONAL COMMAND AUTHORITY · <b id="site">SITUATION ROOM</b></span>
+    <span>27 AUG 2026 · 2254Z · TS//SI</span>
+  </div>
+
+  <header class="head">
+    <div class="brand">
+      <div class="k">STRATEGIC RF DESK</div>
+      <div class="name">LEGION</div>
+    </div>
+    <div class="modes">
+      <button class="on" type="button">Умный · SDR</button>
+      <button type="button">Простой · ESP32</button>
+    </div>
+    <button class="gear" type="button">Настройки</button>
+  </header>
+
+  <div class="hero">
+    <div class="porthole" title="3D-глаз (плейсхолдер)">
+      <div class="eye"></div>
+    </div>
+    <div class="eye-cap">Главный экран · 3D-глаз не меняем</div>
+  </div>
+
+  <div class="board">
+    <div class="board-tag">
+      <span>SPECTRUM WALL · 2.400–2.500 GHZ</span>
+      <span>HOST RETUNE 200 µs · QPSK · 50Ω</span>
+    </div>
+    <canvas id="grid"></canvas>
+    <div class="axis">
+      <span>2400</span>
+      <span class="cur">2449.841 MHz · ON TX</span>
+      <span>2500</span>
+    </div>
+  </div>
+
+  <div class="console">
+    <div class="read">
+      <div><div class="k">Intercept</div><div class="v">2449.841</div></div>
+      <div><div class="k">Forward TX</div><div class="v hot">2449.841</div></div>
+      <div><div class="k">Waveform</div><div class="v">QPSK</div></div>
+    </div>
+    <div class="btns">
+      <button class="btn btn-stop" type="button">Стоп</button>
+      <button class="btn btn-go" type="button">Запустить</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet">
+  <div class="dossier">
+    <div class="stamp">EXECUTE</div>
+    <h2>BRIEFING · УМНЫЙ РЕЖИМ</h2>
+    <div class="fields">
+      <div class="field"><label>Коридор F1 МГц</label><div class="box">2400.000</div></div>
+      <div class="field"><label>Коридор F2 МГц</label><div class="box">2500.000</div></div>
+    </div>
+    <div class="waves">
+      <div class="wave on">
+        <b>QPSK + RRC</b>
+        <span>M=4, Gray, сдвиг π/4, дифф. кодирование, 4 sps, RRC α=0.035 — как generic_mod в GNU Radio.</span>
+      </div>
+      <div class="wave">
+        <b>GFSK (BLE)</b>
+        <span>Гауссов FSK: BT=0.5, h=0.5 — Bluetooth LE и простые IoT-радио.</span>
+      </div>
+      <div class="wave">
+        <b>CSS (LoRa-подобный)</b>
+        <span>Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов на символ.</span>
+      </div>
+    </div>
+    <div class="check">☑ Нагрузка 50 Ом на выходе усилителя SDR — без отметки продолжение закрыто.</div>
+    <div class="actions">
+      <button class="ghost" type="button">Отмена</button>
+      <button class="btn btn-go" type="button">Продолжить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const NAMES = {
+  v1: "V1 · SITROOM — Белый дом / Пентагон",
+  v2: "V2 · NORAD — Шайенн / WarGames",
+  v3: "V3 · HOUSTON — NASA mission control",
+};
+const SITES = { v1: "SITUATION ROOM", v2: "NORAD / CHEYENNE MTN", v3: "MISSION CONTROL HOUSTON" };
+const q = new URLSearchParams(location.search);
+const fromBody = ["v1","v2","v3"].find((k) => document.body.classList.contains(k));
+const v = ["v1","v2","v3"].includes(q.get("v")) ? q.get("v") : (fromBody || "v1");
+document.getElementById("badge").textContent = NAMES[v];
+document.getElementById("site").textContent = SITES[v];
+
+const canvas = document.getElementById("grid");
+const ctx = canvas.getContext("2d");
+
+function bins() {
+  const out = [];
+  for (let i = 0; i < 180; i++) {
+    const f = 2400 + (i / 179) * 100;
+    let p = 0.07 + 0.03 * Math.sin(i * 0.31);
+    if (Math.abs(f - 2442) < 1.1) p = 0.88;
+    if (Math.abs(f - 2449.841) < 0.7) p = 1;
+    if (Math.abs(f - 2475) < 0.55) p = 0.5;
+    out.push({ f, p });
+  }
+  return out;
+}
+const data = bins();
+
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  canvas.width = Math.max(2, Math.floor(r.width * 2));
+  canvas.height = Math.max(2, Math.floor(r.height * 2));
+}
+
+function col() {
+  if (v === "v3") return { acc: "#7eb6ff", hot: "#ff5a5a", grid: "rgba(126,182,255,.12)" };
+  if (v === "v2") return { acc: "#d7a11a", hot: "#ff4d2a", grid: "rgba(215,161,26,.12)" };
+  return { acc: "#c9a36a", hot: "#ff6a4a", grid: "rgba(201,163,106,.10)" };
+}
+
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  const c = col();
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = v === "v3" ? "#041022" : "#071018";
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = c.grid;
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 8; i++) {
+    ctx.beginPath(); ctx.moveTo(0, (h * i) / 8); ctx.lineTo(w, (h * i) / 8); ctx.stroke();
+  }
+  ctx.beginPath();
+  data.forEach((b, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h * 0.82 - b.p * h * 0.62;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = c.acc;
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+  const cx = ((2449.841 - 2400) / 100) * w;
+  ctx.fillStyle = c.hot;
+  ctx.globalAlpha = 0.16;
+  ctx.fillRect(cx - 10, 0, 20, h);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = c.hot;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx, 16); ctx.lineTo(cx, h - 16); ctx.stroke();
+  if (v === "v2") {
+    for (let r = 0; r < 28; r++) {
+      data.forEach((b, i) => {
+        ctx.fillStyle = `rgba(215,161,26,${0.03 + b.p * 0.18})`;
+        ctx.fillRect((i / data.length) * w, h * 0.86 + r * 2.2, w / data.length + 1, 2);
+      });
+    }
+  }
+}
+
+const still = q.get("still") === "1" || document.body.classList.contains("still");
+function paint() { resize(); draw(); }
+paint();
+if (!still) {
+  requestAnimationFrame(function loop() { paint(); requestAnimationFrame(loop); });
+} else {
+  requestAnimationFrame(paint);
+}
+</script>
+</body>
+</html>

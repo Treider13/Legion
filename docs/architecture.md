@@ -91,6 +91,15 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   RF out → усилитель. Команды `CUE` / `PA SET I` / `RF ON` на ESP32
   **не отправляются**. Полосы скана (`sdrBands`) и полосы ESP32
   (`allowBands`) — разные списки.
-  **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. Микросекунды
-  detect→TX только на FPGA HDL (xA9; xA4 49 kLE тесен). Не реализовано
-  и не рисуем. `CUE` остаётся командой режима ESP32 (`synth_apply_fast`).
+  **Честный бюджет:** host USB3/Soapy retune — сотни µs…мс. ПЕРЕДАТЬ в
+  настройках — синтез волны на найденной частоте, не IQ с антенны.
+  Микросекунды detect→TX: FPGA `lb_gated` только на bladeRF 1 x40
+  (LMS6002D CONTROL bit1/2). micro AD9361 этим трактом не кормится —
+  каталог micro переключается на x40; HackRF/Pluto/N210 не подменяются.
+  Энергия в окне 16 сэмплов / fs (при analog 28 MSPS ≈ 0.57 мкс), затем
+  тот же RX IQ на TX SMA / усилитель. FAKE park, FAKE Soapy/TX или FAKE шлюз → ARM нет.
+  park читает LO, RX/TX fs и analog BW (не глотает дефолт LMS ~1.5 МГц)
+  и требует Soapy `hardwareKey=bladerf1`
+  (`bladerf_get_board_name`, не драйвер bladerf — он общий с micro).
+  Без readback / не LMS → ARM нет. `CUE` —
+  команда режима ESP32 (`synth_apply_fast`).

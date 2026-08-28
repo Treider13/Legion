@@ -26,7 +26,10 @@ SoapySDRServer --bind
 
 ```
 sudo apt install python3-soapysdr soapysdr-tools python3-numpy
-# + драйвер: SoapyBladeRF / SoapyUHD / SoapyPlutoSDR
+# bladeRF x40 / micro (антенна на RX, скан 40 MSPS):
+sudo apt install soapysdr-module-bladerf
+# другие платы: soapysdr-module-uhd / soapysdr-module-plutosdr / …
+pip install -r tools/requirements.txt   # numpy: Hann + Welch-8 (DIO-sys)
 SoapySDRServer --bind
 ```
 

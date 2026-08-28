@@ -131,7 +131,18 @@ export function ethCable(deviceId: string): EthCable {
 
 export function sdrOpenArgs(deviceId: string, host: string): string {
   const h = host.trim();
-  if (!h) return "";
+  if (!h) {
+    // Пустой host = локальный USB. Не enumerate[0]: при двух платах
+    // первая может быть HackRF, а каталог уже x40 — FPGA park уехал бы
+    // на чужой чип. Soapy driver= отбирает семейство.
+    if (deviceId.startsWith("bladerf")) return "driver=bladerf";
+    if (deviceId === "hackrf-one") return "driver=hackrf";
+    if (deviceId === "plutosdr") return "driver=plutosdr";
+    if (deviceId === "usrp-n210") return "driver=uhd,type=usrp2";
+    if (deviceId.startsWith("lime")) return "driver=lime";
+    if (deviceId.includes("rtl")) return "driver=rtlsdr";
+    return "";
+  }
   switch (deviceId) {
     case "usrp-n210":
       return `driver=uhd,type=usrp2,addr=${h}`;

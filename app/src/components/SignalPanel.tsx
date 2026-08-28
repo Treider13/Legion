@@ -256,6 +256,8 @@ export function SignalPanel() {
           PLAYER/NCO/LOOPBACK, мультиплексор FPGA перекрывает хост-стрим
           (стрим идёт в режиме PASS). Загрузка волны в RAM: режим PASS +
           capture_arm + обычная ЗАШИТЬ (стрим и capture одновременно).
+          ARM сначала паркует RX/TX LO (иначе loopback на чужой частоте). Без park — отказ.
+          PLAYER без capture_done не стартует (в RAM нули, не волна).
         </p>
         <div className="corr-grid">
           <label>
@@ -268,7 +270,7 @@ export function SignalPanel() {
             >
               <option value="player">PLAYER — волна из RAM FPGA</option>
               <option value="nco">NCO — тон DDS из FPGA</option>
-              <option value="lb_gated">LOOPBACK по детектору (RX→TX)</option>
+              <option value="lb_gated">LOOPBACK по детектору (антенна→усилитель)</option>
               <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
             </select>
           </label>

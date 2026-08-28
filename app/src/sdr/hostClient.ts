@@ -63,8 +63,16 @@ export async function hostOpen(
   analogBwMhz: number,
   canTx: boolean,
   fullDuplex: boolean,
-): Promise<{ ok: boolean; reason: string }> {
-  return hostRpc({ op: "open", args, analogBwMhz, canTx, fullDuplex });
+  requireHw?: string,
+): Promise<{ ok: boolean; reason: string; fake?: boolean; hardwareKey?: string }> {
+  return hostRpc({
+    op: "open",
+    args,
+    analogBwMhz,
+    canTx,
+    fullDuplex,
+    ...(requireHw ? { requireHw } : {}),
+  });
 }
 
 export async function hostScan(centerMhz: number, bwMhz: number, bins: number): Promise<HostScanResult> {
@@ -81,6 +89,52 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
     txLive: r.txLive,
     txError: r.txError,
   };
+}
+
+export async function hostPark(
+  centerMhz: number,
+  bwMhz: number,
+  fsHz: number,
+  rx: boolean,
+  tx: boolean,
+): Promise<{
+  ok: boolean;
+  reason: string;
+  freqMhz?: number;
+  fsHz?: number;
+  fake?: boolean;
+  rxLo?: number;
+  txLo?: number;
+  rxFs?: number;
+  txFs?: number;
+}> {
+  if (!hostSdrAvailable()) return { ok: false, reason: "нет Tauri" };
+  try {
+    const r = await hostRpc<{
+      ok?: boolean;
+      reason?: string;
+      freqMhz?: number;
+      fsHz?: number;
+      fake?: boolean;
+      rxLo?: number;
+      txLo?: number;
+      rxFs?: number;
+      txFs?: number;
+    }>({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
+    return {
+      ok: !!r.ok,
+      reason: r.reason ?? "",
+      freqMhz: r.freqMhz,
+      fsHz: r.fsHz,
+      fake: !!r.fake,
+      rxLo: r.rxLo,
+      txLo: r.txLo,
+      rxFs: r.rxFs,
+      txFs: r.txFs,
+    };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
 }
 
 export async function hostTx(freqMhz: number): Promise<TxCueResult> {
@@ -109,6 +163,7 @@ export async function hostTxWave(
     reason?: string;
     latencyUs?: number;
     freqMhz?: number;
+    fake?: boolean;
   }>({ op: "tx_wave", freqMhz, wave, params });
   return {
     ok: !!r.ok,
@@ -116,6 +171,7 @@ export async function hostTxWave(
     freqMhz: r.freqMhz ?? freqMhz,
     latencyUs: r.latencyUs ?? 0,
     path: r.ok ? "sdr-tx" : "none",
+    fake: !!r.fake,
   };
 }
 
