@@ -268,7 +268,7 @@ export function SignalPanel() {
             >
               <option value="player">PLAYER — волна из RAM FPGA</option>
               <option value="nco">NCO — тон DDS из FPGA</option>
-              <option value="lb_gated">LOOPBACK по детектору (RX→TX)</option>
+              <option value="lb_gated">LOOPBACK по детектору (антенна→усилитель)</option>
               <option value="lb_always">LOOPBACK постоянный (RX→TX)</option>
             </select>
           </label>

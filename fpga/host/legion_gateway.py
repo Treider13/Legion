@@ -158,11 +158,15 @@ class LegionGateway:
         self.fake = fake
         self.last_kick = 0.0
         self.det_thr_set = False  # порог детектора записывался в этой сессии
-        self._rx_by_us = False    # RX включён нами (для lb_*), снять при disarm
+        self._rx_by_us = False    # analog RX включён нами — снять при disarm
+        self._tx_by_us = False    # analog TX включён нами — снять при disarm
 
     # --- Штатный CONTROL-регистр FPGA (target 0x01): read-modify-write ---
     # Бит 1 = lms_rx_enable, бит 2 = lms_tx_enable, бит 0 = lms_reset
     # (факт: pack() в bladerf_p.vhd дерева Nuand).
+    LMS_RX_EN = 0x2
+    LMS_TX_EN = 0x4
+
     def _control_read(self) -> int:
         ok, data = lf.unpack_8x32_resp(
             self.fpga._t.xfer(lf.pack_8x32(0x01, False, 0, 0)))
@@ -173,10 +177,20 @@ class LegionGateway:
             self.fpga._t.xfer(lf.pack_8x32(0x01, True, 0, data)))
         return ok
 
-    def _rx_enable(self, on: bool) -> bool:
+    def _lms_enable(self, rx: bool | None = None, tx: bool | None = None) -> bool:
         ctrl = self._control_read()
-        ctrl = (ctrl | 0x2) if on else (ctrl & ~0x2 & 0xFFFFFFFF)
-        return self._control_write(ctrl)
+        if rx is True:
+            ctrl |= self.LMS_RX_EN
+        elif rx is False:
+            ctrl &= ~self.LMS_RX_EN
+        if tx is True:
+            ctrl |= self.LMS_TX_EN
+        elif tx is False:
+            ctrl &= ~self.LMS_TX_EN
+        return self._control_write(ctrl & 0xFFFFFFFF)
+
+    def _rx_enable(self, on: bool) -> bool:
+        return self._lms_enable(rx=on)
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -195,19 +209,28 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
-            # lb_* режимы питаются от RX-потока: включаем RX штатным
-            # CONTROL-регистром (бит 1 = lms_rx_enable), RMW — не трогаем прочее
+            # Analog LMS: lb_* = антенна + усилитель (бит1 RX, бит2 TX).
+            # nco/player = только TX. Цифровой IQ после close Soapy держит HDL.
             if mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS):
-                if not self._rx_enable(True):
-                    return {"ok": False, "reason": "CONTROL: не включить RX (lms_rx_enable)"}
+                if not self._lms_enable(rx=True, tx=True):
+                    return {"ok": False, "reason": "CONTROL: не включить RX+TX (lms_*_enable)"}
                 self._rx_by_us = True
+                self._tx_by_us = True
+            elif mode in (lf.MODE_NCO, lf.MODE_PLAYER):
+                if not self._lms_enable(tx=True):
+                    return {"ok": False, "reason": "CONTROL: не включить TX (lms_tx_enable)"}
+                self._tx_by_us = True
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             return {"ok": ok, "reason": f"ARM {mode_name}" if ok else "запись CTRL не удалась"}
         if op == "disarm":
             ok = self.fpga.disarm()
-            if ok and self._rx_by_us:
-                self._rx_enable(False)  # RX включали мы — снимаем
+            if ok and (self._rx_by_us or self._tx_by_us):
+                self._lms_enable(
+                    rx=False if self._rx_by_us else None,
+                    tx=False if self._tx_by_us else None,
+                )
                 self._rx_by_us = False
+                self._tx_by_us = False
             return {"ok": ok, "reason": "DISARM"}
         if op == "status":
             st = self.fpga.read_status()

@@ -240,13 +240,18 @@ check("lb_gated без det_thr → отказ", r.get("ok") is False)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
-# RX включён штатным CONTROL-регистром (бит 1 = lms_rx_enable, bladerf_p.vhd)
+# Analog RX+TX штатным CONTROL (бит1 lms_rx_enable, бит2 lms_tx_enable)
 check("lb_gated: RX включён через CONTROL RMW (бит1)",
       bool(gw.fpga._t.control & 0x2))
+check("lb_gated: TX включён через CONTROL RMW (бит2)",
+      bool(gw.fpga._t.control & 0x4))
 r = rpc({"op": "disarm"})
 check("disarm снимает наш RX-enable", not (gw.fpga._t.control & 0x2))
+check("disarm снимает наш TX-enable", not (gw.fpga._t.control & 0x4))
 # повторный arm для следующего теста
 rpc({"op": "arm", "mode": "player"})
+check("player: TX включён через CONTROL (бит2)",
+      bool(gw.fpga._t.control & 0x4))
 
 # Heartbeat — релей от ноутбука, агент сам НЕ генерирует
 r = rpc({"op": "kick"})

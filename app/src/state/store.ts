@@ -27,6 +27,7 @@ import {
   hostHealth,
   hostPing,
   hostSdrAvailable,
+  hostPark,
   hostScan,
   hostTx,
   hostTxOff,
@@ -1368,15 +1369,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         await get().openSdr();
         if (!gLive) return;
-        if (rx) {
-          const win = Math.min(analog, Math.max(2, span || analog));
-          const sc = await hostScan(mid, win, 64);
-          if (!sc.ok) pushLog("sys", sc.reason || "FPGA: RX LO не поставился");
-        } else {
-          const kind = get().txWaveKind ?? get().signalKind;
-          const tx = await hostTxWave(mid, kind, get().signalParams);
-          pushLog("sys", tx.reason);
-        }
+        // Оба PLL на одну частоту: loopback IQ иначе уйдёт на чужой TX LO.
+        // 2 MSPS — окно детектора 16 сэмплов ≈ 8 мкс (не 40 MSPS hostScan).
+        const win = Math.min(analog, Math.max(2, span || analog));
+        const pk = await hostPark(mid, win, FPGA_FS_HZ, rx, true);
+        pushLog("sys", pk.reason || (pk.ok ? "FPGA: LO поставлен" : "FPGA: LO не поставился"));
         await releaseSoapy();
         const acq = await gw({ op: "usb", action: "acquire" });
         if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
@@ -1403,7 +1400,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mid,
             lastSdrTxUs: null,
-            lastCueReason: `эфир+FPGA · lb_gated · ${mid.toFixed(3)} МГц · порог ${FPGA_DET_THR_DEFAULT} · ~8 мкс окно`,
+            lastCueReason: `эфир+FPGA · антенна→усилитель · ${mid.toFixed(3)} МГц · порог ${FPGA_DET_THR_DEFAULT} · ~8 мкс @ 2 MSPS`,
           });
           beginFpgaKick();
           return true;

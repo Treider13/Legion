@@ -83,6 +83,16 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
   };
 }
 
+export async function hostPark(
+  centerMhz: number,
+  bwMhz: number,
+  fsHz: number,
+  rx: boolean,
+  tx: boolean,
+): Promise<{ ok: boolean; reason: string; freqMhz?: number; fsHz?: number }> {
+  return hostRpc({ op: "park", centerMhz, bwMhz, fsHz, rx, tx });
+}
+
 export async function hostTx(freqMhz: number): Promise<TxCueResult> {
   const r = await hostRpc<{
     ok: boolean;

@@ -94,6 +94,8 @@ def kwargs_str(kw: dict[str, str]) -> str:
 
 
 TX_FS = 2.0e6
+# Эфир+FPGA: тот же fs, что NCO FTW / окно детектора 16 сэмплов ≈ 8 мкс.
+FPGA_PARK_FS_HZ = 2_000_000
 TX_N = 4096  # кратно 8 → целое число периодов при bb = fs/8 (Deepwave AIR-T)
 TX_FAIL_LIMIT = 8
 # DIO-sys/spectrum_analyzer: FFT 1024/2048/4096, Welch 8 кадров, Hann, |X|²/N².
@@ -1031,6 +1033,55 @@ class Radio:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
 
+    def park(self, center_mhz: float, bw_mhz: float, fs_hz: float, rx: bool, tx: bool) -> dict[str, Any]:
+        """Поставить RX/TX LO без FFT и без USB-стрима. FPGA потом забирает USB.
+
+        hostScan здесь нельзя: он поднимает 40 MSPS и не трогает TX LO —
+        loopback ушёл бы на чужой TX PLL, а окно детектора перестало бы быть 8 мкс.
+        """
+        fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(FPGA_PARK_FS_HZ)
+        hz = float(center_mhz) * 1e6
+        bw = max(0.2, float(bw_mhz)) * 1e6
+        if not rx and not tx:
+            return {"ok": False, "reason": "park: нужен RX и/или TX", "freqMhz": center_mhz, "fsHz": fs}
+        if self.fake:
+            return {
+                "ok": True,
+                "reason": f"FAKE park {center_mhz:.3f} МГц · {fs / 1e6:.1f} MSPS",
+                "freqMhz": center_mhz,
+                "fsHz": fs,
+                "fake": True,
+            }
+        if self.dev is None:
+            return {"ok": False, "reason": "SDR не открыт", "freqMhz": center_mhz, "fsHz": fs}
+        try:
+            with self._lock:
+                if rx:
+                    self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
+                    self.dev.setFrequency(SOAPY_SDR_RX, 0, hz)
+                    try:
+                        self.dev.setBandwidth(SOAPY_SDR_RX, 0, min(bw, fs))
+                    except Exception:
+                        pass
+                    self._rx_hz = hz
+                    self._rx_fs = fs
+                if tx:
+                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, fs)
+                    self.dev.setFrequency(SOAPY_SDR_TX, 0, hz)
+                    try:
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(bw, fs))
+                    except Exception:
+                        pass
+        except Exception as e:
+            return {"ok": False, "reason": f"park LO: {e}", "freqMhz": center_mhz, "fsHz": fs}
+        sides = "+".join(p for p, on in (("RX", rx), ("TX", tx)) if on)
+        return {
+            "ok": True,
+            "reason": f"park {sides} {center_mhz:.3f} МГц · {fs / 1e6:.1f} MSPS",
+            "freqMhz": center_mhz,
+            "fsHz": fs,
+        }
+
     def _scan_extra(self) -> dict[str, Any]:
         out: dict[str, Any] = {"txLive": self.tx_live()}
         if self.tx_error:
@@ -1447,6 +1498,14 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         )
     if op == "scan":
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
+    if op == "park":
+        return radio.park(
+            float(msg["centerMhz"]),
+            float(msg.get("bwMhz") or 2),
+            float(msg.get("fsHz") or FPGA_PARK_FS_HZ),
+            bool(msg.get("rx", True)),
+            bool(msg.get("tx", True)),
+        )
     if op == "tx":
         return radio.tx_cue(float(msg["freqMhz"]))
     if op == "tx_wave":
