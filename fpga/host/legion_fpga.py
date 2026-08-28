@@ -39,6 +39,8 @@ REG_WD_KICK = 0x08
 REG_AIR_FREQ_KHZ = 0x09
 REG_AIR_GAIN_DB = 0x0A
 REG_AIR_PREP = 0x0B  # bit0: 1=поднять тракт / 0=standby; bit1: RX; bit2: TX
+REG_AIR_FS_HZ = 0x0C  # sample rate эфира/solo, Гц; 0 = 2 МГц (NIOS)
+REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
 
 # Режимы MODE (CTRL bits 3:1)
 MODE_PASS = 0x0
@@ -156,6 +158,14 @@ class LegionFpga:
         Код = gain + 1000 (смещение): сентинел «не задан» в NIOS = 0xFFFFFFFF,
         а легальные 0/−1 дБ не должны с ним сталкиваться."""
         return self.write_reg(REG_AIR_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
+
+    def set_air_fs_hz(self, fs_hz: int) -> bool:
+        """Sample rate AD9361, Гц. 0 = дефолт NIOS 2 МГц (эфир lb_gated)."""
+        return self.write_reg(REG_AIR_FS_HZ, int(fs_hz) & 0xFFFFFFFF)
+
+    def set_air_bw_hz(self, bw_hz: int) -> bool:
+        """Analog BW AD9361, Гц. 0 = дефолт NIOS 2 МГц."""
+        return self.write_reg(REG_AIR_BW_HZ, int(bw_hz) & 0xFFFFFFFF)
 
     def air_prepare(self, up: bool, rx: bool, tx: bool) -> bool:
         """Подъём/стендбай воздушного тракта на micro. На x40 — no-op true.

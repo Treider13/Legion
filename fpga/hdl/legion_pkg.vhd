@@ -41,6 +41,8 @@ package legion_pkg is
     constant LEGION_REG_AIR_FREQ_KHZ : natural := 16#09#; -- LO парковки, кГц (47М..6Г)
     constant LEGION_REG_AIR_GAIN_DB  : natural := 16#0A#; -- ручной RX gain, дБ (0 = не трогать)
     constant LEGION_REG_AIR_PREP     : natural := 16#0B#; -- bit0 up/down, bit1 RX, bit2 TX
+    constant LEGION_REG_AIR_FS_HZ    : natural := 16#0C#; -- sample rate, Гц; 0 = 2 МГц
+    constant LEGION_REG_AIR_BW_HZ    : natural := 16#0D#; -- analog BW, Гц; 0 = 2 МГц
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 armed, 1 playing, 2 det_active, 3 capture_done, 4 wd_fired,
