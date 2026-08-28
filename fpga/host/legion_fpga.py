@@ -153,8 +153,9 @@ class LegionFpga:
 
     def set_air_gain_db(self, gain_db: int) -> bool:
         """Ручной RX gain, дБ — ровно тот, при котором хост мерил полку.
-        Сентинел «не задан» в NIOS = 0xFFFFFFFF (0 дБ — легальное значение)."""
-        return self.write_reg(REG_AIR_GAIN_DB, int(gain_db) & 0xFFFFFFFF)
+        Код = gain + 1000 (смещение): сентинел «не задан» в NIOS = 0xFFFFFFFF,
+        а легальные 0/−1 дБ не должны с ним сталкиваться."""
+        return self.write_reg(REG_AIR_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
 
     def air_prepare(self, up: bool, rx: bool, tx: bool) -> bool:
         """Подъём/стендбай воздушного тракта на micro. На x40 — no-op true.

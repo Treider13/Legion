@@ -335,9 +335,11 @@ def rpcm(msg: dict) -> dict:
 
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("micro: ARM lb_gated без freq_mhz → отказ (LO обязателен)", r.get("ok") is False)
-r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5, "gain_db": 42})
 check("micro: ARM lb_gated с freq_mhz → ok", r.get("ok") is True)
 check("micro: AIR_FREQ_KHZ = 2442500", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2442500)
+check("micro: AIR_GAIN_DB = 1042 (код = gain + 1000, сентинел не сталкивается)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_GAIN_DB) == 1042)
 check("micro: AIR_PREP up+RX+TX (0x7)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
 st_m = rpcm({"op": "status"})
 check("micro: status несёт readback эфира (air_up)",

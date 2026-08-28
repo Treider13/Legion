@@ -39,8 +39,9 @@
 #define LEGION_AIR_BW_HZ 2000000U
 
 /* Параметры эфира, приехавшие регистрами (только NIOS, в HDL не пишутся).
- * gain: 0xFFFFFFFF = «не задан» (остаётся из init AD9361); 0 дБ — легальное
- * значение, поэтому ноль сентинелом быть не может. */
+ * gain: 0xFFFFFFFF = «не задан» (остаётся из init AD9361); на проводе gain
+ * кодируется смещением +1000, чтобы легальные 0/−1 дБ не сталкивались с
+ * сентинелом. */
 static uint32_t legion_air_freq_khz;
 static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
 static bool     legion_air_is_up;
@@ -79,13 +80,16 @@ bool legion_air_up(bool rx, bool tx)
             return false;
         }
         /* Усиление — ровно то, при котором хост мерил шумовую полку:
-         * парк пиннит MGC, читает gain и шлёт его в ARM (gain_db). */
-        if (legion_air_gain_db != 0xFFFFFFFFU &&
-            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAIN,
-                                      BLADERF_CHANNEL_RX(0),
-                                      legion_air_gain_db)) {
-            DBG("LEGION: RFIC RX gain — отказ\n");
-            return false;
+         * парк пиннит MGC, читает gain и шлёт его в ARM (gain_db).
+         * На проводе — смещение +1000 (сентинел 0xFFFFFFFF = «не задан»). */
+        if (legion_air_gain_db != 0xFFFFFFFFU) {
+            int32_t const gain_db = (int32_t)(legion_air_gain_db - 1000U);
+            if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAIN,
+                                          BLADERF_CHANNEL_RX(0),
+                                          (uint32_t)gain_db)) {
+                DBG("LEGION: RFIC RX gain — отказ\n");
+                return false;
+            }
         }
     }
 
