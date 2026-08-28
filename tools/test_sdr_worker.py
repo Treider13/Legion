@@ -48,6 +48,8 @@ def main() -> int:
         "remote": "tcp://10.0.0.5:55132",
     })
     check("LO = RF − fs/8 (Deepwave)", abs(w.cw_lo_hz(2442e6) - (2442e6 - w.TX_FS / 8)) < 1)
+    check("LO при fs окна 20 МГц", abs(w.cw_lo_hz(2442e6, 20e6) - (2442e6 - 20e6 / 8)) < 1)
+    check("Radio._tx_fs старт = TX_FS", abs(w.Radio()._tx_fs - w.TX_FS) < 1)
 
     to = w.stream_timeout_us(w.TX_N, w.TX_FS)
     block_us = w.TX_N / w.TX_FS * 1e6
@@ -208,6 +210,10 @@ def main() -> int:
         fax = np.fft.fftfreq(len(tbuf), 1.0 / w.TX_FS)
         peak_hz = fax[int(np.argmax(np.abs(np.fft.fft(tbuf))))]
         check("тон Fj=0.1 → пик на +200 кГц", abs(peak_hz - 0.1 * w.TX_FS) < 2e3)
+        t20 = w.make_waveform("tone", fs=20e6, pr={"fj": 0.1})
+        fax20 = np.fft.fftfreq(len(t20), 1.0 / 20e6)
+        peak20 = fax20[int(np.argmax(np.abs(np.fft.fft(t20))))]
+        check("тон Fj=0.1 @ 20 MSPS → пик на +2 МГц", abs(peak20 - 2e6) < 20e3)
 
         ph4 = set(np.round(np.angle(w._psk_symbols(256, 4, 1)), 3))
         check("QPSK: 4 фазы (π/4 + k·π/2)", len(ph4) == 4)
@@ -485,6 +491,20 @@ def main() -> int:
     wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "qpsk", "params": {"amp": 0.2}})
     check("tx_wave qpsk ok (fake)", wave.get("ok") is True and wave.get("freqMhz") == 2442.0)
     check("tx_wave fake помечен (player ARM это отвергнет)", wave.get("fake") is True)
+    check("tx_wave без fsHz → 2 МГц", wave.get("fsHz") == w.TX_FS)
+
+    wide = rpc(proc, {"op": "tx_wave", "freqMhz": 2425.0, "wave": "awgn", "params": {}, "fsHz": 20e6})
+    check("tx_wave fsHz=20e6 ok (fake)", wide.get("ok") is True and wide.get("fsHz") == 20e6)
+    check("tx_wave 20e6 не подменяет tx_cue fs", "TX_FS" in open(WORKER).read())
+
+    radio = w.Radio()
+    radio.fake = True
+    cue = radio.tx_cue(2442.0)
+    check("tx_cue не меняет _tx_fs с 2 МГц", cue.get("ok") is True and abs(radio._tx_fs - w.TX_FS) < 1)
+    solo = radio.tx_wave(2425.0, "awgn", {}, 20e6)
+    check("tx_wave окно пишет _tx_fs=20e6", solo.get("ok") is True and abs(radio._tx_fs - 20e6) < 1)
+    again = radio.tx_wave(2425.0, "qpsk", {"amp": 0.2})
+    check("tx_wave без fs снова 2 МГц", again.get("ok") is True and abs(radio._tx_fs - w.TX_FS) < 1)
 
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
     check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)
