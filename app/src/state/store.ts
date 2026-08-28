@@ -1842,7 +1842,9 @@ export const useLegion = create<LegionStore>((set, get) => {
                 : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
-            fpgaPath: air ? "air" : "solo",
+            // Ручной ARM не из кино: fpgaPath=null, иначе beginSoloWalk
+            // (fpgaPath==="solo") продолжит жечь tune после DISARM.
+            fpgaPath: air ? "air" : null,
             lastForwardMhz: mid,
             lastCueReason: cue,
           });
