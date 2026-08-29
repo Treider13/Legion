@@ -1048,6 +1048,28 @@ check("micro: ARM nco с fs/bw → ok", r.get("ok") is True)
 check("micro: nco AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
 rpcm({"op": "disarm"})
 
+# ---------------------------------------------------------------------------
+# air-hop обход как серия tune (сторона шлюза): ARM lb_gated на первой
+# стоянке → N шагов подряд, каждый несёт LO + det_thr своей полки (таблица
+# порогов из калибровочного прохода). Между шагами CTRL не трогается, USB
+# не отпускается; финальный DISARM чистый.
+# ---------------------------------------------------------------------------
+r = rpcm({"op": "arm", "mode": "lb_gated", "freq_mhz": 2412.0,
+          "fs_hz": 2_000_000, "bw_mhz": 2, "det_thr": 3000})
+check("air-hop: ARM lb_gated первой стоянки → ok", r.get("ok") is True)
+ctrl_walk = gw_m.fpga._t.regs.get(lf.REG_CTRL)
+for i, (f, thr) in enumerate([(2412.0, 3000), (2437.0, 5200), (2462.0, 4100), (2437.0, 5200)]):
+    r = rpcm({"op": "tune", "freq_mhz": f, "fs_hz": 2_000_000, "bw_mhz": 2, "det_thr": thr})
+    check(f"air-hop: шаг {i} tune {f} МГц → ok", r.get("ok") is True)
+    check(f"air-hop: шаг {i} AIR_FREQ стоянки",
+          gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == int(f * 1000))
+    check(f"air-hop: шаг {i} DET_THR своей полки",
+          gw_m.fpga._t.regs.get(lf.REG_DET_THR) == thr)
+check("air-hop: CTRL не тронут за весь обход", gw_m.fpga._t.regs.get(lf.REG_CTRL) == ctrl_walk)
+check("air-hop: USB не отпускался между шагами", gw_m.fpga._t.released is False)
+r = rpcm({"op": "disarm"})
+check("air-hop: DISARM после обхода → ok", r.get("ok") is True)
+
 # op flash на micro: семейство A-серии, x40 отвергается (PID общий 0x5250,
 # A4/A9 по USB не различить — size на операторе, как в docs Nuand).
 r = rpcm({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})

@@ -470,6 +470,38 @@ def main() -> int:
     cap_fake = rpc(proc, {"op": "det_capture", "win": 16, "windows": 512})
     check("det_capture на FAKE → отказ (не эфир)", cap_fake.get("ok") is False)
 
+    # --- Калибровочный проход air-hop (сторона воркера): серия det_capture
+    # подряд — полка каждой стоянки обхода. Между точками перестройки нет
+    # (тот же LO/fs → дискард 0, поколение не растёт): повторные захваты
+    # обязаны читать свежие данные кольца и не течь по состоянию. ---
+    if w.NUMPY:
+        import numpy as np_cal  # локальный алиас: np выше связан условно
+
+        cal = w.Radio()
+        cal.fake = False
+        cal.dev = object()  # не None — det_capture смотрит только наличие
+        cal._rx_on = True
+        cal._rx_fs = 2e6
+        cal._ring = w.IqRing(w.RING_CAP)
+        rng_cal = np_cal.random.default_rng(7)
+        meds = []
+        for _stop in range(4):  # четыре стоянки обхода
+            noise = (
+                (rng_cal.standard_normal(16 * 512) + 1j * rng_cal.standard_normal(16 * 512)) * 0.01
+            ).astype(np_cal.complex64)
+            cal._ring.push_block(noise)
+            r_cap = cal.det_capture(16, 512)
+            if r_cap.get("ok"):
+                meds.append(float(r_cap["medianEnergy"]))
+        check("калибровка: 4/4 захвата подряд успешны", len(meds) == 4)
+        check(
+            "калибровка: полки стоянок в разумных пределах и повторяемы",
+            len(meds) == 4 and all(400 < m < 2000 for m in meds)
+            and max(meds) / min(meds) < 2.0,
+        )
+        check("калибровка: кольцо отдало ровно 4 кадра (остаток пуст)",
+              cal._ring.available() == 0)
+
     hd = w.Radio()
     hd.fake = True
     hd.full_duplex = False
