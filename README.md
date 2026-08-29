@@ -164,7 +164,8 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 
 [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
 [sl22](docs/sl22.md) · [wiring](docs/wiring.md) · [hardware](docs/hardware.md) ·
-[module-quirks](docs/module-quirks.md) · [compliance](docs/compliance.md) ·
+[dependencies](docs/dependencies.md) · [module-quirks](docs/module-quirks.md) ·
+[compliance](docs/compliance.md) ·
 [REFERENCES](docs/REFERENCES.md) · [datasheet-facts](docs/datasheet-facts.md) ·
 [analysis-upgrade](docs/analysis-upgrade.md)
 
