@@ -1024,7 +1024,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     gFpgaHandoffBusy = true;
     const airGen = gFpgaAirGen;
     const txGen = gTxGen;
-    set({ fpgaBusy: true });
+    // Новый цикл: старый fpgaStatus (уставший ok:false/wd_fired) не должен
+    // красить hero в ОШИБКУ здорового handoff — первый опрос после ARM свежий.
+    set({ fpgaBusy: true, fpgaStatus: null });
     const gw = (cmd: Record<string, unknown>) =>
       hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
     // Таймлайн этапов: при сбое видно, где именно умер handoff и сколько
@@ -2020,7 +2022,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gFpgaArmGen += 1;
       const armGen = gFpgaArmGen;
       const armRevoked = (): boolean => gFpgaArmGen !== armGen;
-      set({ fpgaBusy: true });
+      set({ fpgaBusy: true, fpgaStatus: null });
       try {
         get().stopScan();
         if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
@@ -2262,7 +2264,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
 
-      set({ fpgaBusy: true, fpgaPath: path });
+      set({ fpgaBusy: true, fpgaPath: path, fpgaStatus: null });
       try {
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });

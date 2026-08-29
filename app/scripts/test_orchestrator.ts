@@ -1477,6 +1477,14 @@ async function main(): Promise<void> {
   check("кино эфир: ручной порог из мастера записан в стор (уйдёт в ARM как det_thr)",
     useLegion.getState().fpgaDetThr === 7000);
 
+  // Регрессия: уставший fpgaStatus (ok:false из лабораторного СТАТУСа без
+  // шлюза) не должен красить новый цикл в ОШИБКУ — вход в ARM чистит статус.
+  // (fpgaArm ставит busy до первого await — доезжает и без Tauri.)
+  useLegion.setState({ fpgaStatus: { ok: false, reason: "старый провал" } });
+  await useLegion.getState().fpgaArm();
+  check("fpgaArm чистит уставший fpgaStatus на входе",
+    useLegion.getState().fpgaStatus === null);
+
   const genBeforeAbort = peekFpgaSoloGen();
   useLegion.getState().abortFpgaSolo();
   check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
@@ -1707,6 +1715,9 @@ async function main(): Promise<void> {
   check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
+  const fpgaStatusClears = (storeSrc.match(/set\(\{ fpgaBusy: true[^}]*fpgaStatus: null \}\)/g) || []).length;
+  check("все входа ARM (handoff/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
+    fpgaStatusClears >= 3);
   check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
   check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
   check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
@@ -1719,7 +1730,8 @@ async function main(): Promise<void> {
   check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
   check("ручной fpgaArm держит метку fpgaPath solo в UI", armBlock.includes('fpgaPath: air ? "air" : "solo"'));
   check("fpgaArm busy до первого await (кино-старт откажет)",
-    armBlock.indexOf("set({ fpgaBusy: true })") > 0 && armBlock.indexOf("set({ fpgaBusy: true })") < armBlock.indexOf("await get().stopTransmit()"));
+    armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") > 0
+    && armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
