@@ -662,11 +662,15 @@ export const useLegion = create<LegionStore>((set, get) => {
   ): void => {
     stopAirWalk();
     if (!plan.hop) return;
+    // Поколение эфира — как gSoloWalkGen у solo: отзыв (abortFpgaAir/СТОП/
+    // DISARM бампают gFpgaAirGen) рвёт тики и stale-ответы tune, а не только
+    // флаг fpgaArmed (между abort и disarm он ещё true — окно в сетевых мс).
+    const gen = gFpgaAirGen;
     // tune медленнее выдержки (LAN/USB-шторм) — тик пропускаем, а не копим
     // очередь на шлюзе (там операции и так под _op_lock, но зачем очередь).
     let inflight = false;
     gAirWalk = setInterval(() => {
-      if (!get().fpgaArmed || get().fpgaPath !== "air") {
+      if (gen !== gFpgaAirGen || !get().fpgaArmed || get().fpgaPath !== "air") {
         stopAirWalk();
         return;
       }
@@ -684,7 +688,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         token: get().fpgaToken,
       })
         .then((r) => {
-          if (!get().fpgaArmed || get().fpgaPath !== "air") return;
+          if (gen !== gFpgaAirGen || !get().fpgaArmed || get().fpgaPath !== "air") return;
           if (!r.ok) {
             pushLog("sys", `FPGA эфир tune: ${r.reason ?? "отказ"} — стоянка прежняя`);
             return;
@@ -2722,6 +2726,9 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     abortFpgaAir: () => {
       gFpgaAirGen += 1;
+      // Как abortFpgaSolo: отзыв гасит и сам интервал обхода, не только
+      // поколение — иначе до fpgaDisarm тики продолжали бы слать tune.
+      stopAirWalk();
     },
 
     abortFpgaArm: () => {

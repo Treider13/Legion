@@ -1529,6 +1529,20 @@ async function main(): Promise<void> {
   check("handoff: FAKE/мёртвый шлюз → fail до stopScan",
     handoffHead.includes("fpgaGatewayRefused(ping)") &&
     handoffHead.indexOf("fpgaGatewayRefused(ping)") < handoffHead.indexOf("get().stopScan()"));
+  // Аудит P1-4: отзыв эфира обязан гасить сам интервал обхода (как solo),
+  // а тик — сверять поколение: между abort и disarm fpgaArmed ещё true.
+  const abortAirBody = storeSrc.slice(
+    storeSrc.indexOf("abortFpgaAir: () =>"),
+    storeSrc.indexOf("abortFpgaArm: () =>"),
+  );
+  check("abortFpgaAir гасит интервал обхода (не только поколение)",
+    abortAirBody.includes("stopAirWalk()"));
+  const airWalkBody = storeSrc.slice(
+    storeSrc.indexOf("const beginAirWalk ="),
+    storeSrc.indexOf("const beginFpgaKick"),
+  );
+  check("air-обход: тик и ответ tune сверяют поколение",
+    airWalkBody.split("gen !== gFpgaAirGen").length - 1 >= 2);
   check("захват полки по окну детектора оператора",
     storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
   check("захват полки с отстройкой под ширину канала",
