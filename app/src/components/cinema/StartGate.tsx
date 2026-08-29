@@ -460,7 +460,7 @@ export function StartGate({ mode, onClose }: Props) {
             </button>
           )}
           <button type="button" className="cinema-btn solid" onClick={() => void goNext()} disabled={busy}>
-            {busy ? "…" : "Продолжить"}
+            {busy ? "…" : step === "walk" || mode === "esp32" ? "Запустить" : "Продолжить"}
           </button>
         </div>
       </div>
