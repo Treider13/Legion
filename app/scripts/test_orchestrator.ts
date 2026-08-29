@@ -1691,6 +1691,8 @@ async function main(): Promise<void> {
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
   check("cinema: путь автоматического перехвата в мастере",
     gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
+    gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
   check("cinema перехват: стратегии приоритет/очередь на шаге walk",
     gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
   check("cinema auto: runSmartStart ставит fpga-паттерн и зовёт startScan, не ARM",

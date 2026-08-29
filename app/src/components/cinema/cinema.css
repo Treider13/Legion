@@ -443,6 +443,17 @@ button.cinema-wave.on:hover:not(:disabled) {
   font-size: 12px;
 }
 
+.cinema-gate-warn {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 212, 121, 0.3);
+  border-radius: 2px;
+  color: rgba(255, 212, 121, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 58ch;
+}
+
 .cinema-gate-actions {
   display: flex;
   justify-content: flex-end;
