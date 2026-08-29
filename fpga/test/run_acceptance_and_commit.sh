@@ -21,7 +21,9 @@ ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-commit) COMMIT=0; shift ;;
-    --commit-only) ONLY_JSON="$2"; shift 2 ;;
+    --commit-only)
+      [ $# -ge 2 ] || { echo "FAIL: --commit-only требует путь к acceptance-*.json" >&2; exit 2; }
+      ONLY_JSON="$2"; shift 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done

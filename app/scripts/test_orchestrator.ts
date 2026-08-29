@@ -1531,6 +1531,8 @@ async function main(): Promise<void> {
   check("handoff: FAKE/мёртвый шлюз → fail до stopScan",
     handoffHead.includes("fpgaGatewayRefused(ping)") &&
     handoffHead.indexOf("fpgaGatewayRefused(ping)") < handoffHead.indexOf("get().stopScan()"));
+  check("handoff: отказ шлюза уходит в fail() (страйк/возврат к скану)",
+    handoffHead.includes("await fail(gwNo)"));
   // Аудит P1-4: отзыв эфира обязан гасить сам интервал обхода (как solo),
   // а тик — сверять поколение: между abort и disarm fpgaArmed ещё true.
   const abortAirBody = storeSrc.slice(
