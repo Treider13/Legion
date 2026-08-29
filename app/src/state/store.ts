@@ -1025,7 +1025,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       gLastDetCount = null;
       gDetStagnantPolls = 0;
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
-      await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+      const relRet = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+      if (!relRet.ok) pushLog("sys", `FPGA USB release: ${relRet.reason ?? "отказ"}`);
       gSkipMhz = skipMhz;
       // restart=false: оператор стопнул в полёте — чистимся, но скан не
       // рестартим (его решение, не таймаут).
@@ -1106,7 +1107,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           (marks.length > 0 ? ` · ${handoffTimeline(t0, marks)}` : ""),
       );
       if (stage === "armed") await gw({ op: "disarm" });
-      if (stage !== "pre") await gw({ op: "usb", action: "release" });
+      if (stage !== "pre") {
+        const relAbort = await gw({ op: "usb", action: "release" });
+        if (!relAbort.ok) pushLog("sys", `FPGA USB release: ${relAbort.reason ?? "отказ"}`);
+      }
       set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
       return true;
     };
@@ -1183,7 +1187,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       const r = await gw(armCmd);
       if (!r.ok) {
-        await gw({ op: "usb", action: "release" });
+        const relFail = await gw({ op: "usb", action: "release" });
+        if (!relFail.ok) pushLog("sys", `FPGA USB release: ${relFail.reason ?? "отказ"}`);
         await fail(r.reason ?? "ARM отказ");
         return;
       }
@@ -2576,8 +2581,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (await abortSoloIfRevoked()) return false;
         await gw({ op: "set", reg: "player_ctl", value: 1 });
         if (await abortSoloIfRevoked()) return false;
-        await gw({ op: "usb", action: "release" });
-        usbOut = true;
+        const relSolo = await gw({ op: "usb", action: "release" });
+        if (!relSolo.ok) {
+          // USB остался у агента: openSdr ниже честно упадёт, а usbOut не
+          // врём — abort-путь не перезанимает то, что не отпускали.
+          pushLog("sys", `FPGA USB release: ${relSolo.reason ?? "отказ"}`);
+        } else {
+          usbOut = true;
+        }
         if (await abortSoloIfRevoked()) return false;
         if (!get().sdrEmulation && hostSdrAvailable()) {
           await get().openSdr({ requireHw: requireHwForSdr(get().sdrId) || undefined });
@@ -2746,7 +2757,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       // под ним открыл бы второй Soapy-device на занятом USB.
       if (get().fpgaArmed) {
         await get().fpgaDisarm();
-        await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+        const relStop = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+        if (!relStop.ok) pushLog("sys", `FPGA USB release: ${relStop.reason ?? "отказ"}`);
         set({ lastForwardMhz: null });
         if (!get().sdrOpened && !get().sdrEmulation) await get().openSdr();
       }
@@ -2921,7 +2933,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         await get().fpgaDisarm();
         // USB остаётся у агента после disarm — отдаём хосту, иначе следующий
         // openSdr словит занятое устройство.
-        await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+        const relClose = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
+        if (!relClose.ok) pushLog("sys", `FPGA USB release: ${relClose.reason ?? "отказ"}`);
       }
       get().stopScan();
       gGate.reset();
@@ -3283,7 +3296,8 @@ export const useLegion = create<LegionStore>((set, get) => {
               }
               // Скан-фаза: USB у хоста (агент держит его с момента старта —
               // без release openSdr ниже словил бы занятое устройство).
-              await hostFpga({ op: "usb", action: "release", token: s.fpgaToken }, s.sdrGateway);
+              const relScan = await hostFpga({ op: "usb", action: "release", token: s.fpgaToken }, s.sdrGateway);
+              if (!relScan.ok) pushLog("sys", `FPGA USB release перед сканом: ${relScan.reason ?? "отказ"}`);
             }
           }
         }

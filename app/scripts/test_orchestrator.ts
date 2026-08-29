@@ -1734,6 +1734,12 @@ async function main(): Promise<void> {
   check("deadman-доказательство на монотонных часах (performance.now)",
     storeSrc.includes("gLastKickOkMs = performance.now()") &&
     !storeSrc.includes("gLastKickOkMs = Date.now()"));
+  // Ни один usb release не выбрасывается молча: каждый назначен в переменную
+  // и залогирован при отказе (следующий openSdr иначе ловил бы «занятое
+  // устройство» без причины). Считаем присвоенные вызовы против всех.
+  const relAll = storeSrc.match(/action: "release"/g)?.length ?? 0;
+  const relAssigned = storeSrc.match(/(?:const|let) \w+ = await (?:hostFpga|gw|opts\.gw)\(\{ op: "usb", action: "release"/g)?.length ?? 0;
+  check("ни один usb release не выбрасывается молча", relAll > 0 && relAll === relAssigned);
   // Находка 4: оценка времени калибровки — в логе до прохода и в UI до старта.
   check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
   check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));
@@ -1755,6 +1761,15 @@ async function main(): Promise<void> {
   pokeLastKickOkMs(null); // kick'ов не было вовсе — доказательства нет
   await L().fpgaDisarm();
   check("мёртвый шлюз без истории kick → ARM держим", L().fpgaArmed === true);
+  // closeSdr при мёртвом шлюзе: force-clear по доказательству + сбой release
+  // честно в логе (раньше release выбрасывался молча — следующий openSdr
+  // ловил бы «занятое устройство» без причины).
+  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442, log: [] });
+  pokeLastKickOkMs(performance.now() - 10_000);
+  await L().closeSdr();
+  check("closeSdr при мёртвом шлюзе: ARM снят по deadman-доказательству", L().fpgaArmed === false);
+  check("closeSdr: сбой usb release честно в логе",
+    L().log.some((e) => e.text.includes("FPGA USB release")));
   useLegion.setState({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
   pokeLastKickOkMs(null);
 
