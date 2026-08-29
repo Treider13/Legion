@@ -1191,6 +1191,10 @@ h3 = lg.acquire_instance_lock()
 check("instance lock: после освобождения захват снова возможен", h3 is not None)
 if h3 is not None and h3 is not True:
     h3.close()
+# Недоступный путь (нет каталога/прав) — чистый отказ None, не traceback.
+os.environ["LEGION_FPGA_LOCK"] = f"/tmp/legion-no-such-dir-{os.getpid()}/lock"
+h4 = lg.acquire_instance_lock()
+check("instance lock: недоступный путь → чистый отказ (fail-closed)", h4 is None)
 os.environ.pop("LEGION_FPGA_LOCK")
 
 print("LEGION FPGA HOST: ALL PASS" if fails == 0 else f"LEGION FPGA HOST: {fails} FAILURES")

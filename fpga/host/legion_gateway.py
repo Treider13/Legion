@@ -970,7 +970,13 @@ def acquire_instance_lock() -> "object | None":
     except ImportError:
         return True  # не Unix: лок не поддержан — не блокируем запуск
     path = os.environ.get("LEGION_FPGA_LOCK", "/tmp/legion-gateway.lock")
-    fd = open(path, "w")
+    try:
+        fd = open(path, "w")
+    except OSError:
+        # Нет прав (lock создал root под systemd, агент запущен вручную) или
+        # нет каталога (LEGION_FPGA_LOCK) — fail-closed, как при занятом локе:
+        # агенту с радио-TX traceback некрасив и небезопасен.
+        return None
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -986,10 +992,11 @@ def main() -> int:
         # (иначе тестовый агент на стенде с живым агентом не поднялся бы).
         lock = acquire_instance_lock()
         if lock is None:
-            print("legion-gateway: уже запущен (flock "
-                  f"{os.environ.get('LEGION_FPGA_LOCK', '/tmp/legion-gateway.lock')}) — "
-                  "второй экземпляр делил бы USB с первым; сначала остановите его "
-                  "(systemctl stop legion-gateway)", flush=True)
+            print("legion-gateway: lock "
+                  f"{os.environ.get('LEGION_FPGA_LOCK', '/tmp/legion-gateway.lock')} не взят — "
+                  "уже запущен другой экземпляр (systemctl stop legion-gateway) "
+                  "или нет прав на lock-файл; второй экземпляр делил бы USB с первым",
+                  flush=True)
             return 2
     gw = LegionGateway(FAKE)
 
