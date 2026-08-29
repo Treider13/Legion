@@ -462,7 +462,7 @@ async function main(): Promise<void> {
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("FPGA+сканер: сканер — глаза цикла (детект → handoff)", scannerParticipates("fpga") === true);
-  check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
+  check("автоперехват имя", patternLabelRu("fpga") === "АВТОПЕРЕХВАТ");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);

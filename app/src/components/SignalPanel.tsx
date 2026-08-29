@@ -251,19 +251,19 @@ export function SignalPanel() {
         <span className="panel-title">FPGA (bladeRF micro / x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
         {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
           <p className="panel-note">
-            Сейчас жив FPGA+СКАНЕР (I²+Q² → RX→TX на SDR). Эта вкладка задачу не
-            ставит и не притворяется PLAYER. Стоп — кнопка ниже или вкладка СКАН.
+            Сейчас жив автоматический перехват (ретрансляция эфира в FPGA). Эта вкладка задачу не
+            ставит и не притворяется генерацией. Стоп — кнопка ниже или вкладка СКАН.
           </p>
         ) : (
           <p className="panel-note">
-            Ноутбук ставит задачу (PLAYER / NCO / loopback всегда). Сканер и
-            I²+Q²-гейт сюда не входят. ARM паркует LO; PLAYER без capture_done
-            не стартует. Watchdog ~1 с. NCO — TX DDS, FTW с fj (0 → fs/8, не DC).
+            Ноутбук ставит задачу (генерация волны / тон / постоянная ретрансляция). Сканер и
+            энергодетектор сюда не входят. ARM паркует LO; генерация волны без загрузки в RAM
+            не стартует. Сторож ~1 с гасит TX при потере связи.
           </p>
         )}
         {!isFpgaAirLive(s.fpgaArmed, s.fpgaMode) && (
           <div className="corr-grid">
-          <label>
+          <label title="Генерация сигнала — волна, загруженная в память FPGA. Тон — DDS-генератор FPGA. Постоянная ретрансляция — RX→TX без детектора.">
             РЕЖИМ FPGA
             <select
               aria-label="Режим FPGA"
@@ -271,12 +271,12 @@ export function SignalPanel() {
               onChange={(e) => s.setFpgaMode(e.target.value as typeof s.fpgaMode)}
               disabled={s.fpgaArmed || s.fpgaBusy}
             >
-              <option value="player">PLAYER — волна из RAM FPGA</option>
-              <option value="nco">NCO — тон DDS из FPGA (FTW с fj, не DC)</option>
-              <option value="lb_always">LOOPBACK постоянный (RX→TX, без детектора)</option>
+              <option value="player">Генерация сигнала — волна из памяти FPGA</option>
+              <option value="nco">Тон — DDS из FPGA</option>
+              <option value="lb_always">Ретрансляция постоянная (RX→TX, без детектора)</option>
             </select>
           </label>
-          <label>
+          <label title="Пароль агента на шлюзе, если там задан LEGION_FPGA_TOKEN. Без пароля на агенте поле оставьте пустым.">
             ТОКЕН ШЛЮЗА (если задан на агенте)
             <input
               aria-label="Токен шлюза FPGA"

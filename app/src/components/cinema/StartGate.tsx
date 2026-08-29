@@ -256,11 +256,13 @@ export function StartGate({ mode, onClose }: Props) {
                 : "Число — ширина пятна на усилителе. Коридор ÷ окно = стоянки. Окно ≥ коридора — одна точка, без прыжков. Тон остаётся палочкой."}
             </p>
             <div className="cinema-gate-row">
-              <label>
+              <label title={path === "air"
+                ? "Ширина полосы ретрансляции на каждой стоянке. Коридор делится на стоянки шириной канала."
+                : "Ширина пятна сигнала на усилителе. Окно больше коридора — одна стоянка без прыжков."}>
                 {path === "air" ? "Канал, МГц" : "Окно, МГц"}
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
-              <label>
+              <label title="Сколько миллисекунд стоять на каждой точке перед переходом к следующей.">
                 Задержка, мс
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
               </label>
@@ -272,6 +274,7 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={pattern === "sweep"}
                 className={pattern === "sweep" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPattern("sweep")}
+                title="Обход стоянок по порядку: от края коридора к краю и обратно."
               >
                 <strong>Туда-сюда</strong>
                 <span>По сетке стоянок туда и обратно. USB не отпускаем — только LO.</span>
@@ -282,6 +285,7 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={pattern === "hop"}
                 className={pattern === "hop" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPattern("hop")}
+                title="Следующая стоянка выбирается случайно из сетки коридора."
               >
                 <strong>Случайно</strong>
                 <span>
@@ -343,11 +347,12 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={path === "solo"}
                 className={path === "solo" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPath("solo")}
+                title="Генерация сигнала внутри FPGA: тон или волна из памяти. Эфир не слушается."
               >
                 <strong>Только FPGA</strong>
                 <span>
-                  Эфир не слушаем. Помеха из FPGA (NCO или player) по сетке коридор÷окно. Одна стоянка
-                  или прыжки LO без пересъёма волны. Это не скан и не хостовые 200 µs.
+                  Эфир не слушаем. Генерация сигнала в FPGA (тон или волна из памяти) по сетке
+                  коридор÷окно. Одна стоянка или прыжки LO без перезаписи волны.
                 </span>
               </button>
             </div>
@@ -363,11 +368,11 @@ export function StartGate({ mode, onClose }: Props) {
             </p>
 
             <div className="cinema-gate-row">
-              <label>
+              <label title="Начало рабочего коридора в мегагерцах.">
                 F1, МГц
                 <input ref={firstRef} value={f1} onChange={(e) => setF1(e.target.value)} inputMode="decimal" />
               </label>
-              <label>
+              <label title="Конец рабочего коридора в мегагерцах.">
                 F2, МГц
                 <input value={f2} onChange={(e) => setF2(e.target.value)} inputMode="decimal" />
               </label>
@@ -394,7 +399,7 @@ export function StartGate({ mode, onClose }: Props) {
               </div>
             )}
 
-            <label className="cinema-check">
+            <label className="cinema-check" title="Подтверждение, что выход усилителя замкнут на эквивалент антенны 50 Ом, а не на открытый эфир. Без этого старт заблокирован.">
               <input type="checkbox" checked={ohm} onChange={(e) => setOhm(e.target.checked)} />
               Нагрузка 50 Ом на выходе усилителя
             </label>
