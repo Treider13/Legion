@@ -77,6 +77,7 @@ import {
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
+import { heroStatusLine } from "../src/components/cinema/status";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -461,7 +462,7 @@ async function main(): Promise<void> {
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("FPGA+сканер: сканер — глаза цикла (детект → handoff)", scannerParticipates("fpga") === true);
-  check("FPGA+сканер имя", patternLabelRu("fpga") === "FPGA+СКАНЕР");
+  check("автоперехват имя", patternLabelRu("fpga") === "АВТОПЕРЕХВАТ");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
@@ -1441,6 +1442,49 @@ async function main(): Promise<void> {
   check("cinema live при capture (busy, не armed)", cinemaIsLive({ ...idleLive, fpgaBusy: true }) === true);
   check("cinema live при ARM", cinemaIsLive({ ...idleLive, fpgaArmed: true }) === true);
 
+  // --- Кино: автоматический перехват (FPGA+сканер из мастера, не лаборатория) ---
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "2400");
+  useLegion.getState().setSdrAllowField("sdrF2", "2500");
+  useLegion.getState().setSdrLoad(true);
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  const autoOk = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "auto",
+    windowMhz: "5", dwellMs: "1500", dispatch: "priority",
+  });
+  const autoSt = useLegion.getState();
+  check("кино перехват: старт поднял скан-фазу", autoOk === true && autoSt.scanRunning === true);
+  check("кино перехват: scanPattern=fpga, не fpgaArm",
+    autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
+  check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
+  check("кино перехват: канал 5 МГц записан", autoSt.fpgaAirBwMhz === "5");
+  useLegion.getState().stopScan();
+  const autoTurn = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "auto",
+    windowMhz: "2", dwellMs: "1500", dispatch: "turn",
+  });
+  const autoTurnSt = useLegion.getState();
+  check("кино перехват: очередь + выдержка записаны",
+    autoTurn === true && autoTurnSt.autoDispatch === "turn" && autoTurnSt.fpgaTurnDwellMs === "1500");
+  useLegion.getState().stopScan();
+
+  // --- Кино: ручной порог чувствительности для автономного эфира ---
+  useLegion.getState().setFpgaDetThr(5000);
+  await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "air",
+    windowMhz: "100", dwellMs: "500", pattern: "sweep", detThr: "7000",
+  });
+  check("кино эфир: ручной порог из мастера записан в стор (уйдёт в ARM как det_thr)",
+    useLegion.getState().fpgaDetThr === 7000);
+
+  // Регрессия: уставший fpgaStatus (ok:false из лабораторного СТАТУСа без
+  // шлюза) не должен красить новый цикл в ОШИБКУ — вход в ARM чистит статус.
+  // (fpgaArm ставит busy до первого await — доезжает и без Tauri.)
+  useLegion.setState({ fpgaStatus: { ok: false, reason: "старый провал" } });
+  await useLegion.getState().fpgaArm();
+  check("fpgaArm чистит уставший fpgaStatus на входе",
+    useLegion.getState().fpgaStatus === null);
+
   const genBeforeAbort = peekFpgaSoloGen();
   useLegion.getState().abortFpgaSolo();
   check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
@@ -1490,8 +1534,98 @@ async function main(): Promise<void> {
   check("нет устаревшего «чип видит центр, не обход» (air-обход существует)",
     !storeSrc.includes("не обход F1–F2"));
   const appSrc = readFileSync(join(here, "../src/App.tsx"), "utf8");
-  check("hero различает авто-цикл сканера и автономный эфир",
-    appSrc.includes("fpgaAutoCycle") && appSrc.includes("ЭФИР→УСИЛИТЕЛЬ · НАБЛЮДЕНИЕ"));
+  const statusSrc = readFileSync(join(here, "../src/components/cinema/status.ts"), "utf8");
+  check("hero: статус считается чистой функцией heroStatusLine",
+    appSrc.includes("heroStatusLine(") && statusSrc.includes("export function heroStatusLine"));
+  check("hero idle: частота по контексту режима (SDR — центр коридора, не поле ESP32)",
+    appSrc.includes("idleFreqMhz") && appSrc.includes('mode === "sdr"'));
+  check("hero: состояния ОЖИДАНИЕ/ПОИСК/РЕТРАНСЛЯЦИЯ/ОШИБКА",
+    ["ОЖИДАНИЕ", "ПОИСК", "РЕТРАНСЛЯЦИЯ", "ОШИБКА"].every((t) => statusSrc.includes(t)));
+  check("hero: гейт открыт/закрыт различён",
+    statusSrc.includes("гейт открыт") && statusSrc.includes("гейт закрыт"));
+  check("hero: watchdog = ОШИБКА с понятным текстом",
+    statusSrc.includes("wd_fired") && statusSrc.includes("сторожевой таймер погасил TX"));
+  const heroBase = {
+    scanRunning: false, transmitArmed: false, corridorRunning: false, signalTxActive: false,
+    fpgaArmed: false, fpgaBusy: false, fpgaMode: "player", fpgaStatus: null,
+    lastForwardMhz: null, lastInterceptMhz: null, scanCenterMhz: null, telemFreq: null, freqMhz: "2475.000",
+  } as const;
+  const heroIdle = heroStatusLine(heroBase);
+  check("hero: idle → ОЖИДАНИЕ с частотой", heroIdle.kind === "idle" && heroIdle.text === "ОЖИДАНИЕ" && heroIdle.detail.includes("2475"));
+  const heroSearch = heroStatusLine({ ...heroBase, scanRunning: true, scanCenterMhz: 2450 });
+  check("hero: сканер → ПОИСК", heroSearch.kind === "search" && heroSearch.text === "ПОИСК" && heroSearch.detail.includes("2450"));
+  const heroRelay = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: true }, lastForwardMhz: 2442.5,
+  });
+  check("hero: гейт открыт → РЕТРАНСЛЯЦИЯ зелёная",
+    heroRelay.kind === "relay" && heroRelay.detail.includes("гейт открыт") && heroRelay.detail.includes("2442.500"));
+  const heroRelayWait = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: false }, lastForwardMhz: 2442.5,
+  });
+  check("hero: гейт закрыт → РЕТРАНСЛЯЦИЯ жёлтая (ждём сигнал)",
+    heroRelayWait.kind === "relay-wait" && heroRelayWait.detail.includes("гейт закрыт"));
+  const heroWd = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: watchdog → ОШИБКА", heroWd.kind === "error" && heroWd.detail.includes("сторожевой"));
+  const heroWarn = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: true, warn: "непрерывная работа 6 мин — проверьте охлаждение" },
+    lastForwardMhz: 2442.5,
+  });
+  check("hero: warn шлюза (длительная работа) виден в статусе ретрансляции",
+    heroWarn.kind === "relay" && heroWarn.detail.includes("охлаждение"));
+  // Регрессия: ОШИБКА обязана переживать снятие ARM стором (стор делает
+  // fpgaDisarm сразу — ветка «только при fpgaArmed» была недостижима).
+  const heroWdLatched = heroStatusLine({
+    ...heroBase, fpgaArmed: false, scanRunning: false,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: watchdog → ОШИБКА держится и после снятия ARM",
+    heroWdLatched.kind === "error" && heroWdLatched.detail.includes("сторожевой"));
+  const heroWdRecovered = heroStatusLine({
+    ...heroBase, fpgaArmed: false, scanRunning: true, scanCenterMhz: 2450,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: авто-цикл восстановился (скан) — не пугаем ОШИБКОЙ",
+    heroWdRecovered.kind === "search");
+  // Stale-тревога не маскирует живой соседний тракт (ESP32-коридор после
+  // остановки FPGA с wd_fired в последнем статусе).
+  const heroWdCorridor = heroStatusLine({
+    ...heroBase, corridorRunning: true, telemFreq: 2442,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает живому коридору ESP32",
+    heroWdCorridor.kind === "tx" && heroWdCorridor.text === "КОРИДОР");
+  const heroWdTx = heroStatusLine({
+    ...heroBase, transmitArmed: true, lastForwardMhz: 2450,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает живой передаче", heroWdTx.kind === "tx" && heroWdTx.text === "ПЕРЕДАЧА");
+  const heroWdBusy = heroStatusLine({
+    ...heroBase, fpgaBusy: true, fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает handoff в полёте (busy → ПОИСК)",
+    heroWdBusy.kind === "search");
+  const heroDeadBusy = heroStatusLine({
+    ...heroBase, fpgaBusy: true, fpgaStatus: { ok: false, reason: "нет ответа шлюза" },
+  });
+  check("hero: шлюз умер в полёте (busy) → ОШИБКА", heroDeadBusy.kind === "error");
+  const heroDeadIdle = heroStatusLine({ ...heroBase, fpgaStatus: { ok: false, reason: "x" } });
+  check("hero: лабораторный СТАТУС без шлюза в idle — без ложной тревоги",
+    heroDeadIdle.kind === "idle");
+  const heroGenWarn = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "player",
+    fpgaStatus: { ok: true, warn: "непрерывная работа 6 мин — проверьте охлаждение" },
+    lastForwardMhz: 2450,
+  });
+  check("hero: warn виден и в генерации (player), не только в ретрансляции",
+    heroGenWarn.kind === "tx" && heroGenWarn.detail.includes("охлаждение"));
+  const heroCorr = heroStatusLine({ ...heroBase, corridorRunning: true, telemFreq: 2442 });
+  check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
   check("air gen после ensureSdrBand, не до валидации",
@@ -1527,6 +1661,64 @@ async function main(): Promise<void> {
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
+  check("cinema: путь автоматического перехвата в мастере",
+    gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("cinema перехват: стратегии приоритет/очередь на шаге walk",
+    gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
+  check("cinema auto: runSmartStart ставит fpga-паттерн и зовёт startScan, не ARM",
+    runSrc.includes('opts.path === "auto"') && runSrc.includes('setScanPattern("fpga")') && runSrc.includes("s.startScan()"));
+  check("cinema auto: канал и выдержка очереди пишутся в стор",
+    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
+  check("cinema air: ручной порог из мастера пишется в стор",
+    gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
+  // Регрессия: окно детектора в мастере — от реального канала (fs следует за
+  // полосой), а не фиксированные 8 мкс при любом канале.
+  check("cinema перехват: окно детектора от канала (airTractParams), не константа",
+    gateSrc.includes("airTractParams(parseFloat(windowMhz), analogMax, detShift)"));
+  const navSrc = readFileSync(join(here, "../src/components/WorkspaceNav.tsx"), "utf8");
+  const scanSrc = readFileSync(join(here, "../src/components/ScanPanel.tsx"), "utf8");
+  const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
+  check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
+  check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
+    !scanSrc.includes("конвейер") && !scanSrc.includes("КОНВЕЙЕР"));
+  check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
+  check("жаргон убран: пользовательские строки стора без «конвейер на SDR»/«det_thr=»",
+    !storeSrc.includes("конвейер на SDR, ноутбук") && !storeSrc.includes("det_thr=${detThr}"));
+  check("док кино зовёт в перехват", dockSrc.includes("перехват"));
+  const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
+  check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",
+    setupSrc.includes("SoapySDRUtil --info") && !setupSrc.includes("SoapySDRUtil --find"));
+  const installSrc = readFileSync(join(here, "../../INSTALL.md"), "utf8");
+  check("INSTALL.md: Quartus, приёмка, шлюз",
+    installSrc.includes("Quartus Prime Lite 23.1.1") && installSrc.includes("run_acceptance.sh")
+    && installSrc.includes("legion_gateway.py"));
+  check("INSTALL.md: desktop Tauri требует Rust и webkit (иначе чистая Ubuntu упадёт)",
+    installSrc.includes("rustup") && installSrc.includes("libwebkit2gtk-4.1-dev"));
+  check("setup.sh: cargo проверяется как warn (desktop-only)",
+    setupSrc.includes("cargo"));
+  check("мастер без жаргона player/NCO в тексте для оператора",
+    !gateSrc.includes("player/NCO"));
+  const soakSrc = readFileSync(join(here, "../../fpga/test/soak_bench.py"), "utf8");
+  check("soak: silent-loss только при наличии armed_s (совместимость со старым шлюзом)",
+    soakSrc.includes('"armed_s" in st'));
+  check("soak: x40 без --ssh — честный отказ (LO шлюзом не паркуется)",
+    soakSrc.includes('board == "x40" and not fake') && soakSrc.includes("bladeRF-cli"));
+  check("soak: x40 парковка LO между release и acquire",
+    soakSrc.indexOf('"action": "release"') < soakSrc.indexOf("bladeRF-cli -e")
+    && soakSrc.indexOf("bladeRF-cli -e") < soakSrc.indexOf('"action": "acquire"'));
+  check("soak: PASS только за полный срок (ранний чистый прогон = НЕПОЛНЫЙ, код 2)",
+    soakSrc.includes("НЕПОЛНЫЙ") && soakSrc.includes("full = elapsed >=") && soakSrc.includes("2 if clean"));
+  const accSrc = readFileSync(join(here, "../../fpga/test/acceptance_bench.py"), "utf8");
+  check("приёмка E6: размер FPGA явный (--size) — xA4/xA9 по USB PID не различить",
+    accSrc.includes('"--size"') && accSrc.includes("legionx{size}.rbf"));
+  check("INSTALL.md: pyusb на шлюзе системным пакетом (PEP 668), не голым pip",
+    installSrc.includes("python3-usb"));
+  const unitSrc = readFileSync(join(here, "../../fpga/systemd/legion-gateway.service"), "utf8");
+  check("systemd unit: зависимость python3-usb и таймер охлаждения задокументированы",
+    unitSrc.includes("python3-usb") && unitSrc.includes("LEGION_ARM_WARN_S"));
+  const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
+  check("раннер приёмки уважает .venv (INSTALL.md §2)",
+    runnerSrc.includes(".venv/bin/python"));
   check("cinema air: выдержка/порядок — свои поля",
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",
@@ -1535,6 +1727,9 @@ async function main(): Promise<void> {
   check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
+  const fpgaStatusClears = (storeSrc.match(/set\(\{ fpgaBusy: true[^}]*fpgaStatus: null \}\)/g) || []).length;
+  check("все входа ARM (handoff/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
+    fpgaStatusClears >= 3);
   check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
   check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
   check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
@@ -1547,7 +1742,8 @@ async function main(): Promise<void> {
   check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
   check("ручной fpgaArm держит метку fpgaPath solo в UI", armBlock.includes('fpgaPath: air ? "air" : "solo"'));
   check("fpgaArm busy до первого await (кино-старт откажет)",
-    armBlock.indexOf("set({ fpgaBusy: true })") > 0 && armBlock.indexOf("set({ fpgaBusy: true })") < armBlock.indexOf("await get().stopTransmit()"));
+    armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") > 0
+    && armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM",
     armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));

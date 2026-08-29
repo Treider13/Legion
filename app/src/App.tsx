@@ -12,6 +12,7 @@ import { CinemaDock } from "./components/cinema/CinemaDock";
 import { FrequencyField } from "./components/cinema/FrequencyField";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
 import { StartGate } from "./components/cinema/StartGate";
+import { heroStatusLine } from "./components/cinema/status";
 import { modeOf } from "./sense/modes";
 import { useDeviceTier } from "./hooks/useDeviceTier";
 import { uiClick } from "./sound/sound";
@@ -49,9 +50,40 @@ function App() {
   const corridorRunning = useLegion((s) => s.corridorRunning);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
+  const signalTxActive = useLegion((s) => s.signalTxActive);
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
+  const fpgaBusy = useLegion((s) => s.fpgaBusy);
   const fpgaMode = useLegion((s) => s.fpgaMode);
-  const fpgaAutoCycle = useLegion((s) => s.fpgaAutoCycle);
+  const fpgaStatus = useLegion((s) => s.fpgaStatus);
+  const lastForwardMhz = useLegion((s) => s.lastForwardMhz);
+  const lastInterceptMhz = useLegion((s) => s.lastInterceptMhz);
+  const scanCenterMhz = useLegion((s) => s.scanCenterMhz);
+  const telemFreq = useLegion((s) => s.telemFreq);
+  const freqMhz = useLegion((s) => s.freqMhz);
+  const sdrF1 = useLegion((s) => s.sdrF1);
+  const sdrF2 = useLegion((s) => s.sdrF2);
+  // Idle-частота по контексту режима: в SDR — центр рабочего коридора,
+  // в ESP32 — поле синтезатора. Иначе в SDR idle показывалась бы частота
+  // чужого тракта (ADF4351), не имеющая отношения к плате bladeRF.
+  const idleFreqMhz =
+    mode === "sdr"
+      ? String(((parseFloat(sdrF1) || 2400) + (parseFloat(sdrF2) || 2500)) / 2)
+      : freqMhz;
+  const hero = heroStatusLine({
+    scanRunning,
+    transmitArmed,
+    corridorRunning,
+    signalTxActive,
+    fpgaArmed,
+    fpgaBusy,
+    fpgaMode,
+    fpgaStatus,
+    lastForwardMhz,
+    lastInterceptMhz,
+    scanCenterMhz,
+    telemFreq,
+    freqMhz: idleFreqMhz,
+  });
 
   useEffect(() => {
     return useLegion.subscribe((s) => {
@@ -108,20 +140,9 @@ function App() {
                   : "ESP32 · USB"}
             </span>
           </header>
-          <div className={`hero-status ${transmitArmed || corridorRunning || scanRunning || fpgaArmed ? "alert" : ""}`}>
-            {fpgaArmed
-              ? fpgaMode === "lb_gated"
-                ? fpgaAutoCycle
-                  ? "РЕЖИМ SDR · FPGA+СКАНЕР · НАБЛЮДЕНИЕ"
-                  : "РЕЖИМ SDR · FPGA · ЭФИР→УСИЛИТЕЛЬ · НАБЛЮДЕНИЕ"
-                : "РЕЖИМ SDR · FPGA · ЗАДАЧА С НОУТБУКА"
-              : transmitArmed
-                ? "РЕЖИМ SDR · TX → УСИЛИТЕЛЬ"
-                : scanRunning
-                  ? "РЕЖИМ SDR · СКАН"
-                  : corridorRunning
-                    ? "РЕЖИМ ESP32 · КОРИДОР"
-                    : "ОЖИДАНИЕ"}
+          <div className={`hero-status st-${hero.kind}`} role="status" aria-live="polite">
+            <span>{hero.text}</span>
+            {hero.detail && <span className="hero-status-detail">{hero.detail}</span>}
           </div>
         </div>
       </section>

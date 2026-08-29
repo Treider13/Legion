@@ -55,7 +55,7 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ";
     case "fpga":
-      return "FPGA+СКАНЕР";
+      return "АВТОПЕРЕХВАТ";
   }
 }
 
@@ -70,7 +70,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
     case "fpga":
-      return "FPGA+СКАНЕР (конвейер на SDR, µs · ноутбук наблюдает)";
+      return "Автоматический перехват (сканер → ретрансляция в FPGA, µs · ноутбук наблюдает)";
   }
 }
 
@@ -101,8 +101,8 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        "FPGA+сканер: сканер находит пик → парковка LO → ARM lb_gated (конвейер I²+Q²→RX→TX на SDR, µs). " +
-        "Энергия пропала / watchdog / СТОП → DISARM и возврат к скану. Ноутбук наблюдает и стопит",
+        "Автоматический перехват: сканер находит сигнал → парковка LO → ретрансляция RX→TX в FPGA (µs). " +
+        "Сигнал пропал / сторож / СТОП → возврат к поиску. Ноутбук наблюдает и стопит",
     };
   }
   if (pattern === "auto") {

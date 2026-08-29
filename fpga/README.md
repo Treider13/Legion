@@ -246,9 +246,14 @@ ARM lb_* на micro не взведётся (и это видно в ответ�
 
 ```bash
 pip install -r fpga/requirements.txt
-python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--board micro] [--skip-e6]
+fpga/test/run_acceptance.sh --gw <IP шлюза> [--board micro] [--ssh user@шлюз] [--skip-e6]
 # --board можно не давать: агент отвечает board в ping, скрипт сам определит.
+# --ssh: SoapySDRServer на шлюзе поднимается/гасится автоматически (иначе —
+# паузы Enter). Лог и JSON-отчёт — в fpga/test/results/.
 ```
+
+**Без зелёного прогона E1–E6 на целевой плате система стабильной не
+считается** — симуляция и хост-тесты не подменяют стенд.
 
 | Этап | Что скрипт делает | Критерий |
 |---|---|---|
@@ -261,3 +266,24 @@ python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--board micro] [--sk
 
 Один владелец USB: скрипт сам гоняет `usb release/acquire` агента вокруг
 стрим-фаз (SoapySDRServer на шлюзе поднимается вручную по подсказке).
+
+## Soak-тест (длительная работа, 8–24 ч)
+
+После зелёной приёмки — длительный прогон ретрансляции (lb_gated, нагрузка
+50 Ом). Скрипт держит ARM, шлёт heartbeat как приложение, пишет JSONL-журнал
+каждого опроса и считает перезапуски (watchdog), ошибки и предупреждения
+шлюза об охлаждении:
+
+```bash
+python3 fpga/test/soak_bench.py --gw <IP шлюза> --hours 8 [--freq 2450] [--det-thr 1000]
+# x40: LO шлюзом не паркуется (LMS6002D настраивает хост) — дайте --ssh
+# user@<шлюз>: скрипт сам сделает release → bladeRF-cli set frequency → acquire.
+# micro: LO уходит в ARM через freq_mhz, --ssh не нужен.
+```
+
+Отчёт — `fpga/test/results/soak-<время>.md` (вердикт PASS/FAIL), журнал —
+рядом `.jsonl`. Артефакты реального стенда коммитятся осознанно
+(`git add -f fpga/test/results/...`) — это и есть доказательство стабильности
+платы. Температуры AD9361 в этой NIOS-сборке нет (командный набор RFIC без
+неё) — вместо неё таймер длительной работы `LEGION_ARM_WARN_S` (дефолт 5 мин)
+с предупреждением в status и в UI.

@@ -35,7 +35,16 @@ libusb_close роняет Intel XHCI).
 LEGION_FPGA_TOKEN — токен доступа; LEGION_FPGA_PORT (5531);
 LEGION_KICK_TIMEOUT_S (2.5) — сторож kick_age; LEGION_DET_THR_FLOOR (1) —
 пол порога lb_gated; LEGION_FPGA_RBF — образ для автозагрузки, если FPGA
-пустая после re-enumerate (питание xA4 — от USB).
+пустая после re-enumerate (питание xA4 — от USB);
+LEGION_ARM_WARN_S (300) — длительная непрерывная работа: предупреждение
+в status (поле warn) — проверить охлаждение / снизить мощность.
+
+Температура AD9361: в этой NIOS-сборке чтения нет — командный набор RFIC
+вендоренного дерева (bladerf2_common.h, BLADERF_RFIC_COMMAND_*) покрывает
+0x00–0x0B без температуры; bladerf_get_rfic_temperature в нашем подмножестве
+libbladeRF — только объявление в bladeRF2.h. Честный заменитель — таймер
+непрерывного ARM (armed_s + warn в status). Реальное чтение температуры =
+новая RFIC-команда в NIOS + пересборка Quartus (будущая работа).
 """
 from __future__ import annotations
 
@@ -89,6 +98,10 @@ LEGION_RBF_RE = re.compile(r"^legion_?x(40|a4|a9)\.rbf$", re.IGNORECASE)
 # железо, затем NIOS (legion_work), шлюз убирает USB последним слоем.
 # 0 = выключить (не рекомендуется). Kick приложения = 500 мс.
 KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
+
+# Длительная непрерывная работа под током: предупреждение оператору в status
+# (температуры AD9361 в этой NIOS-сборке нет — см. шапку). 0 = выключить.
+ARM_WARN_S = float(os.environ.get("LEGION_ARM_WARN_S", "300"))
 
 
 class UsbTransport:
@@ -682,6 +695,13 @@ class LegionGateway:
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
             st["legion"] = self._legion
+            # Длительная работа под током: честный заменитель термометра
+            # (чтения температуры AD9361 в этой NIOS-сборке нет).
+            armed_s = (time.monotonic() - self._armed_at) if self._armed else 0.0
+            st["armed_s"] = int(armed_s)
+            if self._armed and ARM_WARN_S > 0 and armed_s >= ARM_WARN_S:
+                st["warn"] = (f"непрерывная работа {int(armed_s) // 60} мин — "
+                              "проверьте охлаждение платы или сделайте паузу / снизьте мощность")
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
