@@ -53,8 +53,9 @@ ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
 обычного пользователя), возьмите их из дерева Nuand:
 [host/misc/udev](https://github.com/Nuand/bladeRF/tree/master/host/misc/udev)
 — там шаблоны `88-nuand-bladerf1.rules.in` / `88-nuand-bladerf2.rules.in`
-(подстановка `@VAR@` тривиальна: группа `plugdev`, режим `0660`; готовые
-варианты есть и в пакете `libbladerf2`/`bladerf` большинства сборок).
+(подстановка `@BLADERF_GROUP@` → группа `plugdev` — дефолт в их CMake,
+режим `660`; готовые варианты есть и в пакете `libbladerf2`/`bladerf`
+большинства сборок).
 Копировать в `/etc/udev/rules.d/` с расширением `.rules`, затем
 `sudo udevadm control --reload && sudo udevadm trigger`. Шлюз и приёмка
 работают от обычного пользователя; root не нужен.
