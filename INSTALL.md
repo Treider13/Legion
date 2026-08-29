@@ -45,13 +45,17 @@ node --version               # ≥ 20
 Пакет `bladerf` из Ubuntu обычно ставит правила сам. Проверка:
 
 ```bash
-ls /etc/udev/rules.d/ | grep -i bladerf   # или 88-nuand-bladerf.rules в /lib/udev/rules.d/
+dpkg -L bladerf libbladerf2 2>/dev/null | grep udev   # готовые правила пакета
+ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
 ```
 
 Если правил нет (плата видна только под root — `bladeRF-cli -p` молчит у
-обычного пользователя), поставьте их из дерева Nuand:
+обычного пользователя), возьмите их из дерева Nuand:
 [host/misc/udev](https://github.com/Nuand/bladeRF/tree/master/host/misc/udev)
-— скопировать `88-nuand-bladerf.rules` в `/etc/udev/rules.d/`, затем
+— там шаблоны `88-nuand-bladerf1.rules.in` / `88-nuand-bladerf2.rules.in`
+(подстановка `@VAR@` тривиальна: группа `plugdev`, режим `0660`; готовые
+варианты есть и в пакете `libbladerf2`/`bladerf` большинства сборок).
+Копировать в `/etc/udev/rules.d/` с расширением `.rules`, затем
 `sudo udevadm control --reload && sudo udevadm trigger`. Шлюз и приёмка
 работают от обычного пользователя; root не нужен.
 
