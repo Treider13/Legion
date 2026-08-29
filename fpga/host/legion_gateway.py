@@ -204,8 +204,9 @@ class UsbTransport:
         try:
             if self._dev is not None:
                 self._usb.util.dispose_resources(self._dev)
-        except Exception:
-            pass
+        except Exception as e:
+            # Не фатально (handle и так мёртв), но молчание прятало сбой шины.
+            print(f"legion-gateway: dispose_resources при re-acquire: {e}", flush=True)
         self._dev = None
         time.sleep(0.2)
         self._acquire()

@@ -73,6 +73,13 @@ def _reply(**kw: Any) -> None:
     sys.stdout.flush()
 
 
+def _log(msg: str) -> None:
+    """Диагностика — в stderr: stdout занят RPC-протоколом, а stderr
+    Tauri наследует (sdr.rs) — строки видны в консоли приложения."""
+    sys.stderr.write(f"[sdr_worker] {msg}\n")
+    sys.stderr.flush()
+
+
 def parse_args(s: str) -> dict[str, str]:
     """Soapy Kwargs из строки. SoapyRemote: driver=remote,remote=tcp://host:55132
     (wiki SoapyRemote / 0xfeed). Не режем tcp:// по запятой — запятых в URL нет."""
@@ -135,8 +142,8 @@ def soapy_hw_snapshot(dev: Any) -> dict[str, Any]:
     try:
         raw = dev.getHardwareInfo()
         info = {str(k): str(v) for k, v in dict(raw).items()}
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"getHardwareInfo не удался (класс платы — только по hardwareKey): {e}")
     return {"hardwareKey": key, "info": info, "class": classify_bladerf_hw(key, info)}
 
 
@@ -866,20 +873,20 @@ class Radio:
                     if self.rx is not None:
                         self.dev.deactivateStream(self.rx)
                         self.dev.closeStream(self.rx)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"close: RX-стрим не закрылся чисто: {e}")
                 try:
                     if self.tx is not None:
                         self.dev.deactivateStream(self.tx)
                         self.dev.closeStream(self.tx)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"close: TX-стрим не закрылся чисто: {e}")
                 # Детерминированный unmake USB-handle (SoapySDR issue #225:
                 # иначе устройство занято до сборки мусора → -7 при re-open).
                 try:
                     self.dev.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"close: Soapy Device.close() отказал — re-open может дать -7: {e}")
             self.dev = None
             self.rx = None
             self.tx = None
@@ -898,8 +905,8 @@ class Radio:
             if self.dev is not None and SOAPY:
                 try:
                     self.dev.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"unmake: Soapy Device.close() отказал: {e}")
             self.dev = None
             self.rx = None
             self.tx = None
@@ -1019,6 +1026,9 @@ class Radio:
         thr = self._rx_cap_thr
         if thr is not None and thr.is_alive():
             thr.join(timeout=2.5)
+            if thr.is_alive():
+                # Поток-демон умрёт с процессом, но до тех пор держит readStream.
+                _log("RX-захват пережил join 2.5 с — readStream завис в Soapy (плата отвалилась?)")
         self._rx_cap_thr = None
 
     def _start_rx_capture(self) -> None:
@@ -1039,6 +1049,7 @@ class Radio:
         if not NUMPY:
             return
         buf = np.zeros(TRANSFER_SAMPLES, dtype=np.complex64)
+        last_err_log = 0.0
         while not self._rx_cap_stop.is_set():
             if self._rx_pause.is_set() or not self._rx_on or self.dev is None or self.rx is None:
                 time.sleep(0.0002)
@@ -1050,7 +1061,13 @@ class Radio:
                     continue
                 try:
                     sr = self.dev.readStream(self.rx, [buf], TRANSFER_SAMPLES, timeoutUs=timeout)
-                except Exception:
+                except Exception as e:
+                    # Ретрай осознанный (краткий сбой шины), но молчание при
+                    # мёртвой плате — было слепым пятном: лог не чаще раза в 5 с.
+                    now = time.monotonic()
+                    if now - last_err_log >= 5.0:
+                        last_err_log = now
+                        _log(f"readStream исключение (ретрай): {e}")
                     time.sleep(0.001)
                     continue
                 if self._rx_pause.is_set():
@@ -1656,6 +1673,8 @@ class Radio:
         if self._thr:
             # writeStream timeoutUs ≥ 1s — join должен переживать один блокирующий write
             self._thr.join(timeout=3.0)
+            if self._thr.is_alive():
+                _log("TX-поток пережил join 3 с — writeStream завис в Soapy; стрим закрываем из-под него")
             self._thr = None
         self.tx_mhz = None
         self.tx_error = None
@@ -1665,8 +1684,8 @@ class Radio:
                 try:
                     self.dev.deactivateStream(self.tx)
                     self.dev.closeStream(self.tx)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"tx_off: TX-стрим не закрылся чисто: {e}")
                 self.tx = None
 
 
@@ -1681,31 +1700,33 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
 
 
 def _setup_front_end(dev: Any, can_tx: bool) -> None:
-    """Антенна/gain/DC как DIO-sys capture.cpp. AGC не включаем — на антенне качает пол."""
+    """Антенна/gain/DC как DIO-sys capture.cpp. AGC не включаем — на антенне качает пол.
+    Каждый шаг best-effort (не все платы/драйверы всё умеют), но отказ — в лог:
+    молчаливый пропуск setGain оставлял бы тракт на неизвестном усилении."""
     try:
         rx_ants = list(dev.listAntennas(SOAPY_SDR_RX, 0) or [])
         pick = next((a for a in rx_ants if str(a).upper() in ("RX", "RX1", "RX2", "LNAL", "LNAH")), None)
         if pick or rx_ants:
             dev.setAntenna(SOAPY_SDR_RX, 0, pick or rx_ants[0])
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: RX-антенна не выставлена: {e}")
     try:
         dev.setGainMode(SOAPY_SDR_RX, 0, False)
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: ручной gain mode RX не выставлен: {e}")
     try:
         dev.setGain(SOAPY_SDR_RX, 0, RX_GAIN_DB)
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: RX gain {RX_GAIN_DB} дБ не выставлен: {e}")
     # DIO-sys: bladerf_set_correction DCOFF_I/Q = 0, дальше интерполяция DC-бина.
     try:
         dev.setDCOffsetMode(SOAPY_SDR_RX, 0, False)
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: DC offset mode не выставлен: {e}")
     try:
         dev.setDCOffset(SOAPY_SDR_RX, 0, 0.0 + 0.0j)
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: DC offset не выставлен: {e}")
     if not can_tx:
         return
     try:
@@ -1713,17 +1734,18 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
         pick = next((a for a in tx_ants if "TX" in str(a).upper()), None)
         if pick or tx_ants:
             dev.setAntenna(SOAPY_SDR_TX, 0, pick or tx_ants[0])
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"setup: TX-антенна не выставлена: {e}")
     try:
         rng = dev.getGainRange(SOAPY_SDR_TX, 0)
         lo, hi = float(rng.minimum()), float(rng.maximum())
         dev.setGain(SOAPY_SDR_TX, 0, lo + 0.4 * (hi - lo))
-    except Exception:
+    except Exception as e:
+        _log(f"setup: TX gain из диапазона не выставлен ({e}) — пробую 20 дБ")
         try:
             dev.setGain(SOAPY_SDR_TX, 0, 20)
-        except Exception:
-            pass
+        except Exception as e2:
+            _log(f"setup: TX gain 20 дБ тоже не выставлен: {e2}")
 
 
 def _pick_fft_size(n: int) -> int:
