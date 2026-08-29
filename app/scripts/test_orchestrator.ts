@@ -1682,6 +1682,8 @@ async function main(): Promise<void> {
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
     !scanSrc.includes("конвейер") && !scanSrc.includes("КОНВЕЙЕР"));
   check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
+  check("жаргон убран: пользовательские строки стора без «конвейер на SDR»/«det_thr=»",
+    !storeSrc.includes("конвейер на SDR, ноутбук") && !storeSrc.includes("det_thr=${detThr}"));
   check("док кино зовёт в перехват", dockSrc.includes("перехват"));
   const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
   check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",

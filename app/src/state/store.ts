@@ -1124,7 +1124,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail(why);
         return;
       }
-      mark(`det_thr=${detThr}`);
+      mark(`порог=${detThr}`);
       // Операционная парковка на пик (на x40 это и есть рабочий LO; на micro
       // LO при ARM выставит NIOS по freq_mhz — парк тут для readback-честности).
       const pk = await hostPark(mhz, tract.bwMhz, tract.fsHz, true, true);
@@ -1180,7 +1180,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       });
       pushLog(
         "sys",
-        `Автоперехват: ретрансляция ${mhz.toFixed(3)} МГц · det_thr=${detThr} · конвейер на SDR, ноутбук наблюдает` +
+        `Автоперехват: ретрансляция ${mhz.toFixed(3)} МГц · порог=${detThr} · тракт на SDR, ноутбук наблюдает` +
           ` · ${handoffTimeline(t0, marks)}`,
       );
       beginFpgaKick();
