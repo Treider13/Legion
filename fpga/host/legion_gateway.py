@@ -903,8 +903,39 @@ def gateway_cleanup(gw: LegionGateway) -> None:
         print(f"legion-gateway: cleanup USB release: {e}", flush=True)
 
 
+def acquire_instance_lock() -> "object | None":
+    """Один экземпляр агента на машине. Два агента на одной плате делили бы
+    USB/FPGA (fx3 — один интерфейс): кооперативный release/acquire между
+    шлюзом и Soapy от двухголового агента не спасает. flock держим всю
+    жизнь процесса (смерть процесса = лок снят); путь — LEGION_FPGA_LOCK
+    (тесты), дефолт /tmp/legion-gateway.lock. Возвращает держателя лока
+    (не закрывать!) или None, если агент уже запущен."""
+    try:
+        import fcntl  # Unix-only; целевая ОС агента — Linux (INSTALL.md)
+    except ImportError:
+        return True  # не Unix: лок не поддержан — не блокируем запуск
+    path = os.environ.get("LEGION_FPGA_LOCK", "/tmp/legion-gateway.lock")
+    fd = open(path, "w")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fd.close()
+        return None
+    return fd
+
+
 def main() -> int:
     port = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
+    if not FAKE:
+        # FAKE — проверка протокола без железа: USB не трогает, лок не нужен
+        # (иначе тестовый агент на стенде с живым агентом не поднялся бы).
+        lock = acquire_instance_lock()
+        if lock is None:
+            print("legion-gateway: уже запущен (flock "
+                  f"{os.environ.get('LEGION_FPGA_LOCK', '/tmp/legion-gateway.lock')}) — "
+                  "второй экземпляр делил бы USB с первым; сначала остановите его "
+                  "(systemctl stop legion-gateway)", flush=True)
+            return 2
     gw = LegionGateway(FAKE)
 
     def _on_signal(signum, frame) -> None:

@@ -1084,5 +1084,23 @@ srv3.shutdown()
 srv3.server_close()
 lg.CLIENT_TIMEOUT_S = 300.0
 
+# ---------------------------------------------------------------------------
+# 7. Один экземпляр агента (flock): второй захват на том же пути отказывает.
+#    Два открытых fd на один файл = два open-file-description → конфликт
+#    воспроизводится внутри одного процесса, второй агент не нужен.
+# ---------------------------------------------------------------------------
+os.environ["LEGION_FPGA_LOCK"] = f"/tmp/legion-test-lock-{os.getpid()}"
+h1 = lg.acquire_instance_lock()
+check("instance lock: первый захват получен", h1 is not None)
+h2 = lg.acquire_instance_lock()
+check("instance lock: второй экземпляр отказан", h2 is None)
+if h1 is not None and h1 is not True:
+    h1.close()  # смерть процесса сняла бы лок; здесь закрываем явно
+h3 = lg.acquire_instance_lock()
+check("instance lock: после освобождения захват снова возможен", h3 is not None)
+if h3 is not None and h3 is not True:
+    h3.close()
+os.environ.pop("LEGION_FPGA_LOCK")
+
 print("LEGION FPGA HOST: ALL PASS" if fails == 0 else f"LEGION FPGA HOST: {fails} FAILURES")
 sys.exit(0 if fails == 0 else 1)
