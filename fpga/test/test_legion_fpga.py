@@ -837,18 +837,20 @@ check("micro: эфир предыдущего ARM жив (AIR_PREP не отка
 gw_m.fpga._t.fail_ctrl_write = False
 rpcm({"op": "disarm"})
 
-# Solo: fs/BW окна до AIR_PREP. Без полей — регистры не пишутся (NIOS 2 МГц).
+# Solo: fs/BW окна до AIR_PREP. Без полей — пишется ЯВНЫЙ дефолт (0 = NIOS
+# 2 МГц, WD_LIMIT=61): статики/регистры переживают сессии, «не писать»
+# работало бы только на свежей NIOS после питания.
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
-check("micro: без fs_hz AIR_FS не писали", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
-check("micro: эфир/без fs не пишет WD_LIMIT", lf.REG_WD_LIMIT not in gw_m.fpga._t.regs)
-check("micro: без bw_mhz AIR_BW не писали", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+check("micro: без fs_hz AIR_FS = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: без fs_hz WD_LIMIT = дефолт 61 явно", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
+check("micro: без bw_mhz AIR_BW = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
 
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
 check("micro: ARM lb_gated без fs → ok", r.get("ok") is True)
-check("micro: эфир не пишет AIR_FS (2 МГц NIOS)", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
-check("micro: эфир не пишет AIR_BW", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+check("micro: эфир без fs_hz пишет AIR_FS=0 (дефолт 2 МГц)", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: эфир без bw_mhz пишет AIR_BW=0", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
 
 check("wd limit 4 МГц = VHDL дефолт 61", lf.watchdog_limit_for_fs(2_000_000, "bladerf1") == 61)
@@ -881,6 +883,20 @@ r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune без det_thr не трогает DET_THR", gw_m.fpga._t.regs.get(lf.REG_DET_THR) == 4800)
 r = rpcm({"op": "tune"})
 check("micro: tune без freq_mhz → отказ", r.get("ok") is False)
+rpcm({"op": "disarm"})
+
+# Регресс порядка сессий: статики fs/bw и WD_LIMIT переживают DISARM.
+# ARM без fs_hz после 20-МГц сессии обязан получить дефолты явно — иначе
+# волна, снятая на 2 MSPS, игралась бы на 20 MSPS, а deadman растянулся
+# бы с ~2 с до ~10 с (305×65536/2e6).
+r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
+check("micro: ARM без fs после 20-МГц сессии → ok", r.get("ok") is True)
+check("micro: AIR_FS_HZ сброшен в дефолт после 20-МГц сессии",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: AIR_BW_HZ сброшен в дефолт после 20-МГц сессии",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
+check("micro: WD_LIMIT сброшен в 61 (не 305 прошлой сессии)",
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune после DISARM → отказ (не поднимаем TX)", r.get("ok") is False and "ARM" in (r.get("reason") or ""))

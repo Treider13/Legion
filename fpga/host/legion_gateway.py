@@ -427,15 +427,17 @@ class LegionGateway:
             if not self.fpga.set_air_freq_mhz(float(freq)):
                 return False, "micro: запись AIR_FREQ_KHZ не удалась"
             # fs/BW до AIR_PREP: NIOS читает статики в legion_air_up.
-            # Нет полей → статики 0 → дефолт 2 МГц (эфир lb_gated).
+            # Нет полей → пишем 0 (дефолт 2 МГц) ЯВНО: статики переживают
+            # сессии (air_down сбрасывает только gain), иначе ARM без fs/bw
+            # наследовал бы окно прошлой solo-сессии — волна/тон на чужой
+            # скорости.
             fs = msg.get("fs_hz")
-            if fs is not None and not self.fpga.set_air_fs_hz(int(fs)):
+            if not self.fpga.set_air_fs_hz(int(fs) if fs is not None else 0):
                 return False, "micro: запись AIR_FS_HZ не удалась"
             bw = msg.get("bw_mhz")
-            if bw is not None:
-                bw_hz = int(round(float(bw) * 1e6))
-                if not self.fpga.set_air_bw_hz(bw_hz):
-                    return False, "micro: запись AIR_BW_HZ не удалась"
+            bw_hz = int(round(float(bw) * 1e6)) if bw is not None else 0
+            if not self.fpga.set_air_bw_hz(bw_hz):
+                return False, "micro: запись AIR_BW_HZ не удалась"
             gain = msg.get("gain_db")
             if gain is not None and not self.fpga.set_air_gain_db(int(gain)):
                 return False, "micro: запись AIR_GAIN_DB не удалась"
@@ -605,12 +607,17 @@ class LegionGateway:
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
             # Solo fs > 2 МГц: дефолт WD_LIMIT=61 короче kick 500 мс
-            # (61×65536/10e6 ≈ 0.40 с на micro). Эфир без fs_hz — не трогаем.
+            # (61×65536/10e6 ≈ 0.40 с на micro). Без fs_hz дефолт пишем ЯВНО:
+            # регистр переживает сессии (сброс только по nios_reset) — иначе
+            # ARM наследовал бы limit прошлого fs (limit=854 от 56 МГц на
+            # тракте 2 МГц растянул бы deadman до ~28 с вместо ~1–2 с).
             fs_wd = msg.get("fs_hz")
             if fs_wd is not None:
                 limit = lf.watchdog_limit_for_fs(int(fs_wd), self.board)
-                if not self.fpga.set_watchdog(limit):
-                    return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
+            else:
+                limit = lf.WD_LIMIT_DEFAULT
+            if not self.fpga.set_watchdog(limit):
+                return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
