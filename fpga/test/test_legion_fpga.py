@@ -656,6 +656,12 @@ check("flash probe: причина называет оба size",
       "xa4" in gw_p._flash["log"] and "xa9" in gw_p._flash["log"])
 check("flash probe: до записи не дошло (-l/-L не вызывался)",
       not any(("-l" in c or "-L" in c) for c in _probe_calls))
+# UI показывает st.reason ?? st.log (store.ts) — при отказе probe reason
+# обязан нести само сообщение, а не обобщённый «bladeRF-cli отказ»
+# (bladeRF-cli -l/-L не вызывался — обвинять его было бы ложным следом).
+r = gw_p.handle({"op": "flash_status"})
+check("flash probe: flash_status reason = сообщение отказа, не «bladeRF-cli отказ»",
+      "отказано до записи" in str(r.get("reason")) and "bladeRF-cli отказ" not in str(r.get("reason")))
 
 # A4-плата + образ A4 → запись идёт.
 gw_p2 = _mk_flash_gw()

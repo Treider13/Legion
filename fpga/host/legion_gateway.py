@@ -565,6 +565,7 @@ class LegionGateway:
         log = ""
         warn = ""
         ok = False
+        refused = False  # отказ проверки size ДО записи — не вина bladeRF-cli
         try:
             if self.fake:
                 time.sleep(0.2)  # протокол без железа: имитация длительности
@@ -586,6 +587,7 @@ class LegionGateway:
                 want = _rbf_size_key(path)
                 if probed is not None and want is not None and probed != want:
                     ok = False
+                    refused = True
                     log = (f"отказано до записи: bladeRF-cli -p видит FPGA {probed}, "
                            f"а образ для {want} ({os.path.basename(path)}) — "
                            f"неверный size; проверьте плату и файл")
@@ -613,7 +615,7 @@ class LegionGateway:
                         f"Soapy на шлюзе не остановлен или FPGA не сконфигурировалась")
         finally:
             self._flash.update({"running": False, "done": True, "ok": ok,
-                                "log": log, "warn": warn})
+                                "log": log, "warn": warn, "refused": refused})
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -644,8 +646,18 @@ class LegionGateway:
                 return {"ok": False, "reason": "flash не запускался"}
             if f["running"]:
                 return {"ok": True, "running": True, "action": f["action"]}
-            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
             warn = f.get("warn") or ""
+            if f.get("refused"):
+                # Отказ проверки size ДО записи: bladeRF-cli -l/-L не
+                # вызывался — «bladeRF-cli отказ» обвинял бы не ту сторону.
+                # reason несёт само сообщение отказа (UI показывает reason,
+                # а не log — store.ts: st.reason ?? st.log).
+                return {"ok": False, "running": False, "done": True,
+                        "action": f["action"],
+                        "reason": f["log"] or "отказано проверкой size FPGA",
+                        "warn": warn,
+                        "log": f["log"]}
+            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
             return {"ok": bool(f["ok"]), "running": False, "done": True,
                     "action": f["action"],
                     "reason": base + (f" · ВНИМАНИЕ: {warn}" if warn else ""),
