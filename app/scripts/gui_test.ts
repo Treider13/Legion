@@ -42,6 +42,18 @@ async function main(): Promise<void> {
   await new Promise((r) => setTimeout(r, 2500)); // 3D сцена + шрифты
   await page.screenshot({ path: `${SHOTS}/10_design_hero.png` });
 
+  // Режим «Простой» (ESP32 · USB): панель связи с UART рендерится только в нём.
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll("button"));
+    (btns.find((b) => b.textContent?.includes("Простой")) as HTMLButtonElement)?.click();
+  });
+  // Панели лаборатории живут за шторкой «Настройки» (кино-главный кадр).
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll("button"));
+    (btns.find((b) => b.textContent?.trim() === "Настройки") as HTMLButtonElement)?.click();
+  });
+  await waitFor(page, `!!document.querySelector("section.connect-bar select")`);
+
   // MOCK connect
   await page.select("section.connect-bar select", "mock");
   await page.click("section.connect-bar button.btn-primary");
