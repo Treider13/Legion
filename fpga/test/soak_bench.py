@@ -205,7 +205,18 @@ def main() -> int:
     log({"event": "stop", "elapsed_s": elapsed, "polls": polls,
          "restarts": restarts, "errors": errors, "warns": warns})
 
-    verdict_ok = errors == 0 and restarts == 0
+    # Вердикт PASS — только за ПОЛНЫЙ срок: чистый прогон, прерванный на 5-й
+    # минуте восьмичасового soak, — не приёмка, а «неполный» (код 2).
+    full = elapsed >= args.hours * 3600 * 0.9
+    clean = errors == 0 and restarts == 0
+    verdict_ok = clean and full
+    if clean and full:
+        verdict = "PASS — ни одного перезапуска и ошибки за весь прогон"
+    elif clean:
+        verdict = (f"НЕПОЛНЫЙ — чисто, но прерван на {elapsed} с из "
+                   f"{args.hours} ч — soak-приёмкой не считается")
+    else:
+        verdict = "FAIL — были перезапуски или ошибки (см. JSONL)"
     report = f"""# LEGION soak-отчёт — {ts}
 
 | Параметр | Значение |
@@ -222,13 +233,15 @@ def main() -> int:
 
 ## Вердикт
 
-**{"PASS — ни одного перезапуска и ошибки за весь прогон" if verdict_ok else "FAIL — были перезапуски или ошибки (см. JSONL)"}**
+**{verdict}**
 
 Журнал: `{jsonl_path.name}`
 """
     md_path.write_text(report, encoding="utf-8")
-    print(f"\nSOAK: {'PASS' if verdict_ok else 'FAIL'} — отчёт {md_path}")
-    return 0 if verdict_ok else 1
+    tag = "PASS" if verdict_ok else ("НЕПОЛНЫЙ" if clean else "FAIL")
+    print(f"\nSOAK: {tag} — отчёт {md_path}")
+    # 0 = полный PASS, 1 = FAIL (перезапуски/ошибки), 2 = НЕПОЛНЫЙ (чисто, но рано)
+    return 0 if verdict_ok else (2 if clean else 1)
 
 
 if __name__ == "__main__":

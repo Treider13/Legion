@@ -1704,6 +1704,8 @@ async function main(): Promise<void> {
   check("soak: x40 парковка LO между release и acquire",
     soakSrc.indexOf('"action": "release"') < soakSrc.indexOf("bladeRF-cli -e")
     && soakSrc.indexOf("bladeRF-cli -e") < soakSrc.indexOf('"action": "acquire"'));
+  check("soak: PASS только за полный срок (ранний чистый прогон = НЕПОЛНЫЙ, код 2)",
+    soakSrc.includes("НЕПОЛНЫЙ") && soakSrc.includes("full = elapsed >=") && soakSrc.includes("2 if clean"));
   const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
   check("раннер приёмки уважает .venv (INSTALL.md §2)",
     runnerSrc.includes(".venv/bin/python"));
