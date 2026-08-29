@@ -92,6 +92,38 @@ DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
 # из старых docs). hosted/FX3/чужие имена op flash не принимает.
 LEGION_RBF_RE = re.compile(r"^legion_?x(40|a4|a9)\.rbf$", re.IGNORECASE)
 
+# bladeRF-cli -p (probe): строка «FPGA size: …» — A4/A9 у micro, «40 KLE»/
+# «115 KLE» у bladeRF 1. По USB PID размер не различить (xA4/xA9 = 0x5250,
+# x40/x115 = 0x5246) — probe единственная проверка физического size.
+_FPGA_SIZE_RE = re.compile(r"FPGA\s+size\s*:\s*([A-Za-z0-9]+)", re.IGNORECASE)
+_FPGA_SIZE_KEYS = {"40": "x40", "115": "x115", "A4": "xa4", "A5": "xa5", "A9": "xa9"}
+
+
+def _rbf_size_key(path: str) -> "str | None":
+    """Класс size по имени артефакта: legionxA4.rbf → 'xa4'."""
+    m = LEGION_RBF_RE.match(os.path.basename(path.strip()))
+    if not m:
+        return None
+    return {"40": "x40", "a4": "xa4", "a9": "xa9"}[m.group(1).lower()]
+
+
+def _probe_fpga_size_key() -> "str | None":
+    """Физический размер FPGA по probe bladeRF-cli: 'x40'/'x115'/'xa4'/'xa5'/'xa9'.
+    None — probe не удался или формат незнаком: тогда НЕ блокируем (ложный
+    запрет хуже отсутствия проверки) — остаётся сверка класса платы по PID
+    из _flash_validate. Парсинг терпимый: «A4» и «40 KLE» оба принимаются."""
+    try:
+        cp = subprocess.run(["bladeRF-cli", "-p"],
+                            capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if cp.returncode != 0:
+        return None
+    m = _FPGA_SIZE_RE.search(cp.stdout or "")
+    if not m:
+        return None
+    return _FPGA_SIZE_KEYS.get(m.group(1).upper())
+
 # Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
 # сам DISARM → USB release (именно в этом порядке: release без DISARM
 # отдал бы плату Soapy с живым ARM и поднятым аналогом). Дефолт 2.5 с:
@@ -547,10 +579,21 @@ class LegionGateway:
             self._legion = None
             flag = "-l" if action == "load" else "-L"
             try:
-                cp = subprocess.run(["bladeRF-cli", flag, path],
-                                    capture_output=True, text=True, timeout=180)
-                log = (cp.stdout + cp.stderr).strip()[-800:]
-                ok = cp.returncode == 0
+                # Физический size FPGA против size в имени образа: xA4/xA9 и
+                # x40/x115 по USB PID неразличимы, чужой образ кирпичит FPGA
+                # до отката. Probe не распознан → мягкий пропуск (см. helper).
+                probed = _probe_fpga_size_key()
+                want = _rbf_size_key(path)
+                if probed is not None and want is not None and probed != want:
+                    ok = False
+                    log = (f"отказано до записи: bladeRF-cli -p видит FPGA {probed}, "
+                           f"а образ для {want} ({os.path.basename(path)}) — "
+                           f"неверный size; проверьте плату и файл")
+                else:
+                    cp = subprocess.run(["bladeRF-cli", flag, path],
+                                        capture_output=True, text=True, timeout=180)
+                    log = (cp.stdout + cp.stderr).strip()[-800:]
+                    ok = cp.returncode == 0
             except FileNotFoundError:
                 log = "bladeRF-cli не найден на шлюзе"
             except subprocess.TimeoutExpired:

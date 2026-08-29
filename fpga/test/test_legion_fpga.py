@@ -616,6 +616,69 @@ for _ in range(30):
 check("flash после сбоя потока доезжает (fake)", r.get("done") is True and r.get("ok") is True)
 
 # ---------------------------------------------------------------------------
+# flash + probe физического size FPGA (bladeRF-cli -p): xA4/xA9 и x40/x115
+# по USB PID неразличимы — перед записью сверяем size из probe с size в
+# имени образа. Мягкая деградация: probe не распознан → как раньше.
+# ---------------------------------------------------------------------------
+
+
+def _mk_flash_gw():
+    g = lg.LegionGateway(fake=True)
+    g.fake = False  # «реальный» путь _flash_run со стабами (как gw_f выше)
+    g.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf2"))
+    g.board = "bladerf2"
+    g._flash = {"running": True, "done": False, "ok": False, "log": "",
+                "action": "load", "path": "", "warn": ""}
+    return g
+
+
+_probe_calls: list = []
+
+
+def _stub_run_probe(size_text):
+    def _run(argv, *a, **k):
+        _probe_calls.append(list(argv))
+        if "-p" in argv:
+            return _types_f.SimpleNamespace(
+                returncode=0, stdout=f"  FPGA size:      {size_text}\n", stderr="")
+        return _types_f.SimpleNamespace(returncode=0, stdout="Flashing done", stderr="")
+    return _run
+
+
+# A4-плата + образ A9 → отказ ДО записи (bladeRF-cli -l/-L не вызывался).
+gw_p = _mk_flash_gw()
+_probe_calls.clear()
+lg.subprocess.run = _stub_run_probe("A4")
+gw_p._flash_run("/abs/legionxA9.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: A4 + образ A9 → отказ", gw_p._flash["ok"] is False)
+check("flash probe: причина называет оба size",
+      "xa4" in gw_p._flash["log"] and "xa9" in gw_p._flash["log"])
+check("flash probe: до записи не дошло (-l/-L не вызывался)",
+      not any(("-l" in c or "-L" in c) for c in _probe_calls))
+
+# A4-плата + образ A4 → запись идёт.
+gw_p2 = _mk_flash_gw()
+_probe_calls.clear()
+lg.subprocess.run = _stub_run_probe("A4")
+gw_p2._flash_run("/abs/legionxA4.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: A4 + образ A4 → записано", gw_p2._flash["ok"] is True)
+check("flash probe: -l вызван", any("-l" in c for c in _probe_calls))
+
+# Probe не распознан → мягкий пропуск, поведение как раньше.
+gw_p3 = _mk_flash_gw()
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(
+    returncode=0, stdout="unrecognized probe output", stderr="")
+gw_p3._flash_run("/abs/legionxA4.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: нераспознанный probe → мягкий пропуск", gw_p3._flash["ok"] is True)
+
+# Парсер: «40 KLE» (bladeRF 1) и «A9» (micro) оба принимаются.
+check("flash probe: карта size «40 KLE»/«A9»",
+      lg._FPGA_SIZE_KEYS.get("40") == "x40" and lg._FPGA_SIZE_KEYS.get("A9") == "xa9")
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).
