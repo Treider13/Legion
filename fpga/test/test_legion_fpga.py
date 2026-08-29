@@ -299,6 +299,42 @@ r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)
 
+# kick при мёртвом USB НЕ кормит сторожа шлюза: last_kick обновляется
+# только за дошедший до FPGA kick — иначе при больном USB сторож молчал
+# бы вечно (ни DISARM, ни release), хотя железо погасло своим WD.
+kick_before = gw.last_kick
+gw.fpga._t.released = True
+r = rpc({"op": "kick"})
+check("kick при мёртвом USB → ok:false с причиной",
+      r.get("ok") is False and bool(r.get("reason")))
+check("kick при мёртвом USB не тронул last_kick", gw.last_kick == kick_before)
+gw.fpga._t.released = False
+r = rpc({"op": "kick"})
+check("kick после восстановления USB снова кормит сторожа",
+      r.get("ok") is True and gw.last_kick > kick_before)
+
+# Второй путь отказа kick: NIOS ответил без SUCCESS (запись не подтверждена,
+# без исключения) — тоже не кормит сторожа и несёт честную причину.
+kick_before2 = gw.last_kick
+gw.fpga._t.fail_kick = True
+r = rpc({"op": "kick"})
+check("kick без SUCCESS → ok:false, причина про WD_KICK",
+      r.get("ok") is False and "WD_KICK" in str(r.get("reason")))
+check("kick без SUCCESS не тронул last_kick", gw.last_kick == kick_before2)
+gw.fpga._t.fail_kick = False
+r = rpc({"op": "kick"})
+check("kick после сбоя SUCCESS снова кормит сторожа",
+      r.get("ok") is True and gw.last_kick > kick_before2)
+
+# DISARM при сбое записи CTRL: ok:false и честная причина, не «DISARM».
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "disarm"})
+check("disarm при сбое CTRL → ok:false с причиной",
+      r.get("ok") is False and "не удалась" in str(r.get("reason")))
+gw.fpga._t.fail_ctrl_write = False
+r = rpc({"op": "disarm"})
+check("disarm после сбоя снова работает", r.get("ok") is True)
+
 # ---------------------------------------------------------------------------
 # Сторож kick_age (A2): ARM жив, kicks пропали → сам DISARM → USB release
 # (именно в этом порядке). Таймаут 1 с только в этом блоке.
@@ -666,6 +702,32 @@ try:
 finally:
     _restore_usb(_old_usb2)
 
+# D3: провалившийся _acquire не оставляет полуоткрытый handle (_dev=None) —
+# иначе следующий acquire() считался бы no-op «успехом» по непустому _dev.
+# И xfer без устройства — честная причина вместо AttributeError о NoneType.
+_dev3 = _FakeUsbDev()
+_old_usb3 = _stub_usb(_dev3)
+try:
+    t3 = lg.UsbTransport()  # плата найдена, FPGA загружена
+    _dev3.configured = 0    # образ потерян (питание xA4 — от USB)
+    os.environ.pop("LEGION_FPGA_RBF", None)
+    try:
+        t3._acquire()
+        check("d3: _acquire с пустой FPGA → отказ", False)
+    except RuntimeError:
+        check("d3: _acquire с пустой FPGA → отказ", True)
+    check("d3: провалившийся _acquire не держит handle (_dev None)", t3._dev is None)
+    try:
+        t3.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
+        check("d3: xfer без устройства → честная причина", False)
+    except RuntimeError as e:
+        check("d3: xfer без устройства → честная причина", "USB не занят" in str(e))
+    _dev3.configured = 1    # образ вернули — acquire снова работает
+    t3.acquire()
+    check("d3: после восстановления FPGA acquire занимает USB", t3._dev is _dev3)
+finally:
+    _restore_usb(_old_usb3)
+
 # USB release/acquire (один владелец): release → команды честно падают,
 # acquire → работают снова. Регистры FPGA переживают смену владельца.
 r = rpc({"op": "usb", "action": "release"})
@@ -788,18 +850,20 @@ check("micro: эфир предыдущего ARM жив (AIR_PREP не отка
 gw_m.fpga._t.fail_ctrl_write = False
 rpcm({"op": "disarm"})
 
-# Solo: fs/BW окна до AIR_PREP. Без полей — регистры не пишутся (NIOS 2 МГц).
+# Solo: fs/BW окна до AIR_PREP. Без полей — пишется ЯВНЫЙ дефолт (0 = NIOS
+# 2 МГц, WD_LIMIT=61): статики/регистры переживают сессии, «не писать»
+# работало бы только на свежей NIOS после питания.
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
-check("micro: без fs_hz AIR_FS не писали", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
-check("micro: эфир/без fs не пишет WD_LIMIT", lf.REG_WD_LIMIT not in gw_m.fpga._t.regs)
-check("micro: без bw_mhz AIR_BW не писали", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+check("micro: без fs_hz AIR_FS = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: без fs_hz WD_LIMIT = дефолт 61 явно", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
+check("micro: без bw_mhz AIR_BW = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
 
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4, "freq_mhz": 2442.5})
 check("micro: ARM lb_gated без fs → ok", r.get("ok") is True)
-check("micro: эфир не пишет AIR_FS (2 МГц NIOS)", lf.REG_AIR_FS_HZ not in gw_m.fpga._t.regs)
-check("micro: эфир не пишет AIR_BW", lf.REG_AIR_BW_HZ not in gw_m.fpga._t.regs)
+check("micro: эфир без fs_hz пишет AIR_FS=0 (дефолт 2 МГц)", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: эфир без bw_mhz пишет AIR_BW=0", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
 
 check("wd limit 4 МГц = VHDL дефолт 61", lf.watchdog_limit_for_fs(2_000_000, "bladerf1") == 61)
@@ -833,8 +897,59 @@ check("micro: tune без det_thr не трогает DET_THR", gw_m.fpga._t.reg
 r = rpcm({"op": "tune"})
 check("micro: tune без freq_mhz → отказ", r.get("ok") is False)
 rpcm({"op": "disarm"})
+
+# Регресс порядка сессий: статики fs/bw и WD_LIMIT переживают DISARM.
+# ARM без fs_hz после 20-МГц сессии обязан получить дефолты явно — иначе
+# волна, снятая на 2 MSPS, игралась бы на 20 MSPS, а deadman растянулся
+# бы с ~2 с до ~10 с (305×65536/2e6).
+r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
+check("micro: ARM без fs после 20-МГц сессии → ok", r.get("ok") is True)
+check("micro: AIR_FS_HZ сброшен в дефолт после 20-МГц сессии",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
+check("micro: AIR_BW_HZ сброшен в дефолт после 20-МГц сессии",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
+check("micro: WD_LIMIT сброшен в 61 (не 305 прошлой сессии)",
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
+rpcm({"op": "disarm"})
 r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune после DISARM → отказ (не поднимаем TX)", r.get("ok") is False and "ARM" in (r.get("reason") or ""))
+
+# tune при латче deadman: автономный DISARM в NIOS (wd_fired) до шлюза не
+# дошёл — _armed ещё True, но STATUS авторитетнее: отказ ДО записей,
+# иначе AIR_PREP поднял бы TX поверх погашенного deadman'ом тракта.
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: ARM nco для wd-tune теста → ok", r.get("ok") is True)
+freq_before = gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ)
+thr_before = gw_m.fpga._t.regs.get(lf.REG_DET_THR)
+air_before = gw_m.fpga._t.regs.get(lf.REG_AIR_PREP)
+gw_m.fpga._t.wd_latch = True  # как NIOS после deadman (bit4 в STATUS)
+r = rpcm({"op": "tune", "freq_mhz": 2475.0, "det_thr": 4800})
+check("micro: tune при wd-латче → отказ (deadman)",
+      r.get("ok") is False and "deadman" in str(r.get("reason")))
+check("micro: отказной tune не тронул AIR_FREQ", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == freq_before)
+check("micro: отказной tune не тронул DET_THR", gw_m.fpga._t.regs.get(lf.REG_DET_THR) == thr_before)
+check("micro: отказной tune не тронул AIR_PREP", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == air_before)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: re-ARM после deadman-отказа → ok", r.get("ok") is True)
+check("micro: re-ARM снял wd-латч (как NIOS)", gw_m.fpga._t.wd_latch is False)
+r = rpcm({"op": "tune", "freq_mhz": 2475.0})
+check("micro: tune после re-ARM снова работает", r.get("ok") is True)
+rpcm({"op": "disarm"})
+
+# tune при мёртвом USB: STATUS не прочитать → fail-closed отказ, эфир не
+# тронут (исключение из xfer ловит _Handler и отвечает ok:false).
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: ARM nco для fail-closed теста → ok", r.get("ok") is True)
+air_before_fc = gw_m.fpga._t.regs.get(lf.REG_AIR_PREP)
+gw_m.fpga._t.released = True  # USB отпущен — любой xfer падает
+r = rpcm({"op": "tune", "freq_mhz": 2475.0})
+check("micro: tune при мёртвом USB → отказ (fail-closed)", r.get("ok") is False)
+gw_m.fpga._t.released = False
+check("micro: fail-closed tune не тронул AIR_PREP",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == air_before_fc)
+rpcm({"op": "disarm"})
+
 r = rpcm({"op": "set", "reg": "air_fs_hz", "value": 10_000_000})
 check("set air_fs_hz", r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 10_000_000)
 r = rpcm({"op": "set", "reg": "air_bw_hz", "value": 10_000_000})

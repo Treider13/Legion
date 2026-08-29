@@ -32,7 +32,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, useLegion } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -1549,7 +1549,8 @@ async function main(): Promise<void> {
   check("fpgaArm busy до первого await (кино-старт откажет)",
     armBlock.indexOf("set({ fpgaBusy: true })") > 0 && armBlock.indexOf("set({ fpgaBusy: true })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
-  check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
+  check("fpgaArm после отзыва снимает прошедший ARM",
+    armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
   check("fpga-ветка tickScan: ОБЫЧНЫЙ → pickTurnTarget от последней ARM",
     storeSrc.includes('cur.autoDispatch === "turn"') && storeSrc.includes("pickTurnTarget(pool, null, gFpgaTurnLastMhz)"));
@@ -1709,6 +1710,74 @@ async function main(): Promise<void> {
   const legionFlashFn = storeSrc.slice(storeSrc.indexOf("legionFlash: async"), storeSrc.indexOf("probeEsp32Chip: async"));
   check("прошивка legion под flashBusy (мьютекс записи)", legionFlashFn.includes("flashBusy: true"));
   check("прошивка legion: шлюз async flash + опрос", legionFlashFn.includes('op: "flash"') && legionFlashFn.includes('op: "flash_status"'));
+
+  // --- Ревизия аудита 2026-08-28: находки 1/3/4/5 ---
+  // Находка 1: abort-хелперы гасят observe вместе с kick (инвариант beginFpgaKick).
+  const abortSoloFn = storeSrc.slice(storeSrc.indexOf("abortSoloIfRevoked"), storeSrc.indexOf("abortAirIfRevoked"));
+  check("abort solo: observe умирает вместе с kick",
+    abortSoloFn.includes("stopFpgaKick()") && abortSoloFn.includes("stopFpgaObserve()"));
+  const airAbortAt = storeSrc.indexOf("const abortAirIfRevoked");
+  const abortAirFn = storeSrc.slice(airAbortAt, storeSrc.indexOf("const ping = await gw", airAbortAt));
+  check("abort air: observe умирает вместе с kick",
+    abortAirFn.includes("stopFpgaKick()") && abortAirFn.includes("stopFpgaObserve()"));
+  // Находка 3: сбой usb acquire после калибровки — честный отказ ДО ARM,
+  // а не падение ARM в мёртвый транспорт с криптичной причиной.
+  check("air-обход: сбой acquire — отказ до таблицы порогов",
+    storeSrc.includes("FPGA эфир-обход: USB обратно не занят") &&
+    storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят") < storeSrc.indexOf("airThrTable(medians)"));
+  check("air-обход: первопричина калибровки не маскируется сбоем acquire",
+    storeSrc.indexOf('pushLog("sys", calibWhy)') < storeSrc.indexOf("FPGA эфир-обход: USB обратно не занят"));
+  // Возврат к скану: сбой DISARM не прячется (состояние снимается по
+  // deadman-дизайну цикла, но отказ обязан быть в логе).
+  const retScanFn = storeSrc.slice(storeSrc.indexOf("const fpgaReturnToScan"), storeSrc.indexOf("const fpgaHandoff"));
+  check("возврат к скану: сбой DISARM честно в логе", retScanFn.includes("FPGA DISARM при возврате к скану"));
+  // Deadman-доказательство на монотонных часах: скачок NTP не подделывает тишину.
+  check("deadman-доказательство на монотонных часах (performance.now)",
+    storeSrc.includes("gLastKickOkMs = performance.now()") &&
+    !storeSrc.includes("gLastKickOkMs = Date.now()"));
+  // Ни один usb release не выбрасывается молча: каждый назначен в переменную
+  // и залогирован при отказе (следующий openSdr иначе ловил бы «занятое
+  // устройство» без причины). Считаем присвоенные вызовы против всех.
+  const relAll = storeSrc.match(/action: "release"/g)?.length ?? 0;
+  const relAssigned = storeSrc.match(/(?:const|let) \w+ = await (?:hostFpga|gw|opts\.gw)\(\{ op: "usb", action: "release"/g)?.length ?? 0;
+  check("ни один usb release не выбрасывается молча", relAll > 0 && relAll === relAssigned);
+  // Шире: ни один await вызова шлюза (disarm/set/release/…) не молчит —
+  // каждый назначен в переменную, а отказ залогирован у места вызова.
+  const gwAwaits = storeSrc.match(/await (?:hostFpga|gw)\(/g)?.length ?? 0;
+  const gwAssigned = storeSrc.match(/(?:const|let) \w+ = await (?:hostFpga|gw)\(/g)?.length ?? 0;
+  check("ни один вызов шлюза не выбрасывает ответ молча", gwAwaits > 0 && gwAwaits === gwAssigned);
+  // Находка 4: оценка времени калибровки — в логе до прохода и в UI до старта.
+  check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
+  check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));
+
+  // Находка 5 (поведение, без Tauri — hostFpga честно падает «нет desktop»):
+  // мёртвый шлюз не клинит fpgaArmed, когда deadman железа доказан временем.
+  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", fpgaToken: "", sdrGateway: "", lastForwardMhz: 2442 });
+  pokeLastKickOkMs(performance.now()); // свежий kick — deadman НЕ доказан
+  await L().fpgaDisarm();
+  check("мёртвый шлюз, свежий kick → ARM честно держим", L().fpgaArmed === true);
+  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442 });
+  pokeLastKickOkMs(performance.now() - 10_000); // тишина > 3 с: FPGA WD + сторож шлюза уже отработали
+  await L().fpgaDisarm();
+  check("мёртвый шлюз, deadman доказан → локальный ARM снят",
+    L().fpgaArmed === false && L().fpgaPath === null && L().lastForwardMhz === null);
+  check("лог честно называет собственный watchdog железа",
+    (L().log.at(-1)?.text ?? "").includes("watchdog"));
+  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442 });
+  pokeLastKickOkMs(null); // kick'ов не было вовсе — доказательства нет
+  await L().fpgaDisarm();
+  check("мёртвый шлюз без истории kick → ARM держим", L().fpgaArmed === true);
+  // closeSdr при мёртвом шлюзе: force-clear по доказательству + сбой release
+  // честно в логе (раньше release выбрасывался молча — следующий openSdr
+  // ловил бы «занятое устройство» без причины).
+  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442, log: [] });
+  pokeLastKickOkMs(performance.now() - 10_000);
+  await L().closeSdr();
+  check("closeSdr при мёртвом шлюзе: ARM снят по deadman-доказательству", L().fpgaArmed === false);
+  check("closeSdr: сбой usb release честно в логе",
+    L().log.some((e) => e.text.includes("FPGA USB release")));
+  useLegion.setState({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
+  pokeLastKickOkMs(null);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

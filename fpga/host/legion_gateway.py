@@ -153,13 +153,20 @@ class UsbTransport:
                 f"bladeRF-cli -l: {(cp.stderr or cp.stdout).strip()[:200]}")
 
     def _acquire(self) -> None:
-        self._find()
-        if not self._fpga_configured():
-            self._load_fpga()
-            time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+        try:
             self._find()
             if not self._fpga_configured():
-                raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+                self._load_fpga()
+                time.sleep(0.5)  # конфигурация FPGA и возможная re-enumeration
+                self._find()
+                if not self._fpga_configured():
+                    raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+        except Exception:
+            # Полуоткрытый handle не оставляем: иначе следующий acquire()
+            # сочтётся no-op «успехом» по непустому _dev (плата найдена,
+            # но FPGA пуста и LEGION_FPGA_RBF не задан — тот случай).
+            self._dev = None
+            raise
 
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
@@ -183,6 +190,10 @@ class UsbTransport:
         self._acquire()
 
     def xfer(self, req: bytes, timeout_ms: int | None = None) -> bytes:
+        if self._dev is None:
+            # Честная причина вместо AttributeError о NoneType (release или
+            # провалившийся acquire) — такую строку не стыдно показать в логе.
+            raise RuntimeError("USB не занят агентом (release или сбой acquire)")
         t = TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
         try:
             self._dev.write(EP_OUT, req, timeout=t)
@@ -206,6 +217,7 @@ class FakeTransport:
         self.released = False
         self.fail_control_read = False
         self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
+        self.fail_kick = False  # ответ без SUCCESS на запись WD_KICK
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
         # Модель липкого латча NIOS (bit4 STATUS): deadman сработал —
         # после автономного DISARM HDL-бит wd_fired (bit3) гаснет за мкс.
@@ -244,6 +256,9 @@ class FakeTransport:
         if write:
             # Сбой записи CTRL (откат эфира в ARM проверяется этим)
             if addr == lf.REG_CTRL and self.fail_ctrl_write:
+                return bytes(16)
+            # Ответ без SUCCESS на heartbeat (NIOS не подтвердил запись)
+            if addr == lf.REG_WD_KICK and self.fail_kick:
                 return bytes(16)
             # Новый ARM снимает латч deadman (как NIOS legion_cmds.c)
             if addr == lf.REG_CTRL and (data & lf.CTRL_ARM):
@@ -416,15 +431,17 @@ class LegionGateway:
             if not self.fpga.set_air_freq_mhz(float(freq)):
                 return False, "micro: запись AIR_FREQ_KHZ не удалась"
             # fs/BW до AIR_PREP: NIOS читает статики в legion_air_up.
-            # Нет полей → статики 0 → дефолт 2 МГц (эфир lb_gated).
+            # Нет полей → пишем 0 (дефолт 2 МГц) ЯВНО: статики переживают
+            # сессии (air_down сбрасывает только gain), иначе ARM без fs/bw
+            # наследовал бы окно прошлой solo-сессии — волна/тон на чужой
+            # скорости.
             fs = msg.get("fs_hz")
-            if fs is not None and not self.fpga.set_air_fs_hz(int(fs)):
+            if not self.fpga.set_air_fs_hz(int(fs) if fs is not None else 0):
                 return False, "micro: запись AIR_FS_HZ не удалась"
             bw = msg.get("bw_mhz")
-            if bw is not None:
-                bw_hz = int(round(float(bw) * 1e6))
-                if not self.fpga.set_air_bw_hz(bw_hz):
-                    return False, "micro: запись AIR_BW_HZ не удалась"
+            bw_hz = int(round(float(bw) * 1e6)) if bw is not None else 0
+            if not self.fpga.set_air_bw_hz(bw_hz):
+                return False, "micro: запись AIR_BW_HZ не удалась"
             gain = msg.get("gain_db")
             if gain is not None and not self.fpga.set_air_gain_db(int(gain)):
                 return False, "micro: запись AIR_GAIN_DB не удалась"
@@ -594,12 +611,17 @@ class LegionGateway:
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
             # Solo fs > 2 МГц: дефолт WD_LIMIT=61 короче kick 500 мс
-            # (61×65536/10e6 ≈ 0.40 с на micro). Эфир без fs_hz — не трогаем.
+            # (61×65536/10e6 ≈ 0.40 с на micro). Без fs_hz дефолт пишем ЯВНО:
+            # регистр переживает сессии (сброс только по nios_reset) — иначе
+            # ARM наследовал бы limit прошлого fs (limit=854 от 56 МГц на
+            # тракте 2 МГц растянул бы deadman до ~28 с вместо ~1–2 с).
             fs_wd = msg.get("fs_hz")
             if fs_wd is not None:
                 limit = lf.watchdog_limit_for_fs(int(fs_wd), self.board)
-                if not self.fpga.set_watchdog(limit):
-                    return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
+            else:
+                limit = lf.WD_LIMIT_DEFAULT
+            if not self.fpga.set_watchdog(limit):
+                return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -655,7 +677,7 @@ class LegionGateway:
                 )
                 self._rx_by_us = False
                 self._tx_by_us = False
-            return {"ok": ok, "reason": "DISARM"}
+            return {"ok": ok, "reason": "DISARM" if ok else "запись CTRL=0 не удалась"}
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
@@ -668,8 +690,14 @@ class LegionGateway:
                     st["air_freq_set"] = bool(air & 0x2)
             return st
         if op == "kick":
-            self.last_kick = time.monotonic()
-            return {"ok": self.fpga.heartbeat()}
+            # last_kick — только за kick, ДОШЕДШИЙ до FPGA: недошедший
+            # (больной USB) watchdog железа не кормит, и сторож kick_age
+            # обязан это видеть — иначе при больном USB он молчал бы вечно,
+            # не делая DISARM+release (железо при этом уже погасло своим WD).
+            if self.fpga.heartbeat():
+                self.last_kick = time.monotonic()
+                return {"ok": True, "reason": "kick"}
+            return {"ok": False, "reason": "запись WD_KICK не дошла до FPGA"}
         if op == "rx":
             # Включить/выключить RX штатным CONTROL-регистром (для мониторинга
             # детектора без lb_*: NCO-тон с кабеля и т.п.) — только bladeRF 1.
@@ -722,7 +750,8 @@ class LegionGateway:
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True
-            return {"ok": ok}
+            # Причина только при сбое: успех молчит, как раньше.
+            return {"ok": ok, **({} if ok else {"reason": f"запись {reg} не удалась"})}
         if op == "tune":
             # Прыжок LO на уже поднятом эфире. USB не отпускаем, DISARM нет —
             # player RAM и CTRL.ARM остаются. Только micro (AIR-регистры).
@@ -731,6 +760,20 @@ class LegionGateway:
             # Без ARM — отказ: иначе hop после watchdog снова жжёт AIR_PREP/TX.
             if not self._armed:
                 return {"ok": False, "reason": "tune: нет ARM"}
+            # Наш _armed отстаёт от автономного DISARM в NIOS (deadman сработал
+            # на железе, а ноутбук ещё не прислал disarm — голодание event loop
+            # или шторм на релее): латч wd_fired в STATUS авторитетнее. Иначе
+            # tune поднял бы AIR_PREP (TX unmute) поверх погашенного тракта.
+            # Цена — один 16-байтный пакет на шаг обхода (dwell ≥ 200 мс).
+            # Остаточное окно (WD между чтением STATUS и AIR_PREP, ~мс)
+            # закрывает сторож kick_age: его DISARM (CTRL=0) уводит RFIC в
+            # standby через NIOS.
+            st = self.fpga.read_status()
+            if not st.get("ok"):
+                return {"ok": False, "reason": "tune: STATUS не читается — эфир не трогаем"}
+            if st.get("wd_fired"):
+                return {"ok": False,
+                        "reason": "tune: deadman сработал (wd_fired) — эфир в standby, нужен новый ARM"}
             # Порог стоянки (air-обход с ретрансляцией) едет в том же tune:
             # запись DET_THR — один 16-байтный USB-пакет внутри этой операции,
             # отдельный round-trip на шаг не нужен (скорость обхода не режем).
