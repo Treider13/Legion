@@ -94,6 +94,13 @@ else
   fi
 fi
 
+echo "== Rust (только для desktop-сборки Tauri; браузерная работает без него) =="
+if command -v cargo >/dev/null 2>&1; then
+  ok "cargo $(cargo --version 2>/dev/null | awk '{print $2}')"
+else
+  warn "cargo не найден — нужен только для npm run tauri dev/build (rustup.rs, INSTALL.md §3)"
+fi
+
 echo "== Тракт ESP32 (опционально, режим 2) =="
 if $PY -m platformio --version >/dev/null 2>&1; then
   ok "platformio $($PY -m platformio --version 2>/dev/null)"

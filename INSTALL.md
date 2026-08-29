@@ -49,10 +49,24 @@ pip install -r tools/requirements.txt -r fpga/requirements.txt
 
 ## 3. Приложение LEGION Control
 
+Браузерная сборка (достаточно Node.js, без Rust):
+
 ```bash
 cd app
 npm ci
-npm run tauri dev     # desktop; либо npm run dev — браузерная сборка
+npm run dev
+```
+
+Desktop (Tauri) — дополнительно нужны Rust и системные библиотеки WebKit
+(те же, что в CI):
+
+```bash
+sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rustup, stable
+source "$HOME/.cargo/env"
+cd app
+npm ci
+npm run tauri dev
 ```
 
 ## 4. Шлюз FPGA (мини-ПК с USB3 к bladeRF)

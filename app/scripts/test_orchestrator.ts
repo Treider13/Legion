@@ -1582,6 +1582,24 @@ async function main(): Promise<void> {
   });
   check("hero: авто-цикл восстановился (скан) — не пугаем ОШИБКОЙ",
     heroWdRecovered.kind === "search");
+  // Stale-тревога не маскирует живой соседний тракт (ESP32-коридор после
+  // остановки FPGA с wd_fired в последнем статусе).
+  const heroWdCorridor = heroStatusLine({
+    ...heroBase, corridorRunning: true, telemFreq: 2442,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает живому коридору ESP32",
+    heroWdCorridor.kind === "tx" && heroWdCorridor.text === "КОРИДОР");
+  const heroWdTx = heroStatusLine({
+    ...heroBase, transmitArmed: true, lastForwardMhz: 2450,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает живой передаче", heroWdTx.kind === "tx" && heroWdTx.text === "ПЕРЕДАЧА");
+  const heroWdBusy = heroStatusLine({
+    ...heroBase, fpgaBusy: true, fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: stale wd_fired уступает handoff в полёте (busy → ПОИСК)",
+    heroWdBusy.kind === "search");
   const heroDeadBusy = heroStatusLine({
     ...heroBase, fpgaBusy: true, fpgaStatus: { ok: false, reason: "нет ответа шлюза" },
   });
@@ -1662,6 +1680,15 @@ async function main(): Promise<void> {
   check("INSTALL.md: Quartus, приёмка, шлюз",
     installSrc.includes("Quartus Prime Lite 23.1.1") && installSrc.includes("run_acceptance.sh")
     && installSrc.includes("legion_gateway.py"));
+  check("INSTALL.md: desktop Tauri требует Rust и webkit (иначе чистая Ubuntu упадёт)",
+    installSrc.includes("rustup") && installSrc.includes("libwebkit2gtk-4.1-dev"));
+  check("setup.sh: cargo проверяется как warn (desktop-only)",
+    setupSrc.includes("cargo"));
+  check("мастер без жаргона player/NCO в тексте для оператора",
+    !gateSrc.includes("player/NCO"));
+  const soakSrc = readFileSync(join(here, "../../fpga/test/soak_bench.py"), "utf8");
+  check("soak: silent-loss только при наличии armed_s (совместимость со старым шлюзом)",
+    soakSrc.includes('"armed_s" in st'));
   const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
   check("раннер приёмки уважает .venv (INSTALL.md §2)",
     runnerSrc.includes(".venv/bin/python"));

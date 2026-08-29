@@ -143,6 +143,9 @@ def main() -> int:
             wd = bool(st.get("wd_fired"))
             lost_silent = (
                 not wd
+                # Старший шлюз без поля armed_s: silent-loss не определить —
+                # не выдумываем перезапуски (ложный FAIL на каждом опросе).
+                and "armed_s" in st
                 and (st.get("armed_s") or 0) <= 0
                 and time.monotonic() - last_rearm > 5
             )

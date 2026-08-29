@@ -35,9 +35,13 @@ export function heroStatusLine(s: HeroState): HeroLine {
 
   const wdFired = s.fpgaStatus?.wd_fired === true;
   // Watchdog — липкий: стор снимает ARM сразу (fpgaDisarm/fpgaReturnToScan),
-  // поэтому ОШИБКА показываем и после снятия ARM, пока не начался новый цикл
-  // (scanRunning = авто-цикл сам восстановился — не пугаем, событие в журнале).
-  if (wdFired && (s.fpgaArmed || !s.scanRunning)) {
+  // поэтому ОШИБКА показываем и после снятия ARM. Но уступаем любой живой
+  // активности: авто-цикл восстановился (scanRunning) или оператор пошёл в
+  // другой тракт (коридор/передача) — stale-тревога не маскирует работу.
+  const otherLive = s.scanRunning || s.corridorRunning || s.transmitArmed || s.signalTxActive;
+  // fpgaBusy = новый цикл (handoff) уже в полёте — stale wd из прошлого ARM
+  // не показываем: первый же опрос после ARM обновит латч.
+  if (wdFired && (s.fpgaArmed || (!otherLive && !s.fpgaBusy))) {
     return {
       kind: "error",
       text: "ОШИБКА",
