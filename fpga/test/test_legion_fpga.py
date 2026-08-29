@@ -253,6 +253,25 @@ check("gateway set неизвестного reg → отказ", r.get("ok") is 
 r = rpc({"op": "arm", "mode": "nonsense"})
 check("gateway arm неизвестного mode → отказ", r.get("ok") is False)
 
+# Длительная непрерывная работа: armed_s в status + warn по таймеру
+# (температуры AD9361 в этой NIOS-сборке нет — честный заменитель,
+# LEGION_ARM_WARN_S; см. шапку legion_gateway.py).
+r = rpc({"op": "arm", "mode": "nco"})
+check("arm для таймера длительной работы", r.get("ok") is True)
+r = rpc({"op": "status"})
+check("status несёт armed_s", isinstance(r.get("armed_s"), int) and r.get("armed_s") >= 0)
+check("свежий ARM без warn", "warn" not in r)
+lg.ARM_WARN_S = 0.05
+import time as _time
+_time.sleep(0.08)
+r = rpc({"op": "status"})
+check("после ARM_WARN_S status несёт warn про охлаждение",
+      "warn" in r and "охлаждение" in r["warn"])
+lg.ARM_WARN_S = 300.0
+rpc({"op": "disarm"})
+r = rpc({"op": "status"})
+check("после DISARM armed_s=0 и warn снят", r.get("armed_s") == 0 and "warn" not in r)
+
 # lb_gated без порога → честный отказ (порог 0 = гейт на шум)
 r = rpc({"op": "arm", "mode": "lb_gated"})
 check("lb_gated без det_thr → отказ", r.get("ok") is False)

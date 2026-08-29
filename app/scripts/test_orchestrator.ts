@@ -1561,6 +1561,13 @@ async function main(): Promise<void> {
     fpgaStatus: { ok: true, wd_fired: true },
   });
   check("hero: watchdog → ОШИБКА", heroWd.kind === "error" && heroWd.detail.includes("сторожевой"));
+  const heroWarn = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: true, warn: "непрерывная работа 6 мин — проверьте охлаждение" },
+    lastForwardMhz: 2442.5,
+  });
+  check("hero: warn шлюза (длительная работа) виден в статусе ретрансляции",
+    heroWarn.kind === "relay" && heroWarn.detail.includes("охлаждение"));
   const heroCorr = heroStatusLine({ ...heroBase, corridorRunning: true, telemFreq: 2442 });
   check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));

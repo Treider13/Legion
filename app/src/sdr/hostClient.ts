@@ -230,13 +230,16 @@ export interface FpgaStatus {
   fake?: boolean;
   /** Шлюз распознал ревизию legion (0x80 отвечает). null/undefined — неизвестно. */
   legion?: boolean | null;
+  /** Секунды непрерывного ARM по часам шлюза (0 — не армировано). */
+  armed_s?: number | null;
   /** op flash (async): started — процесс пошёл; running/done/log — flash_status. */
   started?: boolean;
   running?: boolean;
   done?: boolean;
   log?: string;
   action?: string;
-  /** flash: CLI записал, но USB обратно не занялся (Soapy держит / FPGA не поднялась). */
+  /** flash: CLI записал, но USB обратно не занялся (Soapy держит / FPGA не поднялась).
+   *  status: длительная непрерывная работа — проверить охлаждение. */
   warn?: string;
 }
 

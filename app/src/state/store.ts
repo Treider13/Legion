@@ -561,6 +561,8 @@ let gHandoffStrikes = 0;
 /** Автовозврат из ARM: det_count не растёт N опросов подряд = энергия пропала. */
 let gLastDetCount: number | null = null;
 let gDetStagnantPolls = 0;
+/** Последнее залогированное предупреждение шлюза (длительная работа) — не спамим. */
+let gArmWarnLast = "";
 /** Поколение авто-цикла FPGA+сканер: инкрементит операторский СТОП.
  *  Handoff сверяет поколение после await ARM — сменилось, значит оператор
  *  стопнул в полёте: не коммитим ARM, откатываемся (паттерн gTxGen). */
@@ -2692,6 +2694,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       if (r.legion !== undefined) set({ fpgaLegion: r.legion });
+      // Длительная непрерывная работа (шлюз считает armed_s): лог один раз
+      // на смену текста, не каждый опрос.
+      if (r.ok && r.warn && r.warn !== gArmWarnLast) {
+        gArmWarnLast = r.warn;
+        pushLog("sys", `FPGA: ${r.warn}`);
+      }
+      if (!r.warn) gArmWarnLast = "";
       // Watchdog сработал в FPGA → TX уже погашен железом; синхронизируем UI
       if (r.ok && get().fpgaArmed && get().fpgaMode === "lb_gated") {
         set({ lastCueReason: fpgaObserveLine(r) });

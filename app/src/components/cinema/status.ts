@@ -14,7 +14,7 @@ export interface HeroState {
   fpgaArmed: boolean;
   fpgaBusy: boolean;
   fpgaMode: string;
-  fpgaStatus: { ok?: boolean; det_active?: boolean; wd_fired?: boolean; reason?: string } | null;
+  fpgaStatus: { ok?: boolean; det_active?: boolean; wd_fired?: boolean; reason?: string; warn?: string } | null;
   lastForwardMhz: number | null;
   lastInterceptMhz: number | null;
   scanCenterMhz: number | null;
@@ -49,9 +49,10 @@ export function heroStatusLine(s: HeroState): HeroLine {
   }
   if (s.fpgaArmed && s.fpgaMode === "lb_gated") {
     // Ретрансляция: гейт открыт = эфир идёт на усилитель; закрыт = ждём сигнал.
+    const warn = s.fpgaStatus?.warn ? ` · ${s.fpgaStatus.warn}` : "";
     return s.fpgaStatus?.det_active === true
-      ? { kind: "relay", text: "РЕТРАНСЛЯЦИЯ", detail: `${freqTxt} · гейт открыт · эфир → усилитель` }
-      : { kind: "relay-wait", text: "РЕТРАНСЛЯЦИЯ", detail: `${freqTxt} · гейт закрыт · ждём сигнал` };
+      ? { kind: "relay", text: "РЕТРАНСЛЯЦИЯ", detail: `${freqTxt} · гейт открыт · эфир → усилитель${warn}` }
+      : { kind: "relay-wait", text: "РЕТРАНСЛЯЦИЯ", detail: `${freqTxt} · гейт закрыт · ждём сигнал${warn}` };
   }
   if (s.fpgaArmed) {
     return {
