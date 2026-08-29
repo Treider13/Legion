@@ -77,6 +77,7 @@ import {
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
+import { heroStatusLine } from "../src/components/cinema/status";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -1516,8 +1517,43 @@ async function main(): Promise<void> {
   check("нет устаревшего «чип видит центр, не обход» (air-обход существует)",
     !storeSrc.includes("не обход F1–F2"));
   const appSrc = readFileSync(join(here, "../src/App.tsx"), "utf8");
-  check("hero различает авто-цикл сканера и автономный эфир",
-    appSrc.includes("fpgaAutoCycle") && appSrc.includes("ЭФИР→УСИЛИТЕЛЬ · НАБЛЮДЕНИЕ"));
+  const statusSrc = readFileSync(join(here, "../src/components/cinema/status.ts"), "utf8");
+  check("hero: статус считается чистой функцией heroStatusLine",
+    appSrc.includes("heroStatusLine(") && statusSrc.includes("export function heroStatusLine"));
+  check("hero: состояния ОЖИДАНИЕ/ПОИСК/РЕТРАНСЛЯЦИЯ/ОШИБКА",
+    ["ОЖИДАНИЕ", "ПОИСК", "РЕТРАНСЛЯЦИЯ", "ОШИБКА"].every((t) => statusSrc.includes(t)));
+  check("hero: гейт открыт/закрыт различён",
+    statusSrc.includes("гейт открыт") && statusSrc.includes("гейт закрыт"));
+  check("hero: watchdog = ОШИБКА с понятным текстом",
+    statusSrc.includes("wd_fired") && statusSrc.includes("сторожевой таймер погасил TX"));
+  const heroBase = {
+    scanRunning: false, transmitArmed: false, corridorRunning: false, signalTxActive: false,
+    fpgaArmed: false, fpgaBusy: false, fpgaMode: "player", fpgaStatus: null,
+    lastForwardMhz: null, lastInterceptMhz: null, scanCenterMhz: null, telemFreq: null, freqMhz: "2475.000",
+  } as const;
+  const heroIdle = heroStatusLine(heroBase);
+  check("hero: idle → ОЖИДАНИЕ с частотой", heroIdle.kind === "idle" && heroIdle.text === "ОЖИДАНИЕ" && heroIdle.detail.includes("2475"));
+  const heroSearch = heroStatusLine({ ...heroBase, scanRunning: true, scanCenterMhz: 2450 });
+  check("hero: сканер → ПОИСК", heroSearch.kind === "search" && heroSearch.text === "ПОИСК" && heroSearch.detail.includes("2450"));
+  const heroRelay = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: true }, lastForwardMhz: 2442.5,
+  });
+  check("hero: гейт открыт → РЕТРАНСЛЯЦИЯ зелёная",
+    heroRelay.kind === "relay" && heroRelay.detail.includes("гейт открыт") && heroRelay.detail.includes("2442.500"));
+  const heroRelayWait = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, det_active: false }, lastForwardMhz: 2442.5,
+  });
+  check("hero: гейт закрыт → РЕТРАНСЛЯЦИЯ жёлтая (ждём сигнал)",
+    heroRelayWait.kind === "relay-wait" && heroRelayWait.detail.includes("гейт закрыт"));
+  const heroWd = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: watchdog → ОШИБКА", heroWd.kind === "error" && heroWd.detail.includes("сторожевой"));
+  const heroCorr = heroStatusLine({ ...heroBase, corridorRunning: true, telemFreq: 2442 });
+  check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
   check("air gen после ensureSdrBand, не до валидации",

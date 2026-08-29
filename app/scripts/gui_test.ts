@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     ["log has SWEEP RUNNING", logText.includes("OK SWEEP RUNNING")],
     ["telemetry flows (live readout)", rangeCur.includes("МГц") && curNum >= 2400 && curNum <= 2500],
     ["маркер движется", marker1 !== marker2],
-    ["hero-статус = КОРИДОР TX", heroStatus.includes("КОРИДОР TX")],
+    ["hero-статус = КОРИДОР", heroStatus.includes("КОРИДОР")],
   ];
 
   let failed = 0;
