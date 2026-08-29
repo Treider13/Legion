@@ -34,7 +34,7 @@ export function StartGate({ mode, onClose }: Props) {
   const storedDispatch = useLegion((s) => s.autoDispatch);
   const storedDetThr = useLegion((s) => s.fpgaDetThr);
   const detShift = useLegion((s) => s.fpgaDetShift);
-  const [step, setStep] = useState<"band" | "path" | "walk">(mode === "sdr" ? "band" : "band");
+  const [step, setStep] = useState<"band" | "path" | "walk">("band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);

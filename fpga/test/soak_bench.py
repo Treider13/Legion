@@ -127,7 +127,7 @@ def main() -> int:
     polls = 0
     last_det = 0
 
-    r = gw({"op": "arm", **{k: v for k, v in arm_cmd.items() if k != "op"}})
+    r = gw(arm_cmd)
     if r.get("ok") is not True:
         print(f"FAIL: ARM не взвёлся: {r.get('reason')}")
         log({"event": "arm_fail", "reason": r.get("reason")})
@@ -189,7 +189,7 @@ def main() -> int:
         if not believe_armed:
             # Re-ARM до конца прогона: разоружённая плата без попыток
             # подняться — не soak, а холостой опрос.
-            r = gw({"op": "arm", **{k: v for k, v in arm_cmd.items() if k != "op"}})
+            r = gw(arm_cmd)
             believe_armed = r.get("ok") is True
             last_rearm = time.monotonic()
             log({"event": "rearm", "ok": r.get("ok"), "reason": r.get("reason")})
