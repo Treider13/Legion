@@ -147,6 +147,8 @@ bladeRF 1 x40 с ревизией `legion`). GHDL-симуляция и хост
 # На шлюзе (мини-ПК с USB3 к плате): python3 fpga/host/legion_gateway.py
 # На этом ПК (Ubuntu, зависимости — INSTALL.md):
 fpga/test/run_acceptance.sh --gw 192.168.1.20 --board micro --ssh user@192.168.1.20
+# Или с автокоммитом зелёного отчёта в репозиторий (коммитит только ALL PASS):
+fpga/test/run_acceptance_and_commit.sh --gw 192.168.1.20 --board micro --ssh user@192.168.1.20
 ```
 
 Прогон пишет лог и JSON-отчёт в `fpga/test/results/`. Красный прогон =

@@ -31,6 +31,24 @@ function App() {
   const [mount3d, setMount3d] = useState(false);
   const [gate, setGate] = useState(false);
   const [settings, setSettings] = useState(false);
+  // Одноразовая заметка про стендовую приёмку: приложение не может знать,
+  // прогонял ли оператор E1–E6 на своей плате — честно напоминаем один раз
+  // (персист в localStorage; без него — просто не показываем).
+  const [acceptNote, setAcceptNote] = useState(() => {
+    try {
+      return !window.localStorage.getItem("legion.acceptanceNoteSeen");
+    } catch {
+      return false;
+    }
+  });
+  const dismissAcceptNote = () => {
+    try {
+      window.localStorage.setItem("legion.acceptanceNoteSeen", "1");
+    } catch {
+      // без персиста заметка вернётся при следующем запуске — допустимо
+    }
+    setAcceptNote(false);
+  };
   const tier = useDeviceTier();
   const workspace = useLegion((s) => s.workspace);
   const mode = modeOf(workspace);
@@ -148,6 +166,19 @@ function App() {
       </section>
 
       <FrequencyField />
+
+      {acceptNote && mode === "sdr" && (
+        <div className="cinema-accept" role="note">
+          <span>
+            Перед боевым применением прогоните стендовую приёмку E1–E6 на своей плате
+            (INSTALL.md §6, fpga/test/run_acceptance_and_commit.sh) — без зелёного прогона
+            стабильность системы не гарантируется.
+          </span>
+          <button type="button" className="cinema-btn ghost" onClick={dismissAcceptNote}>
+            Понятно
+          </button>
+        </div>
+      )}
 
       <CinemaDock
         mode={mode}

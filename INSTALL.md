@@ -113,6 +113,8 @@ cd fpga/vendor/bladerf/hdl/quartus
 
 ```bash
 fpga/test/run_acceptance.sh --gw <IP шлюза> --board micro --ssh user@<IP шлюза>
+# или с автокоммитом зелёного отчёта (коммитит только ALL PASS):
+fpga/test/run_acceptance_and_commit.sh --gw <IP шлюза> --board micro --ssh user@<IP шлюза>
 ```
 
 Лог и JSON-отчёт — `fpga/test/results/`. Этапы и критерии — `fpga/README.md`.
