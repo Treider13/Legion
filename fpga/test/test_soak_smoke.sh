@@ -4,7 +4,7 @@
 # wd_fired) → soak обязан засечь arm_lost и сделать re-ARM (иначе он часами
 # опрашивал бы разоружённую плату — найдено перепроверкой).
 set -u
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || { echo "FAIL: не удалось перейти в корень репозитория" >&2; exit 2; }
 PORT=5597
 export LEGION_FPGA_FAKE=1 LEGION_FPGA_PORT=$PORT
 python3 fpga/host/legion_gateway.py & GW=$!

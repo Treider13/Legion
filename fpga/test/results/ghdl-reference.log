@@ -1,0 +1,33 @@
+# Эталонный прогон GHDL-симуляции ревизии legion (без железа)
+# Дата: 2026-08-29T17:36:10Z · ghdl GHDL 4.1.0 (Ubuntu 4.1.0+dfsg-0ubuntu2.1) [Dunoon edition]
+# Коммит: f16e0d6 · команда: fpga/tb/run_ghdl.sh
+
+== Анализ ==
+== Тестбенчи ==
+legion_detector_tb.vhd:102:9:@2045ns:(report note): legion_detector_tb: PASS
+  OK  legion_detector_tb
+legion_player_tb.vhd:103:9:@675ns:(report note): legion_player_tb: PASS
+  OK  legion_player_tb
+legion_nco_tb.vhd:74:9:@2075ns:(report note): legion_nco_tb: PASS (zero_x=6, max_amp=32752)
+  OK  legion_nco_tb
+legion_watchdog_tb.vhd:60:9:@2922865ns:(report note): legion_watchdog_tb: PASS
+  OK  legion_watchdog_tb
+../../src/ieee2008/numeric_std-body.vhdl:3036:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+legion_dcfifo_tb.vhd:78:9:@1116500ps:(report note): legion_dcfifo_tb: PASS
+  OK  legion_dcfifo_tb
+legion_tx_mux_tb.vhd:190:9:@1805ns:(report note): legion_tx_mux_tb: PASS
+  OK  legion_tx_mux_tb
+legion_regs_tb.vhd:112:9:@668750ps:(report note): legion_regs_tb: PASS
+  OK  legion_regs_tb
+../../src/ieee2008/numeric_std-body.vhdl:3036:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+../../src/ieee2008/numeric_std-body.vhdl:1776:7:@0ms:(assertion warning): NUMERIC_STD."=": metavalue detected, returning FALSE
+legion_integration_tb.vhd:95:9:@471700ps:(report note): legion_integration_tb: PASS (16/16 via CDC)
+  OK  legion_integration_tb
+GHDL: ALL PASS

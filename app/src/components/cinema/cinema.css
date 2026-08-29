@@ -129,6 +129,20 @@
   flex: 0 0 auto;
 }
 
+/* Плашка охлаждения: длительная непрерывная работа (warn шлюза). */
+.legion-root.cinema .cinema-warn {
+  flex: 0 0 auto;
+  margin: 0 22px 4px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 150, 90, 0.55);
+  border-radius: 2px;
+  color: #ffb26b;
+  font-size: 12px;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  animation: alert-blink 1.6s steps(1, end) infinite;
+}
+
 .cinema-dock {
   flex: 0 0 auto;
   display: grid;

@@ -12,7 +12,7 @@ import { CinemaDock } from "./components/cinema/CinemaDock";
 import { FrequencyField } from "./components/cinema/FrequencyField";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
 import { StartGate } from "./components/cinema/StartGate";
-import { heroStatusLine } from "./components/cinema/status";
+import { coolingWarn, heroStatusLine } from "./components/cinema/status";
 import { modeOf } from "./sense/modes";
 import { useDeviceTier } from "./hooks/useDeviceTier";
 import { uiClick } from "./sound/sound";
@@ -102,6 +102,7 @@ function App() {
     telemFreq,
     freqMhz: idleFreqMhz,
   });
+  const cooling = coolingWarn({ fpgaArmed, fpgaStatus });
 
   useEffect(() => {
     return useLegion.subscribe((s) => {
@@ -166,6 +167,12 @@ function App() {
       </section>
 
       <FrequencyField />
+
+      {cooling && (
+        <div className="cinema-warn" role="alert">
+          <span>ОХЛАЖДЕНИЕ: {cooling}</span>
+        </div>
+      )}
 
       {acceptNote && mode === "sdr" && (
         <div className="cinema-accept" role="note">

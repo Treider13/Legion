@@ -1481,7 +1481,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           set({ selectedPort: ports[0].path });
         }
       } catch (e) {
-        pushLog("sys", `ports list failed: ${String(e)}`);
+        pushLog("sys", `не удалось получить список портов: ${String(e)}`);
       }
     },
 
@@ -1492,19 +1492,19 @@ export const useLegion = create<LegionStore>((set, get) => {
       switch (transportKind) {
         case "tauri-serial":
           if (!selectedPort) {
-            pushLog("sys", "no serial port selected");
+            pushLog("sys", "не выбран serial-порт");
             return;
           }
           gTransport = new TauriSerialTransport(selectedPort);
           break;
         case "htool-sl22":
           if (!selectedPort) {
-            pushLog("sys", "no serial port selected");
+            pushLog("sys", "не выбран serial-порт");
             return;
           }
           set({ corrMode: "SWEEP" });
           gTransport = new Sl22Transport(selectedPort);
-          pushLog("sys", "HTOOL SL22: SCPI bridge (no ESP32/ADF4351)");
+          pushLog("sys", "HTOOL SL22: мост SCPI (без ESP32/ADF4351)");
           break;
         case "web-serial":
           gTransport = new WebSerialTransport();
@@ -1535,7 +1535,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
       };
       gClient.onEngineEvent = (e) => {
-        pushLog("sys", `engine event: ${e.event}`);
+        pushLog("sys", `событие движка: ${e.event}`);
         if (e.event === "GLIDE DONE") {
           // GLIDE — одноразовый: по завершении движок сам останавливается
           set({ corridorRunning: false, telemFreq: null });
@@ -1543,7 +1543,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       };
       gClient.onStateChange = (st, detail) => {
         set({ transportState: st, transportDetail: detail });
-        pushLog("sys", `transport: ${st}${detail ? ` (${detail})` : ""}`);
+        pushLog("sys", `транспорт: ${st}${detail ? ` (${detail})` : ""}`);
       };
 
       try {
@@ -1560,7 +1560,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
         }
       } catch (e) {
-        pushLog("sys", `connect failed: ${String(e)}`);
+        pushLog("sys", `подключение не удалось: ${String(e)}`);
         set({ transportState: "error", transportDetail: String(e) });
       }
     },
@@ -3533,7 +3533,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (get().scanRunning) set({ scanRunning: false });
       // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
       // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
-      // что в меню остался пункт «FPGA+СКАНЕР».
+      // что в меню выбран пункт «Автоматический перехват».
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).
@@ -3549,7 +3549,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // а не ручной ARM на середину полосы с порогом «на глаз».
         pushLog(
           "sys",
-          "ПЕРЕДАТЬ в режиме FPGA+СКАНЕР не участвует: цикл автономный — СТАРТ/СТОП на этой вкладке",
+          "ПЕРЕДАТЬ в режиме автоматического перехвата не участвует: цикл автономный — СТАРТ/СТОП на этой вкладке",
         );
         return;
       }

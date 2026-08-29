@@ -39,7 +39,8 @@ export function LegionFlashPanel() {
     <section className="panel">
       <span className="panel-title">КАСТОМ FPGA // РЕВИЗИЯ LEGION</span>
       <p className="panel-note">
-        Своя ревизия поверх hosted Nuand: детектор I²+Q², loopback RX→TX, плеер/NCO, watchdog.
+        Своя ревизия поверх hosted Nuand: детектор энергии сигнала, ретрансляция приём→передача,
+        генератор тона и записанного сигнала, сторожевой таймер.
         Сборка из <code>fpga/</code> этим ПК (Quartus Prime Lite 23.1.1 + NIOS II shell), запись —
         вендорский <code>bladeRF-cli</code>. Официальный hosted-образ — вкладка ПРОШИВКА SDR,
         ESP32 — своя вкладка. Сюда: только bladeRF 1 x40 и bladeRF 2.0 micro xA4/xA9.

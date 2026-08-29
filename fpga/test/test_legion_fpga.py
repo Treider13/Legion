@@ -616,6 +616,75 @@ for _ in range(30):
 check("flash после сбоя потока доезжает (fake)", r.get("done") is True and r.get("ok") is True)
 
 # ---------------------------------------------------------------------------
+# flash + probe физического size FPGA (bladeRF-cli -p): xA4/xA9 и x40/x115
+# по USB PID неразличимы — перед записью сверяем size из probe с size в
+# имени образа. Мягкая деградация: probe не распознан → как раньше.
+# ---------------------------------------------------------------------------
+
+
+def _mk_flash_gw():
+    g = lg.LegionGateway(fake=True)
+    g.fake = False  # «реальный» путь _flash_run со стабами (как gw_f выше)
+    g.fpga = lf.LegionFpga(lg.FakeTransport(board="bladerf2"))
+    g.board = "bladerf2"
+    g._flash = {"running": True, "done": False, "ok": False, "log": "",
+                "action": "load", "path": "", "warn": ""}
+    return g
+
+
+_probe_calls: list = []
+
+
+def _stub_run_probe(size_text):
+    def _run(argv, *a, **k):
+        _probe_calls.append(list(argv))
+        if "-p" in argv:
+            return _types_f.SimpleNamespace(
+                returncode=0, stdout=f"  FPGA size:      {size_text}\n", stderr="")
+        return _types_f.SimpleNamespace(returncode=0, stdout="Flashing done", stderr="")
+    return _run
+
+
+# A4-плата + образ A9 → отказ ДО записи (bladeRF-cli -l/-L не вызывался).
+gw_p = _mk_flash_gw()
+_probe_calls.clear()
+lg.subprocess.run = _stub_run_probe("A4")
+gw_p._flash_run("/abs/legionxA9.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: A4 + образ A9 → отказ", gw_p._flash["ok"] is False)
+check("flash probe: причина называет оба size",
+      "xa4" in gw_p._flash["log"] and "xa9" in gw_p._flash["log"])
+check("flash probe: до записи не дошло (-l/-L не вызывался)",
+      not any(("-l" in c or "-L" in c) for c in _probe_calls))
+# UI показывает st.reason ?? st.log (store.ts) — при отказе probe reason
+# обязан нести само сообщение, а не обобщённый «bladeRF-cli отказ»
+# (bladeRF-cli -l/-L не вызывался — обвинять его было бы ложным следом).
+r = gw_p.handle({"op": "flash_status"})
+check("flash probe: flash_status reason = сообщение отказа, не «bladeRF-cli отказ»",
+      "отказано до записи" in str(r.get("reason")) and "bladeRF-cli отказ" not in str(r.get("reason")))
+
+# A4-плата + образ A4 → запись идёт.
+gw_p2 = _mk_flash_gw()
+_probe_calls.clear()
+lg.subprocess.run = _stub_run_probe("A4")
+gw_p2._flash_run("/abs/legionxA4.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: A4 + образ A4 → записано", gw_p2._flash["ok"] is True)
+check("flash probe: -l вызван", any("-l" in c for c in _probe_calls))
+
+# Probe не распознан → мягкий пропуск, поведение как раньше.
+gw_p3 = _mk_flash_gw()
+lg.subprocess.run = lambda *a, **k: _types_f.SimpleNamespace(
+    returncode=0, stdout="unrecognized probe output", stderr="")
+gw_p3._flash_run("/abs/legionxA4.rbf", "load")
+lg.subprocess.run = _orig_run
+check("flash probe: нераспознанный probe → мягкий пропуск", gw_p3._flash["ok"] is True)
+
+# Парсер: «40 KLE» (bladeRF 1) и «A9» (micro) оба принимаются.
+check("flash probe: карта size «40 KLE»/«A9»",
+      lg._FPGA_SIZE_KEYS.get("40") == "x40" and lg._FPGA_SIZE_KEYS.get("A9") == "xa9")
+
+# ---------------------------------------------------------------------------
 # D1/D2: UsbTransport против стаба pyusb — QUERY_FPGA_STATUS на acquire
 # (BLADE_USB_CMD 1, 0xC0 — как usb_is_fpga_configured в libbladeRF) и
 # retry xfer с re-acquire при USBError (re-enumerate).
@@ -985,6 +1054,28 @@ check("micro: ARM nco с fs/bw → ok", r.get("ok") is True)
 check("micro: nco AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
 rpcm({"op": "disarm"})
 
+# ---------------------------------------------------------------------------
+# air-hop обход как серия tune (сторона шлюза): ARM lb_gated на первой
+# стоянке → N шагов подряд, каждый несёт LO + det_thr своей полки (таблица
+# порогов из калибровочного прохода). Между шагами CTRL не трогается, USB
+# не отпускается; финальный DISARM чистый.
+# ---------------------------------------------------------------------------
+r = rpcm({"op": "arm", "mode": "lb_gated", "freq_mhz": 2412.0,
+          "fs_hz": 2_000_000, "bw_mhz": 2, "det_thr": 3000})
+check("air-hop: ARM lb_gated первой стоянки → ok", r.get("ok") is True)
+ctrl_walk = gw_m.fpga._t.regs.get(lf.REG_CTRL)
+for i, (f, thr) in enumerate([(2412.0, 3000), (2437.0, 5200), (2462.0, 4100), (2437.0, 5200)]):
+    r = rpcm({"op": "tune", "freq_mhz": f, "fs_hz": 2_000_000, "bw_mhz": 2, "det_thr": thr})
+    check(f"air-hop: шаг {i} tune {f} МГц → ok", r.get("ok") is True)
+    check(f"air-hop: шаг {i} AIR_FREQ стоянки",
+          gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == int(f * 1000))
+    check(f"air-hop: шаг {i} DET_THR своей полки",
+          gw_m.fpga._t.regs.get(lf.REG_DET_THR) == thr)
+check("air-hop: CTRL не тронут за весь обход", gw_m.fpga._t.regs.get(lf.REG_CTRL) == ctrl_walk)
+check("air-hop: USB не отпускался между шагами", gw_m.fpga._t.released is False)
+r = rpcm({"op": "disarm"})
+check("air-hop: DISARM после обхода → ok", r.get("ok") is True)
+
 # op flash на micro: семейство A-серии, x40 отвергается (PID общий 0x5250,
 # A4/A9 по USB не различить — size на операторе, как в docs Nuand).
 r = rpcm({"op": "flash", "path": "/tmp/legionx40.rbf", "action": "load"})
@@ -1083,6 +1174,28 @@ check("при CLIENT_TIMEOUT_S=0.3 живой ping работает", r.get("ok"
 srv3.shutdown()
 srv3.server_close()
 lg.CLIENT_TIMEOUT_S = 300.0
+
+# ---------------------------------------------------------------------------
+# 7. Один экземпляр агента (flock): второй захват на том же пути отказывает.
+#    Два открытых fd на один файл = два open-file-description → конфликт
+#    воспроизводится внутри одного процесса, второй агент не нужен.
+# ---------------------------------------------------------------------------
+os.environ["LEGION_FPGA_LOCK"] = f"/tmp/legion-test-lock-{os.getpid()}"
+h1 = lg.acquire_instance_lock()
+check("instance lock: первый захват получен", h1 is not None)
+h2 = lg.acquire_instance_lock()
+check("instance lock: второй экземпляр отказан", h2 is None)
+if h1 is not None and h1 is not True:
+    h1.close()  # смерть процесса сняла бы лок; здесь закрываем явно
+h3 = lg.acquire_instance_lock()
+check("instance lock: после освобождения захват снова возможен", h3 is not None)
+if h3 is not None and h3 is not True:
+    h3.close()
+# Недоступный путь (нет каталога/прав) — чистый отказ None, не traceback.
+os.environ["LEGION_FPGA_LOCK"] = f"/tmp/legion-no-such-dir-{os.getpid()}/lock"
+h4 = lg.acquire_instance_lock()
+check("instance lock: недоступный путь → чистый отказ (fail-closed)", h4 is None)
+os.environ.pop("LEGION_FPGA_LOCK")
 
 print("LEGION FPGA HOST: ALL PASS" if fails == 0 else f"LEGION FPGA HOST: {fails} FAILURES")
 sys.exit(0 if fails == 0 else 1)

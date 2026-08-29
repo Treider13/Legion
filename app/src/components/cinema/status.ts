@@ -88,3 +88,17 @@ export function heroStatusLine(s: HeroState): HeroLine {
   }
   return { kind: "idle", text: "ОЖИДАНИЕ", detail: freqTxt };
 }
+
+/**
+ * Отдельная плашка про охлаждение на главном кадре. warn шлюза
+ * (длительная непрерывная работа, LEGION_ARM_WARN_S) и так едет в хвосте
+ * hero-detail, но там он тонул; температуры AD9361 в этой NIOS-сборке
+ * нет (legion_gateway.py, шапка) — этот таймер единственный термо-сигнал
+ * оператору, поэтому дублируем его заметно. Только при живом ARM:
+ * после DISARM/СТОП предупреждение не актуально.
+ */
+export function coolingWarn(s: Pick<HeroState, "fpgaArmed" | "fpgaStatus">): string | null {
+  if (!s.fpgaArmed) return null;
+  const warn = s.fpgaStatus?.warn;
+  return warn ? String(warn) : null;
+}

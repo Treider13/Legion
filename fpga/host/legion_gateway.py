@@ -92,6 +92,38 @@ DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
 # из старых docs). hosted/FX3/чужие имена op flash не принимает.
 LEGION_RBF_RE = re.compile(r"^legion_?x(40|a4|a9)\.rbf$", re.IGNORECASE)
 
+# bladeRF-cli -p (probe): строка «FPGA size: …» — A4/A9 у micro, «40 KLE»/
+# «115 KLE» у bladeRF 1. По USB PID размер не различить (xA4/xA9 = 0x5250,
+# x40/x115 = 0x5246) — probe единственная проверка физического size.
+_FPGA_SIZE_RE = re.compile(r"FPGA\s+size\s*:\s*([A-Za-z0-9]+)", re.IGNORECASE)
+_FPGA_SIZE_KEYS = {"40": "x40", "115": "x115", "A4": "xa4", "A5": "xa5", "A9": "xa9"}
+
+
+def _rbf_size_key(path: str) -> "str | None":
+    """Класс size по имени артефакта: legionxA4.rbf → 'xa4'."""
+    m = LEGION_RBF_RE.match(os.path.basename(path.strip()))
+    if not m:
+        return None
+    return {"40": "x40", "a4": "xa4", "a9": "xa9"}[m.group(1).lower()]
+
+
+def _probe_fpga_size_key() -> "str | None":
+    """Физический размер FPGA по probe bladeRF-cli: 'x40'/'x115'/'xa4'/'xa5'/'xa9'.
+    None — probe не удался или формат незнаком: тогда НЕ блокируем (ложный
+    запрет хуже отсутствия проверки) — остаётся сверка класса платы по PID
+    из _flash_validate. Парсинг терпимый: «A4» и «40 KLE» оба принимаются."""
+    try:
+        cp = subprocess.run(["bladeRF-cli", "-p"],
+                            capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if cp.returncode != 0:
+        return None
+    m = _FPGA_SIZE_RE.search(cp.stdout or "")
+    if not m:
+        return None
+    return _FPGA_SIZE_KEYS.get(m.group(1).upper())
+
 # Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
 # сам DISARM → USB release (именно в этом порядке: release без DISARM
 # отдал бы плату Soapy с живым ARM и поднятым аналогом). Дефолт 2.5 с:
@@ -204,8 +236,9 @@ class UsbTransport:
         try:
             if self._dev is not None:
                 self._usb.util.dispose_resources(self._dev)
-        except Exception:
-            pass
+        except Exception as e:
+            # Не фатально (handle и так мёртв), но молчание прятало сбой шины.
+            print(f"legion-gateway: dispose_resources при re-acquire: {e}", flush=True)
         self._dev = None
         time.sleep(0.2)
         self._acquire()
@@ -532,6 +565,7 @@ class LegionGateway:
         log = ""
         warn = ""
         ok = False
+        refused = False  # отказ проверки size ДО записи — не вина bladeRF-cli
         try:
             if self.fake:
                 time.sleep(0.2)  # протокол без железа: имитация длительности
@@ -546,10 +580,22 @@ class LegionGateway:
             self._legion = None
             flag = "-l" if action == "load" else "-L"
             try:
-                cp = subprocess.run(["bladeRF-cli", flag, path],
-                                    capture_output=True, text=True, timeout=180)
-                log = (cp.stdout + cp.stderr).strip()[-800:]
-                ok = cp.returncode == 0
+                # Физический size FPGA против size в имени образа: xA4/xA9 и
+                # x40/x115 по USB PID неразличимы, чужой образ кирпичит FPGA
+                # до отката. Probe не распознан → мягкий пропуск (см. helper).
+                probed = _probe_fpga_size_key()
+                want = _rbf_size_key(path)
+                if probed is not None and want is not None and probed != want:
+                    ok = False
+                    refused = True
+                    log = (f"отказано до записи: bladeRF-cli -p видит FPGA {probed}, "
+                           f"а образ для {want} ({os.path.basename(path)}) — "
+                           f"неверный size; проверьте плату и файл")
+                else:
+                    cp = subprocess.run(["bladeRF-cli", flag, path],
+                                        capture_output=True, text=True, timeout=180)
+                    log = (cp.stdout + cp.stderr).strip()[-800:]
+                    ok = cp.returncode == 0
             except FileNotFoundError:
                 log = "bladeRF-cli не найден на шлюзе"
             except subprocess.TimeoutExpired:
@@ -569,7 +615,7 @@ class LegionGateway:
                         f"Soapy на шлюзе не остановлен или FPGA не сконфигурировалась")
         finally:
             self._flash.update({"running": False, "done": True, "ok": ok,
-                                "log": log, "warn": warn})
+                                "log": log, "warn": warn, "refused": refused})
 
     def handle(self, msg: dict) -> dict:
         op = msg.get("op")
@@ -600,8 +646,18 @@ class LegionGateway:
                 return {"ok": False, "reason": "flash не запускался"}
             if f["running"]:
                 return {"ok": True, "running": True, "action": f["action"]}
-            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
             warn = f.get("warn") or ""
+            if f.get("refused"):
+                # Отказ проверки size ДО записи: bladeRF-cli -l/-L не
+                # вызывался — «bladeRF-cli отказ» обвинял бы не ту сторону.
+                # reason несёт само сообщение отказа (UI показывает reason,
+                # а не log — store.ts: st.reason ?? st.log).
+                return {"ok": False, "running": False, "done": True,
+                        "action": f["action"],
+                        "reason": f["log"] or "отказано проверкой size FPGA",
+                        "warn": warn,
+                        "log": f["log"]}
+            base = "bladeRF-cli ok" if f["ok"] else "bladeRF-cli отказ"
             return {"ok": bool(f["ok"]), "running": False, "done": True,
                     "action": f["action"],
                     "reason": base + (f" · ВНИМАНИЕ: {warn}" if warn else ""),
@@ -902,8 +958,46 @@ def gateway_cleanup(gw: LegionGateway) -> None:
         print(f"legion-gateway: cleanup USB release: {e}", flush=True)
 
 
+def acquire_instance_lock() -> "object | None":
+    """Один экземпляр агента на машине. Два агента на одной плате делили бы
+    USB/FPGA (fx3 — один интерфейс): кооперативный release/acquire между
+    шлюзом и Soapy от двухголового агента не спасает. flock держим всю
+    жизнь процесса (смерть процесса = лок снят); путь — LEGION_FPGA_LOCK
+    (тесты), дефолт /tmp/legion-gateway.lock. Возвращает держателя лока
+    (не закрывать!) или None, если агент уже запущен."""
+    try:
+        import fcntl  # Unix-only; целевая ОС агента — Linux (INSTALL.md)
+    except ImportError:
+        return True  # не Unix: лок не поддержан — не блокируем запуск
+    path = os.environ.get("LEGION_FPGA_LOCK", "/tmp/legion-gateway.lock")
+    try:
+        fd = open(path, "w")
+    except OSError:
+        # Нет прав (lock создал root под systemd, агент запущен вручную) или
+        # нет каталога (LEGION_FPGA_LOCK) — fail-closed, как при занятом локе:
+        # агенту с радио-TX traceback некрасив и небезопасен.
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fd.close()
+        return None
+    return fd
+
+
 def main() -> int:
     port = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
+    if not FAKE:
+        # FAKE — проверка протокола без железа: USB не трогает, лок не нужен
+        # (иначе тестовый агент на стенде с живым агентом не поднялся бы).
+        lock = acquire_instance_lock()
+        if lock is None:
+            print("legion-gateway: lock "
+                  f"{os.environ.get('LEGION_FPGA_LOCK', '/tmp/legion-gateway.lock')} не взят — "
+                  "уже запущен другой экземпляр (systemctl stop legion-gateway) "
+                  "или нет прав на lock-файл; второй экземпляр делил бы USB с первым",
+                  flush=True)
+            return 2
     gw = LegionGateway(FAKE)
 
     def _on_signal(signum, frame) -> None:

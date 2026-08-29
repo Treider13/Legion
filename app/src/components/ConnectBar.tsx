@@ -32,7 +32,7 @@ export function ConnectBar() {
         .then((p) => {
           if (p) s.setSelectedPort(p);
         })
-        .catch(() => {});
+        .catch((e) => console.warn("LEGION_PORT: порт по умолчанию не получен:", e));
     } else if (isWebSerialSupported()) {
       s.setTransportKind("web-serial");
     }
