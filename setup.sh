@@ -117,8 +117,8 @@ echo "== Тракт ESP32 (опционально, режим 2) =="
 if $PY -m platformio --version >/dev/null 2>&1; then
   ok "platformio $($PY -m platformio --version 2>/dev/null)"
 else
-  warn "platformio не найден (нужен только для ESP32) — pip install platformio"
-  maybe "platformio" $PY -m pip install platformio
+  warn "platformio не найден (нужен только для ESP32) — pip install \"platformio>=6.1\""
+  maybe "platformio" $PY -m pip install "platformio>=6.1"
 fi
 
 echo "== Quartus (только для сборки образа FPGA legion) =="

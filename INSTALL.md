@@ -170,7 +170,7 @@ fpga/test/run_acceptance_and_commit.sh --gw <IP шлюза> --board micro --ssh 
 
 ```bash
 source .venv/bin/activate
-pip install platformio
+pip install "platformio>=6.1"
 cd firmware
 pio run -e esp32-s3 --target upload    # env под вашу плату (см. platformio.ini)
 ```
@@ -182,6 +182,7 @@ pio run -e esp32-s3 --target upload    # env под вашу плату (см. p
 | Тема | Файл |
 |---|---|
 | Архитектура | `docs/architecture.md` |
+| Зависимости (версии, источники) | `docs/dependencies.md` |
 | Протокол ESP32 | `docs/protocol.md` |
 | Прошивки SDR / Ethernet | `docs/sdr-firmware.md` |
 | FPGA legion: сборка, эксплуатация, приёмка | `fpga/README.md` |
