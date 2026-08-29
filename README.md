@@ -1,5 +1,7 @@
 # LEGION // RF SYNTH CONTROL
 
+[![CI](https://github.com/Treider13/Legion/actions/workflows/ci.yml/badge.svg)](https://github.com/Treider13/Legion/actions/workflows/ci.yml)
+
 **LEGION** — система дистанционного управления широкополосным синтезатором
 частоты **Analog Devices ADF4351** (34.375 МГц – 4.4 ГГц) через микроконтроллер
 **ESP32** с программным обеспечением на ноутбуке/компьютере.

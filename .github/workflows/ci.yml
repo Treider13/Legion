@@ -161,6 +161,28 @@ jobs:
           python3 -m py_compile tools/legion_cli.py tools/sdr_worker.py tools/test_sdr_worker.py
           python3 tools/legion_cli.py --list
           python3 tools/test_sdr_worker.py
+      - name: pytest (единая точка запуска хостовых Python-наборов)
+        run: |
+          pip install pytest
+          python3 -m pytest -q
+
+  # ------------------------------------------------------------------
+  # Shell-скрипты: статический контроль (warning и строже)
+  # ------------------------------------------------------------------
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
+      - name: shellcheck -S warning
+        run: >-
+          shellcheck -S warning
+          setup.sh tools/build_lite_ui.sh
+          fpga/check_toolchain.sh fpga/tb/run_ghdl.sh
+          fpga/test/*.sh
 
   # ------------------------------------------------------------------
   # FPGA (ревизия legion для x40): GHDL-симуляция + хост-тесты.

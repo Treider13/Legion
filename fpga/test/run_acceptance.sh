@@ -3,12 +3,13 @@
 #
 #   fpga/test/run_acceptance.sh --gw <IP шлюза> [--board micro] [--ssh user@host] [--skip-e6]
 #
-# Лог и JSON-отчёт складываются в fpga/test/results/acceptance-<время>-<плата>.*.
+# Лог и JSON-отчёт складываются в fpga/test/results/acceptance-<время>.log/.json
+# (плата — внутри JSON, поле board; в имя не входит).
 # Код возврата = код acceptance_bench.py (0 = ALL PASS).
 # Без успешного прогона на целевой плате система стабильной НЕ считается
 # (см. README.md, раздел «Приёмка на железе»).
 set -u
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || { echo "FAIL: не удалось перейти в корень репозитория" >&2; exit 2; }
 
 GW=""
 EXTRA=()
