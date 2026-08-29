@@ -77,7 +77,7 @@ import {
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
-import { heroStatusLine } from "../src/components/cinema/status";
+import { coolingWarn, heroStatusLine } from "../src/components/cinema/status";
 import {
   heldHitAlive,
   nextAfterOperatorReset,
@@ -1654,6 +1654,19 @@ async function main(): Promise<void> {
   });
   check("hero: warn виден и в генерации (player), не только в ретрансляции",
     heroGenWarn.kind === "tx" && heroGenWarn.detail.includes("охлаждение"));
+  // Плашка охлаждения на главном кадре (P1.1): warn шлюза дублируется
+  // заметно — в hero-detail он тонул; термометра в NIOS-сборке нет.
+  const cool = coolingWarn({
+    fpgaArmed: true,
+    fpgaStatus: { ok: true, warn: "непрерывная работа 6 мин — проверьте охлаждение" },
+  });
+  check("охлаждение: warn при живом ARM даёт плашку", cool !== null && cool.includes("охлаждение"));
+  check("охлаждение: без ARM плашки нет (СТОП/DISARM сняли вопрос)",
+    coolingWarn({ fpgaArmed: false, fpgaStatus: { ok: true, warn: "непрерывная работа 6 мин" } }) === null);
+  check("охлаждение: без warn плашки нет",
+    coolingWarn({ fpgaArmed: true, fpgaStatus: { ok: true } }) === null);
+  check("охлаждение: плашка рендерится на главном кадре",
+    appSrc.includes("coolingWarn(") && appSrc.includes("cinema-warn"));
   const heroCorr = heroStatusLine({ ...heroBase, corridorRunning: true, telemFreq: 2442 });
   check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
