@@ -109,6 +109,26 @@
   color: #efe8dc;
 }
 
+.cinema-accept {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 22px 4px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 212, 121, 0.35);
+  border-radius: 2px;
+  color: rgba(255, 212, 121, 0.85);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cinema-accept .cinema-btn {
+  min-height: 36px;
+  flex: 0 0 auto;
+}
+
 .cinema-dock {
   flex: 0 0 auto;
   display: grid;
@@ -421,6 +441,17 @@ button.cinema-wave.on:hover:not(:disabled) {
   margin: 0 0 12px;
   color: #ffb4a8;
   font-size: 12px;
+}
+
+.cinema-gate-warn {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 212, 121, 0.3);
+  border-radius: 2px;
+  color: rgba(255, 212, 121, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 58ch;
 }
 
 .cinema-gate-actions {

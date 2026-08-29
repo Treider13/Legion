@@ -1043,5 +1043,46 @@ srv2.shutdown()
 srv2.server_close()
 os.environ.pop("LEGION_FPGA_TOKEN")
 
+# ---------------------------------------------------------------------------
+# 6. Таймаут клиентского сокета (LEGION_FPGA_CLIENT_TIMEOUT_S): зависший
+#    peer не держит поток handler'а вечно (аудит P2).
+# ---------------------------------------------------------------------------
+import time as _time  # noqa: E402
+
+lg.CLIENT_TIMEOUT_S = 0.3
+gw3 = lg.LegionGateway(fake=True)
+srv3 = lg._Server(("127.0.0.1", 0), lg._Handler)
+srv3.gw = gw3
+_th.Thread(target=srv3.serve_forever, daemon=True).start()
+port3 = srv3.server_address[1]
+
+# Молчащее соединение: сервер обязан закрыть его сам по таймауту.
+s3 = _socket.create_connection(("127.0.0.1", port3), timeout=3)
+s3.settimeout(3)
+t0 = _time.monotonic()
+closed = False
+try:
+    while _time.monotonic() - t0 < 3:
+        if s3.recv(16) == b"":
+            closed = True
+            break
+except _socket.timeout:
+    pass
+s3.close()
+check("молчаливый клиент отброшен по CLIENT_TIMEOUT_S", closed)
+
+
+def rpc3(msg: dict) -> dict:
+    with _socket.create_connection(("127.0.0.1", port3), timeout=3) as s:
+        s.sendall((json_dumps(msg) + "\n").encode())
+        return json_loads(s.makefile("rb").readline())
+
+
+r = rpc3({"op": "ping"})
+check("при CLIENT_TIMEOUT_S=0.3 живой ping работает", r.get("ok") is True)
+srv3.shutdown()
+srv3.server_close()
+lg.CLIENT_TIMEOUT_S = 300.0
+
 print("LEGION FPGA HOST: ALL PASS" if fails == 0 else f"LEGION FPGA HOST: {fails} FAILURES")
 sys.exit(0 if fails == 0 else 1)

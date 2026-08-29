@@ -52,6 +52,7 @@ import json
 import os
 import re
 import signal
+import socket
 import socketserver
 import subprocess
 import sys
@@ -102,6 +103,13 @@ KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
 # Длительная непрерывная работа под током: предупреждение оператору в status
 # (температуры AD9361 в этой NIOS-сборке нет — см. шапку). 0 = выключить.
 ARM_WARN_S = float(os.environ.get("LEGION_ARM_WARN_S", "300"))
+
+# Таймаут клиентского TCP-соединения: зависший peer не держит поток handler'а
+# вечно (ThreadingTCPServer плодит по потоку на соединение). Клиенты шлюза
+# (sdr_worker fpga_rpc) открывают соединение на ОДНУ команду (таймаут ответа
+# 12 с), поэтому 300 с тишины — гарантированно мусор, а не живой клиент.
+# 0 = выключить (не рекомендуется).
+CLIENT_TIMEOUT_S = float(os.environ.get("LEGION_FPGA_CLIENT_TIMEOUT_S", "300"))
 
 
 class UsbTransport:
@@ -612,14 +620,14 @@ class LegionGateway:
                 return {"ok": False, "reason": f"неизвестный mode {mode_name}"}
             # lb_gated без явного порога = гейт на шум (порог 0). Отказ честно.
             if mode == lf.MODE_LB_GATED and msg.get("det_thr") is None and not self.det_thr_set:
-                return {"ok": False, "reason": "lb_gated: сначала det_thr (порог детектора)"}
+                return {"ok": False, "reason": "ретрансляция по энергии: не задан порог детектора (поле «Порог чувствительности»)"}
             if msg.get("det_thr") is not None:
                 # Явный порог ниже floor (в т.ч. 0) = гейт на шум. Раньше 0
                 # проходил — документация («0 шлюз отвергает») расходилась
                 # с кодом; floor по умолчанию 1, поднимается LEGION_DET_THR_FLOOR.
                 if mode == lf.MODE_LB_GATED and int(msg["det_thr"]) < DET_THR_FLOOR:
                     return {"ok": False,
-                            "reason": f"lb_gated: det_thr {msg['det_thr']} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                            "reason": f"порог детектора {msg['det_thr']} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
@@ -653,6 +661,13 @@ class LegionGateway:
                 self._armed_at = time.monotonic()
                 self._wd_en = bool(msg.get("wd", True))
                 self._wd_attempts = 0
+                if not self._wd_en:
+                    # Отказ от deadman — видимая строка в журнале шлюза, не
+                    # молчаливый режим: сторож kick_age молчит, TX гаснет
+                    # только явным DISARM (приложение LEGION так не ARM'ит —
+                    # инвариант fpgaArmCmd; это путь сырых API-клиентов).
+                    print("legion-gateway: ARM с wd=false — оператор отказался от "
+                          "deadman; TX гаснет только по DISARM", flush=True)
             elif (self._rx_by_us or self._tx_by_us) and not self._armed:
                 # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
                 # подняли, а ARM не взвёлся — тракт под током не оставляем
@@ -766,7 +781,7 @@ class LegionGateway:
             # det_thr_set, и lb_gated без det_thr армировался с гейтом на шум.
             if reg == "det_thr" and val < DET_THR_FLOOR:
                 return {"ok": False,
-                        "reason": f"det_thr {val} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                        "reason": f"порог детектора {val} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True
@@ -801,7 +816,7 @@ class LegionGateway:
             if thr is not None:
                 if int(thr) < DET_THR_FLOOR:
                     return {"ok": False,
-                            "reason": f"tune: det_thr {thr} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                            "reason": f"tune: порог детектора {thr} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
                 if not self.fpga.write_reg(lf.REG_DET_THR, int(thr)):
                     return {"ok": False, "reason": "tune: запись DET_THR не удалась"}
             freq = msg.get("freq_mhz")
@@ -826,28 +841,36 @@ class LegionGateway:
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         gw: LegionGateway = self.server.gw  # type: ignore[attr-defined]
-        for raw in self.rfile:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line.decode("utf-8", "replace"))
-                # Авторизация: при заданном LEGION_FPGA_TOKEN каждая команда
-                # (кроме ping) несёт токен; неверный/отсутствует — отказ.
-                if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
-                    resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
-                elif msg.get("op") == "ping":
-                    # ping без лока: длинный ARM/сторож не задерживают liveness
-                    resp = gw.handle(msg)
-                else:
-                    # Сериализация операций: xfer — пара write/read 16-байтных
-                    # пакетов, её нельзя перемежать с другой командой или
-                    # DISARM сторожа (ответ уехал бы не тому).
-                    with gw._op_lock:
+        if CLIENT_TIMEOUT_S > 0:
+            # Тишина дольше таймаута → чтение бросит TimeoutError и соединение
+            # закроется. Касается и записи ответа в умерший сокет.
+            self.connection.settimeout(CLIENT_TIMEOUT_S)
+        try:
+            for raw in self.rfile:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", "replace"))
+                    # Авторизация: при заданном LEGION_FPGA_TOKEN каждая команда
+                    # (кроме ping) несёт токен; неверный/отсутствует — отказ.
+                    if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
+                        resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
+                    elif msg.get("op") == "ping":
+                        # ping без лока: длинный ARM/сторож не задерживают liveness
                         resp = gw.handle(msg)
-            except Exception as e:
-                resp = {"ok": False, "reason": str(e)}
-            self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
+                    else:
+                        # Сериализация операций: xfer — пара write/read 16-байтных
+                        # пакетов, её нельзя перемежать с другой командой или
+                        # DISARM сторожа (ответ уехал бы не тому).
+                        with gw._op_lock:
+                            resp = gw.handle(msg)
+                except Exception as e:
+                    resp = {"ok": False, "reason": str(e)}
+                self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
+        except (TimeoutError, socket.timeout):
+            # Клиент молчал дольше CLIENT_TIMEOUT_S — поток освобождаем.
+            pass
 
 
 class _Server(socketserver.ThreadingTCPServer):

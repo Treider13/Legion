@@ -125,7 +125,7 @@ python3 tools/esp32_emulator.py   # печатает /dev/pts/N — виртуа
 
 | Слой | Команда | Что проверяет |
 |---|---|---|
-| Математика регистров | `cd firmware && pio test -e native` | 23 юнит-теста против эталонов даташита/pyadf435x (сетка 34.375–4400 МГц, «проклятая» 2175 МГц) |
+| Математика регистров | `cd firmware && pio test -e native` | 57 юнит-тестов против эталонов даташита/pyadf435x (сетка 34.375–4400 МГц, «проклятая» 2175 МГц) |
 | Парсер прошивки | `pio test -e native_fuzz` | 10 000 фазз-кейсов в production-парсер (host-сборка с shim'ами) |
 | Протокол (PTY) | `python3 tools/fuzz_protocol.py` | 1000 случайных/битых команд против эмулятора |
 | ПК-протокол | `cd app && npx tsx scripts/smoke_mock.ts` | 21 проверка команд/ошибок |
@@ -147,6 +147,8 @@ bladeRF 1 x40 с ревизией `legion`). GHDL-симуляция и хост
 # На шлюзе (мини-ПК с USB3 к плате): python3 fpga/host/legion_gateway.py
 # На этом ПК (Ubuntu, зависимости — INSTALL.md):
 fpga/test/run_acceptance.sh --gw 192.168.1.20 --board micro --ssh user@192.168.1.20
+# Или с автокоммитом зелёного отчёта в репозиторий (коммитит только ALL PASS):
+fpga/test/run_acceptance_and_commit.sh --gw 192.168.1.20 --board micro --ssh user@192.168.1.20
 ```
 
 Прогон пишет лог и JSON-отчёт в `fpga/test/results/`. Красный прогон =

@@ -61,7 +61,15 @@ async function main(): Promise<void> {
   // Стратегия «По очереди» → появляется поле выдержки.
   await click(page, "По очереди");
   await waitFor(page, `Array.from(document.querySelectorAll("label")).some(l => l.textContent?.includes("Выдержка"))`);
-  await click(page, "Продолжить"); // walk → старт
+  // Финальный шаг мастера — кнопка «Запустить» (аудит P2). Клик строго в
+  // карточке мастера: в доке есть своя «Запустить», первую в DOM нельзя.
+  const finalLabel = await page.$eval(
+    ".cinema-gate-actions .cinema-btn.solid",
+    (el) => el.textContent?.trim() ?? "",
+  );
+  await page.evaluate(() => {
+    (document.querySelector(".cinema-gate-actions .cinema-btn.solid") as HTMLButtonElement | null)?.click();
+  });
 
   // Браузер = эмуляция: скан-фаза обязана подняться, hero — ПОИСК.
   await waitFor(page, `document.querySelector(".hero-status")?.textContent?.includes("ПОИСК")`);
@@ -74,6 +82,7 @@ async function main(): Promise<void> {
 
   const checks: Array<[string, boolean]> = [
     ["idle до старта = ОЖИДАНИЕ", idle0.includes("ОЖИДАНИЕ")],
+    ["финальный шаг мастера = кнопка «Запустить»", finalLabel === "Запустить"],
     ["перехват из мастера поднял скан (hero ПОИСК)", searching.includes("ПОИСК")],
     ["Стоп вернул ОЖИДАНИЕ", idle1.includes("ОЖИДАНИЕ")],
   ];

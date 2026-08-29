@@ -1,5 +1,9 @@
 # LEGION — установка (Ubuntu 22.04 / 24.04)
 
+**Инструкция актуальна только для Linux** (проверено на Ubuntu 22.04/24.04).
+Windows/macOS не поддерживаются: шлюз FPGA, приёмка E1–E6 и сборка ревизии
+legion привязаны к Linux-инструментам (pyusb/systemd/Quartus для Linux).
+
 Пошаговый сценарий «чистая Ubuntu → рабочий стенд с bladeRF 2.0 micro xA4».
 Тракт ESP32 (режим 2) — в конце, он независим.
 
@@ -35,6 +39,26 @@ SoapySDRUtil --find          # видит модуль bladerf
 python3 -c "import SoapySDR" # python-биндинг
 node --version               # ≥ 20
 ```
+
+### udev-правила (USB без root)
+
+Пакет `bladerf` из Ubuntu обычно ставит правила сам. Проверка:
+
+```bash
+dpkg -L bladerf libbladerf2 2>/dev/null | grep udev   # готовые правила пакета
+ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
+```
+
+Если правил нет (плата видна только под root — `bladeRF-cli -p` молчит у
+обычного пользователя), возьмите их из дерева Nuand:
+[host/misc/udev](https://github.com/Nuand/bladeRF/tree/master/host/misc/udev)
+— там шаблоны `88-nuand-bladerf1.rules.in` / `88-nuand-bladerf2.rules.in`
+(подстановка `@BLADERF_GROUP@` → группа `plugdev` — дефолт в их CMake,
+режим `660`; готовые варианты есть и в пакете `libbladerf2`/`bladerf`
+большинства сборок).
+Копировать в `/etc/udev/rules.d/` с расширением `.rules`, затем
+`sudo udevadm control --reload && sudo udevadm trigger`. Шлюз и приёмка
+работают от обычного пользователя; root не нужен.
 
 ## 2. Python-зависимости проекта (venv)
 
@@ -83,9 +107,28 @@ python3 fpga/host/legion_gateway.py  # порт 5531
 
 (Альтернатива — venv как в §2: `.venv/bin/python fpga/host/legion_gateway.py`.)
 
-Автозапуск — `fpga/systemd/legion-gateway.service`. Если FPGA пустая после
-подачи питания (xA4 питается от USB) — `LEGION_FPGA_RBF=/путь/legionxA4.rbf`
-для автозагрузки.
+**Один владелец USB.** У bladeRF один USB-интерфейс, захватываемый
+эксклюзивно: `legion_gateway.py` и `SoapySDRServer` одновременно на одной
+плате **не работают** (факт из дескриптора FX3, подробности —
+`fpga/README.md`, «Эксплуатационные факты»). Порядок смены владельца —
+только через команды шлюза `usb release`/`usb acquire` (приложение делает
+это само в цикле сканер↔FPGA). Прошивка платы: стоп агента →
+`bladeRF-cli -l/-L` → старт агента.
+
+Автозапуск — systemd-юнит `fpga/systemd/legion-gateway.service`:
+
+```bash
+sudo install -d /opt/legion
+sudo install -m644 fpga/host/legion_gateway.py fpga/host/legion_fpga.py /opt/legion/
+sudo install -m644 fpga/systemd/legion-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now legion-gateway
+systemctl status legion-gateway   # active (running), порт 5531
+```
+
+Токен (`LEGION_FPGA_TOKEN`) и автозагрузка образа (`LEGION_FPGA_RBF`)
+задаются раскомментированием строк `Environment=` в юните. Если FPGA пустая
+после подачи питания (xA4 питается от USB) — без `LEGION_FPGA_RBF` агент
+честно откажет, с ним загрузит образ сам.
 
 ## 5. Образ FPGA ревизии legion
 
@@ -97,8 +140,12 @@ NIOS II EDS входит в установку.
 
 ```bash
 fpga/check_toolchain.sh   # проверка тулчейна до сборки
+# Сборка — из nios2_command_shell (NIOS II EDS входит в Quartus Lite):
+source ~/intelFPGA_lite/23.1std/nios2eds/nios2_command_shell.sh
 cd fpga/vendor/bladerf/hdl/quartus
-./build_bladerf.sh -b bladeRF-micro -s A4 -r legion   # → legionxA4.rbf
+./build_bladerf.sh -b bladeRF-micro -s A4 -r legion   # → legionxA4.rbf (micro xA4)
+./build_bladerf.sh -b bladeRF-micro -s A9 -r legion   # → legionxA9.rbf (micro xA9)
+./build_bladerf.sh -b bladeRF -s 40 -r legion         # → legionx40.rbf (bladeRF 1 x40)
 ```
 
 Запись в плату — из приложения, вкладка **КАСТОМ FPGA** (СОБРАТЬ → ПРОШИТЬ),
@@ -113,6 +160,8 @@ cd fpga/vendor/bladerf/hdl/quartus
 
 ```bash
 fpga/test/run_acceptance.sh --gw <IP шлюза> --board micro --ssh user@<IP шлюза>
+# или с автокоммитом зелёного отчёта (коммитит только ALL PASS):
+fpga/test/run_acceptance_and_commit.sh --gw <IP шлюза> --board micro --ssh user@<IP шлюза>
 ```
 
 Лог и JSON-отчёт — `fpga/test/results/`. Этапы и критерии — `fpga/README.md`.

@@ -315,7 +315,7 @@ export function SignalPanel() {
           <div className="sdr-facts">
             <div>
               {s.fpgaStatus.ok
-                ? `playing=${s.fpgaStatus.playing ? "да" : "нет"} · capture_done=${s.fpgaStatus.capture_done ? "да" : "нет"} · det=${s.fpgaStatus.det_active ? "активен" : "нет"} · watchdog=${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · детектов=${s.fpgaStatus.det_count ?? 0} · lb_fifo=${s.fpgaStatus.lb_level ?? 0}`
+                ? `воспроизведение: ${s.fpgaStatus.playing ? "да" : "нет"} · волна в памяти: ${s.fpgaStatus.capture_done ? "да" : "нет"} · детектор: ${s.fpgaStatus.det_active ? "энергия" : "тишина"} · сторож: ${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · детектов: ${s.fpgaStatus.det_count ?? 0} · буфер FPGA: ${s.fpgaStatus.lb_level ?? 0}`
                 : `статус недоступен: ${s.fpgaStatus.reason ?? "?"}`}
             </div>
           </div>

@@ -188,7 +188,9 @@ async function main(): Promise<void> {
   check("шлюз FAKE → отказ", (fpgaGatewayRefused({ ok: true, fake: true }) ?? "").includes("FAKE"));
   check("шлюз мёртв → отказ", fpgaGatewayRefused({ ok: false, reason: "down" }) === "down");
   check("player capture_done → можно ARM", fpgaPlayerReady({ ok: true, capture_done: true }) === null);
-  check("player без capture_done → отказ", (fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("capture_done"));
+  check("player без capture_done → отказ", (fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("в памяти нет волны"));
+  check("отказ player без сырого ключа capture_done (аудит P1-6)",
+    !((fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("capture_done")));
   check("player статус мёртв → отказ", fpgaPlayerReady({ ok: false, reason: "usb" }) === "usb");
   check("кабель xA4 = шлюз", planEthernet("bladerf-micro-xa4", "1.2.3.4").cable === "gateway-rj45");
   check("кабель N210 = RJ45 в SDR", planEthernet("usrp-n210", "").cable === "sdr-rj45");
@@ -1517,6 +1519,34 @@ async function main(): Promise<void> {
   check("handoff паркует канал оператора, не зашитые 2 МГц",
     storeSrc.includes("hostPark(mhz, tract.bwMhz, tract.fsHz, true, true)"));
   check("handoff ARM несёт fs/bw канала", storeSrc.includes("fsHz: tract.fsHz,") && storeSrc.includes("bwMhz: tract.bwMhz,"));
+  // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
+  // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
+  // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
+  // юнитом fpgaGatewayRefused выше; здесь — факт и порядок врезки.
+  const handoffHead = storeSrc.slice(
+    storeSrc.indexOf("const fpgaHandoff = async"),
+    storeSrc.indexOf("park захвата"),
+  );
+  check("handoff: ping шлюза до парковки", handoffHead.includes('gw({ op: "ping" })'));
+  check("handoff: FAKE/мёртвый шлюз → fail до stopScan",
+    handoffHead.includes("fpgaGatewayRefused(ping)") &&
+    handoffHead.indexOf("fpgaGatewayRefused(ping)") < handoffHead.indexOf("get().stopScan()"));
+  check("handoff: отказ шлюза уходит в fail() (страйк/возврат к скану)",
+    handoffHead.includes("await fail(gwNo)"));
+  // Аудит P1-4: отзыв эфира обязан гасить сам интервал обхода (как solo),
+  // а тик — сверять поколение: между abort и disarm fpgaArmed ещё true.
+  const abortAirBody = storeSrc.slice(
+    storeSrc.indexOf("abortFpgaAir: () =>"),
+    storeSrc.indexOf("abortFpgaArm: () =>"),
+  );
+  check("abortFpgaAir гасит интервал обхода (не только поколение)",
+    abortAirBody.includes("stopAirWalk()"));
+  const airWalkBody = storeSrc.slice(
+    storeSrc.indexOf("const beginAirWalk ="),
+    storeSrc.indexOf("const beginFpgaKick"),
+  );
+  check("air-обход: тик и ответ tune сверяют поколение",
+    airWalkBody.split("gen !== gFpgaAirGen").length - 1 >= 2);
   check("захват полки по окну детектора оператора",
     storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
   check("захват полки с отстройкой под ширину канала",
@@ -1663,6 +1693,8 @@ async function main(): Promise<void> {
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
   check("cinema: путь автоматического перехвата в мастере",
     gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
+    gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
   check("cinema перехват: стратегии приоритет/очередь на шаге walk",
     gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
   check("cinema auto: runSmartStart ставит fpga-паттерн и зовёт startScan, не ARM",

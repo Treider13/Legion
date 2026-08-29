@@ -13,6 +13,14 @@ interface Props {
   onClose: () => void;
 }
 
+/** Слепое пятно одночастотного релея (docs/architecture.md): утечка TX→RX
+ *  держит гейт открытым после смерти цели. Показываем в режимах с ретрансляцией. */
+const SELF_EXCITE_WARN =
+  "Ретрансляция — одночастотный тракт: возможна утечка собственного сигнала с выхода " +
+  "на вход. Сильная утечка держит гейт открытым после пропадания цели — автовозврат " +
+  "к поиску тогда не сработает. Разнесите антенны RX и TX и не выкручивайте усиление " +
+  "в максимум. Кнопка «Стоп» и сторожевой таймер работают всегда.";
+
 export function StartGate({ mode, onClose }: Props) {
   const titleId = useId();
   const firstRef = useRef<HTMLInputElement>(null);
@@ -264,6 +272,7 @@ export function StartGate({ mode, onClose }: Props) {
                   } мкс · ноутбук наблюдает и стопит`
                 : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 — выбирается на вкладке SDR в Настройках."}
             </p>
+            <p className="cinema-gate-warn">{SELF_EXCITE_WARN}</p>
           </>
         ) : mode === "sdr" && step === "walk" ? (
           <>
@@ -323,6 +332,7 @@ export function StartGate({ mode, onClose }: Props) {
               </button>
             </div>
             <p className="cinema-gate-lead">{hopNo ?? (path === "air" ? airWalkReason : walkPlan.reason)}</p>
+            {path === "air" && <p className="cinema-gate-warn">{SELF_EXCITE_WARN}</p>}
           </>
         ) : mode === "sdr" && step === "path" ? (
           <>
@@ -446,7 +456,7 @@ export function StartGate({ mode, onClose }: Props) {
             </button>
           )}
           <button type="button" className="cinema-btn solid" onClick={() => void goNext()} disabled={busy}>
-            {busy ? "…" : "Продолжить"}
+            {busy ? "…" : step === "walk" || mode === "esp32" ? "Запустить" : "Продолжить"}
           </button>
         </div>
       </div>

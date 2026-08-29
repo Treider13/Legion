@@ -2,16 +2,20 @@
 # LEGION — проверка окружения стенда (Ubuntu 22.04/24.04).
 # Без аргументов: только проверка с понятными подсказками.
 # С --install: попытка доустановить недостающее (apt/pip/npm, с sudo).
-# Код возврата: 0 — всё обязательное на месте; 1 — есть пробелы.
+# С --info: та же проверка, но справочно — ничего не «фейлится», код всегда 0
+# (для отчётов о проблемах: «пришлите вывод setup.sh --info»).
+# Код возврата: 0 — всё обязательное на месте (или --info); 1 — есть пробелы.
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || { echo "FAIL: не удалось перейти в каталог скрипта" >&2; exit 2; }
 
 INSTALL=0
+INFO=0
 [ "${1:-}" = "--install" ] && INSTALL=1
+[ "${1:-}" = "--info" ] && INFO=1
 FAIL=0
 
 ok()   { echo "  OK: $1"; }
-miss() { echo "  FAIL: $1"; FAIL=1; }
+miss() { if [ "$INFO" = "1" ]; then echo "  нет: $1"; else echo "  FAIL: $1"; FAIL=1; fi; }
 warn() { echo "  ВНИМАНИЕ: $1"; }
 
 maybe() { # maybe <описание> <команда...>
@@ -101,6 +105,14 @@ else
   warn "cargo не найден — нужен только для npm run tauri dev/build (rustup.rs, INSTALL.md §3)"
 fi
 
+# Системные библиотеки WebKit для Tauri (INSTALL.md §3) — без них сборка
+# desktop падает на pkg-config. Браузерной сборке (npm run dev) не нужны.
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+  ok "webkit2gtk-4.1 ($(pkg-config --modversion webkit2gtk-4.1 2>/dev/null)) — desktop Tauri"
+else
+  warn "webkit2gtk-4.1 не найден — нужен только для desktop: sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev"
+fi
+
 echo "== Тракт ESP32 (опционально, режим 2) =="
 if $PY -m platformio --version >/dev/null 2>&1; then
   ok "platformio $($PY -m platformio --version 2>/dev/null)"
@@ -117,6 +129,10 @@ else
 fi
 
 echo
+if [ "$INFO" = "1" ]; then
+  echo "СВОДКА (--info): справочно, код возврата всегда 0"
+  exit 0
+fi
 if [ "$FAIL" = "0" ]; then
   echo "ОКРУЖЕНИЕ: OK — дальше: шлюз (INSTALL.md §4), образ legion (§5), приёмка (§6)"
 else

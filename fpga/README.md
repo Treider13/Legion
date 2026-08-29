@@ -250,6 +250,12 @@ fpga/test/run_acceptance.sh --gw <IP шлюза> [--board micro] [--ssh user@ш�
 # --board можно не давать: агент отвечает board в ping, скрипт сам определит.
 # --ssh: SoapySDRServer на шлюзе поднимается/гасится автоматически (иначе —
 # паузы Enter). Лог и JSON-отчёт — в fpga/test/results/.
+
+# Зелёный прогон с автокоммитом доказательства в репозиторий:
+fpga/test/run_acceptance_and_commit.sh --gw <IP шлюза> [--board micro] [--ssh user@шлюз]
+# Коммитит ТОЛЬКО при ALL PASS (ok:true в JSON читается из файла, не по слову
+# раннера); красный прогон не коммитится никогда. Уже существующий зелёный
+# отчёт: --commit-only fpga/test/results/acceptance-<время>.json
 ```
 
 **Без зелёного прогона E1–E6 на целевой плате система стабильной не

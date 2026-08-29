@@ -212,7 +212,7 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
     return fail("FPGA эфир: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
   }
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
-    return fail("FPGA эфир: задайте det_thr > 0 (порог 0 = гейт на шум)");
+    return fail("FPGA эфир: задайте порог чувствительности больше нуля (нулевой порог — гейт открывается на шум)");
   }
   if (spanMhz > bwMhz) {
     return {

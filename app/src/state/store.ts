@@ -97,6 +97,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  fpgaRunModeRu,
   isFpgaAirPattern,
   modeConflict,
   modeOf,
@@ -538,8 +539,8 @@ export function fpgaPlayerReady(st: {
   capture_done?: boolean;
   reason?: string;
 }): string | null {
-  if (!st.ok) return st.reason ?? "FPGA: статус недоступен — capture не подтверждён";
-  if (!st.capture_done) return "FPGA player: capture_done=0 — в RAM нет волны, ARM нельзя";
+  if (!st.ok) return st.reason ?? "FPGA: статус недоступен — захват не подтверждён";
+  if (!st.capture_done) return "FPGA: в памяти нет волны (сначала загрузите её на SDR) — генерация невозможна";
   return null;
 }
 
@@ -662,11 +663,15 @@ export const useLegion = create<LegionStore>((set, get) => {
   ): void => {
     stopAirWalk();
     if (!plan.hop) return;
+    // Поколение эфира — как gSoloWalkGen у solo: отзыв (abortFpgaAir/СТОП/
+    // DISARM бампают gFpgaAirGen) рвёт тики и stale-ответы tune, а не только
+    // флаг fpgaArmed (между abort и disarm он ещё true — окно в сетевых мс).
+    const gen = gFpgaAirGen;
     // tune медленнее выдержки (LAN/USB-шторм) — тик пропускаем, а не копим
     // очередь на шлюзе (там операции и так под _op_lock, но зачем очередь).
     let inflight = false;
     gAirWalk = setInterval(() => {
-      if (!get().fpgaArmed || get().fpgaPath !== "air") {
+      if (gen !== gFpgaAirGen || !get().fpgaArmed || get().fpgaPath !== "air") {
         stopAirWalk();
         return;
       }
@@ -684,7 +689,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         token: get().fpgaToken,
       })
         .then((r) => {
-          if (!get().fpgaArmed || get().fpgaPath !== "air") return;
+          if (gen !== gFpgaAirGen || !get().fpgaArmed || get().fpgaPath !== "air") return;
           if (!r.ok) {
             pushLog("sys", `FPGA эфир tune: ${r.reason ?? "отказ"} — стоянка прежняя`);
             return;
@@ -1124,6 +1129,17 @@ export const useLegion = create<LegionStore>((set, get) => {
     try {
       if (!gLive) {
         await fail("SDR не открыт");
+        return;
+      }
+      // FAKE-шлюз (LEGION_FPGA_FAKE на агенте) — регистры не железо: ARM ушёл
+      // бы в эмулятор, а UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта. Тот же
+      // отказ, что в fpgaArm/startFpgaPath (инвариант: FAKE → ARM нет).
+      // Пинг per-handoff, не кэш из startScan: шлюз мог перезапуститься
+      // в FAKE между стартом скана и этим handoff.
+      const ping = await gw({ op: "ping" });
+      const gwNo = fpgaGatewayRefused(ping);
+      if (gwNo) {
+        await fail(gwNo);
         return;
       }
       // Тики скана стоп: in-flight tick увидит scanRunning=false и выйдет.
@@ -2160,8 +2176,8 @@ export const useLegion = create<LegionStore>((set, get) => {
                   bwMhz: parseFloat(get().fpgaAirBwMhz),
                 }).reason
               : air
-                ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
-                : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
+                ? `FPGA · ${fpgaRunModeRu(mode)} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
+                : `FPGA · ${fpgaRunModeRu(mode)} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
             fpgaAutoCycle: false,
@@ -2578,7 +2594,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mhz,
             lastSdrTxUs: null,
-            lastCueReason: `FPGA · NCO ${kind} · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
+            lastCueReason: `FPGA · тон ${kind} · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
           });
           beginFpgaKick();
           if (await abortSoloIfRevoked()) return false;
@@ -2692,7 +2708,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fpgaArmed: true,
           lastForwardMhz: mhz,
           lastSdrTxUs: null,
-          lastCueReason: `FPGA · player «${kind}» · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
+          lastCueReason: `FPGA · волна «${kind}» из памяти · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
         });
         beginFpgaKick();
         if (await abortSoloIfRevoked()) return false;
@@ -2711,6 +2727,9 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     abortFpgaAir: () => {
       gFpgaAirGen += 1;
+      // Как abortFpgaSolo: отзыв гасит и сам интервал обхода, не только
+      // поколение — иначе до fpgaDisarm тики продолжали бы слать tune.
+      stopAirWalk();
     },
 
     abortFpgaArm: () => {
