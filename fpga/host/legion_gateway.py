@@ -52,6 +52,7 @@ import json
 import os
 import re
 import signal
+import socket
 import socketserver
 import subprocess
 import sys
@@ -102,6 +103,13 @@ KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
 # Длительная непрерывная работа под током: предупреждение оператору в status
 # (температуры AD9361 в этой NIOS-сборке нет — см. шапку). 0 = выключить.
 ARM_WARN_S = float(os.environ.get("LEGION_ARM_WARN_S", "300"))
+
+# Таймаут клиентского TCP-соединения: зависший peer не держит поток handler'а
+# вечно (ThreadingTCPServer плодит по потоку на соединение). Клиенты шлюза
+# (sdr_worker fpga_rpc) открывают соединение на ОДНУ команду (таймаут ответа
+# 12 с), поэтому 300 с тишины — гарантированно мусор, а не живой клиент.
+# 0 = выключить (не рекомендуется).
+CLIENT_TIMEOUT_S = float(os.environ.get("LEGION_FPGA_CLIENT_TIMEOUT_S", "300"))
 
 
 class UsbTransport:
@@ -653,6 +661,13 @@ class LegionGateway:
                 self._armed_at = time.monotonic()
                 self._wd_en = bool(msg.get("wd", True))
                 self._wd_attempts = 0
+                if not self._wd_en:
+                    # Отказ от deadman — видимая строка в журнале шлюза, не
+                    # молчаливый режим: сторож kick_age молчит, TX гаснет
+                    # только явным DISARM (приложение LEGION так не ARM'ит —
+                    # инвариант fpgaArmCmd; это путь сырых API-клиентов).
+                    print("legion-gateway: ARM с wd=false — оператор отказался от "
+                          "deadman; TX гаснет только по DISARM", flush=True)
             elif (self._rx_by_us or self._tx_by_us) and not self._armed:
                 # Откат ТОЛЬКО если до этого ничего не было армировано: эфир
                 # подняли, а ARM не взвёлся — тракт под током не оставляем
@@ -826,28 +841,36 @@ class LegionGateway:
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         gw: LegionGateway = self.server.gw  # type: ignore[attr-defined]
-        for raw in self.rfile:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line.decode("utf-8", "replace"))
-                # Авторизация: при заданном LEGION_FPGA_TOKEN каждая команда
-                # (кроме ping) несёт токен; неверный/отсутствует — отказ.
-                if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
-                    resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
-                elif msg.get("op") == "ping":
-                    # ping без лока: длинный ARM/сторож не задерживают liveness
-                    resp = gw.handle(msg)
-                else:
-                    # Сериализация операций: xfer — пара write/read 16-байтных
-                    # пакетов, её нельзя перемежать с другой командой или
-                    # DISARM сторожа (ответ уехал бы не тому).
-                    with gw._op_lock:
+        if CLIENT_TIMEOUT_S > 0:
+            # Тишина дольше таймаута → чтение бросит TimeoutError и соединение
+            # закроется. Касается и записи ответа в умерший сокет.
+            self.connection.settimeout(CLIENT_TIMEOUT_S)
+        try:
+            for raw in self.rfile:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", "replace"))
+                    # Авторизация: при заданном LEGION_FPGA_TOKEN каждая команда
+                    # (кроме ping) несёт токен; неверный/отсутствует — отказ.
+                    if AUTH_TOKEN and msg.get("op") != "ping" and msg.get("token") != AUTH_TOKEN:
+                        resp = {"ok": False, "reason": "нет/неверен token (LEGION_FPGA_TOKEN на шлюзе)"}
+                    elif msg.get("op") == "ping":
+                        # ping без лока: длинный ARM/сторож не задерживают liveness
                         resp = gw.handle(msg)
-            except Exception as e:
-                resp = {"ok": False, "reason": str(e)}
-            self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
+                    else:
+                        # Сериализация операций: xfer — пара write/read 16-байтных
+                        # пакетов, её нельзя перемежать с другой командой или
+                        # DISARM сторожа (ответ уехал бы не тому).
+                        with gw._op_lock:
+                            resp = gw.handle(msg)
+                except Exception as e:
+                    resp = {"ok": False, "reason": str(e)}
+                self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
+        except (TimeoutError, socket.timeout):
+            # Клиент молчал дольше CLIENT_TIMEOUT_S — поток освобождаем.
+            pass
 
 
 class _Server(socketserver.ThreadingTCPServer):
