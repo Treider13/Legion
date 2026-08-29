@@ -1,10 +1,11 @@
 // Главный старт: ESP32-коридор или FPGA-ревизия legion (не хостовый скан).
 import type { WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
+import type { AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
-export type FpgaStartPath = "solo" | "air";
+export type FpgaStartPath = "solo" | "air" | "auto";
 
 export async function runSmartStart(opts: {
   f1: string;
@@ -15,6 +16,8 @@ export async function runSmartStart(opts: {
   windowMhz?: string;
   dwellMs?: string;
   pattern?: FpgaSoloPattern;
+  /** Автоматический перехват: приоритет сильнейшей или очередь с выдержкой. */
+  dispatch?: AutoDispatch;
 }): Promise<boolean> {
   const s = useLegion.getState();
   s.setWorkspace("scan");
@@ -22,6 +25,24 @@ export async function runSmartStart(opts: {
   s.setSdrAllowField("sdrF2", opts.f2);
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
+  if (opts.path === "auto") {
+    // Автоматический перехват: сканер → handoff → ARM lb_gated в FPGA.
+    // Волна с ноутбука не участвует — ретранслируется сам эфир (RX→TX).
+    s.setScanPattern("fpga");
+    if (opts.dispatch) s.setAutoDispatch(opts.dispatch);
+    if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
+    if (opts.dwellMs !== undefined) s.setFpgaTurnDwellMs(opts.dwellMs);
+    s.startScan();
+    // startScan внутри асинхронный (openSdr → scanRunning): ждём подъёма
+    // скан-фазы, иначе честный отказ — причина уже в журнале.
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8000) {
+      const st = useLegion.getState();
+      if (st.scanRunning || st.fpgaBusy || st.fpgaArmed) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  }
   s.armTxWave(opts.wave);
   if (opts.path === "air") {
     // Эфир-обход: окно шага = канал подавления; выдержка/порядок — свои поля.

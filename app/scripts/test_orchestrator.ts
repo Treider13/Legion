@@ -1441,6 +1441,32 @@ async function main(): Promise<void> {
   check("cinema live при capture (busy, не armed)", cinemaIsLive({ ...idleLive, fpgaBusy: true }) === true);
   check("cinema live при ARM", cinemaIsLive({ ...idleLive, fpgaArmed: true }) === true);
 
+  // --- Кино: автоматический перехват (FPGA+сканер из мастера, не лаборатория) ---
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "2400");
+  useLegion.getState().setSdrAllowField("sdrF2", "2500");
+  useLegion.getState().setSdrLoad(true);
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  const autoOk = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "auto",
+    windowMhz: "5", dwellMs: "1500", dispatch: "priority",
+  });
+  const autoSt = useLegion.getState();
+  check("кино перехват: старт поднял скан-фазу", autoOk === true && autoSt.scanRunning === true);
+  check("кино перехват: scanPattern=fpga, не fpgaArm",
+    autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
+  check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
+  check("кино перехват: канал 5 МГц записан", autoSt.fpgaAirBwMhz === "5");
+  useLegion.getState().stopScan();
+  const autoTurn = await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "auto",
+    windowMhz: "2", dwellMs: "1500", dispatch: "turn",
+  });
+  const autoTurnSt = useLegion.getState();
+  check("кино перехват: очередь + выдержка записаны",
+    autoTurn === true && autoTurnSt.autoDispatch === "turn" && autoTurnSt.fpgaTurnDwellMs === "1500");
+  useLegion.getState().stopScan();
+
   const genBeforeAbort = peekFpgaSoloGen();
   useLegion.getState().abortFpgaSolo();
   check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
@@ -1527,6 +1553,14 @@ async function main(): Promise<void> {
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
+  check("cinema: путь автоматического перехвата в мастере",
+    gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("cinema перехват: стратегии приоритет/очередь на шаге walk",
+    gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
+  check("cinema auto: runSmartStart ставит fpga-паттерн и зовёт startScan, не ARM",
+    runSrc.includes('opts.path === "auto"') && runSrc.includes('setScanPattern("fpga")') && runSrc.includes("s.startScan()"));
+  check("cinema auto: канал и выдержка очереди пишутся в стор",
+    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
   check("cinema air: выдержка/порядок — свои поля",
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",
