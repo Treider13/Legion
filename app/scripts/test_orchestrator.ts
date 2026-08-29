@@ -1529,6 +1529,8 @@ async function main(): Promise<void> {
   const statusSrc = readFileSync(join(here, "../src/components/cinema/status.ts"), "utf8");
   check("hero: статус считается чистой функцией heroStatusLine",
     appSrc.includes("heroStatusLine(") && statusSrc.includes("export function heroStatusLine"));
+  check("hero idle: частота по контексту режима (SDR — центр коридора, не поле ESP32)",
+    appSrc.includes("idleFreqMhz") && appSrc.includes('mode === "sdr"'));
   check("hero: состояния ОЖИДАНИЕ/ПОИСК/РЕТРАНСЛЯЦИЯ/ОШИБКА",
     ["ОЖИДАНИЕ", "ПОИСК", "РЕТРАНСЛЯЦИЯ", "ОШИБКА"].every((t) => statusSrc.includes(t)));
   check("hero: гейт открыт/закрыт различён",

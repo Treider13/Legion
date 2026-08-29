@@ -60,6 +60,15 @@ function App() {
   const scanCenterMhz = useLegion((s) => s.scanCenterMhz);
   const telemFreq = useLegion((s) => s.telemFreq);
   const freqMhz = useLegion((s) => s.freqMhz);
+  const sdrF1 = useLegion((s) => s.sdrF1);
+  const sdrF2 = useLegion((s) => s.sdrF2);
+  // Idle-частота по контексту режима: в SDR — центр рабочего коридора,
+  // в ESP32 — поле синтезатора. Иначе в SDR idle показывалась бы частота
+  // чужого тракта (ADF4351), не имеющая отношения к плате bladeRF.
+  const idleFreqMhz =
+    mode === "sdr"
+      ? String(((parseFloat(sdrF1) || 2400) + (parseFloat(sdrF2) || 2500)) / 2)
+      : freqMhz;
   const hero = heroStatusLine({
     scanRunning,
     transmitArmed,
@@ -73,7 +82,7 @@ function App() {
     lastInterceptMhz,
     scanCenterMhz,
     telemFreq,
-    freqMhz,
+    freqMhz: idleFreqMhz,
   });
 
   useEffect(() => {
