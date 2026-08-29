@@ -3533,7 +3533,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (get().scanRunning) set({ scanRunning: false });
       // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
       // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
-      // что в меню остался пункт «FPGA+СКАНЕР».
+      // что в меню выбран пункт «Автоматический перехват».
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).

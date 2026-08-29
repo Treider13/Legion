@@ -185,7 +185,7 @@ export function isFpgaTaskMode(mode: FpgaRunMode): boolean {
   return mode === "player" || mode === "nco" || mode === "lb_always";
 }
 
-/** Живой конвейер FPGA+сканер. Не путать с выбранным пунктом меню «FPGA+СКАНЕР». */
+/** Живой конвейер FPGA+сканер. Не путать с выбранным пунктом меню «Автоматический перехват». */
 export function isFpgaAirLive(armed: boolean, mode: FpgaRunMode): boolean {
   return armed && mode === "lb_gated";
 }
