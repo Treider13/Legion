@@ -39,8 +39,8 @@ export class WebSocketTransport implements Transport {
         resolve();
       };
       ws.onerror = () => {
-        this.emitState("error", "websocket error");
-        reject(new Error("websocket error"));
+        this.emitState("error", "ошибка WebSocket");
+        reject(new Error("ошибка WebSocket"));
       };
       ws.onclose = (e) => this.emitState("disconnected", e.reason);
       ws.onmessage = (m) => {
@@ -57,7 +57,7 @@ export class WebSocketTransport implements Transport {
 
   async writeLine(line: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("websocket not open");
+      throw new Error("WebSocket не открыт");
     }
     this.ws.send(line + "\n");
   }
