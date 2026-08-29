@@ -26,6 +26,14 @@ maybe() { # maybe <описание> <команда...>
   fi
 }
 
+udev_rules_present() { # правила Nuand в любом из двух каталогов (без ls|grep)
+  local f
+  for f in /etc/udev/rules.d/*[Nn]uand* /lib/udev/rules.d/*[Nn]uand*; do
+    [ -e "$f" ] && return 0
+  done
+  return 1
+}
+
 echo "== Python =="
 if command -v python3 >/dev/null; then
   ok "python3 $(python3 --version 2>&1 | awk '{print $2}')"
@@ -63,6 +71,23 @@ else
   maybe "bladerf" sudo apt install -y bladerf libbladerf-dev
 fi
 
+# udev-правила Nuand: без них плата видна только под root (INSTALL.md §1).
+if udev_rules_present; then
+  ok "udev-правила Nuand (USB без root)"
+else
+  miss "udev-правила Nuand — без них плата только под root (INSTALL.md §1, udev)"
+  if [ "$INSTALL" = "1" ]; then
+    # Правила приезжают с пакетом bladerf/libbladerf2 — переустановка + trigger.
+    sudo apt install -y --reinstall bladerf 2>/dev/null || true
+    sudo udevadm control --reload 2>/dev/null && sudo udevadm trigger 2>/dev/null || true
+    if udev_rules_present; then
+      ok "udev-правила Nuand появились после переустановки пакета"
+    else
+      warn "udev-правил всё ещё нет — возьмите шаблоны из дерева Nuand (INSTALL.md §1)"
+    fi
+  fi
+fi
+
 echo "== SoapySDR (сканер/стримы; pip не подходит — только системный биндинг) =="
 if $PY -c "import SoapySDR" 2>/dev/null; then
   ok "python3-soapysdr"
@@ -80,14 +105,36 @@ else
 fi
 
 echo "== Node.js (приложение LEGION Control) =="
+NODE_OK=0
 if command -v node >/dev/null; then
   NV=$(node --version | sed 's/v//;s/\..*//')
-  if [ "$NV" -ge 20 ]; then ok "node $(node --version)"; else
-    miss "node $(node --version) — нужен ≥ 20 (NodeSource/nvm, см. INSTALL.md)"
+  if [ "$NV" -ge 20 ]; then
+    ok "node $(node --version)"
+    NODE_OK=1
   fi
-else
-  miss "node — sudo apt install nodejs npm (≥ 20; иначе NodeSource/nvm)"
-  maybe "nodejs" sudo apt install -y nodejs npm
+fi
+if [ "$NODE_OK" = "0" ]; then
+  if command -v node >/dev/null; then
+    miss "node $(node --version) — нужен ≥ 20 (NodeSource/nvm, см. INSTALL.md)"
+  else
+    miss "node — нужен ≥ 20 (apt в Ubuntu 22.04 даёт старый; NodeSource/nvm)"
+  fi
+  if [ "$INSTALL" = "1" ]; then
+    maybe "nodejs из apt" sudo apt install -y nodejs npm
+    if command -v node >/dev/null && [ "$(node --version | sed 's/v//;s/\..*//')" -ge 20 ]; then
+      ok "node $(node --version) из apt"
+    elif command -v curl >/dev/null; then
+      # apt дал Node < 20 (Ubuntu 22.04: Node 12) — NodeSource 22 LTS.
+      echo "  … apt дал Node < 20 — ставлю NodeSource (22 LTS)"
+      if curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs; then
+        ok "node $(node --version 2>/dev/null) (NodeSource)"
+      else
+        warn "NodeSource не удался — поставьте Node ≥ 20 вручную (nvm, INSTALL.md §1)"
+      fi
+    else
+      warn "curl не найден — NodeSource недоступен; поставьте Node ≥ 20 вручную (nvm)"
+    fi
+  fi
 fi
 if [ -d app/node_modules ]; then
   ok "app/node_modules (npm ci уже сделан)"
@@ -111,6 +158,25 @@ if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1 2
   ok "webkit2gtk-4.1 ($(pkg-config --modversion webkit2gtk-4.1 2>/dev/null)) — desktop Tauri"
 else
   warn "webkit2gtk-4.1 не найден — нужен только для desktop: sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev"
+fi
+
+echo "== Шлюз FPGA (systemd-автозапуск; опционально — можно вручную по INSTALL.md §4) =="
+if [ -f /etc/systemd/system/legion-gateway.service ]; then
+  ok "legion-gateway.service установлен"
+else
+  warn "legion-gateway.service не установлен — автозапуск агента шлюза (INSTALL.md §4)"
+  if [ "$INSTALL" = "1" ]; then
+    if sudo install -d /opt/legion \
+      && sudo install -m644 fpga/host/legion_gateway.py fpga/host/legion_fpga.py /opt/legion/ \
+      && sudo install -m644 fpga/systemd/legion-gateway.service /etc/systemd/system/ \
+      && sudo systemctl daemon-reload; then
+      # enable --now осознанно НЕ делаем: сначала LEGION_FPGA_TOKEN в юните
+      # (строчки Environment=), иначе агент поднимется открытым в LAN.
+      ok "юнит установлен; дальше вручную: токен в /etc/systemd/system/legion-gateway.service → systemctl enable --now legion-gateway"
+    else
+      warn "установка юнита не удалась — шаги вручную по INSTALL.md §4"
+    fi
+  fi
 fi
 
 echo "== Тракт ESP32 (опционально, режим 2) =="
