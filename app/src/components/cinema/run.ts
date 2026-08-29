@@ -1,4 +1,5 @@
-// Главный старт: ESP32-коридор или FPGA-ревизия legion (не хостовый скан).
+// Главный старт: ESP32-коридор, автоперехват (хост-сканер → handoff в FPGA)
+// или FPGA-ревизия legion без сканера (эфир-стоянка/обход, генерация).
 import type { WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
