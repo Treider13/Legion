@@ -1468,6 +1468,15 @@ async function main(): Promise<void> {
     autoTurn === true && autoTurnSt.autoDispatch === "turn" && autoTurnSt.fpgaTurnDwellMs === "1500");
   useLegion.getState().stopScan();
 
+  // --- Кино: ручной порог чувствительности для автономного эфира ---
+  useLegion.getState().setFpgaDetThr(5000);
+  await runSmartStart({
+    f1: "2400", f2: "2500", wave: "awgn", loadOk: true, path: "air",
+    windowMhz: "100", dwellMs: "500", pattern: "sweep", detThr: "7000",
+  });
+  check("кино эфир: ручной порог из мастера записан в стор (уйдёт в ARM как det_thr)",
+    useLegion.getState().fpgaDetThr === 7000);
+
   const genBeforeAbort = peekFpgaSoloGen();
   useLegion.getState().abortFpgaSolo();
   check("abortFpgaSolo бампает поколение", peekFpgaSoloGen() === genBeforeAbort + 1);
@@ -1597,6 +1606,8 @@ async function main(): Promise<void> {
     runSrc.includes('opts.path === "auto"') && runSrc.includes('setScanPattern("fpga")') && runSrc.includes("s.startScan()"));
   check("cinema auto: канал и выдержка очереди пишутся в стор",
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
+  check("cinema air: ручной порог из мастера пишется в стор",
+    gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
   check("cinema air: выдержка/порядок — свои поля",
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",

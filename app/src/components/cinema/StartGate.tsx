@@ -32,6 +32,7 @@ export function StartGate({ mode, onClose }: Props) {
   const storedAirPattern = useLegion((s) => s.fpgaAirWalkPattern);
   const storedTurnDwell = useLegion((s) => s.fpgaTurnDwellMs);
   const storedDispatch = useLegion((s) => s.autoDispatch);
+  const storedDetThr = useLegion((s) => s.fpgaDetThr);
   const [step, setStep] = useState<"band" | "path" | "walk">(mode === "sdr" ? "band" : "band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
@@ -45,6 +46,7 @@ export function StartGate({ mode, onClose }: Props) {
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
   const [pattern, setPattern] = useState<FpgaSoloPattern>(path === "air" ? storedAirPattern : storedPattern);
+  const [detThr, setDetThr] = useState(String(storedDetThr));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -114,6 +116,7 @@ export function StartGate({ mode, onClose }: Props) {
         dwellMs,
         pattern,
         dispatch,
+        detThr,
       });
       if (!ok) {
         setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
@@ -177,6 +180,13 @@ export function StartGate({ mode, onClose }: Props) {
     if (!walkPlan.ok) {
       setErr(walkPlan.reason);
       return;
+    }
+    if (path === "air") {
+      const thr = parseFloat(detThr);
+      if (!Number.isFinite(thr) || thr <= 0) {
+        setErr("Задайте порог чувствительности больше нуля.");
+        return;
+      }
     }
     if (hopNo) {
       setErr(hopNo);
@@ -267,6 +277,14 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
               </label>
             </div>
+            {path === "air" && (
+              <div className="cinema-gate-row">
+                <label title="Минимальная энергия сигнала, при которой открывается ретрансляция. Больше — только сильные сигналы, меньше — чувствительнее к слабым. При обходе коридора (несколько стоянок) пороги измеряются калибровкой автоматически.">
+                  Порог чувствительности
+                  <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
+                </label>
+              </div>
+            )}
             <div className="cinema-paths" role="radiogroup" aria-label="Ход по стоянкам">
               <button
                 type="button"

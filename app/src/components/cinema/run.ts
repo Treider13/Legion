@@ -18,6 +18,8 @@ export async function runSmartStart(opts: {
   pattern?: FpgaSoloPattern;
   /** Автоматический перехват: приоритет сильнейшей или очередь с выдержкой. */
   dispatch?: AutoDispatch;
+  /** Автономный эфир: ручной порог чувствительности (одна стоянка). */
+  detThr?: string;
 }): Promise<boolean> {
   const s = useLegion.getState();
   s.setWorkspace("scan");
@@ -49,6 +51,9 @@ export async function runSmartStart(opts: {
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
     if (opts.dwellMs !== undefined) s.setFpgaAirDwellMs(opts.dwellMs);
     if (opts.pattern !== undefined) s.setFpgaAirWalkPattern(opts.pattern);
+    // Ручной порог — для одной стоянки; при обходе коридора пороги меряются
+    // калибровочным проходом и едут в tune (см. startFpgaPath).
+    if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
   } else {
     if (opts.windowMhz !== undefined) s.setFpgaSoloWindowMhz(opts.windowMhz);
     if (opts.dwellMs !== undefined) s.setFpgaSoloDwellMs(opts.dwellMs);
