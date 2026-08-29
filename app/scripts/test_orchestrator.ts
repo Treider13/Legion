@@ -1549,7 +1549,8 @@ async function main(): Promise<void> {
   check("fpgaArm busy до первого await (кино-старт откажет)",
     armBlock.indexOf("set({ fpgaBusy: true })") > 0 && armBlock.indexOf("set({ fpgaBusy: true })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
-  check("fpgaArm после отзыва снимает прошедший ARM", armBlock.includes('if (r.ok) await gw({ op: "disarm" })'));
+  check("fpgaArm после отзыва снимает прошедший ARM",
+    armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
   check("fpga-ветка tickScan: ОБЫЧНЫЙ → pickTurnTarget от последней ARM",
     storeSrc.includes('cur.autoDispatch === "turn"') && storeSrc.includes("pickTurnTarget(pool, null, gFpgaTurnLastMhz)"));
@@ -1740,6 +1741,11 @@ async function main(): Promise<void> {
   const relAll = storeSrc.match(/action: "release"/g)?.length ?? 0;
   const relAssigned = storeSrc.match(/(?:const|let) \w+ = await (?:hostFpga|gw|opts\.gw)\(\{ op: "usb", action: "release"/g)?.length ?? 0;
   check("ни один usb release не выбрасывается молча", relAll > 0 && relAll === relAssigned);
+  // Шире: ни один await вызова шлюза (disarm/set/release/…) не молчит —
+  // каждый назначен в переменную, а отказ залогирован у места вызова.
+  const gwAwaits = storeSrc.match(/await (?:hostFpga|gw)\(/g)?.length ?? 0;
+  const gwAssigned = storeSrc.match(/(?:const|let) \w+ = await (?:hostFpga|gw)\(/g)?.length ?? 0;
+  check("ни один вызов шлюза не выбрасывает ответ молча", gwAwaits > 0 && gwAwaits === gwAssigned);
   // Находка 4: оценка времени калибровки — в логе до прохода и в UI до старта.
   check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
   check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));

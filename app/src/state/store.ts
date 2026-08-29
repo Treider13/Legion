@@ -1106,7 +1106,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         `FPGA handoff ${mhz.toFixed(3)} МГц: отменён оператором в полёте (${stage})` +
           (marks.length > 0 ? ` · ${handoffTimeline(t0, marks)}` : ""),
       );
-      if (stage === "armed") await gw({ op: "disarm" });
+      if (stage === "armed") {
+        const dAbort = await gw({ op: "disarm" });
+        if (!dAbort.ok) pushLog("sys", `FPGA DISARM: ${dAbort.reason ?? "отказ"}`);
+      }
       if (stage !== "pre") {
         const relAbort = await gw({ op: "usb", action: "release" });
         if (!relAbort.ok) pushLog("sys", `FPGA USB release: ${relAbort.reason ?? "отказ"}`);
@@ -2133,7 +2136,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (armRevoked()) {
           // ARM уже прошёл на железе — снимаем, в UI не коммитим.
-          if (r.ok) await gw({ op: "disarm" });
+          if (r.ok) {
+            const dAbort = await gw({ op: "disarm" });
+            if (!dAbort.ok) pushLog("sys", `FPGA DISARM: ${dAbort.reason ?? "отказ"}`);
+          }
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
           return;
         }
@@ -2577,9 +2583,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
 
         set({ fpgaMode: "player" });
-        await gw({ op: "set", reg: "player_len", value: 4095 });
+        const setLen = await gw({ op: "set", reg: "player_len", value: 4095 });
+        if (!setLen.ok) pushLog("sys", `FPGA set player_len: ${setLen.reason ?? "отказ"}`);
         if (await abortSoloIfRevoked()) return false;
-        await gw({ op: "set", reg: "player_ctl", value: 1 });
+        const setCtl = await gw({ op: "set", reg: "player_ctl", value: 1 });
+        // Сбой capture_arm всплыл бы позже («capture_done=0») — причину
+        // честнее логировать здесь, у записи.
+        if (!setCtl.ok) pushLog("sys", `FPGA set player_ctl: ${setCtl.reason ?? "отказ"}`);
         if (await abortSoloIfRevoked()) return false;
         const relSolo = await gw({ op: "usb", action: "release" });
         if (!relSolo.ok) {
