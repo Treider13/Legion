@@ -268,6 +268,11 @@ r = rpc({"op": "status"})
 check("после ARM_WARN_S status несёт warn про охлаждение",
       "warn" in r and "охлаждение" in r["warn"])
 lg.ARM_WARN_S = 300.0
+# armed_s растёт со временем ARM (целые секунды — ждём пересечение).
+rpc({"op": "arm", "mode": "nco"})
+_time.sleep(1.1)
+r = rpc({"op": "status"})
+check("armed_s растёт со временем ARM", isinstance(r.get("armed_s"), int) and r.get("armed_s") >= 1)
 rpc({"op": "disarm"})
 r = rpc({"op": "status"})
 check("после DISARM armed_s=0 и warn снят", r.get("armed_s") == 0 and "warn" not in r)

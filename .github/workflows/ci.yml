@@ -192,3 +192,5 @@ jobs:
           done
       - name: Host packer golden test vs Nuand C header (вендоренное дерево, без сети)
         run: python3 fpga/test/test_legion_fpga.py
+      - name: Soak smoke (FAKE шлюз: молчаливая потеря ARM → arm_lost + rearm)
+        run: fpga/test/test_soak_smoke.sh

@@ -1568,6 +1568,34 @@ async function main(): Promise<void> {
   });
   check("hero: warn шлюза (длительная работа) виден в статусе ретрансляции",
     heroWarn.kind === "relay" && heroWarn.detail.includes("охлаждение"));
+  // Регрессия: ОШИБКА обязана переживать снятие ARM стором (стор делает
+  // fpgaDisarm сразу — ветка «только при fpgaArmed» была недостижима).
+  const heroWdLatched = heroStatusLine({
+    ...heroBase, fpgaArmed: false, scanRunning: false,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: watchdog → ОШИБКА держится и после снятия ARM",
+    heroWdLatched.kind === "error" && heroWdLatched.detail.includes("сторожевой"));
+  const heroWdRecovered = heroStatusLine({
+    ...heroBase, fpgaArmed: false, scanRunning: true, scanCenterMhz: 2450,
+    fpgaStatus: { ok: true, wd_fired: true },
+  });
+  check("hero: авто-цикл восстановился (скан) — не пугаем ОШИБКОЙ",
+    heroWdRecovered.kind === "search");
+  const heroDeadBusy = heroStatusLine({
+    ...heroBase, fpgaBusy: true, fpgaStatus: { ok: false, reason: "нет ответа шлюза" },
+  });
+  check("hero: шлюз умер в полёте (busy) → ОШИБКА", heroDeadBusy.kind === "error");
+  const heroDeadIdle = heroStatusLine({ ...heroBase, fpgaStatus: { ok: false, reason: "x" } });
+  check("hero: лабораторный СТАТУС без шлюза в idle — без ложной тревоги",
+    heroDeadIdle.kind === "idle");
+  const heroGenWarn = heroStatusLine({
+    ...heroBase, fpgaArmed: true, fpgaMode: "player",
+    fpgaStatus: { ok: true, warn: "непрерывная работа 6 мин — проверьте охлаждение" },
+    lastForwardMhz: 2450,
+  });
+  check("hero: warn виден и в генерации (player), не только в ретрансляции",
+    heroGenWarn.kind === "tx" && heroGenWarn.detail.includes("охлаждение"));
   const heroCorr = heroStatusLine({ ...heroBase, corridorRunning: true, telemFreq: 2442 });
   check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
@@ -1615,6 +1643,28 @@ async function main(): Promise<void> {
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
   check("cinema air: ручной порог из мастера пишется в стор",
     gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
+  // Регрессия: окно детектора в мастере — от реального канала (fs следует за
+  // полосой), а не фиксированные 8 мкс при любом канале.
+  check("cinema перехват: окно детектора от канала (airTractParams), не константа",
+    gateSrc.includes("airTractParams(parseFloat(windowMhz), analogMax, detShift)"));
+  const navSrc = readFileSync(join(here, "../src/components/WorkspaceNav.tsx"), "utf8");
+  const scanSrc = readFileSync(join(here, "../src/components/ScanPanel.tsx"), "utf8");
+  const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
+  check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
+  check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
+    !scanSrc.includes("конвейер") && !scanSrc.includes("КОНВЕЙЕР"));
+  check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
+  check("док кино зовёт в перехват", dockSrc.includes("перехват"));
+  const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
+  check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",
+    setupSrc.includes("SoapySDRUtil --info") && !setupSrc.includes("SoapySDRUtil --find"));
+  const installSrc = readFileSync(join(here, "../../INSTALL.md"), "utf8");
+  check("INSTALL.md: Quartus, приёмка, шлюз",
+    installSrc.includes("Quartus Prime Lite 23.1.1") && installSrc.includes("run_acceptance.sh")
+    && installSrc.includes("legion_gateway.py"));
+  const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
+  check("раннер приёмки уважает .venv (INSTALL.md §2)",
+    runnerSrc.includes(".venv/bin/python"));
   check("cinema air: выдержка/порядок — свои поля",
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",

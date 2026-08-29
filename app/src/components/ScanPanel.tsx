@@ -77,12 +77,12 @@ export function ScanPanel() {
                 ? "энергия в окне"
                 : "окно FPGA"
               : taskLive
-                ? "не конвейер"
+                ? "не перехват"
                 : `МГц · ${auto ? "energy" : "сканер выкл"}`}
           </span>
         </div>
         <div className={`freq-hud-card tx ${airLive ? (s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
-          <span className="freq-hud-k">{airLive ? "КОНВЕЙЕР SDR" : taskLive ? "SDR ИГРАЕТ" : "НА TX SDR"}</span>
+          <span className="freq-hud-k">{airLive ? "РЕТРАНСЛЯЦИЯ" : taskLive ? "SDR ИГРАЕТ" : "НА TX SDR"}</span>
           <span className="freq-hud-v">
             {airLive
               ? s.fpgaStatus?.det_active
@@ -445,7 +445,7 @@ export function ScanPanel() {
         {airLive
           ? fpgaObserveLine(s.fpgaStatus) || s.lastCueReason
           : taskLive
-            ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не конвейер сканера"
+            ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не автоперехват"
             : fpgaAir
               ? s.lastCueReason ||
                 (!fpgaAirSupported(s.sdrId)

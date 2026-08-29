@@ -33,14 +33,20 @@ export function heroStatusLine(s: HeroState): HeroLine {
     s.lastForwardMhz ?? s.lastInterceptMhz ?? s.scanCenterMhz ?? s.telemFreq ?? parseFloat(s.freqMhz);
   const freqTxt = freq != null && Number.isFinite(freq) ? `${freq.toFixed(3)} МГц` : "";
 
-  if (s.fpgaArmed && s.fpgaStatus?.wd_fired) {
+  const wdFired = s.fpgaStatus?.wd_fired === true;
+  // Watchdog — липкий: стор снимает ARM сразу (fpgaDisarm/fpgaReturnToScan),
+  // поэтому ОШИБКА показываем и после снятия ARM, пока не начался новый цикл
+  // (scanRunning = авто-цикл сам восстановился — не пугаем, событие в журнале).
+  if (wdFired && (s.fpgaArmed || !s.scanRunning)) {
     return {
       kind: "error",
       text: "ОШИБКА",
-      detail: `сторожевой таймер погасил TX — проверьте связь со шлюзом · ${freqTxt}`.trim(),
+      detail: "сторожевой таймер погасил TX — проверьте связь со шлюзом" + (freqTxt ? ` · ${freqTxt}` : ""),
     };
   }
-  if (s.fpgaArmed && s.fpgaStatus != null && s.fpgaStatus.ok === false) {
+  // Статус недоступен в активной фазе (ARM или handoff в полёте) = шлюз умер
+  // на ходу. В idle не вооружаемся: лабораторный СТАТУС без шлюза — не авария.
+  if (s.fpgaStatus != null && s.fpgaStatus.ok === false && (s.fpgaArmed || s.fpgaBusy)) {
     return {
       kind: "error",
       text: "ОШИБКА",
@@ -55,10 +61,11 @@ export function heroStatusLine(s: HeroState): HeroLine {
       : { kind: "relay-wait", text: "РЕТРАНСЛЯЦИЯ", detail: `${freqTxt} · гейт закрыт · ждём сигнал${warn}` };
   }
   if (s.fpgaArmed) {
+    const warn = s.fpgaStatus?.warn ? ` · ${s.fpgaStatus.warn}` : "";
     return {
       kind: "tx",
       text: "ГЕНЕРАЦИЯ",
-      detail: `${freqTxt} · FPGA: ${s.fpgaMode === "nco" ? "тон" : "волна из памяти"}`,
+      detail: `${freqTxt} · FPGA: ${s.fpgaMode === "nco" ? "тон" : "волна из памяти"}${warn}`,
     };
   }
   if (s.fpgaBusy) {

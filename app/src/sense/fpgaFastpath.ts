@@ -248,7 +248,7 @@ export function fpgaObserveLine(st: {
   wd_fired?: boolean;
 } | null): string {
   if (!st?.ok) return "ноутбук наблюдает · статус FPGA недоступен";
-  if (st.wd_fired) return "watchdog погасил TX — конвейер на SDR остановлен";
+  if (st.wd_fired) return "сторожевой таймер погасил TX — ретрансляция остановлена";
   const gate = st.det_active ? "энергия → RX→TX на усилитель" : "тишина, гейт закрыт";
   return `наблюдение: ${gate} · окон с энергией ${st.det_count ?? 0}`;
 }

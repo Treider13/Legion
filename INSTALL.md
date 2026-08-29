@@ -73,7 +73,7 @@ python3 fpga/host/legion_gateway.py    # порт 5531
 
 Пребилда нет — сборка из вендоренного дерева репозитория. Внешний инструмент
 ровно один: **Quartus Prime Lite 23.1.1** (бесплатный, регистрация Intel):
-[скачать с intel.com](https://www.intel.com/content/www/us/en/software-kit/795187)
+страница загрузки — [intel.com → Quartus Prime Lite](https://www.intel.com/content/www/us/en/products/details/fpga/development-tools/quartus-prime.html)
 — нужны пакеты Cyclone V (micro xA4/xA9) и/или Cyclone IV E (bladeRF 1 x40),
 NIOS II EDS входит в установку.
 

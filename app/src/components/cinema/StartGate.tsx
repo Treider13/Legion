@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp } from "../../sense/fpgaFastpath";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { autoDispatchOptionRu, type AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
@@ -33,6 +33,7 @@ export function StartGate({ mode, onClose }: Props) {
   const storedTurnDwell = useLegion((s) => s.fpgaTurnDwellMs);
   const storedDispatch = useLegion((s) => s.autoDispatch);
   const storedDetThr = useLegion((s) => s.fpgaDetThr);
+  const detShift = useLegion((s) => s.fpgaDetShift);
   const [step, setStep] = useState<"band" | "path" | "walk">(mode === "sdr" ? "band" : "band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
@@ -252,7 +253,9 @@ export function StartGate({ mode, onClose }: Props) {
             </div>
             <p className="cinema-gate-lead">
               {fpgaAirSupported(sdrId)
-                ? `канал ${clampAirBwMhz(parseFloat(windowMhz), analogMax)} МГц · окно детектора ${airDetUs.toFixed(1)} мкс · ноутбук наблюдает и стопит`
+                ? `канал ${clampAirBwMhz(parseFloat(windowMhz), analogMax)} МГц · окно детектора ${
+                    airTractParams(parseFloat(windowMhz), analogMax, detShift).windowUs.toFixed(1)
+                  } мкс · ноутбук наблюдает и стопит`
                 : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 — выбирается на вкладке SDR в Настройках."}
             </p>
           </>

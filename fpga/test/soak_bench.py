@@ -104,6 +104,8 @@ def main() -> int:
         return 1
     log({"event": "arm", "mode": "lb_gated"})
     print("  ARM lb_gated взведён — soak пошёл")
+    believe_armed = True
+    last_rearm = time.monotonic()
 
     while not stop.is_set() and time.monotonic() < deadline:
         stop.wait(args.poll_s)
@@ -133,13 +135,34 @@ def main() -> int:
         if st.get("ok") is not True:
             errors += 1
             log({"event": "status_fail", "reason": st.get("reason")})
-        if st.get("wd_fired"):
-            restarts += 1
-            log({"event": "wd_fired", "restart": restarts})
-            print(f"  [{polls}] watchdog снял ARM — перезапуск #{restarts}")
-            gw({"op": "disarm"})
+            continue
+        # Потеря ARM: wd_fired (сторож/NIOS deadman) или молчаливый armed_s=0
+        # (сторож kick_age шлюза сделал DISARM сам). Грейс 5 с после нашего
+        # re-ARM: armed_s — целые секунды, на коротком poll не кусаемся.
+        if believe_armed:
+            wd = bool(st.get("wd_fired"))
+            lost_silent = (
+                not wd
+                and (st.get("armed_s") or 0) <= 0
+                and time.monotonic() - last_rearm > 5
+            )
+            if wd or lost_silent:
+                restarts += 1
+                why = "watchdog снял ARM" if wd else "ARM потерян молча (armed_s=0)"
+                print(f"  [{polls}] {why} — перезапуск #{restarts}")
+                log({"event": "arm_lost", "why": why, "restart": restarts})
+                gw({"op": "disarm"})
+                believe_armed = False
+        if not believe_armed:
+            # Re-ARM до конца прогона: разоружённая плата без попыток
+            # подняться — не soak, а холостой опрос.
             r = gw({"op": "arm", **{k: v for k, v in arm_cmd.items() if k != "op"}})
+            believe_armed = r.get("ok") is True
+            last_rearm = time.monotonic()
             log({"event": "rearm", "ok": r.get("ok"), "reason": r.get("reason")})
+            if not believe_armed:
+                errors += 1
+                print(f"  [{polls}] re-ARM не удался: {r.get('reason')}")
         dc = st.get("det_count") or 0
         if dc != last_det:
             last_det = dc

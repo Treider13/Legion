@@ -66,7 +66,9 @@ else
   miss "python3-soapysdr — sudo apt install python3-soapysdr soapysdr-tools"
   maybe "soapysdr" sudo apt install -y python3-soapysdr soapysdr-tools
 fi
-if command -v SoapySDRUtil >/dev/null && SoapySDRUtil --find 2>/dev/null | grep -qi bladerf; then
+# Модуль bladerf: --info перечисляет фабрики (модули) без железа; --find без
+# подключённой платы показал бы пусто даже при установленном модуле.
+if command -v SoapySDRUtil >/dev/null && SoapySDRUtil --info 2>/dev/null | grep -qi bladerf; then
   ok "soapysdr-module-bladerf"
 else
   miss "soapysdr-module-bladerf — sudo apt install soapysdr-module-bladerf"

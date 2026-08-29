@@ -25,14 +25,21 @@ if [ -z "$GW" ]; then
 fi
 
 echo "== предусловия (этот ПК) =="
+# Зависимости Python ставятся в .venv (INSTALL.md §2) — проверяем его, иначе
+# системный python3 без пакетов дал бы ложные FAIL.
+PY=python3
+if [ -f .venv/bin/python ]; then
+  PY=.venv/bin/python
+  echo "  OK: venv .venv ($($PY --version 2>&1))"
+fi
 FAIL=0
 command -v python3 >/dev/null && echo "  OK: python3 $(python3 --version 2>&1 | awk '{print $2}')" \
   || { echo "  FAIL: python3 не найден"; FAIL=1; }
-python3 -c "import usb" 2>/dev/null && echo "  OK: pyusb" \
+$PY -c "import usb" 2>/dev/null && echo "  OK: pyusb" \
   || { echo "  FAIL: pyusb — pip install -r fpga/requirements.txt"; FAIL=1; }
-python3 -c "import numpy" 2>/dev/null && echo "  OK: numpy (стрим-стимул E3/E4)" \
+$PY -c "import numpy" 2>/dev/null && echo "  OK: numpy (стрим-стимул E3/E4)" \
   || { echo "  FAIL: numpy — pip install -r tools/requirements.txt"; FAIL=1; }
-python3 -c "import SoapySDR" 2>/dev/null && echo "  OK: SoapySDR python (воркер E3/E4)" \
+$PY -c "import SoapySDR" 2>/dev/null && echo "  OK: SoapySDR python (воркер E3/E4)" \
   || { echo "  FAIL: python3-soapysdr — sudo apt install python3-soapysdr soapysdr-module-bladerf"; FAIL=1; }
 [ "$FAIL" = "0" ] || { echo "Предусловия не выполнены — приёмка не запускалась."; exit 1; }
 
@@ -43,7 +50,7 @@ LOG="$OUT_DIR/acceptance-$TS.log"
 JSON="$OUT_DIR/acceptance-$TS.json"
 
 echo "== приёмка E1–E6: лог $LOG =="
-python3 fpga/test/acceptance_bench.py --gw "$GW" --out "$JSON" "${EXTRA[@]}" 2>&1 | tee "$LOG"
+$PY fpga/test/acceptance_bench.py --gw "$GW" --out "$JSON" "${EXTRA[@]}" 2>&1 | tee "$LOG"
 RC=${PIPESTATUS[0]}
 
 echo
