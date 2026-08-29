@@ -299,6 +299,29 @@ r = rpc({"op": "disarm"})
 check("gateway disarm", r.get("ok") is True and
       gw.fpga._t.regs.get(lf.REG_CTRL) == 0)
 
+# kick при мёртвом USB НЕ кормит сторожа шлюза: last_kick обновляется
+# только за дошедший до FPGA kick — иначе при больном USB сторож молчал
+# бы вечно (ни DISARM, ни release), хотя железо погасло своим WD.
+kick_before = gw.last_kick
+gw.fpga._t.released = True
+r = rpc({"op": "kick"})
+check("kick при мёртвом USB → ok:false с причиной",
+      r.get("ok") is False and bool(r.get("reason")))
+check("kick при мёртвом USB не тронул last_kick", gw.last_kick == kick_before)
+gw.fpga._t.released = False
+r = rpc({"op": "kick"})
+check("kick после восстановления USB снова кормит сторожа",
+      r.get("ok") is True and gw.last_kick > kick_before)
+
+# DISARM при сбое записи CTRL: ok:false и честная причина, не «DISARM».
+gw.fpga._t.fail_ctrl_write = True
+r = rpc({"op": "disarm"})
+check("disarm при сбое CTRL → ok:false с причиной",
+      r.get("ok") is False and "не удалась" in str(r.get("reason")))
+gw.fpga._t.fail_ctrl_write = False
+r = rpc({"op": "disarm"})
+check("disarm после сбоя снова работает", r.get("ok") is True)
+
 # ---------------------------------------------------------------------------
 # Сторож kick_age (A2): ARM жив, kicks пропали → сам DISARM → USB release
 # (именно в этом порядке). Таймаут 1 с только в этом блоке.

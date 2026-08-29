@@ -666,7 +666,7 @@ class LegionGateway:
                 )
                 self._rx_by_us = False
                 self._tx_by_us = False
-            return {"ok": ok, "reason": "DISARM"}
+            return {"ok": ok, "reason": "DISARM" if ok else "запись CTRL=0 не удалась"}
         if op == "status":
             st = self.fpga.read_status()
             st["kick_age_ms"] = int((time.monotonic() - self.last_kick) * 1000) if self.last_kick else None
@@ -679,8 +679,14 @@ class LegionGateway:
                     st["air_freq_set"] = bool(air & 0x2)
             return st
         if op == "kick":
-            self.last_kick = time.monotonic()
-            return {"ok": self.fpga.heartbeat()}
+            # last_kick — только за kick, ДОШЕДШИЙ до FPGA: недошедший
+            # (больной USB) watchdog железа не кормит, и сторож kick_age
+            # обязан это видеть — иначе при больном USB он молчал бы вечно,
+            # не делая DISARM+release (железо при этом уже погасло своим WD).
+            if self.fpga.heartbeat():
+                self.last_kick = time.monotonic()
+                return {"ok": True, "reason": "kick"}
+            return {"ok": False, "reason": "запись WD_KICK не дошла до FPGA"}
         if op == "rx":
             # Включить/выключить RX штатным CONTROL-регистром (для мониторинга
             # детектора без lb_*: NCO-тон с кабеля и т.п.) — только bladeRF 1.
@@ -733,7 +739,8 @@ class LegionGateway:
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True
-            return {"ok": ok}
+            # Причина только при сбое: успех молчит, как раньше.
+            return {"ok": ok, **({} if ok else {"reason": f"запись {reg} не удалась"})}
         if op == "tune":
             # Прыжок LO на уже поднятом эфире. USB не отпускаем, DISARM нет —
             # player RAM и CTRL.ARM остаются. Только micro (AIR-регистры).
