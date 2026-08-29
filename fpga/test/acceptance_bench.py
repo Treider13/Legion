@@ -112,6 +112,10 @@ def main() -> int:
                     help="плата на шлюзе; пусто = авто-детект по ping.board")
     ap.add_argument("--worker", default=str(Path(__file__).resolve().parents[2] / "tools" / "sdr_worker.py"))
     ap.add_argument("--skip-e6", action="store_true")
+    ap.add_argument("--size", choices=("40", "A4", "A9"), default="",
+                    help="размер FPGA для имени образа в E6; пусто: x40→40, micro→A4. "
+                         "ping.board не различает xA4/xA9 (один USB PID 0x5250) — "
+                         "на xA9 дайте --size A9 явно, иначе E6 предложит чужой образ")
     ap.add_argument("--ssh", default="", metavar="USER@HOST",
                     help="шлюз по ssh: SoapySDRServer поднимается/гасится сам")
     ap.add_argument("--non-interactive", action="store_true",
@@ -276,9 +280,12 @@ def main() -> int:
     if not args.skip_e6:
         stage = "E6"
         print("== E6: autoload (оператор) ==")
-        # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf), плата —
-        # из ping.board (авто-детект приёмки, PR #22).
-        rbf = "legionxA4.rbf" if board == "micro" else "legionx40.rbf"
+        # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf). Размер
+        # micro по USB PID не отличить (xA4 и xA9 — оба 0x5250): --size A9.
+        size = args.size or ("40" if board != "micro" else "A4")
+        if board == "micro" and not args.size:
+            print("  … micro без --size: считаю A4; на xA9 перезапустите с --size A9")
+        rbf = f"legionx{size}.rbf"
         if args.non_interactive:
             print(f"  … --non-interactive: на шлюзе должно быть сделано: "
                   f"bladeRF-cli -L {rbf}; питание off/on")
