@@ -1709,6 +1709,11 @@ async function main(): Promise<void> {
   const accSrc = readFileSync(join(here, "../../fpga/test/acceptance_bench.py"), "utf8");
   check("приёмка E6: размер FPGA явный (--size) — xA4/xA9 по USB PID не различить",
     accSrc.includes('"--size"') && accSrc.includes("legionx{size}.rbf"));
+  check("INSTALL.md: pyusb на шлюзе системным пакетом (PEP 668), не голым pip",
+    installSrc.includes("python3-usb"));
+  const unitSrc = readFileSync(join(here, "../../fpga/systemd/legion-gateway.service"), "utf8");
+  check("systemd unit: зависимость python3-usb и таймер охлаждения задокументированы",
+    unitSrc.includes("python3-usb") && unitSrc.includes("LEGION_ARM_WARN_S"));
   const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
   check("раннер приёмки уважает .venv (INSTALL.md §2)",
     runnerSrc.includes(".venv/bin/python"));

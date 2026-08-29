@@ -1,4 +1,6 @@
 # LEGION FPGA gateway — агент на шлюзе (мини-ПК с USB3 к bladeRF).
+# Зависимость: pyusb — системным пакетом (sudo apt install python3-usb);
+# pip на современной Ubuntu блокирован PEP 668, а ExecStart — /usr/bin/python3.
 # Установка: скопировать legion_gateway.py + legion_fpga.py в /opt/legion/,
 # этот unit в /etc/systemd/system/, затем:
 #   systemctl daemon-reload && systemctl enable --now legion-gateway
@@ -21,6 +23,8 @@ Environment=LEGION_FPGA_PORT=5531
 # Environment=LEGION_FPGA_RBF=/opt/legion/legion_xA4.rbf
 # Environment=LEGION_KICK_TIMEOUT_S=2.5
 # Environment=LEGION_DET_THR_FLOOR=1
+# Предупреждение о длительной непрерывной работе (охлаждение), сек:
+# Environment=LEGION_ARM_WARN_S=300
 ExecStart=/usr/bin/python3 /opt/legion/legion_gateway.py
 Restart=on-failure
 RestartSec=2

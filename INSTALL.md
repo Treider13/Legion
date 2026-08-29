@@ -71,13 +71,17 @@ npm run tauri dev
 
 ## 4. Шлюз FPGA (мини-ПК с USB3 к bladeRF)
 
-На шлюзе (может быть тот же ноутбук, если плата локальная):
+На шлюзе (может быть тот же ноутбук, если плата локальная). pyusb ставим
+**системным пакетом** — pip на современной Ubuntu блокирован PEP 668 (§2),
+а systemd-юнит работает с системным `/usr/bin/python3`:
 
 ```bash
-pip install -r fpga/requirements.txt   # pyusb
-export LEGION_FPGA_TOKEN=<секрет>      # рекомендуется
-python3 fpga/host/legion_gateway.py    # порт 5531
+sudo apt install -y python3-usb      # pyusb
+export LEGION_FPGA_TOKEN=<секрет>    # рекомендуется
+python3 fpga/host/legion_gateway.py  # порт 5531
 ```
+
+(Альтернатива — venv как в §2: `.venv/bin/python fpga/host/legion_gateway.py`.)
 
 Автозапуск — `fpga/systemd/legion-gateway.service`. Если FPGA пустая после
 подачи питания (xA4 питается от USB) — `LEGION_FPGA_RBF=/путь/legionxA4.rbf`
