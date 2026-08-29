@@ -1126,6 +1126,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         await fail("SDR не открыт");
         return;
       }
+      // FAKE-шлюз (LEGION_FPGA_FAKE на агенте) — регистры не железо: ARM ушёл
+      // бы в эмулятор, а UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта. Тот же
+      // отказ, что в fpgaArm/startFpgaPath (инвариант: FAKE → ARM нет).
+      // Пинг per-handoff, не кэш из startScan: шлюз мог перезапуститься
+      // в FAKE между стартом скана и этим handoff.
+      const ping = await gw({ op: "ping" });
+      const gwNo = fpgaGatewayRefused(ping);
+      if (gwNo) {
+        await fail(gwNo);
+        return;
+      }
       // Тики скана стоп: in-flight tick увидит scanRunning=false и выйдет.
       get().stopScan();
       // Шумовая полка меряется с ОТСТРОЙКОЙ от пика: на самом пике

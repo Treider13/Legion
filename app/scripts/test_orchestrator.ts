@@ -1517,6 +1517,18 @@ async function main(): Promise<void> {
   check("handoff паркует канал оператора, не зашитые 2 МГц",
     storeSrc.includes("hostPark(mhz, tract.bwMhz, tract.fsHz, true, true)"));
   check("handoff ARM несёт fs/bw канала", storeSrc.includes("fsHz: tract.fsHz,") && storeSrc.includes("bwMhz: tract.bwMhz,"));
+  // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
+  // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
+  // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
+  // юнитом fpgaGatewayRefused выше; здесь — факт и порядок врезки.
+  const handoffHead = storeSrc.slice(
+    storeSrc.indexOf("const fpgaHandoff = async"),
+    storeSrc.indexOf("park захвата"),
+  );
+  check("handoff: ping шлюза до парковки", handoffHead.includes('gw({ op: "ping" })'));
+  check("handoff: FAKE/мёртвый шлюз → fail до stopScan",
+    handoffHead.includes("fpgaGatewayRefused(ping)") &&
+    handoffHead.indexOf("fpgaGatewayRefused(ping)") < handoffHead.indexOf("get().stopScan()"));
   check("захват полки по окну детектора оператора",
     storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
   check("захват полки с отстройкой под ширину канала",
