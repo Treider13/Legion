@@ -313,6 +313,19 @@ r = rpc({"op": "kick"})
 check("kick после восстановления USB снова кормит сторожа",
       r.get("ok") is True and gw.last_kick > kick_before)
 
+# Второй путь отказа kick: NIOS ответил без SUCCESS (запись не подтверждена,
+# без исключения) — тоже не кормит сторожа и несёт честную причину.
+kick_before2 = gw.last_kick
+gw.fpga._t.fail_kick = True
+r = rpc({"op": "kick"})
+check("kick без SUCCESS → ok:false, причина про WD_KICK",
+      r.get("ok") is False and "WD_KICK" in str(r.get("reason")))
+check("kick без SUCCESS не тронул last_kick", gw.last_kick == kick_before2)
+gw.fpga._t.fail_kick = False
+r = rpc({"op": "kick"})
+check("kick после сбоя SUCCESS снова кормит сторожа",
+      r.get("ok") is True and gw.last_kick > kick_before2)
+
 # DISARM при сбое записи CTRL: ok:false и честная причина, не «DISARM».
 gw.fpga._t.fail_ctrl_write = True
 r = rpc({"op": "disarm"})

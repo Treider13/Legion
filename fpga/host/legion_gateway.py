@@ -217,6 +217,7 @@ class FakeTransport:
         self.released = False
         self.fail_control_read = False
         self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
+        self.fail_kick = False  # ответ без SUCCESS на запись WD_KICK
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
         # Модель липкого латча NIOS (bit4 STATUS): deadman сработал —
         # после автономного DISARM HDL-бит wd_fired (bit3) гаснет за мкс.
@@ -255,6 +256,9 @@ class FakeTransport:
         if write:
             # Сбой записи CTRL (откат эфира в ARM проверяется этим)
             if addr == lf.REG_CTRL and self.fail_ctrl_write:
+                return bytes(16)
+            # Ответ без SUCCESS на heartbeat (NIOS не подтвердил запись)
+            if addr == lf.REG_WD_KICK and self.fail_kick:
                 return bytes(16)
             # Новый ARM снимает латч deadman (как NIOS legion_cmds.c)
             if addr == lf.REG_CTRL and (data & lf.CTRL_ARM):
