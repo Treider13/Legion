@@ -276,6 +276,9 @@ fpga/test/run_acceptance.sh --gw <IP шлюза> [--board micro] [--ssh user@ш�
 
 ```bash
 python3 fpga/test/soak_bench.py --gw <IP шлюза> --hours 8 [--freq 2450] [--det-thr 1000]
+# x40: LO шлюзом не паркуется (LMS6002D настраивает хост) — дайте --ssh
+# user@<шлюз>: скрипт сам сделает release → bladeRF-cli set frequency → acquire.
+# micro: LO уходит в ARM через freq_mhz, --ssh не нужен.
 ```
 
 Отчёт — `fpga/test/results/soak-<время>.md` (вердикт PASS/FAIL), журнал —

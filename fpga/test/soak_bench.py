@@ -23,6 +23,7 @@ import argparse
 import json
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -52,6 +53,8 @@ def main() -> int:
     ap.add_argument("--board", choices=("x40", "micro"), default="",
                     help="плата; пусто = авто-детект по ping.board")
     ap.add_argument("--poll-s", type=float, default=30.0, help="период опроса status")
+    ap.add_argument("--ssh", default="", metavar="USER@HOST",
+                    help="шлюз по ssh: на x40 — парковка LO через bladeRF-cli перед ARM")
     args = ap.parse_args()
     gw = Gw(args.gw, args.port)
 
@@ -82,6 +85,33 @@ def main() -> int:
         print(f"FAIL: шлюз не отвечает: {r}")
         return 1
     board = args.board or ("micro" if r.get("board") == "bladerf2" else "x40")
+    fake = bool(r.get("fake"))
+    if board == "x40" and not fake:
+        # x40 (LMS6002D): шлюз freq_mhz игнорирует (факт: _air_enable трогает
+        # частоту только в ветке micro/AD9361) — LO держит последняя установка.
+        # Паркуем явно: release USB → bladeRF-cli на шлюзе → acquire обратно.
+        if not args.ssh:
+            print("FAIL: x40 не паркует LO из шлюза (freq_mhz игнорируется — LMS6002D\n"
+                  "      настраивается хостом). Дайте --ssh user@шлюз (bladeRF-cli на\n"
+                  "      шлюзе) или припаркуйте LO приложением LEGION и перезапустите soak.")
+            return 2
+        r = gw({"op": "usb", "action": "release"})
+        if r.get("ok") is not True:
+            print(f"FAIL: шлюз не отпустил USB для парковки LO: {r.get('reason')}")
+            return 2
+        cp = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", args.ssh,
+             f'bladeRF-cli -e "set frequency rx {args.freq}M" -e "set frequency tx {args.freq}M"'],
+            capture_output=True, text=True, timeout=30)
+        acq = gw({"op": "usb", "action": "acquire"})
+        if cp.returncode != 0:
+            print(f"FAIL: парковка LO на шлюзе: {cp.stderr.strip() or cp.stdout.strip()}")
+            return 2
+        if acq.get("ok") is not True:
+            print(f"FAIL: шлюз не занял USB обратно: {acq.get('reason')}")
+            return 2
+        print(f"  x40: LO припаркован на {args.freq} МГц (bladeRF-cli на шлюзе)")
+        log({"event": "x40_lo_park", "freq_mhz": args.freq})
     arm_cmd: dict = {"op": "arm", "mode": "lb_gated", "det_thr": args.det_thr}
     if board == "micro":
         arm_cmd["freq_mhz"] = args.freq  # LO для AD9361 обязателен

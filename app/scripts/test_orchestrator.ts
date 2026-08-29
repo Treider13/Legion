@@ -1689,6 +1689,11 @@ async function main(): Promise<void> {
   const soakSrc = readFileSync(join(here, "../../fpga/test/soak_bench.py"), "utf8");
   check("soak: silent-loss только при наличии armed_s (совместимость со старым шлюзом)",
     soakSrc.includes('"armed_s" in st'));
+  check("soak: x40 без --ssh — честный отказ (LO шлюзом не паркуется)",
+    soakSrc.includes('board == "x40" and not fake') && soakSrc.includes("bladeRF-cli"));
+  check("soak: x40 парковка LO между release и acquire",
+    soakSrc.indexOf('"action": "release"') < soakSrc.indexOf("bladeRF-cli -e")
+    && soakSrc.indexOf("bladeRF-cli -e") < soakSrc.indexOf('"action": "acquire"'));
   const runnerSrc = readFileSync(join(here, "../../fpga/test/run_acceptance.sh"), "utf8");
   check("раннер приёмки уважает .venv (INSTALL.md §2)",
     runnerSrc.includes(".venv/bin/python"));
