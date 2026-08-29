@@ -246,9 +246,14 @@ ARM lb_* на micro не взведётся (и это видно в ответ�
 
 ```bash
 pip install -r fpga/requirements.txt
-python3 fpga/test/acceptance_bench.py --gw <IP шлюза> [--board micro] [--skip-e6]
+fpga/test/run_acceptance.sh --gw <IP шлюза> [--board micro] [--ssh user@шлюз] [--skip-e6]
 # --board можно не давать: агент отвечает board в ping, скрипт сам определит.
+# --ssh: SoapySDRServer на шлюзе поднимается/гасится автоматически (иначе —
+# паузы Enter). Лог и JSON-отчёт — в fpga/test/results/.
 ```
+
+**Без зелёного прогона E1–E6 на целевой плате система стабильной не
+считается** — симуляция и хост-тесты не подменяют стенд.
 
 | Этап | Что скрипт делает | Критерий |
 |---|---|---|

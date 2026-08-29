@@ -14,6 +14,15 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
 
   python3 fpga/test/acceptance_bench.py --gw 192.168.1.20 [--port 5531]
       [--board micro] [--worker tools/sdr_worker.py] [--skip-e6]
+      [--ssh user@шлюз] [--non-interactive] [--out results/acceptance.json]
+
+Автоматизация стенда:
+  --ssh user@host   SoapySDRServer на шлюзе поднимается/гасится по ssh
+                    (без ключа — операторские паузы Enter, как раньше).
+  --non-interactive без пауз Enter вообще: без --ssh стрим-фазы E3/E4
+                    честно упадут, если SoapySDRServer не поднят заранее.
+  --out PATH        JSON-отчёт приёмки (этапы, PASS/FAIL, латентность
+                    watchdog, плата, время) — артефакт готовности xA4.
 
 Этапы (зеркало fpga/README.md):
   E1 канал/образ живы: ping + VERSION (штатный пакет target 0x00)
@@ -43,11 +52,16 @@ import time
 from pathlib import Path
 
 fails = 0
+# Протокол приёмки для JSON-отчёта: (этап, имя, ok, detail).
+results: list[dict] = []
+stage = ""
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
     global fails
     print(("  PASS  " if cond else "  FAIL  ") + name + ("" if cond else f"  {detail}"))
+    results.append({"stage": stage, "name": name, "ok": bool(cond),
+                    **({"detail": detail} if detail and not cond else {})})
     if not cond:
         fails += 1
 
@@ -90,6 +104,7 @@ class Worker:
 
 
 def main() -> int:
+    global stage
     ap = argparse.ArgumentParser()
     ap.add_argument("--gw", required=True, help="IP шлюза с платой")
     ap.add_argument("--port", type=int, default=5531)
@@ -97,8 +112,34 @@ def main() -> int:
                     help="плата на шлюзе; пусто = авто-детект по ping.board")
     ap.add_argument("--worker", default=str(Path(__file__).resolve().parents[2] / "tools" / "sdr_worker.py"))
     ap.add_argument("--skip-e6", action="store_true")
+    ap.add_argument("--ssh", default="", metavar="USER@HOST",
+                    help="шлюз по ssh: SoapySDRServer поднимается/гасится сам")
+    ap.add_argument("--non-interactive", action="store_true",
+                    help="без пауз Enter (без --ssh стрим-фазы требуют заранее поднятый SoapySDRServer)")
+    ap.add_argument("--out", default="", metavar="PATH",
+                    help="JSON-отчёт приёмки (артефакт готовности платы)")
     args = ap.parse_args()
     gw = Gw(args.gw, args.port)
+
+    def soapy_server(up: bool) -> None:
+        """SoapySDRServer на шлюзе: по ssh — сами, иначе пауза оператора."""
+        action = "поднимите" if up else "остановите"
+        if args.ssh:
+            cmd = ("pgrep -x SoapySDRServer >/dev/null || "
+                   "(nohup SoapySDRServer --bind >/tmp/soapysdr.log 2>&1 &)") if up \
+                else "pkill -x SoapySDRServer || true"
+            cp = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                                 args.ssh, cmd], capture_output=True, text=True, timeout=30)
+            if cp.returncode != 0:
+                print(f"  ВНИМАНИЕ: ssh {action} SoapySDRServer: {cp.stderr.strip() or cp.stdout.strip()}")
+            time.sleep(1.5 if up else 0.5)
+            return
+        if args.non_interactive:
+            print(f"  … --non-interactive: SoapySDRServer на шлюзе должен быть "
+                  f"{'поднят' if up else 'остановлен'} заранее")
+            return
+        print(f"  … {action} SoapySDRServer на шлюзе (или --ssh), Enter когда готово")
+        input()
 
     # Heartbeat как у приложения LEGION (500 мс), пока идут этапы E2–E4;
     # на E5 намеренно останавливаем — проверяем, что железо гасит TX само.
@@ -114,6 +155,7 @@ def main() -> int:
     kick_thr = threading.Thread(target=kick_loop, daemon=True)
     kick_thr.start()
 
+    stage = "E1"
     print("== E1: канал и образ ==")
     r = gw({"op": "ping"})
     check("агент шлюза отвечает", r.get("ok") is True, str(r))
@@ -126,6 +168,7 @@ def main() -> int:
     r = gw({"op": "set", "reg": "det_thr", "value": 1000})
     check("запись регистра через агента (det_thr)", r.get("ok") is True, str(r))
 
+    stage = "E2"
     print("== E2: NCO из FPGA ==")
     r = gw({"op": "set", "reg": "nco_ftw", "value": int(0.25e6 / 2e6 * 2**32)})
     check("FTW записан (250 кГц при fs=2 МГц)", r.get("ok") is True, str(r))
@@ -155,14 +198,14 @@ def main() -> int:
     if board != "micro":
         gw({"op": "rx", "on": False})
 
+    stage = "E3"
     print("== E3: плеер (capture → play) ==")
     gw({"op": "set", "reg": "player_len", "value": 4095})
     r = gw({"op": "set", "reg": "player_ctl", "value": 1})
     check("capture_arm=1", r.get("ok") is True, str(r))
     r = gw({"op": "usb", "action": "release"})
     check("агент отпустил USB для стрима", r.get("ok") is True, str(r))
-    print("  … поднимите SoapySDRServer на шлюзе (или --ssh), Enter когда готово")
-    input()
+    soapy_server(up=True)
     wk = Worker(Path(args.worker), args.gw)
     try:
         r = wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
@@ -173,8 +216,7 @@ def main() -> int:
         wk.rpc({"op": "tx_off"})
     finally:
         wk.close()
-    print("  … остановите SoapySDRServer на шлюзе, Enter когда готово")
-    input()
+    soapy_server(up=False)
     r = gw({"op": "usb", "action": "acquire"})
     check("агент занял USB обратно", r.get("ok") is True, str(r))
     st = gw({"op": "status"})
@@ -184,14 +226,14 @@ def main() -> int:
     check("PLAYER играет из RAM автономно", r.get("ok") is True and st.get("playing") is True,
           f"{r} / {st}")
 
+    stage = "E4"
     print("== E4: детектор (стимул — стрим тона) ==")
     gw({"op": "disarm"})
     r = gw({"op": "set", "reg": "det_thr", "value": 1000})
     check("det_thr записан", r.get("ok") is True, str(r))
     d0 = gw({"op": "status"}).get("det_count", 0) or 0
     gw({"op": "usb", "action": "release"})
-    print("  … SoapySDRServer на шлюзе, Enter")
-    input()
+    soapy_server(up=True)
     wk = Worker(Path(args.worker), args.gw)
     try:
         wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
@@ -202,12 +244,12 @@ def main() -> int:
         wk.rpc({"op": "tx_off"})
     finally:
         wk.close()
-    print("  … остановите SoapySDRServer, Enter")
-    input()
+    soapy_server(up=False)
     gw({"op": "usb", "action": "acquire"})
     d1 = gw({"op": "status"}).get("det_count", 0) or 0
     check("детектор FPGA засёк тон (det_count вырос)", d1 > d0, f"{d0} → {d1}")
 
+    stage = "E5"
     print("== E5: watchdog (deadman) ==")
     r = gw({"op": "arm", "mode": "nco", **arm_freq})
     check("ARM для watchdog-теста", r.get("ok") is True, str(r))
@@ -232,17 +274,38 @@ def main() -> int:
     gw({"op": "disarm"})
 
     if not args.skip_e6:
+        stage = "E6"
         print("== E6: autoload (оператор) ==")
         # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf), плата —
         # из ping.board (авто-детект приёмки, PR #22).
         rbf = "legionxA4.rbf" if board == "micro" else "legionx40.rbf"
-        print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
-        input()
+        if args.non_interactive:
+            print(f"  … --non-interactive: на шлюзе должно быть сделано: "
+                  f"bladeRF-cli -L {rbf}; питание off/on")
+        else:
+            print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
+            input()
         r = gw({"op": "ping"})
         check("канал жив после power cycle (наш образ autoload)", r.get("ok") is True, str(r))
 
-    print("ПРИЁМКА: ALL PASS" if fails == 0 else f"ПРИЁМКА: {fails} FAILURES")
-    return 0 if fails == 0 else 1
+    ok_all = fails == 0
+    print("ПРИЁМКА: ALL PASS" if ok_all else f"ПРИЁМКА: {fails} FAILURES")
+    if args.out:
+        report = {
+            "system": "LEGION fpga legion",
+            "board": board,
+            "gateway": f"{args.gw}:{args.port}",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "ok": ok_all,
+            "fails": fails,
+            "wd_fired_after_s": fired_after,
+            "checks": results,
+        }
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        print(f"  отчёт: {out}")
+    return 0 if ok_all else 1
 
 
 if __name__ == "__main__":

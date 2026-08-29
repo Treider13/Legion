@@ -125,7 +125,25 @@ python3 tools/esp32_emulator.py   # печатает /dev/pts/N — виртуа
 | GUI | `npx tsx scripts/gui_test.ts` | e2e в Chrome: connect → 2475 МГц → LOCK → коридор |
 | FPGA HDL | `fpga/tb/run_ghdl.sh` | GHDL-симуляция 8 тестбенчей ревизии legion (детектор/плеер/NCO/watchdog/CDC/мукс/регистры/интеграция) |
 | FPGA хост | `python3 fpga/test/test_legion_fpga.py` | упаковщик байт-в-байт против C Nuand (вендоренное дерево), карта регистров, USB-константы, протокол шлюза |
-| FPGA приёмка | `python3 fpga/test/acceptance_bench.py --gw <IP>` | E1–E6 на стенде с x40 (скрипт гоняет usb release/acquire вокруг стрим-фаз) |
+| FPGA приёмка | `fpga/test/run_acceptance.sh --gw <IP>` | E1–E6 на стенде с платой (лог и JSON-отчёт в `fpga/test/results/`) |
+
+## Приёмка на железе (обязательна)
+
+**Система НЕ считается стабильной и готовой к использованию, пока приёмка
+E1–E6 не пройдена на целевой плате** (bladeRF 2.0 micro xA4/xA9 или
+bladeRF 1 x40 с ревизией `legion`). GHDL-симуляция и хост-тесты проверяют
+логику, но не подменяют стенд: компиляция Quartus, USB-тракт и RFIC поднимаются
+только на железе.
+
+```bash
+# На шлюзе (мини-ПК с USB3 к плате): python3 fpga/host/legion_gateway.py
+# На этом ПК (Ubuntu, зависимости — INSTALL.md):
+fpga/test/run_acceptance.sh --gw 192.168.1.20 --board micro --ssh user@192.168.1.20
+```
+
+Прогон пишет лог и JSON-отчёт в `fpga/test/results/`. Красный прогон =
+блокирующий дефект: сначала исправление, потом эксплуатация. Подробный
+runbook по этапам — `fpga/README.md` («Этапы приёмки на железе»).
 
 CI (GitHub Actions) гоняет всё это + сборку прошивки под 6 плат + сборку
 Tauri на каждый пуш; релизы (win/mac/linux бандлы) — по тегу `v*`.
