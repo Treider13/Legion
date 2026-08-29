@@ -97,6 +97,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  fpgaRunModeRu,
   isFpgaAirPattern,
   modeConflict,
   modeOf,
@@ -538,8 +539,8 @@ export function fpgaPlayerReady(st: {
   capture_done?: boolean;
   reason?: string;
 }): string | null {
-  if (!st.ok) return st.reason ?? "FPGA: статус недоступен — capture не подтверждён";
-  if (!st.capture_done) return "FPGA player: capture_done=0 — в RAM нет волны, ARM нельзя";
+  if (!st.ok) return st.reason ?? "FPGA: статус недоступен — захват не подтверждён";
+  if (!st.capture_done) return "FPGA: в памяти нет волны (сначала загрузите её на SDR) — генерация невозможна";
   return null;
 }
 
@@ -2175,8 +2176,8 @@ export const useLegion = create<LegionStore>((set, get) => {
                   bwMhz: parseFloat(get().fpgaAirBwMhz),
                 }).reason
               : air
-                ? `FPGA · ${mode} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
-                : `FPGA · ${mode} · ${mid.toFixed(3)} МГц`;
+                ? `FPGA · ${fpgaRunModeRu(mode)} · антенна→усилитель · ${mid.toFixed(3)} МГц · ${formatDetWindow(pk.fsHz)}`
+                : `FPGA · ${fpgaRunModeRu(mode)} · ${mid.toFixed(3)} МГц`;
           set({
             fpgaArmed: true,
             fpgaAutoCycle: false,
@@ -2593,7 +2594,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fpgaArmed: true,
             lastForwardMhz: mhz,
             lastSdrTxUs: null,
-            lastCueReason: `FPGA · NCO ${kind} · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
+            lastCueReason: `FPGA · тон ${kind} · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
           });
           beginFpgaKick();
           if (await abortSoloIfRevoked()) return false;
@@ -2707,7 +2708,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fpgaArmed: true,
           lastForwardMhz: mhz,
           lastSdrTxUs: null,
-          lastCueReason: `FPGA · player «${kind}» · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
+          lastCueReason: `FPGA · волна «${kind}» из памяти · ${mhz.toFixed(3)} МГц · окно ${walk.analogMhz} МГц · без эфира`,
         });
         beginFpgaKick();
         if (await abortSoloIfRevoked()) return false;

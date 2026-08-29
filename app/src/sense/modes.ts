@@ -165,6 +165,21 @@ export function modeConflict(
 
 export type FpgaRunMode = "player" | "nco" | "lb_gated" | "lb_always";
 
+/** Режим ARM по-русски — для whisper/лога оператора. На проводе (шлюз)
+ *  остаются wire-имена player/nco/lb_gated/lb_always. */
+export function fpgaRunModeRu(mode: FpgaRunMode): string {
+  switch (mode) {
+    case "player":
+      return "генерация · волна из памяти";
+    case "nco":
+      return "генерация · тон";
+    case "lb_gated":
+      return "ретрансляция по энергии";
+    case "lb_always":
+      return "ретрансляция постоянная";
+  }
+}
+
 /** FPGA без сканера: ноутбук ставит контент, SDR играет. Не lb_gated. */
 export function isFpgaTaskMode(mode: FpgaRunMode): boolean {
   return mode === "player" || mode === "nco" || mode === "lb_always";

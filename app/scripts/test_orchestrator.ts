@@ -188,7 +188,9 @@ async function main(): Promise<void> {
   check("шлюз FAKE → отказ", (fpgaGatewayRefused({ ok: true, fake: true }) ?? "").includes("FAKE"));
   check("шлюз мёртв → отказ", fpgaGatewayRefused({ ok: false, reason: "down" }) === "down");
   check("player capture_done → можно ARM", fpgaPlayerReady({ ok: true, capture_done: true }) === null);
-  check("player без capture_done → отказ", (fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("capture_done"));
+  check("player без capture_done → отказ", (fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("в памяти нет волны"));
+  check("отказ player без сырого ключа capture_done (аудит P1-6)",
+    !((fpgaPlayerReady({ ok: true, capture_done: false }) ?? "").includes("capture_done")));
   check("player статус мёртв → отказ", fpgaPlayerReady({ ok: false, reason: "usb" }) === "usb");
   check("кабель xA4 = шлюз", planEthernet("bladerf-micro-xa4", "1.2.3.4").cable === "gateway-rj45");
   check("кабель N210 = RJ45 в SDR", planEthernet("usrp-n210", "").cable === "sdr-rj45");

@@ -612,14 +612,14 @@ class LegionGateway:
                 return {"ok": False, "reason": f"неизвестный mode {mode_name}"}
             # lb_gated без явного порога = гейт на шум (порог 0). Отказ честно.
             if mode == lf.MODE_LB_GATED and msg.get("det_thr") is None and not self.det_thr_set:
-                return {"ok": False, "reason": "lb_gated: сначала det_thr (порог детектора)"}
+                return {"ok": False, "reason": "ретрансляция по энергии: не задан порог детектора (поле «Порог чувствительности»)"}
             if msg.get("det_thr") is not None:
                 # Явный порог ниже floor (в т.ч. 0) = гейт на шум. Раньше 0
                 # проходил — документация («0 шлюз отвергает») расходилась
                 # с кодом; floor по умолчанию 1, поднимается LEGION_DET_THR_FLOOR.
                 if mode == lf.MODE_LB_GATED and int(msg["det_thr"]) < DET_THR_FLOOR:
                     return {"ok": False,
-                            "reason": f"lb_gated: det_thr {msg['det_thr']} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                            "reason": f"порог детектора {msg['det_thr']} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
@@ -766,7 +766,7 @@ class LegionGateway:
             # det_thr_set, и lb_gated без det_thr армировался с гейтом на шум.
             if reg == "det_thr" and val < DET_THR_FLOOR:
                 return {"ok": False,
-                        "reason": f"det_thr {val} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                        "reason": f"порог детектора {val} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
             ok = self.fpga.write_reg(regmap[reg], val)
             if ok and reg == "det_thr":
                 self.det_thr_set = True
@@ -801,7 +801,7 @@ class LegionGateway:
             if thr is not None:
                 if int(thr) < DET_THR_FLOOR:
                     return {"ok": False,
-                            "reason": f"tune: det_thr {thr} < floor {DET_THR_FLOOR} (гейт на шум)"}
+                            "reason": f"tune: порог детектора {thr} ниже допустимого минимума {DET_THR_FLOOR} — гейт открылся бы на шум"}
                 if not self.fpga.write_reg(lf.REG_DET_THR, int(thr)):
                     return {"ok": False, "reason": "tune: запись DET_THR не удалась"}
             freq = msg.get("freq_mhz")
