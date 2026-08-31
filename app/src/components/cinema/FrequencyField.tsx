@@ -7,6 +7,7 @@ import {
   heatRgb,
   nextWaterfallRow,
   shouldPushWaterfallRow,
+  waterfallBandChanged,
 } from "../../sense/waterfall";
 import { useLegion } from "../../state/store";
 
@@ -52,6 +53,8 @@ export function FrequencyField() {
     let composite: Float32Array | null = null;
     let lastPush = 0;
     let lastKey = "";
+    let lastLo = Number.NaN;
+    let lastHi = Number.NaN;
     let heatDirty = true;
     let raf = 0;
     let alive = true;
@@ -86,6 +89,17 @@ export function FrequencyField() {
       const specTop = 8 + wfH + 4;
       const baseY = specTop + specH;
       const xOf = (mhz: number) => pad + ((mhz - lo) / span) * plotW;
+
+      if (waterfallBandChanged(lastLo, lastHi, lo, hi)) {
+        lastLo = lo;
+        lastHi = hi;
+        history.length = 0;
+        for (let i = 0; i < WATERFALL_ROWS; i++) history.push(new Float32Array(WATERFALL_COLS));
+        composite = null;
+        lastKey = "";
+        lastPush = 0;
+        heatDirty = true;
+      }
 
       const lookMhz = Math.max(parseFloat(st.fpgaAirBwMhz) || 2, 0.2);
       const fpgaMhz = st.fpgaStatus?.freq_mhz ?? st.lastForwardMhz;

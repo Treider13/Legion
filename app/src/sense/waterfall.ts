@@ -65,6 +65,18 @@ export function shouldPushWaterfallRow(
   return live || keyChanged;
 }
 
+/** Колонки строки — индекс в текущем F1…F2, не МГц. Смена коридора
+ *  без сброса истории рисует старый FFT на новой оси. */
+export function waterfallBandChanged(
+  prevLo: number,
+  prevHi: number,
+  lo: number,
+  hi: number,
+): boolean {
+  if (!Number.isFinite(prevLo) || !Number.isFinite(prevHi)) return true;
+  return Math.abs(prevLo - lo) > 1e-9 || Math.abs(prevHi - hi) > 1e-9;
+}
+
 /** Записать энергию текущего взгляда FPGA в композит (остальные колонки живы).
  *  Скат как у analog-фильтра (не кирпич): пик на LO, края взгляда тише. */
 export function applyLook(

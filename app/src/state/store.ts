@@ -447,6 +447,11 @@ export function peekFpgaArmGen(): number {
 let gTxWatch: ReturnType<typeof setInterval> | null = null;
 /** Heartbeat ноутбука → FPGA watchdog (deadman end-to-end, 2 Гц). */
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
+/** СТОП/новый ARM рвёт in-flight kick: иначе отказ старого heartbeat
+ *  зовёт DISARM уже другой сессии (тот же класс, что gFpgaObserveGen). */
+let gFpgaKickGen = 0;
+/** kick RPC > 500 мс — не копим очередь на шлюзе и не плодим второй DISARM. */
+let gFpgaKickInflight = false;
 /** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
 let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
 /** Поколение наблюдения: СТОП/новый kick рвёт stale STATUS. */
@@ -485,6 +490,7 @@ function stopFpgaKick(): void {
     clearInterval(gFpgaKick);
     gFpgaKick = null;
   }
+  gFpgaKickGen += 1;
 }
 
 function stopFpgaObserve(): void {
@@ -722,20 +728,29 @@ export const useLegion = create<LegionStore>((set, get) => {
     // ARM только что подтвердился ответом шлюза, а enable 0→1 сбросил
     // счётчик watchdog в железе — это точка отсчёта deadman-доказательства.
     gLastKickOkMs = performance.now();
+    const kickGen = gFpgaKickGen;
     gFpgaKick = setInterval(() => {
-      void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway).then((kr) => {
-        if (kr.ok) {
-          gLastKickOkMs = performance.now();
-          return;
-        }
-        pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
-        if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
-          // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
-          void fpgaReturnToScan(null);
-        } else {
-          void get().fpgaDisarm();
-        }
-      });
+      if (kickGen !== gFpgaKickGen) return;
+      if (gFpgaKickInflight) return;
+      gFpgaKickInflight = true;
+      void hostFpga({ op: "kick", token: get().fpgaToken }, get().sdrGateway)
+        .then((kr) => {
+          if (kickGen !== gFpgaKickGen) return;
+          if (kr.ok) {
+            gLastKickOkMs = performance.now();
+            return;
+          }
+          pushLog("sys", `FPGA heartbeat не дошёл: ${kr.reason ?? "?"} — шлём DISARM, watchdog гасит TX если шлюз мёртв`);
+          if (isFpgaAirPattern(get().scanPattern) && get().fpgaMode === "lb_gated" && get().fpgaAutoCycle) {
+            // Авто-цикл: канал мёртв → возврат к скану (TX уже гаснет железом).
+            void fpgaReturnToScan(null);
+          } else {
+            void get().fpgaDisarm();
+          }
+        })
+        .finally(() => {
+          gFpgaKickInflight = false;
+        });
     }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
     gFpgaObserve = setInterval(() => {
       void get().fpgaPollStatus();

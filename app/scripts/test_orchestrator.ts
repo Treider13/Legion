@@ -92,6 +92,7 @@ import {
   nextWaterfallRow,
   rowFromBins,
   shouldPushWaterfallRow,
+  waterfallBandChanged,
 } from "../src/sense/waterfall";
 import { coolingWarn, heroStatusLine } from "../src/components/cinema/status";
 import {
@@ -1367,6 +1368,8 @@ async function main(): Promise<void> {
   check("водопад: стоянка живая — строка по времени", shouldPushWaterfallRow(70, 70, true, false));
   check("водопад: простой без смены ключа — не скроллит", !shouldPushWaterfallRow(70, 70, false, false));
   check("водопад: раньше интервала — нет", !shouldPushWaterfallRow(69, 70, true, true));
+  check("водопад: смена коридора сбрасывает ось", waterfallBandChanged(2400, 2500, 2400, 2480));
+  check("водопад: тот же коридор — история жива", !waterfallBandChanged(2400, 2500, 2400, 2500));
   {
     const a = detCountStagnant(null, 4, null, 1000);
     const b = detCountStagnant(4, 4, a.stagnantSinceMs, 1000);
@@ -1954,6 +1957,10 @@ async function main(): Promise<void> {
     storeSrc.includes("if (gFpgaObserveInflight) return") && storeSrc.includes("gFpgaObserveInflight = true"));
   check("stale STATUS после СТОП/нового ARM отбрасывается",
     storeSrc.includes("if (obsGen !== gFpgaObserveGen) return") && storeSrc.includes("gFpgaObserveGen += 1"));
+  check("kick не DISARM чужой сессии",
+    storeSrc.includes("if (kickGen !== gFpgaKickGen) return") && storeSrc.includes("gFpgaKickGen += 1"));
+  check("kick не копится: inflight",
+    storeSrc.includes("if (gFpgaKickInflight) return") && storeSrc.includes("gFpgaKickInflight = true"));
   check("автовозврат по стагнации работает в обоих dispatch",
     storeSrc.includes("await fpgaReturnToScan(mhz);"));
 
