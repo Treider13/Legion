@@ -75,6 +75,21 @@ BATC, Hackaday, IEEE).
 | [njavro/SpectralEye](https://github.com/njavro/SpectralEye) | нет | Cesium + опциональный Sionna RT | Карта мощности ≠ «SJR kill». Другой продукт |
 | [AsaqeLee/EW-THREAT-DETECTION-SYSTEM](https://github.com/AsaqeLee/EW-THREAT-DETECTION-SYSTEM) | MIT | Flask, RSS log-distance, 8 виртуальных станций | Скан находит частоту, не координаты. Один SDR ≠ геолокация |
 
+## Ровесники того же класса прибора (разбор, код не копировали)
+
+Полный текст: [analysis-peer-projects.md](analysis-peer-projects.md).
+Клона «ESP32+ADF4351 + bladeRF FPGA-handoff в одном UI» нет.
+
+| Репозиторий | Лицензия | Роль | Чем они лучше / чем мы |
+|---|---|---|---|
+| [circuitvalley/ADF4351_USB_RF_GEN](https://github.com/circuitvalley/ADF4351_USB_RF_GEN) (RFGEN44, 46★) | CC BY-NC-ND | USB HID генератор, своя PCB | Лучше как изделие (HID, sync, опора). Мы — режимами/тестами/SDR. GUI не копировать |
+| [dfannin/siggen4351](https://github.com/dfannin/siggen4351) (24★) | MIT | Arduino + SV1AFN + OCXO/GPSDO | Лучше тракт опоры и ручное управление без ПК |
+| [f4exb/sdrangel](https://github.com/f4exb/sdrangel) (3948★) | GPL-3.0 | SDR RX/TX рабочая станция, есть bladeRF | Лучше спектр/демодуляторы/I/Q/remote. Нет нашего FPGA `lb_gated`. Плагины не копировать |
+| [xmikos/qspectrumanalyzer](https://github.com/xmikos/qspectrumanalyzer) (1445★) | GPL-3.0 | Водопад soapy_power / hackrf_sweep | Лучше обзор спектра. Только RX |
+| [AlexandreRouma/SDRPlusPlus](https://github.com/AlexandreRouma/SDRPlusPlus) (6290★) | GPL-3.0 | Массовый RX UI | Лучше глаз приёмника. Не наш оркестратор |
+| [BatchDrake/SigDigger](https://github.com/BatchDrake/SigDigger) (2880★) | LGPL-3.0 | Инспектор сигнала | Лучше разбор неизвестного I/Q |
+| [portapack-mayhem/mayhem-firmware](https://github.com/portapack-mayhem/mayhem-firmware) (5366★) | GPL-3.0 | HackRF без ноутбука | Лучше автономность в поле. Другое железо; TX-приложения не смотрим |
+
 ## Дизайн (фаза 5)
 
 | Источник | Что взято |

@@ -168,7 +168,8 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 [compliance](docs/compliance.md) ·
 [REFERENCES](docs/REFERENCES.md) · [datasheet-facts](docs/datasheet-facts.md) ·
 [analysis-upgrade](docs/analysis-upgrade.md) ·
-[analysis-related-repos](docs/analysis-related-repos.md)
+[analysis-related-repos](docs/analysis-related-repos.md) ·
+[analysis-peer-projects](docs/analysis-peer-projects.md)
 
 ## Правовая заметка
 
