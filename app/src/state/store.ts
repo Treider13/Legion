@@ -491,6 +491,9 @@ function stopFpgaKick(): void {
     gFpgaKick = null;
   }
   gFpgaKickGen += 1;
+  // Иначе старый RPC держит inflight: тик 500 мс новой сессии skip,
+  // первый kick только через 1 с — край WD_LIMIT после ARM.
+  gFpgaKickInflight = false;
 }
 
 function stopFpgaObserve(): void {
@@ -501,6 +504,7 @@ function stopFpgaObserve(): void {
   // In-flight STATUS после СТОП/нового ARM не должен красить lastForward
   // и тем более звать DISARM уже другой сессии (окно хуже при тике 80 мс).
   gFpgaObserveGen += 1;
+  gFpgaObserveInflight = false;
 }
 
 /** Эфирный FPGA-тракт (lb_*): bladeRF 2.0 micro xA4/xA9 (AD9361 — после
@@ -749,7 +753,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
         })
         .finally(() => {
-          gFpgaKickInflight = false;
+          if (kickGen === gFpgaKickGen) gFpgaKickInflight = false;
         });
     }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
     gFpgaObserve = setInterval(() => {
@@ -3066,7 +3070,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
       }
       } finally {
-        gFpgaObserveInflight = false;
+        if (obsGen === gFpgaObserveGen) gFpgaObserveInflight = false;
       }
     },
 

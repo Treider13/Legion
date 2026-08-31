@@ -1961,6 +1961,10 @@ async function main(): Promise<void> {
     storeSrc.includes("if (kickGen !== gFpgaKickGen) return") && storeSrc.includes("gFpgaKickGen += 1"));
   check("kick не копится: inflight",
     storeSrc.includes("if (gFpgaKickInflight) return") && storeSrc.includes("gFpgaKickInflight = true"));
+  check("kick inflight не держит чужую сессию (WD ~1 с)",
+    storeSrc.includes("if (kickGen === gFpgaKickGen) gFpgaKickInflight = false"));
+  check("STATUS inflight не держит чужую сессию",
+    storeSrc.includes("if (obsGen === gFpgaObserveGen) gFpgaObserveInflight = false"));
   check("автовозврат по стагнации работает в обоих dispatch",
     storeSrc.includes("await fpgaReturnToScan(mhz);"));
 
