@@ -90,6 +90,18 @@ BATC, Hackaday, IEEE).
 | [BatchDrake/SigDigger](https://github.com/BatchDrake/SigDigger) (2880★) | LGPL-3.0 | Инспектор сигнала | Лучше разбор неизвестного I/Q |
 | [portapack-mayhem/mayhem-firmware](https://github.com/portapack-mayhem/mayhem-firmware) (5366★) | GPL-3.0 | HackRF без ноутбука | Лучше автономность в поле. Другое железо; TX-приложения не смотрим |
 
+Итог по идеям сообщества (GitHub + Hackaday + Crowd Supply + EEVblog + BATC +
+стенды Hellmich/dd1us): [analysis-community-ideas.md](analysis-community-ideas.md).
+
+| Источник | Что доказали |
+|---|---|
+| [Hellmich ADF4351 gen](https://www.mariohellmich.de/projects/sig-gen/sig-gen.html) | Банк ФНЧ + замкнутая АРУ + integer-N через DDS; цель по уровню выше 3 ГГц не достигнута (честно) |
+| [ERASynth](https://www.crowdsupply.com/era-instruments/erasynth) / [github.com/erainstruments](https://github.com/erainstruments) | Crowd Supply: dual-loop, калиброванный дБм, AM/FM/pulse, QCoDeS. Это прибор, не модуль |
+| [dd1us PE43702](https://www.dd1us.de/Downloads/ADF4351%20PLL%20module%20with%20OLED%201v3.pdf) | Открытый аттенюатор 0.25 дБ; разброс модуля ~9 дБ |
+| [OK1DX 4g_gen](http://ok1dx.cz/constructions/4g_gen/4g_gen.html) | Стоковый FW врёт частотой; гармоники ниже 2.2 Г — факт |
+| Analog CN-0174, [BATC LO_filters](https://wiki.batc.org.uk/LO_filters) | Банк ФНЧ обязателен, не опция |
+| Hackaday MWGEN-G1 / DSG-22.6GHz | Типичный wishlist: 15–22 ГГц, фильтр «потом», софт не написан |
+
 ## Дизайн (фаза 5)
 
 | Источник | Что взято |
