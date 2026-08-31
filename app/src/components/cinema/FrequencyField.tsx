@@ -1,6 +1,14 @@
 import { useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
+import {
+  WATERFALL_COLS,
+  WATERFALL_ROWS,
+  heatRgb,
+  nextWaterfallRow,
+  shouldPushWaterfallRow,
+  waterfallBandChanged,
+} from "../../sense/waterfall";
 import { useLegion } from "../../state/store";
 
 function bandEdges(s: {
@@ -41,8 +49,19 @@ export function FrequencyField() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const quiet = prefersReducedMotion();
+    const history: Float32Array[] = Array.from({ length: WATERFALL_ROWS }, () => new Float32Array(WATERFALL_COLS));
+    let composite: Float32Array | null = null;
+    let lastPush = 0;
+    let lastKey = "";
+    let lastLo = Number.NaN;
+    let lastHi = Number.NaN;
+    let heatDirty = true;
     let raf = 0;
     let alive = true;
+    const off = document.createElement("canvas");
+    off.width = WATERFALL_COLS;
+    off.height = WATERFALL_ROWS;
+    const offCtx = off.getContext("2d");
 
     const draw = (t: number) => {
       if (!alive) return;
@@ -60,14 +79,129 @@ export function FrequencyField() {
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssW, cssH);
-
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
 
       const pad = 18;
       const plotW = cssW - pad * 2;
-      const baseY = cssH - 22;
-      const plotH = cssH - 36;
+      const wfH = Math.max(48, cssH - 56);
+      const specH = 28;
+      const specTop = 8 + wfH + 4;
+      const baseY = specTop + specH;
+      const xOf = (mhz: number) => pad + ((mhz - lo) / span) * plotW;
+
+      if (waterfallBandChanged(lastLo, lastHi, lo, hi)) {
+        lastLo = lo;
+        lastHi = hi;
+        history.length = 0;
+        for (let i = 0; i < WATERFALL_ROWS; i++) history.push(new Float32Array(WATERFALL_COLS));
+        composite = null;
+        lastKey = "";
+        lastPush = 0;
+        heatDirty = true;
+      }
+
+      const lookMhz = Math.max(parseFloat(st.fpgaAirBwMhz) || 2, 0.2);
+      const fpgaMhz = st.fpgaStatus?.freq_mhz ?? st.lastForwardMhz;
+      const det = st.fpgaStatus?.det_active === true;
+      const key = st.fpgaArmed
+        ? `f:${fpgaMhz ?? 0}:${det}:${st.fpgaStatus?.det_count ?? 0}`
+        : `b:${st.scanBins.length}:${st.scanBins[0]?.powerDbm ?? 0}:${st.scanCenterMhz ?? 0}`;
+      if (shouldPushWaterfallRow(t - lastPush, 70, st.scanRunning || st.fpgaArmed, key !== lastKey)) {
+        const row = nextWaterfallRow(
+          composite,
+          {
+            bins: st.scanBins,
+            fpgaArmed: st.fpgaArmed,
+            fpgaFreqMhz: fpgaMhz,
+            lookMhz,
+            detActive: det,
+          },
+          lo,
+          hi,
+          WATERFALL_COLS,
+        );
+        composite = row;
+        if (!quiet) {
+          history.push(row);
+          while (history.length > WATERFALL_ROWS) history.shift();
+        } else {
+          history.length = 0;
+          history.push(row);
+        }
+        lastKey = key;
+        lastPush = t;
+        heatDirty = true;
+      }
+
+      const rows = history.length > 0 ? history : [];
+      if (rows.length > 0 && offCtx) {
+        if (off.height !== rows.length) {
+          off.height = rows.length;
+          heatDirty = true;
+        }
+        if (heatDirty) {
+          const img = offCtx.createImageData(WATERFALL_COLS, rows.length);
+          for (let r = 0; r < rows.length; r++) {
+            const src = rows[r];
+            for (let c = 0; c < WATERFALL_COLS; c++) {
+              const [cr, cg, cb] = heatRgb(src[c] ?? 0);
+              const o = (r * WATERFALL_COLS + c) * 4;
+              img.data[o] = cr;
+              img.data[o + 1] = cg;
+              img.data[o + 2] = cb;
+              img.data[o + 3] = 255;
+            }
+          }
+          offCtx.putImageData(img, 0, 0);
+          heatDirty = false;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, pad, 8, plotW, wfH);
+      }
+
+      const latest = rows.length > 0 ? rows[rows.length - 1] : null;
+      if (latest) {
+        ctx.beginPath();
+        for (let c = 0; c < latest.length; c++) {
+          const mhz = lo + ((c + 0.5) / latest.length) * span;
+          const y = baseY - latest[c] * specH;
+          const x = xOf(mhz);
+          if (c === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "rgba(236, 230, 218, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      } else if (!quiet) {
+        ctx.beginPath();
+        for (let i = 0; i <= 96; i++) {
+          const mhz = lo + (span * i) / 96;
+          const y = baseY - (6 + Math.sin(mhz * 0.11 + t * 0.0007) * 3);
+          const x = xOf(mhz);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "rgba(232, 228, 220, 0.14)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      if (st.fpgaArmed && fpgaMhz != null) {
+        const half = lookMhz / 2;
+        const x0 = Math.max(pad, xOf(fpgaMhz - half));
+        const x1 = Math.min(pad + plotW, xOf(fpgaMhz + half));
+        ctx.fillStyle = det ? "rgba(255, 168, 136, 0.12)" : "rgba(232, 228, 220, 0.05)";
+        ctx.fillRect(x0, 8, Math.max(x1 - x0, 2), wfH);
+      } else if (st.scanCenterMhz != null && st.scanRunning) {
+        const bins = st.scanBins;
+        const fromBins = bins.length >= 2 ? (bins[bins.length - 1].freqMhz - bins[0].freqMhz) / 2 : 0;
+        const half = fromBins > 0 ? fromBins : (parseFloat(st.scanWindowMhz) || 20) / 2;
+        const x0 = Math.max(pad, xOf(st.scanCenterMhz - half));
+        const x1 = Math.min(pad + plotW, xOf(st.scanCenterMhz + half));
+        ctx.fillStyle = "rgba(232, 228, 220, 0.045)";
+        ctx.fillRect(x0, 8, Math.max(x1 - x0, 2), wfH);
+      }
 
       ctx.strokeStyle = "rgba(232, 228, 220, 0.08)";
       ctx.lineWidth = 1;
@@ -78,8 +212,10 @@ export function FrequencyField() {
 
       const step = span > 400 ? 100 : span > 80 ? 20 : 10;
       const first = Math.ceil(lo / step) * step;
+      ctx.fillStyle = "rgba(232, 228, 220, 0.28)";
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
       for (let f = first; f <= hi + 1e-9; f += step) {
-        const x = pad + ((f - lo) / span) * plotW;
+        const x = xOf(f);
         ctx.strokeStyle = "rgba(232, 228, 220, 0.05)";
         ctx.beginPath();
         ctx.moveTo(x, 8);
@@ -87,74 +223,9 @@ export function FrequencyField() {
         ctx.stroke();
       }
 
-      const bins = st.scanBins;
-      const xOf = (mhz: number) => pad + ((mhz - lo) / span) * plotW;
-      const yOf = (dbm: number) => {
-        const n = Math.min(1, Math.max(0, (dbm + 100) / 58));
-        return baseY - n * plotH;
-      };
-
-      if (st.scanCenterMhz != null && st.scanRunning) {
-        const fromBins = bins.length >= 2 ? (bins[bins.length - 1].freqMhz - bins[0].freqMhz) / 2 : 0;
-        const half = fromBins > 0 ? fromBins : (parseFloat(st.scanWindowMhz) || 20) / 2;
-        const x0 = Math.max(pad, xOf(st.scanCenterMhz - half));
-        const x1 = Math.min(pad + plotW, xOf(st.scanCenterMhz + half));
-        ctx.fillStyle = "rgba(232, 228, 220, 0.045)";
-        ctx.fillRect(x0, 8, Math.max(x1 - x0, 2), baseY - 8);
-      }
-
-      if (bins.length > 0) {
-        ctx.beginPath();
-        let started = false;
-        for (const b of bins) {
-          if (b.freqMhz < lo || b.freqMhz > hi) continue;
-          const x = xOf(b.freqMhz);
-          const y = yOf(b.powerDbm);
-          if (!started) {
-            ctx.moveTo(x, baseY);
-            ctx.lineTo(x, y);
-            started = true;
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
-        if (started) {
-          ctx.lineTo(xOf(bins[bins.length - 1].freqMhz), baseY);
-          ctx.closePath();
-          ctx.fillStyle = "rgba(214, 208, 196, 0.16)";
-          ctx.fill();
-          ctx.strokeStyle = "rgba(236, 230, 218, 0.55)";
-          ctx.lineWidth = 1.25;
-          ctx.stroke();
-        }
-      } else if (!quiet) {
-        ctx.beginPath();
-        for (let i = 0; i <= 96; i++) {
-          const mhz = lo + (span * i) / 96;
-          const breathe = Math.sin(mhz * 0.11 + t * 0.0007) * 4;
-          const y = baseY - (10 + breathe);
-          const x = xOf(mhz);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = "rgba(232, 228, 220, 0.14)";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-
-      for (const d of st.detections) {
-        if (d.freqMhz < lo || d.freqMhz > hi) continue;
-        const x = xOf(d.freqMhz);
-        ctx.strokeStyle = d.forwarded ? "rgba(255, 176, 148, 0.85)" : "rgba(236, 230, 218, 0.7)";
-        ctx.beginPath();
-        ctx.moveTo(x, 10);
-        ctx.lineTo(x, baseY);
-        ctx.stroke();
-      }
-
       if (st.lastForwardMhz != null) {
         const x = xOf(st.lastForwardMhz);
-        ctx.strokeStyle = "rgba(255, 168, 136, 0.95)";
+        ctx.strokeStyle = det && st.fpgaArmed ? "rgba(255, 168, 136, 0.95)" : "rgba(255, 168, 136, 0.75)";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(x, 6);
@@ -197,16 +268,16 @@ export function FrequencyField() {
             : "—";
 
   return (
-    <section className="cinema-field" aria-label="Полоса частот">
+    <section className="cinema-field" aria-label="Водопад частот">
       <canvas ref={canvasRef} className="cinema-field-canvas" />
       <div className="cinema-field-meta">
         <span>{f1.toFixed(0)}</span>
         <span className={live ? "cinema-field-read live" : "cinema-field-read"}>
           {read}
-          {fpgaArmed && fpgaPath === "air" ? " · эфир→усилитель" : ""}
+          {fpgaArmed && fpgaPath === "air" ? " · водопад · эфир→усилитель" : ""}
           {fpgaArmed && fpgaPath === "solo" ? " · FPGA" : ""}
           {transmitArmed && hostUs != null ? ` · ${hostUs} µs host` : ""}
-          {scanRunning && !transmitArmed && !fpgaArmed ? " · слушает" : ""}
+          {scanRunning && !transmitArmed && !fpgaArmed ? " · водопад · слушает" : ""}
           {transmitArmed && !fpgaArmed ? " · на усилитель" : ""}
           {corridorRunning ? " · коридор" : ""}
         </span>

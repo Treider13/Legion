@@ -34,13 +34,30 @@ export const FPGA_DET_WINDOWS = 512;
 /** Множитель над медианой нижних 60% энергий окон. Окно 16 сэмплов — χ² с 32
  *  степенями: разброс среднего ~25%, K=4 ≈ +6 дБ над полкой. Тюнинг на стенде. */
 export const FPGA_DET_THR_K = 4;
-/** Опросы статуса без роста det_count подряд = «энергия пропала» (400 мс тик).
+/** Стагнация det_count → «энергия пропала». Раньше: 3 опроса × 400 мс = 1.2 с.
+ *  Интервал наблюдения (80 мс для водопада) не должен ускорять возврат в скан.
  *  Слепое пятно: сильная утечка собственного TX обратно в RX (одночастотный
  *  ретранслятор — литература: SI на 60–120 дБ выше принимаемого) держит гейт
  *  открытым после смерти цели — стагнации нет, автовозврат не сработает.
  *  Это физика тракта, не код: ответ — изоляция антенн/выдержка усиления,
  *  операторский СТОП и watchdog работают всегда. */
-export const FPGA_AIR_GONE_POLLS = 3;
+export const FPGA_AIR_GONE_MS = 1200;
+
+/** Счётчик опросов без роста det_count: время, не «3 тика». Тик 80 мс × 3 = 240 мс. */
+export function detCountStagnant(
+  prevCount: number | null,
+  detCount: number,
+  stagnantSinceMs: number | null,
+  nowMs: number,
+  goneMs = FPGA_AIR_GONE_MS,
+): { stagnantSinceMs: number | null; gone: boolean } {
+  if (prevCount !== null && detCount === prevCount) {
+    const since = stagnantSinceMs ?? nowMs;
+    return { stagnantSinceMs: since, gone: nowMs - since >= goneMs };
+  }
+  return { stagnantSinceMs: null, gone: false };
+}
+
 /** ОБЫЧНЫЙ в FPGA-перехвате: сколько держать LO на найденном взгляде
  *  после первого det, затем шаг дальше (даже если энергия ещё есть).
  *  Пример оператора 0.4 мс. Ниже 0.1 мс — короче окна детектора на 2 MSPS
@@ -253,6 +270,8 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
  *  шириной взгляда (аналоговый фильтр = шаг сетки). Две частоты ближе
  *  взгляда — одно TX-окно; 2450 и 2465 МГц раздельно при взгляде ≤15 МГц. */
 export const FPGA_SCAN_QUIET_MS = 5;
+/** Опрос STATUS для водопада/героя. Регистр дешёвый; 400 мс пропускал hop. */
+export const FPGA_OBSERVE_MS = 80;
 
 export interface OnboardInterceptInput {
   sdrId: string;
