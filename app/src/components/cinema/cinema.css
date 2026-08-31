@@ -78,7 +78,7 @@
 
 .cinema-field {
   flex: 0 0 auto;
-  height: 168px;
+  height: 236px;
   padding: 0 22px;
   display: flex;
   flex-direction: column;
@@ -88,7 +88,7 @@
 .cinema-field-canvas {
   display: block;
   width: 100%;
-  height: 128px;
+  height: 196px;
   border-radius: 2px;
 }
 
@@ -519,11 +519,11 @@ button.cinema-wave.on:hover:not(:disabled) {
   }
 
   .cinema-field {
-    height: 140px;
+    height: 188px;
   }
 
   .cinema-field-canvas {
-    height: 104px;
+    height: 152px;
   }
 }
 

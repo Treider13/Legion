@@ -253,6 +253,8 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
  *  шириной взгляда (аналоговый фильтр = шаг сетки). Две частоты ближе
  *  взгляда — одно TX-окно; 2450 и 2465 МГц раздельно при взгляде ≤15 МГц. */
 export const FPGA_SCAN_QUIET_MS = 5;
+/** Опрос STATUS для водопада/героя. Регистр дешёвый; 400 мс пропускал hop. */
+export const FPGA_OBSERVE_MS = 80;
 
 export interface OnboardInterceptInput {
   sdrId: string;

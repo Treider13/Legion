@@ -47,6 +47,7 @@ import {
   fpgaTurnDwellClamp,
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_TURN_DWELL_MIN_MS,
+  FPGA_OBSERVE_MS,
   fpgaTurnDwellUs,
   airTractParams,
   airFsHz,
@@ -80,6 +81,15 @@ import {
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
+import {
+  applyLook,
+  colOfMhz,
+  dbmToUnit,
+  fpgaLookEnergy,
+  heatRgb,
+  nextWaterfallRow,
+  rowFromBins,
+} from "../src/sense/waterfall";
 import { coolingWarn, heroStatusLine } from "../src/components/cinema/status";
 import {
   heldHitAlive,
@@ -1325,6 +1335,38 @@ async function main(): Promise<void> {
     fpgaObserveLine({ ok: true, det_active: true, det_count: 3 }).includes("RX→TX"),
   );
   check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
+  check("опрос водопада 80 мс", FPGA_OBSERVE_MS === 80);
+  check("dBm −110 → 0, −40 → 1", dbmToUnit(-110) === 0 && dbmToUnit(-40) === 1);
+  const wr = rowFromBins(
+    [
+      { freqMhz: 2400, powerDbm: -110 },
+      { freqMhz: 2450, powerDbm: -40 },
+      { freqMhz: 2500, powerDbm: -110 },
+    ],
+    2400,
+    2500,
+    8,
+  );
+  check("хост-FFT: пик в середине коридора", wr[3] > 0.7 && wr[0] < 0.2 && wr[7] < 0.2);
+  const look = new Float32Array(8);
+  applyLook(look, 2400, 2500, 2444, 28, 0.9);
+  check("взгляд FPGA: 2444 красит середину, не край", look[3] > 0.8 && look[0] === 0);
+  check("колонка 2444 в 2400–2500 / 8", colOfMhz(2444, 2400, 2500, 8) === 3);
+  const hop = nextWaterfallRow(look, {
+    bins: [],
+    fpgaArmed: true,
+    fpgaFreqMhz: 2475,
+    lookMhz: 20,
+    detActive: true,
+  }, 2400, 2500, 8);
+  check(
+    "следующий hop не затирает прошлый взгляд",
+    hop[3] > 0.5 && Math.max(...Array.from(hop.slice(4))) > 0.25,
+  );
+  check("гейт открыт ярче тишины", fpgaLookEnergy(true) > fpgaLookEnergy(false));
+  const [hr, hg, hb] = heatRgb(1);
+  const [cr, cg, cb] = heatRgb(0);
+  check("тепло: удар светлее пола", hr + hg + hb > cr + cg + cb + 200);
 
   // --- FPGA solo: сетка стоянок (не эфир, не хост-скан) ---
   const w100 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 100, analogMaxMhz: 56, wave: "awgn" });

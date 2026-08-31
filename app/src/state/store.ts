@@ -57,6 +57,7 @@ import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
   FPGA_AIR_BW_DEFAULT_MHZ,
   FPGA_AIR_GONE_POLLS,
+  FPGA_OBSERVE_MS,
   FPGA_DEFAULT_DET_THR,
   FPGA_DET_THR_FLOOR,
   FPGA_DET_THR_K,
@@ -730,7 +731,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
     gFpgaObserve = setInterval(() => {
       void get().fpgaPollStatus();
-    }, 400);
+    }, FPGA_OBSERVE_MS);
     void get().fpgaPollStatus();
   };
 
