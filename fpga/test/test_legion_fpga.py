@@ -126,7 +126,7 @@ py_map = {
     "LEGION_REG_SCAN_F1_KHZ": lf.REG_SCAN_F1_KHZ,
     "LEGION_REG_SCAN_F2_KHZ": lf.REG_SCAN_F2_KHZ,
     "LEGION_REG_SCAN_CTRL": lf.REG_SCAN_CTRL,
-    "LEGION_REG_SCAN_DWELL_MS": lf.REG_SCAN_DWELL_MS,
+    "LEGION_REG_SCAN_DWELL_US": lf.REG_SCAN_DWELL_US,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -1102,16 +1102,22 @@ check("micro: _lms_enable no-op True, CONTROL не тронут",
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2414.0, "fs_hz": 28_000_000, "bw_mhz": 28,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2500,
-          "scan_turn": True, "scan_dwell_ms": 1500})
+          "scan_turn": True, "scan_dwell_us": 400})
 check("micro: ARM scan_enable ok", r.get("ok") is True)
 check("micro: SCAN_F1 = 2400000 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F1_KHZ) == 2_400_000)
 check("micro: SCAN_F2 = 2500000 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F2_KHZ) == 2_500_000)
 check("micro: SCAN_CTRL enable|turn",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
-check("micro: SCAN_DWELL = 1500", gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_MS) == 1500)
+check("micro: SCAN_DWELL 0.4 мс = 400 мкс", gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_US) == 400)
 st = rpcm({"op": "status"})
 check("micro: status freq_mhz = 2414 (AIR_FREQ readback)",
       st.get("ok") is True and abs(float(st.get("freq_mhz") or 0) - 2414.0) < 0.01)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2414.0, "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2500,
+          "scan_turn": True, "scan_dwell_ms": 1.5})
+check("micro: scan_dwell_ms 1.5 → 1500 мкс (совместимость)",
+      r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_US) == 1500)
 r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
 check("micro: ARM без scan_enable пишет SCAN_CTRL=0",
       r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == 0)

@@ -9,7 +9,7 @@
   {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
    "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int,
    "scan_enable":bool, "scan_f1_mhz":float, "scan_f2_mhz":float,
-   "scan_turn":bool, "scan_dwell_ms":int}
+   "scan_turn":bool, "scan_dwell_us":int, "scan_dwell_ms":float}
   {"op":"disarm"}
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
@@ -546,7 +546,14 @@ class LegionGateway:
         f2 = msg.get("scan_f2_mhz")
         if f1 is None or f2 is None:
             return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
-        dwell = int(msg.get("scan_dwell_ms") or 0)
+        # Регистр — микросекунды. scan_dwell_us предпочтителен; ms → ×1000
+        # (0.4 мс оператора не должен стать 0 и дефолтом NIOS 3 с).
+        if msg.get("scan_dwell_us") is not None:
+            dwell = int(msg.get("scan_dwell_us") or 0)
+        elif msg.get("scan_dwell_ms") is not None:
+            dwell = int(round(float(msg.get("scan_dwell_ms") or 0) * 1000.0))
+        else:
+            dwell = 0
         if not self.fpga.set_scan_corridor(
                 float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell):
             return False, "запись SCAN_* не удалась"
@@ -873,7 +880,8 @@ class LegionGateway:
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,
                 "scan_f1_khz": lf.REG_SCAN_F1_KHZ, "scan_f2_khz": lf.REG_SCAN_F2_KHZ,
-                "scan_ctrl": lf.REG_SCAN_CTRL, "scan_dwell_ms": lf.REG_SCAN_DWELL_MS,
+                "scan_ctrl": lf.REG_SCAN_CTRL, "scan_dwell_us": lf.REG_SCAN_DWELL_US,
+                "scan_dwell_ms": lf.REG_SCAN_DWELL_US,
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}

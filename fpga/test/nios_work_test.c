@@ -14,8 +14,8 @@
  *   B2: AIR_PREP с readback GAINMODE ≠ MGC → отказ подъёма эфира.
  *   B3: порядок AIR_PREP: TXMUTE(1) раньше любой записи TX FREQUENCY,
  *       TXMUTE(0) после ENABLE TX.
- *   SCAN: walker при SCAN_CTRL.enable — hop по quiet (tamer) / dwell (turn);
- *         tamer стоит → hop нет; wd_fired важнее walker.
+ *   SCAN: walker при SCAN_CTRL.enable — hop по quiet (tamer) / dwell от
+ *         первого det (turn, мкс); tamer стоит → hop нет; wd_fired важнее walker.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -243,7 +243,7 @@ int main(void)
     legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
-    legion_reg_write(LEGION_REG_SCAN_DWELL_MS, 10);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 10000);
     legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN); /* priority */
     CHECK("SCAN: AIR_PREP перед ARM", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
     CHECK("SCAN: ARM lb_gated", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
@@ -288,17 +288,44 @@ int main(void)
     for (int k = 0; k < 20; k++) legion_work();
     CHECK("SCAN: tamer стоит → hop нет", rfic_n == 0);
 
-    /* TURN: hop по выдержке даже при энергии */
+    /* TURN: выдержка от первого det, не от входа во взгляд.
+     * Сигнал позже dwell-с-входа всё равно держится dwell, потом hop. */
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_TURN);
     CHECK("SCAN TURN: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 0;
+    legion_work(); /* якорь взгляда, энергии нет */
+    rfic_n = 0;
+    t_tamer += (uint64_t)28000000 * 2 / 1000; /* 2 мс < quiet 5 мс */
+    legion_work();
+    CHECK("SCAN: TURN пустой взгляд раньше quiet → hop нет", rfic_n == 0);
     t_status = LEGION_STATUS_DET_ACTIVE;
+    t_tamer += 1;
+    legion_work(); /* первый det — якорь выдержки */
+    rfic_n = 0;
+    t_tamer += (uint64_t)28000000 * 400 / 1000000; /* 400 мкс, ещё не dwell 10 мс */
+    legion_work();
+    CHECK("SCAN: TURN + энергия, выдержка не истекла → hop нет", rfic_n == 0);
+    t_tamer += (uint64_t)28000000 * 10 / 1000 + 1; /* 10 мс dwell */
+    legion_work();
+    CHECK("SCAN: TURN + энергия + dwell от детекта → hop", rfic_n > 0);
+
+    /* 0.4 мс оператора: 400 мкс @ 28 MSPS */
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_TURN);
+    CHECK("SCAN TURN 0.4мс: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
     t_tamer = 0;
     legion_work();
-    rfic_n = 0;
-    t_tamer += (uint64_t)28000000 * 10 / 1000 + 1; /* dwell 10 мс */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_tamer += 1;
     legion_work();
-    CHECK("SCAN: TURN + энергия + dwell → hop", rfic_n > 0);
+    rfic_n = 0;
+    t_tamer += (uint64_t)28000000 * 400 / 1000000 + 1;
+    legion_work();
+    CHECK("SCAN: TURN 400 мкс от детекта → hop", rfic_n > 0);
 
     /* deadman по-прежнему важнее walker */
     t_status = LEGION_STATUS_WD_FIRED;

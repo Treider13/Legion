@@ -41,16 +41,24 @@ export const FPGA_DET_THR_K = 4;
  *  Это физика тракта, не код: ответ — изоляция антенн/выдержка усиления,
  *  операторский СТОП и watchdog работают всегда. */
 export const FPGA_AIR_GONE_POLLS = 3;
-/** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации на следующую живую.
- *  Ниже 500 мс handoff (сотни мс на micro) не успевает отработать — крутилка
- *  вхолостую; выше минуты — уже удержание, а не очередь. */
+/** ОБЫЧНЫЙ в FPGA-перехвате: сколько держать LO на найденном взгляде
+ *  после первого det, затем шаг дальше (даже если энергия ещё есть).
+ *  Пример оператора 0.4 мс. Ниже 0.1 мс — короче окна детектора на 2 MSPS
+ *  с запасом; выше минуты — уже удержание, а не очередь. USB-handoff к
+ *  выдержке не относится (его в круге нет). */
 export const FPGA_TURN_DWELL_DEFAULT_MS = 3000;
-export const FPGA_TURN_DWELL_MIN_MS = 500;
+export const FPGA_TURN_DWELL_MIN_MS = 0.1;
 export const FPGA_TURN_DWELL_MAX_MS = 60_000;
 
 export function fpgaTurnDwellClamp(ms: number): number {
   if (!Number.isFinite(ms) || ms <= 0) return FPGA_TURN_DWELL_DEFAULT_MS;
-  return Math.min(FPGA_TURN_DWELL_MAX_MS, Math.max(FPGA_TURN_DWELL_MIN_MS, Math.round(ms)));
+  const c = Math.min(FPGA_TURN_DWELL_MAX_MS, Math.max(FPGA_TURN_DWELL_MIN_MS, ms));
+  return Math.round(c * 10) / 10;
+}
+
+/** Регистр NIOS SCAN_DWELL — микросекунды. 0.4 мс → 400. */
+export function fpgaTurnDwellUs(ms: number): number {
+  return Math.round(fpgaTurnDwellClamp(ms) * 1000);
 }
 
 /** Полоса канала подавления lb_*-тракта: fs = max(полоса, минимум sample-rate
@@ -242,7 +250,8 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
 /** Онбордовый перехват: плата смотрит эфир в аналоговом окне и сама
  *  открывает TX. USB не в круге «увидел → усилитель». Два времени:
  *  гейт I²+Q² в текущем взгляде — микросекунды; обзор коридора — шаги LO
- *  шириной analog BW (десятки МГц), миллисекунды. */
+ *  шириной взгляда (аналоговый фильтр = шаг сетки). Две частоты ближе
+ *  взгляда — одно TX-окно; 2450 и 2465 МГц раздельно при взгляде ≤15 МГц. */
 export const FPGA_SCAN_QUIET_MS = 5;
 
 export interface OnboardInterceptInput {
@@ -274,7 +283,7 @@ export interface OnboardInterceptPlan {
 
 export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
   const analog = i.analogBwMhz > 0 ? i.analogBwMhz : FPGA_AIR_BW_DEFAULT_MHZ;
-  const lookMhz = clampAirBwMhz(i.lookMhz ?? analog, analog);
+  const lookMhz = clampAirBwMhz(i.lookMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog);
   const fsHz = airFsHz(lookMhz);
   const detShift = clampDetShift(i.detShift);
   const windowUs = detectorWindowUs(detShift, fsHz);
@@ -395,6 +404,7 @@ export function fpgaArmCmd(
     scanF2Mhz?: number;
     scanTurn?: boolean;
     scanDwellMs?: number;
+    scanDwellUs?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -424,7 +434,12 @@ export function fpgaArmCmd(
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
     if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;
     cmd.scan_turn = !!opts.scanTurn;
-    if (opts.scanDwellMs !== undefined) cmd.scan_dwell_ms = Math.round(opts.scanDwellMs);
+    if (opts.scanDwellUs !== undefined && Number.isFinite(opts.scanDwellUs)) {
+      cmd.scan_dwell_us = Math.max(0, Math.round(opts.scanDwellUs));
+    } else if (opts.scanDwellMs !== undefined) {
+      cmd.scan_dwell_us = fpgaTurnDwellUs(opts.scanDwellMs);
+      cmd.scan_dwell_ms = fpgaTurnDwellClamp(opts.scanDwellMs);
+    }
   }
   return cmd;
 }

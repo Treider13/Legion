@@ -48,7 +48,7 @@ package legion_pkg is
     constant LEGION_REG_SCAN_F1_KHZ  : natural := 16#0E#; -- начало коридора, кГц
     constant LEGION_REG_SCAN_F2_KHZ  : natural := 16#0F#; -- конец коридора, кГц
     constant LEGION_REG_SCAN_CTRL    : natural := 16#10#; -- bit0 enable, bit1 turn
-    constant LEGION_REG_SCAN_DWELL_MS : natural := 16#11#; -- выдержка turn, мс
+    constant LEGION_REG_SCAN_DWELL_US : natural := 16#11#; -- выдержка turn от детекта, мкс
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (живой expired),

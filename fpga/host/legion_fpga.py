@@ -45,7 +45,7 @@ REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
 REG_SCAN_F1_KHZ = 0x0E
 REG_SCAN_F2_KHZ = 0x0F
 REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn
-REG_SCAN_DWELL_MS = 0x11
+REG_SCAN_DWELL_US = 0x11  # выдержка turn от первого детекта, мкс
 
 SCAN_CTRL_EN = 1 << 0
 SCAN_CTRL_TURN = 1 << 1
@@ -139,17 +139,18 @@ class LegionFpga:
         }
 
     def set_scan_corridor(self, f1_mhz: float, f2_mhz: float,
-                          enable: bool, turn: bool, dwell_ms: int) -> bool:
-        """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo)."""
+                          enable: bool, turn: bool, dwell_us: int) -> bool:
+        """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo).
+        dwell_us — выдержка TURN от первого det в взгляде (0 → дефолт NIOS 3 с)."""
         f1 = int(round(float(f1_mhz) * 1000.0))
         f2 = int(round(float(f2_mhz) * 1000.0))
         if f1 <= 0 or f2 < f1:
             return False
         ctrl = (SCAN_CTRL_EN if enable else 0) | (SCAN_CTRL_TURN if turn else 0)
-        dwell = max(0, int(dwell_ms))
+        dwell = max(0, int(dwell_us))
         return (self.write_reg(REG_SCAN_F1_KHZ, f1 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_F2_KHZ, f2 & 0xFFFFFFFF) and
-                self.write_reg(REG_SCAN_DWELL_MS, dwell & 0xFFFFFFFF) and
+                self.write_reg(REG_SCAN_DWELL_US, dwell & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_CTRL, ctrl))
 
     # ---- высокоуровневые команды ----

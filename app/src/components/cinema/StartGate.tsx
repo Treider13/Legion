@@ -17,9 +17,9 @@ interface Props {
  *  держит гейт открытым после смерти цели. Показываем в режимах с ретрансляцией. */
 const SELF_EXCITE_WARN =
   "Ретрансляция — одночастотный тракт: возможна утечка собственного сигнала с выхода " +
-  "на вход. Сильная утечка держит гейт открытым после пропадания цели — автовозврат " +
-  "к поиску тогда не сработает. Разнесите антенны RX и TX и не выкручивайте усиление " +
-  "в максимум. Кнопка «Стоп» и сторожевой таймер работают всегда.";
+  "на вход. В режиме приоритет сильная утечка держит гейт и плату на частоте после " +
+  "пропадания цели. По очереди плата уйдёт по выдержке даже если гейт ещё открыт. " +
+  "Разнесите антенны RX и TX. Кнопка «Стоп» и сторожевой таймер работают всегда.";
 
 export function StartGate({ mode, onClose }: Props) {
   const titleId = useId();
@@ -51,7 +51,7 @@ export function StartGate({ mode, onClose }: Props) {
   const [dispatch, setDispatch] = useState<AutoDispatch>(storedDispatch);
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
   const [windowMhz, setWindowMhz] = useState(
-    path === "solo" ? storedWindow : path === "auto" ? String(catalogCaps(sdrId).analogBwMhz) : storedAirBw,
+    path === "solo" ? storedWindow : storedAirBw,
   );
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
@@ -232,19 +232,20 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · Автоматический перехват</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
-              После Старта хозяин один — SDR. Ноутбук только смотрит и может Стоп.
-              Плата сама видит энергию в своём аналоговом окне и сама открывает TX.
-              Гейт в текущем взгляде — микросекунды. Коридор целиком — шаги LO
-              (один взгляд = фильтр платы, десятки МГц, не 100). USB не в круге
-              «увидел → усилитель».
+              После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
+              усилителя на найденной частоте, Старт и Стоп. Плата сама видит
+              энергию (антенна на RX SMA) и сама открывает TX SMA на усилитель.
+              Нашёл взгляд — держал выдержку (например 0.4 мс) — шагнул дальше.
+              Две частоты ближе ширины взгляда — одно TX-окно; уже взгляд —
+              2450 и 2465 МГц как разные стоянки. USB не в круге «увидел → усилитель».
             </p>
             <div className="cinema-gate-row">
-              <label title="Ширина одного взгляда платы. Равна аналоговому фильтру (x40 28 / micro 56 МГц). Уже — больше шагов по коридору.">
+              <label title="Ширина одного взгляда платы и шаг сетки LO (аналоговый фильтр). Уже — 2450 и 2465 как разные стоянки; шире потолка платы — урежется.">
                 Взгляд, МГц
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
               {dispatch === "turn" && (
-                <label title="Сколько миллисекунд держать взгляд, прежде чем шагнуть дальше, даже если энергия ещё есть.">
+                <label title="Сколько миллисекунд держать усилитель на найденной частоте, затем шаг к следующей (можно 0.4).">
                   Выдержка, мс
                   <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
                 </label>
@@ -274,7 +275,7 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={dispatch === "turn"}
                 className={dispatch === "turn" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("turn")}
-                title="Каждая живая частота обслуживается по кругу с выдержкой. Никто не монополизирует усилитель."
+                title="Каждая найденная частота: усилитель на выдержке, затем следующая в коридоре."
               >
                 <strong>По очереди</strong>
                 <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseFloat(dwellMs))} мс.</span>
@@ -364,10 +365,7 @@ export function StartGate({ mode, onClose }: Props) {
                 role="radio"
                 aria-checked={path === "auto"}
                 className={path === "auto" ? "cinema-path on" : "cinema-path"}
-                onClick={() => {
-                  setPath("auto");
-                  setWindowMhz(String(analogMax));
-                }}
+                onClick={() => setPath("auto")}
                 title="После Старта хозяин — SDR. Плата сама видит энергию и открывает TX. Ноутбук — рубильник."
               >
                 <strong>Автоматический перехват</strong>

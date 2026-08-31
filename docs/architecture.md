@@ -96,19 +96,22 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   Микросекунды detect→TX: FPGA `lb_gated` на bladeRF 2.0 micro xA4/xA9
   (AD9361) и bladeRF 1 x40 (LMS6002D); HackRF/Pluto/N210 не подменяются.
   Режим **автоматический перехват** — после Старта хозяин один (SDR).
-  Ноутбук — рубильник и наблюдение. Плата смотрит эфир в аналоговом окне
-  фильтра (x40 28 МГц / micro 56 МГц, каталог Nuand) и сама открывает TX
-  на усилитель. USB в круге «увидел → усилитель» нет: IQ на хост не
-  гоняется, exclusive USB на каждый пик не меняется. Два времени:
-  гейт I²+Q² в текущем взгляде — микросекунды (окно 16 сэмплов);
-  обзор коридора шире фильтра — шаги LO на NIOS (десятки МГц за взгляд),
-  миллисекунды. Сетка стоянок — `planCenters` (ceil(span/look), ping-pong).
-  PRIORITY: шаг после тишины ~5 мс сэмплов (time tamer); TURN: шаг по
-  выдержке даже при энергии. Порог — поле оператора / дефолт 5000, не
-  полка USB-IQ. На micro hop = TX mute → FREQUENCY RX+TX → unmute (без
-  INIT). На x40 hop = integer-копия `lms_calculate_tuning_params` →
-  `lms_set_precalculated_frequency` RX+TX + `band_select`; Si5338 fs —
-  один park Soapy при Старт. Режим **FPGA+сканер с USB-handoff**
+  Ноутбук — коридор F1…F2, выдержка усилителя на найденной частоте
+  (можно 0.4 мс), Старт/Стоп и наблюдение. Плата смотрит эфир в
+  аналоговом окне взгляда (шаг сетки = фильтр; потолок x40 28 / micro 56 МГц,
+  каталог Nuand) и сама открывает TX на усилитель. USB в круге
+  «увидел → усилитель» нет: IQ на хост не гоняется, exclusive USB на каждый
+  пик не меняется. Два времени: гейт I²+Q² в текущем взгляде — микросекунды
+  (окно 16 сэмплов); обзор коридора — шаги LO на NIOS. Сетка стоянок —
+  `planCenters` (ceil(span/look), ping-pong). Частоты ближе взгляда —
+  одно TX-окно. PRIORITY: шаг после тишины ~5 мс сэмплов (time tamer);
+  TURN: после первого `det_active` держим LO выдержку (регистр в
+  микросекундах), затем следующий взгляд даже если энергия ещё есть.
+  Порог — поле оператора / дефолт 5000, не полка USB-IQ. На micro hop =
+  TX mute → FREQUENCY RX+TX → unmute (без INIT). На x40 hop = integer-копия
+  `lms_calculate_tuning_params` → `lms_set_precalculated_frequency` RX+TX +
+  `band_select`; Si5338 fs — один park Soapy при Старт. Режим **FPGA+сканер
+  с USB-handoff**
   (Welch-8 → park → полка → смена хозяина USB) убран из Старта.
   FAKE park, FAKE Soapy/TX или FAKE шлюз → ARM нет. park читает LO, RX/TX fs и analog BW
   (не глотает дефолт ~1.5 МГц) и сверяет Soapy `hardwareKey` с платой

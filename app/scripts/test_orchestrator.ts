@@ -46,6 +46,8 @@ import {
   fpgaObserveLine,
   fpgaTurnDwellClamp,
   FPGA_TURN_DWELL_DEFAULT_MS,
+  FPGA_TURN_DWELL_MIN_MS,
+  fpgaTurnDwellUs,
   airTractParams,
   airFsHz,
   airThrTable,
@@ -1214,8 +1216,9 @@ async function main(): Promise<void> {
   check("handoff backoff: 10→20→40 с", handoffRetryMs(1) === 10_000 && handoffRetryMs(2) === 20_000 && handoffRetryMs(3) === 40_000);
   check("handoff backoff: страйк 0/мусор → базовые 10 с", handoffRetryMs(0) === 10_000);
   check("turn dwell: дефолт 3000", FPGA_TURN_DWELL_DEFAULT_MS === 3000 && fpgaTurnDwellClamp(Number.NaN) === 3000 && fpgaTurnDwellClamp(0) === 3000);
-  check("turn dwell: кламп 500..60000", fpgaTurnDwellClamp(40) === 500 && fpgaTurnDwellClamp(999999) === 60_000);
-  check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500);
+  check("turn dwell: 0.4 мс оператора не клампится", fpgaTurnDwellClamp(0.4) === 0.4 && fpgaTurnDwellUs(0.4) === 400);
+  check("turn dwell: пол 0.1 мс, потолок 60000", FPGA_TURN_DWELL_MIN_MS === 0.1 && fpgaTurnDwellClamp(0.05) === 0.1 && fpgaTurnDwellClamp(999999) === 60_000);
+  check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500 && fpgaTurnDwellClamp(40) === 40);
   check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
   check("air полоса: кламп потолком платы", clampAirBwMhz(56, 28) === 28 && clampAirBwMhz(20, 56) === 20);
   check("air полоса: пол 0.2 МГц", clampAirBwMhz(0.1, 56) === 0.2);
@@ -1263,6 +1266,14 @@ async function main(): Promise<void> {
     });
     return p.ok && p.centers.length === 1 && p.reason.includes("не шагает");
   })());
+  check("онбордовый перехват: 2 МГц взгляд — 2450 и 2465 разные стоянки, выдержка 0.4 мс", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 2, turn: true, dwellMs: 0.4,
+    });
+    return p.ok && p.dwellMs === 0.4 && p.centers.includes(2465)
+      && p.centers.some((c) => Math.abs(c - 2450) <= 1);
+  })());
   check("онбордовый перехват без нагрузки отказ", planOnboardIntercept({
     sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
     loadOk: false, detThr: 5000, detShift: 4, turn: false, dwellMs: 3000,
@@ -1273,8 +1284,13 @@ async function main(): Promise<void> {
       fsHz: 28e6, bwMhz: 28, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
       scanTurn: true, scanDwellMs: 1500,
     });
-    return c.scan_enable === true && c.scan_f1_mhz === 2400 && c.scan_turn === true && c.scan_dwell_ms === 1500;
+    return c.scan_enable === true && c.scan_f1_mhz === 2400 && c.scan_turn === true
+      && c.scan_dwell_us === 1_500_000 && c.scan_dwell_ms === 1500;
   })());
+  check("ARM 0.4 мс → 400 мкс на провод", fpgaArmCmd("lb_gated", {
+    detThr: 5000, detShift: 4, token: "t", scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+    scanTurn: true, scanDwellMs: 0.4,
+  }).scan_dwell_us === 400);
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
     return t !== null && t.join(",") === "4000,8000,12000";

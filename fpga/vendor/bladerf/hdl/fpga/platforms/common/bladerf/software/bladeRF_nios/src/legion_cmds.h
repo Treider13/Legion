@@ -41,7 +41,7 @@
 #define LEGION_REG_SCAN_F1_KHZ    0x0E  /* начало коридора, кГц */
 #define LEGION_REG_SCAN_F2_KHZ    0x0F  /* конец коридора, кГц */
 #define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn (иначе priority) */
-#define LEGION_REG_SCAN_DWELL_MS  0x11  /* выдержка turn, мс; 0 = 3000 */
+#define LEGION_REG_SCAN_DWELL_US  0x11  /* выдержка turn от первого детекта, мкс; 0 = 3e6 */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -84,8 +84,11 @@ bool legion_air_down(void);
  * lms_rx/tx_enable в CONTROL (NIOS — хозяин PIO, devices_inline.h).
  * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз.
  * После deadman (если ARM жив и SCAN_CTRL.enable): шаг LO по коридору.
- * Взгляд = AIR_BW_HZ (аналог платы, десятки МГц). Гейт I²+Q² — микросекунды
- * в текущем окне. Обзор коридора — миллисекунды шагов LO, не USB-IQ. */
+ * Взгляд = AIR_BW_HZ (аналоговый фильтр = шаг сетки). Гейт I²+Q² —
+ * микросекунды в текущем окне. TURN: после первого det_active держим
+ * LO выдержку (мкс, пример оператора 0.4 мс = 400), затем следующий
+ * взгляд — даже если энергия ещё есть. Пустой взгляд — hop после тишины
+ * ~5 мс. USB в круге «увидел → усилитель» нет. */
 void legion_work(void);
 
 #endif /* LEGION_CMDS_H_ */

@@ -68,23 +68,25 @@ static bool     legion_wd_latch;
 static uint32_t legion_scan_f1_khz;
 static uint32_t legion_scan_f2_khz;
 static uint32_t legion_scan_ctrl;
-static uint32_t legion_scan_dwell_ms;
+static uint32_t legion_scan_dwell_us;
 static uint32_t legion_scan_idx;
 static int      legion_scan_dir;      /* +1 / −1, ping-pong как planCenters */
 static bool     legion_scan_look_set; /* tamer якорь текущей стоянки */
-static uint64_t legion_look_t0;
 static uint64_t legion_quiet_t0;
+static bool     legion_hold_armed;    /* TURN: выдержка от первого det в взгляде */
+static uint64_t legion_hold_t0;
 
 #define LEGION_SCAN_QUIET_MS     5u
-#define LEGION_SCAN_DWELL_DEFAULT_MS 3000u
+#define LEGION_SCAN_DWELL_DEFAULT_US 3000000u
 
 static void legion_scan_reset(void)
 {
     legion_scan_idx = 0;
     legion_scan_dir = 1;
     legion_scan_look_set = false;
-    legion_look_t0 = 0;
     legion_quiet_t0 = 0;
+    legion_hold_armed = false;
+    legion_hold_t0 = 0;
 }
 
 bool legion_air_up(bool rx, bool tx)
@@ -471,9 +473,10 @@ static bool legion_hop_lo(uint32_t freq_khz)
 
 static void legion_scan_mark_look(void)
 {
-    legion_look_t0 = time_tamer_read(BLADERF_MODULE_RX);
-    legion_quiet_t0 = legion_look_t0;
+    legion_quiet_t0 = time_tamer_read(BLADERF_MODULE_RX);
     legion_scan_look_set = true;
+    legion_hold_armed = false;
+    legion_hold_t0 = 0;
 }
 
 static bool legion_scan_go(uint32_t khz)
@@ -492,13 +495,28 @@ static bool legion_scan_go(uint32_t khz)
     return true;
 }
 
+/* Шаг сетки только после удачного hop: иначе idx уехал, а LO остался —
+ * следующие quiet/dwell крутили бы чужие стоянки. */
+static void legion_scan_try_next(void)
+{
+    uint32_t const old_idx = legion_scan_idx;
+    int const old_dir = legion_scan_dir;
+
+    legion_scan_advance();
+    if (legion_scan_go(legion_scan_center_khz(legion_scan_idx))) {
+        return;
+    }
+    legion_scan_idx = old_idx;
+    legion_scan_dir = old_dir;
+}
+
 static void legion_scan_walk(void)
 {
     uint32_t const n = legion_scan_n();
     uint64_t now;
     uint64_t quiet;
     uint64_t dwell;
-    uint32_t dwell_ms;
+    uint32_t dwell_us;
     bool det;
     bool turn;
 
@@ -527,8 +545,9 @@ static void legion_scan_walk(void)
     if (quiet == 0) {
         quiet = 1;
     }
-    dwell_ms = legion_scan_dwell_ms ? legion_scan_dwell_ms : LEGION_SCAN_DWELL_DEFAULT_MS;
-    dwell = ((uint64_t)legion_fs_hz() * dwell_ms) / 1000u;
+    dwell_us = legion_scan_dwell_us ? legion_scan_dwell_us : LEGION_SCAN_DWELL_DEFAULT_US;
+    /* fs·мкс / 1e6; 40e6·60e6 влезает в uint64. */
+    dwell = ((uint64_t)legion_fs_hz() * (uint64_t)dwell_us) / 1000000u;
     if (dwell == 0) {
         dwell = 1;
     }
@@ -536,22 +555,36 @@ static void legion_scan_walk(void)
            LEGION_STATUS_DET_ACTIVE) != 0;
     turn = (legion_scan_ctrl & LEGION_SCAN_CTRL_TURN) != 0;
 
+    /* Выдержка TURN — от первого det в этом взгляде, не от входа в взгляд.
+     * Иначе сигнал, появившийся позже dwell, сразу терялся бы без удержания
+     * (пример оператора: нашёл 2450 → 0.4 мс на усилитель → дальше 2465). */
+    if (det && !legion_hold_armed) {
+        legion_hold_armed = true;
+        legion_hold_t0 = now;
+    }
     if (det) {
         legion_quiet_t0 = now;
-        if (!turn || now - legion_look_t0 < dwell) {
-            return;
-        }
-    } else if (now - legion_quiet_t0 < quiet) {
-        return;
     }
 
-    legion_scan_advance();
-    (void)legion_scan_go(legion_scan_center_khz(legion_scan_idx));
+    if (turn && legion_hold_armed) {
+        if (now - legion_hold_t0 >= dwell) {
+            legion_scan_try_next();
+        }
+        return;
+    }
+    if (det) {
+        /* PRIORITY: пока энергия — не шагаем. */
+        return;
+    }
+    if (now - legion_quiet_t0 < quiet) {
+        return;
+    }
+    legion_scan_try_next();
 }
 
 bool legion_reg_write(uint8_t addr, uint32_t data)
 {
-    if (addr > LEGION_REG_SCAN_DWELL_MS) {
+    if (addr > LEGION_REG_SCAN_DWELL_US) {
         DBG("LEGION: bad addr 0x%x\n", addr);
         return false;
     }
@@ -588,8 +621,8 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             legion_scan_reset();
             return true;
 
-        case LEGION_REG_SCAN_DWELL_MS:
-            legion_scan_dwell_ms = data;
+        case LEGION_REG_SCAN_DWELL_US:
+            legion_scan_dwell_us = data;
             return true;
 
         case LEGION_REG_AIR_PREP:
