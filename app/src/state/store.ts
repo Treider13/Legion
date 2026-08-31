@@ -77,6 +77,7 @@ import {
   handoffTimeline,
   ncoFtwFromFrac,
   planFpgaAir,
+  planOnboardIntercept,
 } from "../sense/fpgaFastpath";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
@@ -1003,6 +1004,147 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
     }
     return { ok: parked, fsHz };
+  };
+
+  /** Старт онбордового перехвата: один хозяин — SDR. Ноутбук рубильник.
+   *  USB не в круге «увидел → усилитель». x40: один park Soapy (Si5338 fs/BW
+   *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy. */
+  const startOnboardIntercept = async (): Promise<void> => {
+    const s = get();
+    if (s.fpgaArmed || s.fpgaBusy || gFpgaHandoffBusy) return;
+    const blocked = modeConflict("sdr", s.corridorRunning, false);
+    if (blocked) {
+      pushLog("sys", blocked);
+      return;
+    }
+    if (s.rfOn || s.paOn) {
+      pushLog("sys", "СТАРТ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
+      return;
+    }
+    if (s.signalTxActive) {
+      pushLog("sys", "СТАРТ: идёт TX сигнала — сначала СТОП на вкладке ТИП СИГНАЛА");
+      return;
+    }
+    if (s.flashBusy) {
+      pushLog("sys", "СТАРТ: идёт прошивка — дождитесь конца записи");
+      return;
+    }
+    if (!ensureSdrBand()) return;
+    const board = fpgaBoardPlan(s.sdrId);
+    if (!board.ok) {
+      pushLog("sys", board.reason);
+      return;
+    }
+    if (!s.sdrLoadOk) {
+      pushLog("sys", "Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+      return;
+    }
+    const analog = catalogCaps(s.sdrId).analogBwMhz;
+    const detThr =
+      Number.isFinite(s.fpgaDetThr) && s.fpgaDetThr > 0 ? s.fpgaDetThr : FPGA_DEFAULT_DET_THR;
+    const plan = planOnboardIntercept({
+      sdrId: s.sdrId,
+      analogBwMhz: analog,
+      bands: get().sdrBands,
+      loadOk: s.sdrLoadOk,
+      detThr,
+      detShift: s.fpgaDetShift,
+      lookMhz: parseFloat(s.fpgaAirBwMhz),
+      turn: s.autoDispatch === "turn",
+      dwellMs: parseFloat(s.fpgaTurnDwellMs),
+    });
+    if (!plan.ok) {
+      pushLog("sys", plan.reason);
+      return;
+    }
+    if (s.sdrEmulation) {
+      pushLog(
+        "sys",
+        "Автоперехват: эмуляция — платы нет, ARM нет. USB-IQ handoff убран: без железа эфир не смотрим.",
+      );
+      return;
+    }
+    set({ fpgaMode: "lb_gated", fpgaBusy: true, fpgaStatus: null, fpgaAutoCycle: false });
+    const airGen = gFpgaAirGen;
+    const gw = (cmd: Record<string, unknown>) =>
+      hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+    try {
+      const ping = await gw({ op: "ping" });
+      if (gFpgaAirGen !== airGen) return;
+      if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
+      const no = fpgaGatewayRefused(ping);
+      if (no) {
+        pushLog("sys", `Автоперехват: ${no}`);
+        return;
+      }
+      const noLegion = fpgaLegionMissing(ping);
+      if (noLegion) {
+        pushLog("sys", `Автоперехват: ${noLegion}`);
+        return;
+      }
+      const bands = get().sdrBands;
+      const f1 = Math.min(...bands.map((b) => b.f1Mhz));
+      const f2 = Math.max(...bands.map((b) => b.f2Mhz));
+      let fsHz = plan.fsHz;
+      if (s.sdrId === "bladerf-x40") {
+        const pk = await parkFpgaLo({
+          midMhz: plan.firstMhz,
+          analogMhz: analog,
+          spanMhz: plan.lookMhz,
+          rx: true,
+          fsHz: plan.fsHz,
+          bwMhz: plan.lookMhz,
+          gw,
+        });
+        if (gFpgaAirGen !== airGen) return;
+        if (!pk.ok) {
+          pushLog("sys", "Автоперехват: x40 — Soapy не поставил fs/BW/первый LO, ARM нет");
+          return;
+        }
+        fsHz = pk.fsHz;
+      } else {
+        const acq = await gw({ op: "usb", action: "acquire" });
+        if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+      }
+      if (gFpgaAirGen !== airGen) return;
+      const r = await gw(
+        fpgaArmCmd("lb_gated", {
+          detThr: plan.detThr,
+          detShift: plan.detShift,
+          token: get().fpgaToken,
+          freqMhz: plan.firstMhz,
+          fsHz,
+          bwMhz: plan.lookMhz,
+          scanEnable: true,
+          scanF1Mhz: f1,
+          scanF2Mhz: f2,
+          scanTurn: plan.turn,
+          scanDwellMs: plan.dwellMs,
+        }),
+      );
+      if (gFpgaAirGen !== airGen) {
+        if (r.ok) {
+          const d = await gw({ op: "disarm" });
+          if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
+        }
+        return;
+      }
+      if (!r.ok) {
+        pushLog("sys", `Автоперехват ARM: ${r.reason ?? "отказ"}`);
+        return;
+      }
+      set({
+        fpgaArmed: true,
+        fpgaPath: "air",
+        lastForwardMhz: plan.firstMhz,
+        sdrHoldSince: Date.now(),
+        lastCueReason: plan.reason,
+      });
+      beginFpgaKick();
+      pushLog("sys", `Автоперехват: ${plan.reason} · порог ${plan.detThr} (не полка USB-IQ)`);
+    } finally {
+      set({ fpgaBusy: false });
+    }
   };
 
   /** Возврат в скан-фазу цикла FPGA+сканер: DISARM → USB хосту → скан.
@@ -2805,6 +2947,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
       set({ fpgaStatus: r });
       if (r.legion !== undefined) set({ fpgaLegion: r.legion });
+      if (r.ok && r.freq_mhz && r.freq_mhz > 0 && get().fpgaArmed) {
+        set({ lastForwardMhz: r.freq_mhz });
+      }
       // Длительная непрерывная работа (шлюз считает armed_s): лог один раз
       // на смену текста, не каждый опрос.
       if (r.ok && r.warn && r.warn !== gArmWarnLast) {
@@ -3309,37 +3454,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       void (async () => {
         const s = get();
         if (isFpgaAirPattern(s.scanPattern)) {
-          // FPGA+СКАНЕР: автономный цикл «скан → handoff → ARM → возврат».
-          // Старт = скан-фаза; ARM случается из tickScan по детекту.
-          if (s.fpgaArmed || s.fpgaBusy || gFpgaHandoffBusy) return;
-          const board = fpgaBoardPlan(s.sdrId);
-          if (!board.ok) {
-            pushLog("sys", board.reason);
-            return;
-          }
-          if (!s.sdrLoadOk) {
-            pushLog("sys", "Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
-            return;
-          }
-          set({ fpgaMode: "lb_gated" });
-          if (!s.sdrEmulation) {
-            // Шлюз нужен только на ARM; без него сканируем и ждём — честно в лог.
-            const ping = await hostFpga({ op: "ping", token: s.fpgaToken }, s.sdrGateway);
-            if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
-            const no = fpgaGatewayRefused(ping);
-            if (no) {
-              pushLog("sys", `Автоперехват: ${no} — поиск идёт, ретрансляция начнётся когда шлюз оживёт`);
-            } else {
-              const noLegion = fpgaLegionMissing(ping);
-              if (noLegion) {
-                pushLog("sys", `Автоперехват: ${noLegion} — поиск идёт, ретрансляция начнётся после прошивки legion`);
-              }
-              // Скан-фаза: USB у хоста (агент держит его с момента старта —
-              // без release openSdr ниже словил бы занятое устройство).
-              const relScan = await hostFpga({ op: "usb", action: "release", token: s.fpgaToken }, s.sdrGateway);
-              if (!relScan.ok) pushLog("sys", `FPGA USB release перед сканом: ${relScan.reason ?? "отказ"}`);
-            }
-          }
+          await startOnboardIntercept();
+          return;
         }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
@@ -3549,7 +3665,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // а не ручной ARM на середину полосы с порогом «на глаз».
         pushLog(
           "sys",
-          "ПЕРЕДАТЬ в режиме автоматического перехвата не участвует: цикл автономный — СТАРТ/СТОП на этой вкладке",
+          "ПЕРЕДАТЬ в режиме автоматического перехвата не участвует: после Старта хозяин — плата; ноутбук только Стоп",
         );
         return;
       }

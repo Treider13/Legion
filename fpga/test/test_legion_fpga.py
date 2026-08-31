@@ -123,6 +123,10 @@ py_map = {
     "LEGION_REG_AIR_PREP": lf.REG_AIR_PREP,
     "LEGION_REG_AIR_FS_HZ": lf.REG_AIR_FS_HZ,
     "LEGION_REG_AIR_BW_HZ": lf.REG_AIR_BW_HZ,
+    "LEGION_REG_SCAN_F1_KHZ": lf.REG_SCAN_F1_KHZ,
+    "LEGION_REG_SCAN_F2_KHZ": lf.REG_SCAN_F2_KHZ,
+    "LEGION_REG_SCAN_CTRL": lf.REG_SCAN_CTRL,
+    "LEGION_REG_SCAN_DWELL_MS": lf.REG_SCAN_DWELL_MS,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -1093,6 +1097,28 @@ check("micro: flash_status done ok", r.get("done") is True and r.get("ok") is Tr
 # (там питание/клоки по bladerf2_common.h, не LMS-биты; аналог = AIR_PREP).
 check("micro: _lms_enable no-op True, CONTROL не тронут",
       gw_m._lms_enable(rx=True, tx=True) is True and gw_m.fpga._t.control == 0)
+
+# Онбордовый обзор: ARM пишет SCAN_*, status читает freq_mhz из AIR_FREQ
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2414.0, "fs_hz": 28_000_000, "bw_mhz": 28,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2500,
+          "scan_turn": True, "scan_dwell_ms": 1500})
+check("micro: ARM scan_enable ok", r.get("ok") is True)
+check("micro: SCAN_F1 = 2400000 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F1_KHZ) == 2_400_000)
+check("micro: SCAN_F2 = 2500000 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F2_KHZ) == 2_500_000)
+check("micro: SCAN_CTRL enable|turn",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
+check("micro: SCAN_DWELL = 1500", gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_MS) == 1500)
+st = rpcm({"op": "status"})
+check("micro: status freq_mhz = 2414 (AIR_FREQ readback)",
+      st.get("ok") is True and abs(float(st.get("freq_mhz") or 0) - 2414.0) < 0.01)
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("micro: ARM без scan_enable пишет SCAN_CTRL=0",
+      r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == 0)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000,
+          "freq_mhz": 2414.0, "scan_enable": True})
+check("micro: scan_enable без коридора → отказ", r.get("ok") is False)
 
 r = rpcm({"op": "ping"})
 check("micro: ping несёт board=bladerf2 (авто-детект приёмки)",

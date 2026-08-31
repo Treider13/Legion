@@ -13,8 +13,9 @@
  *       Без ARM или без wd_fired — ничего не делает.
  *   B2: AIR_PREP с readback GAINMODE ≠ MGC → отказ подъёма эфира.
  *   B3: порядок AIR_PREP: TXMUTE(1) раньше любой записи TX FREQUENCY,
- *       TXMUTE(0) после ENABLE TX (guard против перезапуска TX-cal —
- *       прецедент upstream TX_RECAL).
+ *       TXMUTE(0) после ENABLE TX.
+ *   SCAN: walker при SCAN_CTRL.enable — hop по quiet (tamer) / dwell (turn);
+ *         tamer стоит → hop нет; wd_fired важнее walker.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -36,6 +37,35 @@ static struct { uint32_t base, data; } pio_log[512];
 static int pio_n;
 static uint32_t t_status;    /* STATUS-PIO (бит 3 = wd_fired) */
 static uint32_t t_control;   /* CONTROL-PIO Nuand (x40: бит1 rx, бит2 tx) */
+static uint64_t t_tamer;     /* RX time tamer (сэмплы) */
+
+uint64_t time_tamer_read(bladerf_module m)
+{
+    (void)m;
+    return t_tamer;
+}
+
+#if !defined(HAVE_RFIC)
+struct bladerf;
+struct lms_freq;
+static int lms_n;
+static int band_n;
+
+int lms_set_precalculated_frequency(struct bladerf *dev, bladerf_module mod,
+                                    struct lms_freq *f)
+{
+    (void)dev; (void)mod; (void)f;
+    lms_n++;
+    return 0;
+}
+
+int band_select(struct bladerf *dev, bladerf_module module, bool low_band)
+{
+    (void)dev; (void)module; (void)low_band;
+    band_n++;
+    return 0;
+}
+#endif
 
 uint32_t t_pio_read(uint32_t base)
 {
@@ -205,6 +235,79 @@ int main(void)
     t_status = LEGION_STATUS_WD_FIRED;
     legion_work();
     CHECK("A1: wd_fired без ARM → ничего", pio_n == pio_mark && rfic_n == rfic_mark);
+
+    /* --- Онбордовый обзор: USB не в круге увидел→TX --- */
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000); /* центр 0 при look 28 МГц */
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 28000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_MS, 10);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN); /* priority */
+    CHECK("SCAN: AIR_PREP перед ARM", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("SCAN: ARM lb_gated", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    rfic_n = 0;
+    legion_work(); /* стоянка 0 уже на LO — hop нет */
+    CHECK("SCAN: первая стоянка без hop FREQUENCY",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2442000ULL * 1000ULL) < 0);
+    t_tamer += 140001; /* 5 мс @ 28 MSPS */
+    legion_work();
+    CHECK("SCAN: тишина → hop на центр 1 (2442 МГц)",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2442000ULL * 1000ULL) >= 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("SCAN: readback AIR_FREQ после hop", khz == 2442000);
+    }
+    rfic_n = 0;
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_tamer += 10000000;
+    legion_work();
+    CHECK("SCAN: PRIORITY + энергия → LO не шагает", rfic_n == 0);
+    t_status = 0;
+    t_tamer += 100; /* меньше quiet */
+    rfic_n = 0;
+    legion_work();
+    CHECK("SCAN: после спада энергии quiet не истёк → нет hop", rfic_n == 0);
+    t_tamer += 140001;
+    legion_work();
+    CHECK("SCAN: quiet истёк → hop дальше", rfic_n > 0);
+
+    /* tamer стоит — обзор не шагает, гейт мог бы жить на текущем взгляде */
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG);
+    t_status = 0;
+    t_tamer = 50;
+    legion_work(); /* якорь */
+    rfic_n = 0;
+    for (int k = 0; k < 20; k++) legion_work();
+    CHECK("SCAN: tamer стоит → hop нет", rfic_n == 0);
+
+    /* TURN: hop по выдержке даже при энергии */
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_TURN);
+    CHECK("SCAN TURN: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_tamer = 0;
+    legion_work();
+    rfic_n = 0;
+    t_tamer += (uint64_t)28000000 * 10 / 1000 + 1; /* dwell 10 мс */
+    legion_work();
+    CHECK("SCAN: TURN + энергия + dwell → hop", rfic_n > 0);
+
+    /* deadman по-прежнему важнее walker */
+    t_status = LEGION_STATUS_WD_FIRED;
+    pio_n = 0; rfic_n = 0;
+    legion_work();
+    CHECK("SCAN: wd_fired → DISARM, не hop",
+          pio_wrote_reg(LEGION_REG_CTRL, 0));
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
 #else
     printf("== конфиг: x40 (LMS6002D, CONTROL со шлюза) ==\n");
 
@@ -243,6 +346,41 @@ int main(void)
           legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_PLAYER));
     legion_reg_read(0, &st);
     CHECK("A1: re-ARM снял латч (bit4 чист)", (st & LEGION_STATUS_WD_LATCH) == 0);
+
+    /* Онбордовый обзор x40: hop = lms_set_precalculated + band_select, CONTROL жив */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 28000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    t_control = 0x6;
+    CHECK("SCAN x40: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    lms_n = 0; band_n = 0;
+    legion_work(); /* стоянка 0 уже на LO */
+    CHECK("SCAN x40: первая стоянка без LMS hop", lms_n == 0 && band_n == 0);
+    t_tamer += 140001;
+    legion_work();
+    CHECK("SCAN x40: тишина → lms RX+TX (2) и band_select RX+TX (2)",
+          lms_n == 2 && band_n == 2);
+    CHECK("SCAN x40: CONTROL lms_rx/tx_enable живы", t_control == 0x6);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("SCAN x40: AIR_FREQ после hop", khz == 2442000);
+    }
+    lms_n = 0; band_n = 0;
+    t_tamer = 50;
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG);
+    legion_work();
+    lms_n = 0; band_n = 0;
+    for (int k = 0; k < 20; k++) legion_work();
+    CHECK("SCAN x40: tamer стоит → hop нет", lms_n == 0 && band_n == 0);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
 #endif
 
     printf(fails ? "NIOS WORK: %d FAILURES\n" : "NIOS WORK: ALL PASS\n", fails);

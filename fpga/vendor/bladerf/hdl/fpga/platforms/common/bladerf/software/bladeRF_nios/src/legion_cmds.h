@@ -35,6 +35,16 @@
 #define LEGION_REG_AIR_PREP       0x0B  /* bit0: 1=up/0=standby; bit1: RX; bit2: TX */
 #define LEGION_REG_AIR_FS_HZ      0x0C  /* sample rate эфира/solo, Гц; 0 = 2 МГц */
 #define LEGION_REG_AIR_BW_HZ      0x0D  /* analog BW эфира/solo, Гц; 0 = 2 МГц */
+/* Онбордовый обзор коридора (только NIOS, HDL when others => null).
+ * После Старта перехвата хост пишет коридор и включает walker: плата
+ * шагает LO сама. USB в круге «энергия → TX» не участвует. */
+#define LEGION_REG_SCAN_F1_KHZ    0x0E  /* начало коридора, кГц */
+#define LEGION_REG_SCAN_F2_KHZ    0x0F  /* конец коридора, кГц */
+#define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn (иначе priority) */
+#define LEGION_REG_SCAN_DWELL_MS  0x11  /* выдержка turn, мс; 0 = 3000 */
+
+#define LEGION_SCAN_CTRL_EN       (1u << 0)
+#define LEGION_SCAN_CTRL_TURN     (1u << 1)
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -50,6 +60,7 @@
  *   HDL-бит 3 гаснет за мкс, enable=0 сбрасывает expired),
  *   15..8 lb_fifo_level, 31..16 det_count
  * (зеркало legion_regs.vhd, процесс status_tx) */
+#define LEGION_STATUS_DET_ACTIVE  (1u << 2)
 #define LEGION_STATUS_WD_FIRED    (1u << 3)
 #define LEGION_STATUS_WD_LATCH    (1u << 4)
 
@@ -71,7 +82,10 @@ bool legion_air_down(void);
  * (STATUS.wd_fired) при живом ARM → сам DISARM: CTRL=0, на micro это
  * уводит RFIC в standby (case LEGION_REG_CTRL), на x40 снимаются
  * lms_rx/tx_enable в CONTROL (NIOS — хозяин PIO, devices_inline.h).
- * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз. */
+ * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз.
+ * После deadman (если ARM жив и SCAN_CTRL.enable): шаг LO по коридору.
+ * Взгляд = AIR_BW_HZ (аналог платы, десятки МГц). Гейт I²+Q² — микросекунды
+ * в текущем окне. Обзор коридора — миллисекунды шагов LO, не USB-IQ. */
 void legion_work(void);
 
 #endif /* LEGION_CMDS_H_ */

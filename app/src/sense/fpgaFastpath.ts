@@ -8,6 +8,7 @@
 // AIR-регистры) и bladeRF 1 x40 (LMS6002D, CONTROL bit1/2 со шлюза).
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
+import { planCenters } from "./scan";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
@@ -238,9 +239,97 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   };
 }
 
+/** Онбордовый перехват: плата смотрит эфир в аналоговом окне и сама
+ *  открывает TX. USB не в круге «увидел → усилитель». Два времени:
+ *  гейт I²+Q² в текущем взгляде — микросекунды; обзор коридора — шаги LO
+ *  шириной analog BW (десятки МГц), миллисекунды. */
+export const FPGA_SCAN_QUIET_MS = 5;
+
+export interface OnboardInterceptInput {
+  sdrId: string;
+  analogBwMhz: number;
+  bands: readonly AllowBand[];
+  loadOk: boolean;
+  detThr: number;
+  detShift: number;
+  lookMhz?: number;
+  turn: boolean;
+  dwellMs: number;
+}
+
+export interface OnboardInterceptPlan {
+  ok: boolean;
+  reason: string;
+  lookMhz: number;
+  fsHz: number;
+  windowUs: number;
+  spanMhz: number;
+  centers: number[];
+  firstMhz: number;
+  detThr: number;
+  detShift: number;
+  dwellMs: number;
+  turn: boolean;
+}
+
+export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
+  const analog = i.analogBwMhz > 0 ? i.analogBwMhz : FPGA_AIR_BW_DEFAULT_MHZ;
+  const lookMhz = clampAirBwMhz(i.lookMhz ?? analog, analog);
+  const fsHz = airFsHz(lookMhz);
+  const detShift = clampDetShift(i.detShift);
+  const windowUs = detectorWindowUs(detShift, fsHz);
+  const spanMhz = parkSpanMhz(i.bands);
+  const centers = planCenters(i.bands, lookMhz);
+  const dwellMs = fpgaTurnDwellClamp(i.dwellMs);
+  const fail = (reason: string): OnboardInterceptPlan => ({
+    ok: false,
+    reason,
+    lookMhz,
+    fsHz,
+    windowUs,
+    spanMhz,
+    centers,
+    firstMhz: centers[0] ?? 0,
+    detThr: i.detThr,
+    detShift,
+    dwellMs,
+    turn: i.turn,
+  });
+  if (!fpgaAirSupported(i.sdrId)) {
+    return fail("Автоперехват: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
+  }
+  if (!i.loadOk) {
+    return fail("Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+  }
+  if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
+    return fail("Автоперехват: задайте порог чувствительности больше нуля (нулевой порог — гейт на шум)");
+  }
+  if (centers.length === 0) {
+    return fail("Автоперехват: задайте коридор F1…F2");
+  }
+  const hops = Math.max(0, centers.length - 1);
+  const survey =
+    hops === 0
+      ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
+      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO = мс, не USB`;
+  return {
+    ok: true,
+    reason: `плата смотрит эфир сама · ${survey} · USB не в круге увидел→усилитель`,
+    lookMhz,
+    fsHz,
+    windowUs,
+    spanMhz,
+    centers,
+    firstMhz: centers[0],
+    detThr: i.detThr,
+    detShift,
+    dwellMs,
+    turn: i.turn,
+  };
+}
+
 /** Строка наблюдения: ноутбук не в тракте, только телеметрия.
- *  det_count — счётчик КАЖДОГО окна с детектом (HDL, не фронт): рост =
- *  энергия жива; стагнация N опросов = «пропала» → автовозврат к скану. */
+ *  det_count — счётчик КАЖДОГО окна с детектом (HDL, не фронт). */
 export function fpgaObserveLine(st: {
   ok?: boolean;
   det_active?: boolean;
@@ -297,9 +386,15 @@ export function fpgaArmCmd(
     wd?: boolean;
     ncoFtw?: number;
     freqMhz?: number;
-    /** fs/BW тракта (solo окно / эфирный канал). Без них NIOS оставит 2 МГц. */
+    /** fs/BW тракта (solo окно / эфирный канал / взгляд перехвата). Без них NIOS оставит 2 МГц. */
     fsHz?: number;
     bwMhz?: number;
+    /** Онбордовый обзор коридора: плата шагает LO сама. */
+    scanEnable?: boolean;
+    scanF1Mhz?: number;
+    scanF2Mhz?: number;
+    scanTurn?: boolean;
+    scanDwellMs?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -323,6 +418,13 @@ export function fpgaArmCmd(
   }
   if (opts.bwMhz !== undefined && Number.isFinite(opts.bwMhz) && opts.bwMhz > 0) {
     cmd.bw_mhz = opts.bwMhz;
+  }
+  if (opts.scanEnable) {
+    cmd.scan_enable = true;
+    if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
+    if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;
+    cmd.scan_turn = !!opts.scanTurn;
+    if (opts.scanDwellMs !== undefined) cmd.scan_dwell_ms = Math.round(opts.scanDwellMs);
   }
   return cmd;
 }

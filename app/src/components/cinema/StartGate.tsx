@@ -50,7 +50,9 @@ export function StartGate({ mode, onClose }: Props) {
   const [path, setPath] = useState<FpgaStartPath>("auto");
   const [dispatch, setDispatch] = useState<AutoDispatch>(storedDispatch);
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
-  const [windowMhz, setWindowMhz] = useState(path === "solo" ? storedWindow : storedAirBw);
+  const [windowMhz, setWindowMhz] = useState(
+    path === "solo" ? storedWindow : path === "auto" ? String(catalogCaps(sdrId).analogBwMhz) : storedAirBw,
+  );
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
@@ -186,7 +188,12 @@ export function StartGate({ mode, onClose }: Props) {
       }
       const ch = parseFloat(windowMhz);
       if (!Number.isFinite(ch) || ch <= 0) {
-        setErr("Задайте канал ретрансляции в мегагерцах.");
+        setErr("Задайте ширину взгляда платы в мегагерцах.");
+        return;
+      }
+      const thr = parseFloat(detThr);
+      if (!Number.isFinite(thr) || thr <= 0) {
+        setErr("Задайте порог чувствительности больше нуля.");
         return;
       }
       await startSmart();
@@ -225,21 +232,29 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · Автоматический перехват</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
-              Сканер ищет сигнал в коридоре → LO паркуется на пик → FPGA ретранслирует
-              эфир на усилитель за микросекунды. Сигнал пропал — поиск продолжается сам.
-              Канал — ширина ретрансляции вокруг найденной частоты.
+              После Старта хозяин один — SDR. Ноутбук только смотрит и может Стоп.
+              Плата сама видит энергию в своём аналоговом окне и сама открывает TX.
+              Гейт в текущем взгляде — микросекунды. Коридор целиком — шаги LO
+              (один взгляд = фильтр платы, десятки МГц, не 100). USB не в круге
+              «увидел → усилитель».
             </p>
             <div className="cinema-gate-row">
-              <label title="Ширина полосы вокруг найденного пика, которую ретранслирует FPGA. Уже канал — точнее на цель, шире — захватывает соседей.">
-                Канал, МГц
+              <label title="Ширина одного взгляда платы. Равна аналоговому фильтру (x40 28 / micro 56 МГц). Уже — больше шагов по коридору.">
+                Взгляд, МГц
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
               {dispatch === "turn" && (
-                <label title="Сколько секунд держать каждую найденную частоту перед переходом к следующей.">
+                <label title="Сколько миллисекунд держать взгляд, прежде чем шагнуть дальше, даже если энергия ещё есть.">
                   Выдержка, мс
                   <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
                 </label>
               )}
+            </div>
+            <div className="cinema-gate-row">
+              <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
+                Порог чувствительности
+                <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
+              </label>
             </div>
             <div className="cinema-paths" role="radiogroup" aria-label="Стратегия перехвата">
               <button
@@ -267,9 +282,9 @@ export function StartGate({ mode, onClose }: Props) {
             </div>
             <p className="cinema-gate-lead">
               {fpgaAirSupported(sdrId)
-                ? `канал ${clampAirBwMhz(parseFloat(windowMhz), analogMax)} МГц · окно детектора ${
+                ? `взгляд ${clampAirBwMhz(parseFloat(windowMhz), analogMax)} МГц · гейт ${
                     airTractParams(parseFloat(windowMhz), analogMax, detShift).windowUs.toFixed(1)
-                  } мкс · ноутбук наблюдает и стопит`
+                  } мкс · обзор коридора — шаги LO, мс · ноутбук наблюдает и стопит`
                 : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 — выбирается на вкладке SDR в Настройках."}
             </p>
             <p className="cinema-gate-warn">{SELF_EXCITE_WARN}</p>
@@ -339,8 +354,9 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              Перехват слушает эфир сканером и сам находит цели. Эфир + FPGA и Только FPGA
-              работают без сканера: USB один — либо Soapy ставит LO, либо агент держит FPGA.
+              Перехват: после Старта хозяин — плата (USB не в круге увидел→TX).
+              Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
+              либо Soapy ставит LO, либо агент держит FPGA.
             </p>
             <div className="cinema-paths" role="radiogroup" aria-label="Режим FPGA">
               <button
@@ -348,13 +364,16 @@ export function StartGate({ mode, onClose }: Props) {
                 role="radio"
                 aria-checked={path === "auto"}
                 className={path === "auto" ? "cinema-path on" : "cinema-path"}
-                onClick={() => setPath("auto")}
-                title="Полный автомат: сканер ищет сигнал, FPGA ретранслирует его за микросекунды, при пропадании — возврат к поиску."
+                onClick={() => {
+                  setPath("auto");
+                  setWindowMhz(String(analogMax));
+                }}
+                title="После Старта хозяин — SDR. Плата сама видит энергию и открывает TX. Ноутбук — рубильник."
               >
                 <strong>Автоматический перехват</strong>
                 <span>
-                  Сканер находит сигнал в коридоре → FPGA ретранслирует его на усилитель
-                  за микросекунды. Сигнал пропал — поиск продолжается сам.{" "}
+                  Антенна на RX SMA. Плата смотрит эфир в аналоговом окне и сама
+                  решает, что энергия есть. USB не в круге «увидел → усилитель».{" "}
                   {fpgaAirSupported(sdrId)
                     ? "Эта плата в ревизии legion."
                     : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}
@@ -400,7 +419,7 @@ export function StartGate({ mode, onClose }: Props) {
             <h2 id={titleId}>{mode === "sdr" ? "Коридор и тип сигнала" : "Коридор синтезатора"}</h2>
             <p className="cinema-gate-lead">
               {mode === "sdr"
-                ? "Дальше: автоматический перехват (сканер + ретрансляция), эфир+FPGA без сканера или только FPGA. Тип сигнала — волна для генерации в FPGA."
+                ? "Дальше: автоматический перехват (плата смотрит эфир сама), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA."
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 

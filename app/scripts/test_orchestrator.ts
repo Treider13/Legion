@@ -58,6 +58,7 @@ import {
   ncoFtwFromFrac,
   parkSpanMhz,
   planFpgaAir,
+  planOnboardIntercept,
 } from "../src/sense/fpgaFastpath";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -463,7 +464,7 @@ async function main(): Promise<void> {
   check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
-  check("FPGA+сканер: сканер — глаза цикла (детект → handoff)", scannerParticipates("fpga") === true);
+  check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
   check("автоперехват имя", patternLabelRu("fpga") === "АВТОПЕРЕХВАТ");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
@@ -473,8 +474,9 @@ async function main(): Promise<void> {
   check("PLAYER+ARM = задача, не сканер", isFpgaTaskLive(true, "player") && !isFpgaAirLive(true, "player"));
   check("без ARM нет живой задачи", isFpgaTaskLive(false, "player") === false);
   const fpgaWork = planSdrWork("fpga");
-  check("planSdrWork FPGA: скан→конвейер на SDR", fpgaWork.useFpgaAir && fpgaWork.useScanner && !fpgaWork.openLoopTx);
-  check("planSdrWork FPGA: ноутбук наблюдает", fpgaWork.reason.includes("наблюдает"));
+  check("planSdrWork FPGA: плата смотрит эфир, хост-сканер не в круге",
+    fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
+  check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
   check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
   check(
     "пустой эфир не стопает АВТО",
@@ -1247,6 +1249,32 @@ async function main(): Promise<void> {
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
     loadOk: true, detThr: 5000, detShift: 4, bwMhz: 20,
   }).fsHz === 20_000_000);
+  check("онбордовый перехват: 2400–2500 @ 28 МГц → несколько взглядов", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 28, turn: false, dwellMs: 3000,
+    });
+    return p.ok && p.centers.length === 4 && p.firstMhz === 2414 && p.reason.includes("USB не в круге");
+  })());
+  check("онбордовый перехват: коридор в одном взгляде — LO не шагает", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    });
+    return p.ok && p.centers.length === 1 && p.reason.includes("не шагает");
+  })());
+  check("онбордовый перехват без нагрузки отказ", planOnboardIntercept({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    loadOk: false, detThr: 5000, detShift: 4, turn: false, dwellMs: 3000,
+  }).ok === false);
+  check("ARM lb_gated с scan_enable несёт коридор", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2414,
+      fsHz: 28e6, bwMhz: 28, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+      scanTurn: true, scanDwellMs: 1500,
+    });
+    return c.scan_enable === true && c.scan_f1_mhz === 2400 && c.scan_turn === true && c.scan_dwell_ms === 1500;
+  })());
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
     return t !== null && t.join(",") === "4000,8000,12000";
@@ -1455,7 +1483,8 @@ async function main(): Promise<void> {
     windowMhz: "5", dwellMs: "1500", dispatch: "priority",
   });
   const autoSt = useLegion.getState();
-  check("кино перехват: старт поднял скан-фазу", autoOk === true && autoSt.scanRunning === true);
+  check("кино перехват: эмуляция не врёт скан-фазу и не ARM",
+    autoOk === true && autoSt.scanRunning === false && autoSt.fpgaArmed === false);
   check("кино перехват: scanPattern=fpga, не fpgaArm",
     autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
   check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
@@ -1710,8 +1739,11 @@ async function main(): Promise<void> {
     gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
   check("cinema перехват: стратегии приоритет/очередь на шаге walk",
     gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
-  check("cinema auto: runSmartStart ставит fpga-паттерн и зовёт startScan, не ARM",
-    runSrc.includes('opts.path === "auto"') && runSrc.includes('setScanPattern("fpga")') && runSrc.includes("s.startScan()"));
+  const autoBlock = runSrc.slice(runSrc.indexOf('opts.path === "auto"'), runSrc.indexOf("s.armTxWave"));
+  check("cinema auto: startScan, не startFpgaPath",
+    autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
+  check("cinema auto: эмуляция не ждёт scanRunning",
+    autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
   check("cinema auto: канал и выдержка очереди пишутся в стор",
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
   check("cinema air: ручной порог из мастера пишется в стор",
@@ -1793,10 +1825,11 @@ async function main(): Promise<void> {
   check("fpgaArm после отзыва снимает прошедший ARM",
     armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
-  check("fpga-ветка tickScan: ОБЫЧНЫЙ → pickTurnTarget от последней ARM",
-    storeSrc.includes('cur.autoDispatch === "turn"') && storeSrc.includes("pickTurnTarget(pool, null, gFpgaTurnLastMhz)"));
-  check("fpga-ветка tickScan: пустое окно — ARM на тишину не ставим",
-    storeSrc.includes("if (pool.length === 0) return;"));
+  check("онбордовый старт: startOnboardIntercept, USB не отдаём хост-сканеру",
+    storeSrc.includes("const startOnboardIntercept") &&
+    storeSrc.includes("await startOnboardIntercept()") &&
+    storeSrc.includes("scanEnable: true") &&
+    !storeSrc.includes("USB release перед сканом"));
   check("handoff commit помнит частоту очереди", storeSrc.includes("gFpgaTurnLastMhz = mhz;"));
   check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));

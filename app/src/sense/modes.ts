@@ -39,8 +39,8 @@ export function walkPatternArmsTx(): boolean {
 }
 
 export function scannerParticipates(pattern: SdrWalkPattern): boolean {
-  // fpga: сканер — глаза цикла (детект → handoff в FPGA). UI скана нужен.
-  return pattern === "auto" || pattern === "fpga";
+  // fpga: глаза — плата (энергия у АЦП). Хост-сканер в круге не участвует.
+  return pattern === "auto";
 }
 
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
@@ -70,7 +70,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
     case "fpga":
-      return "Автоматический перехват (сканер → ретрансляция в FPGA, µs · ноутбук наблюдает)";
+      return "Автоматический перехват (плата смотрит эфир → TX на усилитель, USB не в круге)";
   }
 }
 
@@ -97,12 +97,12 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
 } {
   if (pattern === "fpga") {
     return {
-      useScanner: true,
+      useScanner: false,
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        "Автоматический перехват: сканер находит сигнал → парковка LO → ретрансляция RX→TX в FPGA (µs). " +
-        "Сигнал пропал / сторож / СТОП → возврат к поиску. Ноутбук наблюдает и стопит",
+        "Автоматический перехват: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. " +
+        "Гейт в текущем взгляде — микросекунды. Коридор целиком — шаги LO (десятки МГц за взгляд), миллисекунды. USB не в круге увидел→усилитель. Ноутбук — рубильник и наблюдение.",
     };
   }
   if (pattern === "auto") {
@@ -185,7 +185,7 @@ export function isFpgaTaskMode(mode: FpgaRunMode): boolean {
   return mode === "player" || mode === "nco" || mode === "lb_always";
 }
 
-/** Живой конвейер FPGA+сканер. Не путать с выбранным пунктом меню «Автоматический перехват». */
+/** Живой онбордовый перехват (плата смотрит эфир). Не путать с пунктом меню. */
 export function isFpgaAirLive(armed: boolean, mode: FpgaRunMode): boolean {
   return armed && mode === "lb_gated";
 }
