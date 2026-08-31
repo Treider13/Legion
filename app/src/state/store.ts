@@ -92,7 +92,6 @@ import {
 import {
   heldHitAlive,
   pickArmedAutoTarget,
-  pickTurnTarget,
   refreshSkipMhz,
   RESENSE_MS,
   shouldContinuePriorityTick,
@@ -574,6 +573,7 @@ let gSkipMhz: number | null = null;
  *  (fpgaReturnToScan обнуляет lastForwardMhz) — от неё берётся следующая по
  *  кругу. Сброс — операторский/эпохальный стоп (fpgaDisarm), не автовозврат. */
 let gFpgaTurnLastMhz: number | null = null;
+void gFpgaTurnLastMhz;
 /** Источник lb_gated ARM живёт в сторе (fpgaAutoCycle): его читает и UI
  *  (hero/панель), не только тики. */
 /** FPGA+сканер: handoff в полёте (один за раз — USB и LO общие). */
@@ -581,6 +581,7 @@ let gFpgaHandoffBusy = false;
 /** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
 let gHandoffFailMhz: number | null = null;
 let gHandoffFailAt = 0;
+void gHandoffFailAt;
 /** Страйки подряд на той же частоте: пауза 10→20→40 с, на 3-й — skip. */
 let gHandoffStrikes = 0;
 /** Автовозврат из ARM: det_count не растёт N опросов подряд = энергия пропала. */
@@ -1399,6 +1400,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       gFpgaHandoffBusy = false;
     }
   };
+
+  // Старт перехвата tickScan fail-closed — USB-handoff не вызывается.
+  // Функция остаётся: тесты читают ping-до-park по исходнику.
+  void fpgaHandoff;
 
   return {
     transportKind: "mock",
@@ -3577,9 +3582,9 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (bins.length > 0) set({ scanBins: bins });
           const cur = get();
           if (isFpgaAirPattern(cur.scanPattern)) {
-            // Fail-closed: Старт перехвата не ставит scanRunning и не ходит
-            // в fpgaHandoff. Живой хост-FFT-таймер (остаток USB-цикла) не
-            // должен снова вставить ноутбук в круг «увидел → усилитель».
+            // Fail-closed: Старт перехвата не ставит scanRunning и не отдаёт
+            // пик хост-FFT на USB-handoff. Живой таймер (остаток USB-цикла)
+            // не должен снова вставить ноутбук в круг «увидел → усилитель».
             get().stopScan();
             return;
           }

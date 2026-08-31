@@ -1866,7 +1866,7 @@ async function main(): Promise<void> {
       tickFn.indexOf("if (!cur.transmitArmed"),
     );
     check("tickScan: паттерн fpga fail-closed, не USB-handoff",
-      fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff"));
+      fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff("));
   }
   check("живой автоперехват не подписывается «автономный эфир без сканера»",
     scanSrc.indexOf("fpgaAir") < scanSrc.indexOf("АВТОНОМНЫЙ ЭФИР") &&
