@@ -50,11 +50,13 @@ struct bladerf;
 struct lms_freq;
 static int lms_n;
 static int band_n;
+static bool lms_tx_off_during_set;
 
 int lms_set_precalculated_frequency(struct bladerf *dev, bladerf_module mod,
                                     struct lms_freq *f)
 {
     (void)dev; (void)mod; (void)f;
+    if ((t_control & 0x4u) == 0) lms_tx_off_during_set = true;
     lms_n++;
     return 0;
 }
@@ -389,9 +391,11 @@ int main(void)
     legion_work(); /* стоянка 0 уже на LO */
     CHECK("SCAN x40: первая стоянка без LMS hop", lms_n == 0 && band_n == 0);
     t_tamer += 140001;
+    lms_tx_off_during_set = false;
     legion_work();
     CHECK("SCAN x40: тишина → lms RX+TX (2) и band_select RX+TX (2)",
           lms_n == 2 && band_n == 2);
+    CHECK("SCAN x40: hop глушит LMS TX (bit2) на время PLL", lms_tx_off_during_set);
     CHECK("SCAN x40: CONTROL lms_rx/tx_enable живы", t_control == 0x6);
     {
         uint32_t khz = 0;

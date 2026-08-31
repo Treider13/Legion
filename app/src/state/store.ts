@@ -1065,10 +1065,18 @@ export const useLegion = create<LegionStore>((set, get) => {
       return;
     }
     set({ fpgaMode: "lb_gated", fpgaBusy: true, fpgaStatus: null, fpgaAutoCycle: false });
+    gFpgaAirGen += 1;
     const airGen = gFpgaAirGen;
     const gw = (cmd: Record<string, unknown>) =>
       hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
     try {
+      // Хост-FFT и Soapy держат USB эксклюзивно (FX3). Пока тик скана жив —
+      // шлюз не займёт кабель, плата не станет хозяином. Soapy закрываем
+      // до acquire и на micro (там нет parkFpgaLo).
+      get().stopScan();
+      stopAirWalk();
+      if (get().transmitArmed) await get().stopTransmit();
+      if (gFpgaAirGen !== airGen) return;
       const ping = await gw({ op: "ping" });
       if (gFpgaAirGen !== airGen) return;
       if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
@@ -1103,8 +1111,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         fsHz = pk.fsHz;
       } else {
+        await releaseSoapyForFpga();
         const acq = await gw({ op: "usb", action: "acquire" });
-        if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+        if (gFpgaAirGen !== airGen) return;
+        if (!acq.ok) {
+          pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
+          return;
+        }
       }
       if (gFpgaAirGen !== airGen) return;
       const r = await gw(

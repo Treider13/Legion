@@ -445,6 +445,7 @@ static bool legion_hop_lo(uint32_t freq_khz)
     {
         struct lms_freq f;
         bool low;
+        uint32_t cr;
 
         if (freq_hz > 0xFFFFFFFFULL) {
             return false;
@@ -452,19 +453,24 @@ static bool legion_hop_lo(uint32_t freq_khz)
         if (legion_lms_fill((uint32_t)freq_hz, &f) != 0) {
             return false;
         }
-        if (lms_set_precalculated_frequency(NULL, BLADERF_MODULE_RX, &f) != 0) {
-            return false;
-        }
-        if (lms_set_precalculated_frequency(NULL, BLADERF_MODULE_TX, &f) != 0) {
+        /* BLADERF_GPIO_LMS_TX_ENABLE = bit2 (bladeRF1.h). На время записи
+         * PLL глушим аналог TX: иначе det_active ещё от старого LO, гейт
+         * открыт, в усилитель уходят броски ФАПЧ. RX (bit1) не трогаем —
+         * time tamer и детектор должны тикать. */
+        cr = control_reg_read();
+        control_reg_write(cr & ~0x4u);
+        if (lms_set_precalculated_frequency(NULL, BLADERF_MODULE_RX, &f) != 0 ||
+            lms_set_precalculated_frequency(NULL, BLADERF_MODULE_TX, &f) != 0) {
+            control_reg_write(cr);
             return false;
         }
         low = (f.flags & LMS_FREQ_FLAGS_LOW_BAND) != 0;
-        if (band_select(NULL, BLADERF_MODULE_RX, low) != 0) {
+        if (band_select(NULL, BLADERF_MODULE_RX, low) != 0 ||
+            band_select(NULL, BLADERF_MODULE_TX, low) != 0) {
+            control_reg_write(cr);
             return false;
         }
-        if (band_select(NULL, BLADERF_MODULE_TX, low) != 0) {
-            return false;
-        }
+        control_reg_write(cr);
     }
 #endif
     legion_air_freq_khz = freq_khz;

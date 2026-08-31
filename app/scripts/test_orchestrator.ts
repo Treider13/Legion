@@ -1846,6 +1846,16 @@ async function main(): Promise<void> {
     storeSrc.includes("await startOnboardIntercept()") &&
     storeSrc.includes("scanEnable: true") &&
     !storeSrc.includes("USB release перед сканом"));
+  {
+    const onboard = storeSrc.slice(
+      storeSrc.indexOf("const startOnboardIntercept"),
+      storeSrc.indexOf("const fpgaReturnToScan"),
+    );
+    check("онбордовый старт глушит хост-FFT и Soapy до USB платы",
+      onboard.includes("get().stopScan()") &&
+      onboard.includes("releaseSoapyForFpga") &&
+      onboard.includes("if (!acq.ok)"));
+  }
   check("handoff commit помнит частоту очереди", storeSrc.includes("gFpgaTurnLastMhz = mhz;"));
   check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));
