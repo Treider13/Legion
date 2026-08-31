@@ -1856,6 +1856,22 @@ async function main(): Promise<void> {
       onboard.includes("releaseSoapyForFpga") &&
       onboard.includes("if (!acq.ok)"));
   }
+  {
+    const tickFn = storeSrc.slice(
+      storeSrc.indexOf("const tickScan = async"),
+      storeSrc.indexOf("const armTick ="),
+    );
+    const fpgaTick = tickFn.slice(
+      tickFn.indexOf("isFpgaAirPattern(cur.scanPattern)"),
+      tickFn.indexOf("if (!cur.transmitArmed"),
+    );
+    check("tickScan: паттерн fpga fail-closed, не USB-handoff",
+      fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff"));
+  }
+  check("живой автоперехват не подписывается «автономный эфир без сканера»",
+    scanSrc.indexOf("fpgaAir") < scanSrc.indexOf("АВТОНОМНЫЙ ЭФИР") &&
+    !scanSrc.includes("airLive && !s.fpgaAutoCycle") &&
+    !scanSrc.includes("парковка пика"));
   check("handoff commit помнит частоту очереди", storeSrc.includes("gFpgaTurnLastMhz = mhz;"));
   check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));

@@ -33,8 +33,8 @@ TURN (якорь от детекта, не от входа во взгляд) �
 
 На micro LO/fs/BW ставит NIOS (`rfic_command_write_immed`). На x40
 sample-rate — Si5338: один park Soapy при Старт, дальше NIOS шагает
-LMS (`lms_set_precalculated_frequency` + `band_select`). CONTROL bit1/2
-на время шага не снимаются.
+LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
+глушится CONTROL bit2 (LMS TX); bit1 (RX) жив — tamer и детектор.
 
 **Правовая/безопасная рамка:** выход TX — только в нагрузку 50 Ом
 (см. `docs/compliance.md`). Watchdog включён по умолчанию: пропал heartbeat

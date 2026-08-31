@@ -320,7 +320,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const survey =
     hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
-      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO = мс, не USB`;
+      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
   return {
     ok: true,
     reason: `плата смотрит эфир сама · ${survey} · USB не в круге увидел→усилитель`,

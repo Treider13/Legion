@@ -110,9 +110,10 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   Порог — поле оператора / дефолт 5000, не полка USB-IQ. На micro hop =
   TX mute → FREQUENCY RX+TX → unmute (без INIT). На x40 hop = integer-копия
   `lms_calculate_tuning_params` → `lms_set_precalculated_frequency` RX+TX +
-  `band_select`; Si5338 fs — один park Soapy при Старт. Режим **FPGA+сканер
+  `band_select`; Si5338 fs — один park Soapy при Старт.   Режим **FPGA+сканер
   с USB-handoff**
-  (Welch-8 → park → полка → смена хозяина USB) убран из Старта.
+  (Welch-8 → park → полка → смена хозяина USB) убран из Старта: хост-FFT
+  с паттерном `fpga` fail-closed (`stopScan`, без `fpgaHandoff`).
   FAKE park, FAKE Soapy/TX или FAKE шлюз → ARM нет. park читает LO, RX/TX fs и analog BW
   (не глотает дефолт ~1.5 МГц) и сверяет Soapy `hardwareKey` с платой
   каталога (`bladerf1`/`bladerf2`, не драйвер bladerf — он общий). Без

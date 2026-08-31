@@ -3577,37 +3577,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           if (bins.length > 0) set({ scanBins: bins });
           const cur = get();
           if (isFpgaAirPattern(cur.scanPattern)) {
-            // FPGA+СКАНЕР: детект → handoff (парк → порог → USB → ARM lb_gated).
-            // ПЕРЕДАТЬ не участвует — режим автономный. Пропуски: gSkipMhz
-            // (мёртвая после ARM) и gHandoffFailMhz (handoff упал — ретрай
-            // через паузу, не каждым тиком).
-            gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
-            if (cur.sdrEmulation) return; // демо без железа: сканируем, ARM не делаем
-            if (gFpgaHandoffBusy || cur.fpgaArmed || cur.fpgaBusy || cur.flashBusy) return;
-            // Интерлок нагрузки — как planHandoff в хост-пути: без подтверждённой
-            // нагрузки 50 Ом ARM не ставим (снятие галки гасит и будущие ARM).
-            if (!cur.sdrLoadOk) return;
-            const failActive =
-              gHandoffFailMhz != null &&
-              Date.now() - gHandoffFailAt < handoffRetryMs(gHandoffStrikes);
-            const pool = detections.filter((d) => {
-              if (gSkipMhz != null && sameBin(d.freqMhz, gSkipMhz)) return false;
-              if (failActive && gHandoffFailMhz != null && sameBin(d.freqMhz, gHandoffFailMhz)) {
-                return false;
-              }
-              return true;
-            });
-            // Пустое живое окно — ARM на тишину не ставим (pickTurnTarget
-            // подставил бы held-слот мёртвой частоты).
-            if (pool.length === 0) return;
-            // ПРИОРИТЕТ — сильнейшая. ОБЫЧНЫЙ — следующая по кругу после
-            // последней ARM (её слот подставляется, если она выпала из живого
-            // окна: порядок очереди не сбивается).
-            const target =
-              cur.autoDispatch === "turn"
-                ? pickTurnTarget(pool, null, gFpgaTurnLastMhz)
-                : pickStrongest(pool);
-            if (target) void fpgaHandoff(target.freqMhz, target.powerDbm);
+            // Fail-closed: Старт перехвата не ставит scanRunning и не ходит
+            // в fpgaHandoff. Живой хост-FFT-таймер (остаток USB-цикла) не
+            // должен снова вставить ноутбук в круг «увидел → усилитель».
+            get().stopScan();
             return;
           }
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
