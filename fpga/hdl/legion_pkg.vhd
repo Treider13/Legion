@@ -43,6 +43,12 @@ package legion_pkg is
     constant LEGION_REG_AIR_PREP     : natural := 16#0B#; -- bit0 up/down, bit1 RX, bit2 TX
     constant LEGION_REG_AIR_FS_HZ    : natural := 16#0C#; -- sample rate, Гц; 0 = 2 МГц
     constant LEGION_REG_AIR_BW_HZ    : natural := 16#0D#; -- analog BW, Гц; 0 = 2 МГц
+    -- Онбордовый обзор (только NIOS, HDL не декодирует): коридор и стратегия
+    -- шага LO. Хост пишет при ARM перехвата; USB в гейт RX→TX не входит.
+    constant LEGION_REG_SCAN_F1_KHZ  : natural := 16#0E#; -- начало коридора, кГц
+    constant LEGION_REG_SCAN_F2_KHZ  : natural := 16#0F#; -- конец коридора, кГц
+    constant LEGION_REG_SCAN_CTRL    : natural := 16#10#; -- bit0 enable, bit1 turn
+    constant LEGION_REG_SCAN_DWELL_US : natural := 16#11#; -- выдержка turn от детекта, мкс
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (живой expired),

@@ -27,11 +27,17 @@
 #include <altera_avalon_pio_regs.h>
 
 #include "debug.h"
-#include "devices.h"  /* control_reg_read/write — x40: снять lms_*_enable при deadman */
+#include "devices.h"  /* control_reg_read/write — x40: снять lms_*_enable при deadman
+                       * time_tamer_read(RX) — счётчик сэмплов (оба борта) */
 
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 #include "devices_rfic.h"
 #define LEGION_HAVE_RFIC 1
+#endif
+
+#if !defined(BOARD_BLADERF_MICRO)
+#include "lms.h"
+#include "band_select.h"
 #endif
 
 /* Тракт ретрансляции micro: fs и analog BW парковки (хост паркует так же —
@@ -57,6 +63,31 @@ static bool     legion_armed;
  * legion_watchdog.vhd) — хост читал бы пульс никогда. Держим латч до
  * следующего ARM и подмешиваем в чтение STATUS битом 4 (HDL 7..4 = 0). */
 static bool     legion_wd_latch;
+
+/* Онбордовый обзор: коридор и стратегия. HDL эти адреса не декодирует. */
+static uint32_t legion_scan_f1_khz;
+static uint32_t legion_scan_f2_khz;
+static uint32_t legion_scan_ctrl;
+static uint32_t legion_scan_dwell_us;
+static uint32_t legion_scan_idx;
+static int      legion_scan_dir;      /* +1 / −1, ping-pong как planCenters */
+static bool     legion_scan_look_set; /* tamer якорь текущей стоянки */
+static uint64_t legion_quiet_t0;
+static bool     legion_hold_armed;    /* TURN: выдержка от первого det в взгляде */
+static uint64_t legion_hold_t0;
+
+#define LEGION_SCAN_QUIET_MS     5u
+#define LEGION_SCAN_DWELL_DEFAULT_US 3000000u
+
+static void legion_scan_reset(void)
+{
+    legion_scan_idx = 0;
+    legion_scan_dir = 1;
+    legion_scan_look_set = false;
+    legion_quiet_t0 = 0;
+    legion_hold_armed = false;
+    legion_hold_t0 = 0;
+}
 
 bool legion_air_up(bool rx, bool tx)
 {
@@ -206,9 +237,360 @@ bool legion_air_down(void)
 #endif
 }
 
+static uint32_t legion_look_hz(void)
+{
+    return legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
+}
+
+static uint32_t legion_fs_hz(void)
+{
+    return legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
+}
+
+/* Сетка стоянок — та же формула, что planCenters в app/src/sense/scan.ts:
+ * n = ceil(span/look), центр i = f1 + look/2 + i·look, клип к f2. */
+static uint32_t legion_scan_n(void)
+{
+    uint32_t const look_khz = legion_look_hz() / 1000u;
+    uint32_t span;
+
+    if (legion_scan_f1_khz == 0 || legion_scan_f2_khz < legion_scan_f1_khz) {
+        return 0;
+    }
+    if (look_khz == 0) {
+        return 0;
+    }
+    span = legion_scan_f2_khz - legion_scan_f1_khz;
+    if (span <= look_khz) {
+        return 1;
+    }
+    return (span + look_khz - 1u) / look_khz;
+}
+
+static uint32_t legion_scan_center_khz(uint32_t i)
+{
+    uint32_t const look_khz = legion_look_hz() / 1000u;
+    uint32_t const n = legion_scan_n();
+    uint32_t c;
+
+    if (n == 0) {
+        return 0;
+    }
+    if (n == 1) {
+        return (legion_scan_f1_khz / 2u) + (legion_scan_f2_khz / 2u);
+    }
+    if (i >= n) {
+        i = n - 1u;
+    }
+    c = legion_scan_f1_khz + (look_khz / 2u) + i * look_khz;
+    if (c > legion_scan_f2_khz) {
+        c = legion_scan_f2_khz;
+    }
+    return c;
+}
+
+static void legion_scan_advance(void)
+{
+    uint32_t const n = legion_scan_n();
+
+    if (n <= 1u) {
+        return;
+    }
+    if (legion_scan_dir > 0) {
+        if (legion_scan_idx + 1u >= n) {
+            legion_scan_dir = -1;
+            if (legion_scan_idx > 0) {
+                legion_scan_idx--;
+            }
+        } else {
+            legion_scan_idx++;
+        }
+    } else if (legion_scan_idx == 0) {
+        legion_scan_dir = 1;
+        if (n > 1u) {
+            legion_scan_idx++;
+        }
+    } else {
+        legion_scan_idx--;
+    }
+}
+
+#if !defined(BOARD_BLADERF_MICRO)
+/* Integer-копия lms_calculate_tuning_params (fpga_common/src/lms.c):
+ * та же таблица VCO/DIV (консервативные края, не LMS FAQ), nint/nfrac
+ * от ref 38.4 МГц, VCOCAP = 15 + round(40·(f−low)/(high−low)).
+ * f->x не пишем — поле только вне BLADERF_NIOS_BUILD (lms.h). */
+#define LEGION_LMS_REF_HZ   38400000u
+#define LEGION_LMS_FMIN     237500000u   /* bladeRF1.h BLADERF_FREQUENCY_MIN */
+#define LEGION_LMS_FMAX     3800000000u  /* VCO1_HIGH/2 */
+#define LEGION_VCO4_LOW     3800000000ull
+#define LEGION_VCO4_HIGH    4535000000ull
+#define LEGION_VCO3_HIGH    5408000000ull
+#define LEGION_VCO2_HIGH    6480000000ull
+#define LEGION_VCO1_HIGH    7600000000ull
+#define LEGION_VCO4         (4 << 3)
+#define LEGION_VCO3         (5 << 3)
+#define LEGION_VCO2         (6 << 3)
+#define LEGION_VCO1         (7 << 3)
+#define LEGION_DIV2         0x4
+#define LEGION_DIV4         0x5
+#define LEGION_DIV8         0x6
+#define LEGION_DIV16        0x7
+
+static int legion_lms_fill(uint32_t freq, struct lms_freq *f)
+{
+    static const struct {
+        uint32_t low;
+        uint32_t high;
+        uint8_t  value;
+    } bands[] = {
+        { LEGION_LMS_FMIN,                    (uint32_t)(LEGION_VCO4_HIGH / 16), LEGION_VCO4 | LEGION_DIV16 },
+        { (uint32_t)(LEGION_VCO4_HIGH / 16),  (uint32_t)(LEGION_VCO3_HIGH / 16), LEGION_VCO3 | LEGION_DIV16 },
+        { (uint32_t)(LEGION_VCO3_HIGH / 16),  (uint32_t)(LEGION_VCO2_HIGH / 16), LEGION_VCO2 | LEGION_DIV16 },
+        { (uint32_t)(LEGION_VCO2_HIGH / 16),  (uint32_t)(LEGION_VCO1_HIGH / 16), LEGION_VCO1 | LEGION_DIV16 },
+        { (uint32_t)(LEGION_VCO4_LOW / 8),    (uint32_t)(LEGION_VCO4_HIGH / 8),  LEGION_VCO4 | LEGION_DIV8  },
+        { (uint32_t)(LEGION_VCO4_HIGH / 8),   (uint32_t)(LEGION_VCO3_HIGH / 8),  LEGION_VCO3 | LEGION_DIV8  },
+        { (uint32_t)(LEGION_VCO3_HIGH / 8),   (uint32_t)(LEGION_VCO2_HIGH / 8),  LEGION_VCO2 | LEGION_DIV8  },
+        { (uint32_t)(LEGION_VCO2_HIGH / 8),   (uint32_t)(LEGION_VCO1_HIGH / 8),  LEGION_VCO1 | LEGION_DIV8  },
+        { (uint32_t)(LEGION_VCO4_LOW / 4),    (uint32_t)(LEGION_VCO4_HIGH / 4),  LEGION_VCO4 | LEGION_DIV4  },
+        { (uint32_t)(LEGION_VCO4_HIGH / 4),   (uint32_t)(LEGION_VCO3_HIGH / 4),  LEGION_VCO3 | LEGION_DIV4  },
+        { (uint32_t)(LEGION_VCO3_HIGH / 4),   (uint32_t)(LEGION_VCO2_HIGH / 4),  LEGION_VCO2 | LEGION_DIV4  },
+        { (uint32_t)(LEGION_VCO2_HIGH / 4),   (uint32_t)(LEGION_VCO1_HIGH / 4),  LEGION_VCO1 | LEGION_DIV4  },
+        { (uint32_t)(LEGION_VCO4_LOW / 2),    (uint32_t)(LEGION_VCO4_HIGH / 2),  LEGION_VCO4 | LEGION_DIV2  },
+        { (uint32_t)(LEGION_VCO4_HIGH / 2),   (uint32_t)(LEGION_VCO3_HIGH / 2),  LEGION_VCO3 | LEGION_DIV2  },
+        { (uint32_t)(LEGION_VCO3_HIGH / 2),   (uint32_t)(LEGION_VCO2_HIGH / 2),  LEGION_VCO2 | LEGION_DIV2  },
+        { (uint32_t)(LEGION_VCO2_HIGH / 2),   LEGION_LMS_FMAX,                  LEGION_VCO1 | LEGION_DIV2  },
+    };
+    unsigned i;
+    uint64_t vco_x;
+    uint64_t temp;
+    uint32_t denom;
+    uint32_t vcocap;
+
+    if (freq < LEGION_LMS_FMIN) {
+        freq = LEGION_LMS_FMIN;
+    } else if (freq > LEGION_LMS_FMAX) {
+        freq = LEGION_LMS_FMAX;
+    }
+
+    for (i = 0; i < (unsigned)(sizeof(bands) / sizeof(bands[0])); i++) {
+        if (freq >= bands[i].low && freq <= bands[i].high) {
+            break;
+        }
+    }
+    if (i >= (unsigned)(sizeof(bands) / sizeof(bands[0]))) {
+        return -1;
+    }
+
+    denom = bands[i].high - bands[i].low;
+    if (denom == 0) {
+        return -1;
+    }
+    /* 15 + round(40 · (f−low)/(high−low)), кламп 0x3f — estimate_vcocap */
+    vcocap = 15u + (40u * (freq - bands[i].low) + denom / 2u) / denom;
+    if (vcocap > 0x3fu) {
+        vcocap = 0x3fu;
+    }
+
+    vco_x = ((uint64_t)1) << ((bands[i].value & 7) - 3);
+    temp = (vco_x * (uint64_t)freq) / LEGION_LMS_REF_HZ;
+    f->nint = (uint16_t)temp;
+    temp = ((uint64_t)1 << 23) * (vco_x * (uint64_t)freq - (uint64_t)f->nint * LEGION_LMS_REF_HZ);
+    temp = (temp + LEGION_LMS_REF_HZ / 2u) / LEGION_LMS_REF_HZ;
+    f->nfrac = (uint32_t)temp;
+    f->freqsel = bands[i].value;
+    f->vcocap = (uint8_t)vcocap;
+    f->xb_gpio = 0;
+    f->flags = 0;
+    if (freq < BLADERF1_BAND_HIGH) {
+        f->flags |= LMS_FREQ_FLAGS_LOW_BAND;
+    }
+    return 0;
+}
+#endif
+
+static bool legion_hop_lo(uint32_t freq_khz)
+{
+    uint64_t const freq_hz = (uint64_t)freq_khz * 1000ULL;
+
+    if (freq_khz == 0 || freq_hz == 0) {
+        return false;
+    }
+
+#if defined(LEGION_HAVE_RFIC)
+    /* Живой тракт: mute → FREQUENCY RX+TX → unmute. Без INIT/ad9361_init. */
+    if (!legion_air_is_up) {
+        return false;
+    }
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                  BLADERF_CHANNEL_TX(0), 1)) {
+        return false;
+    }
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
+                                  BLADERF_CHANNEL_RX(0), freq_hz) ||
+        !rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
+                                  BLADERF_CHANNEL_TX(0), freq_hz)) {
+        (void)rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                       BLADERF_CHANNEL_TX(0), 0);
+        return false;
+    }
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                  BLADERF_CHANNEL_TX(0), 0)) {
+        return false;
+    }
+#elif defined(BOARD_BLADERF_MICRO)
+    (void)freq_hz;
+    return false;
+#else
+    {
+        struct lms_freq f;
+        bool low;
+        uint32_t cr;
+
+        if (freq_hz > 0xFFFFFFFFULL) {
+            return false;
+        }
+        if (legion_lms_fill((uint32_t)freq_hz, &f) != 0) {
+            return false;
+        }
+        /* BLADERF_GPIO_LMS_TX_ENABLE = bit2 (bladeRF1.h). На время записи
+         * PLL глушим аналог TX: иначе det_active ещё от старого LO, гейт
+         * открыт, в усилитель уходят броски ФАПЧ. RX (bit1) не трогаем —
+         * time tamer и детектор должны тикать. */
+        cr = control_reg_read();
+        control_reg_write(cr & ~0x4u);
+        if (lms_set_precalculated_frequency(NULL, BLADERF_MODULE_RX, &f) != 0 ||
+            lms_set_precalculated_frequency(NULL, BLADERF_MODULE_TX, &f) != 0) {
+            control_reg_write(cr);
+            return false;
+        }
+        low = (f.flags & LMS_FREQ_FLAGS_LOW_BAND) != 0;
+        if (band_select(NULL, BLADERF_MODULE_RX, low) != 0 ||
+            band_select(NULL, BLADERF_MODULE_TX, low) != 0) {
+            control_reg_write(cr);
+            return false;
+        }
+        control_reg_write(cr);
+    }
+#endif
+    legion_air_freq_khz = freq_khz;
+    return true;
+}
+
+static void legion_scan_mark_look(void)
+{
+    legion_quiet_t0 = time_tamer_read(BLADERF_MODULE_RX);
+    legion_scan_look_set = true;
+    legion_hold_armed = false;
+    legion_hold_t0 = 0;
+}
+
+static bool legion_scan_go(uint32_t khz)
+{
+    if (khz == 0) {
+        return false;
+    }
+    if (khz == legion_air_freq_khz) {
+        legion_scan_mark_look();
+        return true;
+    }
+    if (!legion_hop_lo(khz)) {
+        return false;
+    }
+    legion_scan_mark_look();
+    return true;
+}
+
+/* Шаг сетки только после удачного hop: иначе idx уехал, а LO остался —
+ * следующие quiet/dwell крутили бы чужие стоянки. */
+static void legion_scan_try_next(void)
+{
+    uint32_t const old_idx = legion_scan_idx;
+    int const old_dir = legion_scan_dir;
+
+    legion_scan_advance();
+    if (legion_scan_go(legion_scan_center_khz(legion_scan_idx))) {
+        return;
+    }
+    legion_scan_idx = old_idx;
+    legion_scan_dir = old_dir;
+}
+
+static void legion_scan_walk(void)
+{
+    uint32_t const n = legion_scan_n();
+    uint64_t now;
+    uint64_t quiet;
+    uint64_t dwell;
+    uint32_t dwell_us;
+    bool det;
+    bool turn;
+
+    if ((legion_scan_ctrl & LEGION_SCAN_CTRL_EN) == 0 || n == 0) {
+        return;
+    }
+
+    if (!legion_scan_look_set) {
+        if (legion_scan_idx >= n) {
+            legion_scan_idx = 0;
+        }
+        (void)legion_scan_go(legion_scan_center_khz(legion_scan_idx));
+        return;
+    }
+
+    if (n == 1) {
+        /* Весь коридор в одном аналоговом окне — LO не шагаем.
+         * Гейт I²+Q² работает в текущем взгляде (микросекунды). */
+        return;
+    }
+
+    now = time_tamer_read(BLADERF_MODULE_RX);
+    /* Tamer не идёт (нет тактов RX) → elapsed=0 → hop не срабатывает.
+     * Гейт на текущем взгляде жив, если тракт поднят. */
+    quiet = ((uint64_t)legion_fs_hz() * LEGION_SCAN_QUIET_MS) / 1000u;
+    if (quiet == 0) {
+        quiet = 1;
+    }
+    dwell_us = legion_scan_dwell_us ? legion_scan_dwell_us : LEGION_SCAN_DWELL_DEFAULT_US;
+    /* fs·мкс / 1e6; 40e6·60e6 влезает в uint64. */
+    dwell = ((uint64_t)legion_fs_hz() * (uint64_t)dwell_us) / 1000000u;
+    if (dwell == 0) {
+        dwell = 1;
+    }
+    det = (IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE) &
+           LEGION_STATUS_DET_ACTIVE) != 0;
+    turn = (legion_scan_ctrl & LEGION_SCAN_CTRL_TURN) != 0;
+
+    /* Выдержка TURN — от первого det в этом взгляде, не от входа в взгляд.
+     * Иначе сигнал, появившийся позже dwell, сразу терялся бы без удержания
+     * (пример оператора: нашёл 2450 → 0.4 мс на усилитель → дальше 2465). */
+    if (det && !legion_hold_armed) {
+        legion_hold_armed = true;
+        legion_hold_t0 = now;
+    }
+    if (det) {
+        legion_quiet_t0 = now;
+    }
+
+    if (turn && legion_hold_armed) {
+        if (now - legion_hold_t0 >= dwell) {
+            legion_scan_try_next();
+        }
+        return;
+    }
+    if (det) {
+        /* PRIORITY: пока энергия — не шагаем. */
+        return;
+    }
+    if (now - legion_quiet_t0 < quiet) {
+        return;
+    }
+    legion_scan_try_next();
+}
+
 bool legion_reg_write(uint8_t addr, uint32_t data)
 {
-    if (addr > LEGION_REG_AIR_BW_HZ) {
+    if (addr > LEGION_REG_SCAN_DWELL_US) {
         DBG("LEGION: bad addr 0x%x\n", addr);
         return false;
     }
@@ -228,6 +610,25 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 
         case LEGION_REG_AIR_BW_HZ:
             legion_air_bw_hz = data;
+            return true;
+
+        case LEGION_REG_SCAN_F1_KHZ:
+            legion_scan_f1_khz = data;
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_SCAN_F2_KHZ:
+            legion_scan_f2_khz = data;
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_SCAN_CTRL:
+            legion_scan_ctrl = data;
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_SCAN_DWELL_US:
+            legion_scan_dwell_us = data;
             return true;
 
         case LEGION_REG_AIR_PREP:
@@ -251,8 +652,9 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 #endif
             legion_armed = (data & 0x1) != 0;
             if ((data & 0x1) != 0) {
-                /* Новый ARM — латч deadman прошлой сессии снять */
+                /* Новый ARM — латч deadman прошлой сессии снять; обзор с первой стоянки */
                 legion_wd_latch = false;
+                legion_scan_reset();
             }
             if ((data & 0x1) == 0 && legion_air_is_up) {
                 /* DISARM: эфир гасим сами — шлюз про RFIC не знает */
@@ -279,6 +681,18 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
                 (legion_air_freq_khz != 0 ? 0x2u : 0x0u);
         return true;
     }
+    if (addr == LEGION_REG_AIR_FREQ_KHZ) {
+        *data = legion_air_freq_khz;
+        return true;
+    }
+    if (addr == LEGION_REG_AIR_FS_HZ) {
+        *data = legion_air_fs_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_AIR_BW_HZ) {
+        *data = legion_air_bw_hz;
+        return true;
+    }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
     /* Бит 4 — не из HDL (там 7..4 = 0): липкий латч NIOS «deadman сработал»,
      * иначе wd_fired после автономного DISARM — микросекундный пульс. */
@@ -303,13 +717,14 @@ void legion_work(void)
         return;
     }
     if ((IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE) &
-         LEGION_STATUS_WD_FIRED) == 0) {
+         LEGION_STATUS_WD_FIRED) != 0) {
+        DBG("LEGION: wd_fired при живом ARM — автономный DISARM\n");
+        legion_wd_latch = true;
+        legion_reg_write(LEGION_REG_CTRL, 0);
+#if !defined(BOARD_BLADERF_MICRO)
+        control_reg_write(control_reg_read() & ~0x6u);
+#endif
         return;
     }
-    DBG("LEGION: wd_fired при живом ARM — автономный DISARM\n");
-    legion_wd_latch = true;
-    legion_reg_write(LEGION_REG_CTRL, 0);
-#if !defined(BOARD_BLADERF_MICRO)
-    control_reg_write(control_reg_read() & ~0x6u);
-#endif
+    legion_scan_walk();
 }

@@ -71,11 +71,12 @@ async function main(): Promise<void> {
     (document.querySelector(".cinema-gate-actions .cinema-btn.solid") as HTMLButtonElement | null)?.click();
   });
 
-  // Браузер = эмуляция: скан-фаза обязана подняться, hero — ПОИСК.
-  await waitFor(page, `document.querySelector(".hero-status")?.textContent?.includes("ПОИСК")`);
-  const searching = await heroText();
+  // Браузер = эмуляция: ARM нет (платы нет). Hero остаётся ОЖИДАНИЕ —
+  // не врём «ПОИСК» хост-сканера и не врём «РЕТРАНСЛЯЦИЯ».
+  await waitFor(page, `!document.querySelector(".cinema-gate-card")`);
+  const afterStart = await heroText();
 
-  // Стоп в доке → ОЖИДАНИЕ.
+  // Стоп в доке → ОЖИДАНИЕ (уже idle).
   await click(page, "Стоп", true);
   await waitFor(page, `document.querySelector(".hero-status")?.textContent?.includes("ОЖИДАНИЕ")`);
   const idle1 = await heroText();
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
   const checks: Array<[string, boolean]> = [
     ["idle до старта = ОЖИДАНИЕ", idle0.includes("ОЖИДАНИЕ")],
     ["финальный шаг мастера = кнопка «Запустить»", finalLabel === "Запустить"],
-    ["перехват из мастера поднял скан (hero ПОИСК)", searching.includes("ПОИСК")],
+    ["эмуляция не врёт ПОИСК/РЕТРАНСЛЯЦИЯ", afterStart.includes("ОЖИДАНИЕ") && !afterStart.includes("ПОИСК") && !afterStart.includes("РЕТРАНСЛЯЦИЯ")],
     ["Стоп вернул ОЖИДАНИЕ", idle1.includes("ОЖИДАНИЕ")],
   ];
   let failed = 0;

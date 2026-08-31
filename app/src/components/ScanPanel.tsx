@@ -25,6 +25,7 @@ export function ScanPanel() {
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
   const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
+  const interceptSetup = fpgaAir && !taskLive && !airLive;
   const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
@@ -42,19 +43,19 @@ export function ScanPanel() {
       <span className="panel-title">
         {taskLive
           ? "РЕЖИМ SDR // FPGA · ЗАДАЧА С НОУТБУКА"
-          : airLive && !s.fpgaAutoCycle
-            ? "РЕЖИМ SDR // FPGA · АВТОНОМНЫЙ ЭФИР (БЕЗ СКАНЕРА)"
-            : fpgaAir || airLive
-              ? "РЕЖИМ SDR // АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ · РЕТРАНСЛЯЦИЯ В FPGA"
+          : fpgaAir
+            ? "РЕЖИМ SDR // АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ · РЕТРАНСЛЯЦИЯ В FPGA"
+            : airLive
+              ? "РЕЖИМ SDR // FPGA · АВТОНОМНЫЙ ЭФИР (БЕЗ СКАНЕРА)"
               : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
       </span>
       <p className="panel-note">
         {taskLive
           ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не автоперехват и не хост-скан. Стоп — там или кнопкой ниже."
-          : airLive && !s.fpgaAutoCycle
-            ? "Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора. Сканер не участвует — ноутбук наблюдает и стопит."
-            : fpgaAir
-              ? "Автоматический перехват: сканер находит сигнал → LO паркуется на пик (канал оператора) → порог меряется по шумовой полке → FPGA ретранслирует RX→TX за микросекунды. Сигнал пропал, сработал сторож или СТОП — возврат к поиску. ПЕРЕДАТЬ не нужен: цикл автономный."
+          : fpgaAir
+            ? "Автоматический перехват: после Старта хозяин — SDR. Антенна SMA → RX, плата сама видит энергию в аналоговом окне и сама открывает TX на усилитель. Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ)."
+            : airLive
+              ? "Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не автоперехват. Стоп — кнопкой ниже."
               : "АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: автоматический перехват. Хост-скан и FPGA вместе не работают (один USB)."}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
@@ -131,7 +132,7 @@ export function ScanPanel() {
         </label>
         {fpgaAir && !taskLive && (
           <>
-            <label title="Минимальная энергия сигнала, при которой открывается ретрансляция. В автоперехвате порог меряется автоматически по шумовой полке; это поле — для автономного эфира и ручного ARM.">
+            <label title="Минимальная энергия I²+Q², при которой открывается гейт. В перехвате порог задаёт оператор (полка USB-IQ в круге больше не меряется).">
               ПОРОГ ЧУВСТВИТЕЛЬНОСТИ
               <input
                 aria-label="Порог чувствительности детектора FPGA"
@@ -143,10 +144,10 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
-            <label title="Ширина полосы вокруг найденной частоты, которую ретранслирует FPGA. Уже — точнее на цель, шире — захватывает соседние сигналы.">
-              КАНАЛ, МГц
+            <label title="Ширина одного взгляда платы и шаг сетки LO (аналоговый фильтр). Уже — соседние частоты как разные стоянки; шире потолка платы — урежется.">
+              ВЗГЛЯД, МГц
               <input
-                aria-label="Полоса канала ретрансляции FPGA"
+                aria-label="Ширина взгляда платы (аналоговый фильтр)"
                 type="number"
                 min={0.2}
                 max={analogBw}
@@ -170,14 +171,14 @@ export function ScanPanel() {
               />
             </label>
             {s.autoDispatch === "turn" && (
-              <label title="Сколько миллисекунд держать каждую найденную частоту, прежде чем перейти к следующей по кругу.">
+              <label title="Сколько миллисекунд держать усилитель на найденной частоте, затем шаг дальше (можно 0.4).">
                 ВЫДЕРЖКА НА ЧАСТОТЕ мс
                 <input
                   aria-label="Выдержка на частоте до переключения по очереди"
                   type="number"
-                  min={500}
+                  min={0.1}
                   max={60000}
-                  step={500}
+                  step={0.1}
                   value={s.fpgaTurnDwellMs}
                   onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
                   disabled={busy || s.fpgaBusy}
@@ -186,7 +187,7 @@ export function ScanPanel() {
             )}
           </>
         )}
-        {auto && (
+        {(auto || interceptSetup) && (
           <label>
             АВТО
             <select
@@ -305,21 +306,15 @@ export function ScanPanel() {
               СТОП FPGA
             </button>
           ) : fpgaAir && s.fpgaBusy ? (
-            // Handoff в полёте (парк/захват/USB/ARM — на micro до секунд на
-            // первом подъёме): отмена по поколению, handoff откатится сам.
             <button className="btn-danger" onClick={() => void s.stopFpgaAir()}>
-              СТОП (отмена handoff)
-            </button>
-          ) : s.scanRunning && fpgaAir ? (
-            <button className="btn-danger" onClick={() => s.stopScan()}>
-              СТОП СКАН
+              СТОП (отмена старта)
             </button>
           ) : (
             <button
               className="btn-primary"
               disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
               onClick={() => void s.startScan()}
-              title="Сканер ищет сигнал → FPGA ретранслирует его за микросекунды → при пропадании возврат к поиску."
+              title="Плата смотрит эфир сама и открывает TX. Ноутбук — рубильник."
             >
               СТАРТ ПЕРЕХВАТА
             </button>
@@ -361,7 +356,7 @@ export function ScanPanel() {
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
           {!fpgaAirSupported(s.sdrId)
             ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
-            : " — поиск → парковка пика → ретрансляция · пропала энергия/сторож → возврат к поиску"}
+            : " — плата шагает LO сама · USB не в круге увидел→усилитель · Стоп и watchdog гасят TX"}
         </p>
       )}
       {fpgaAir && s.fpgaLegion === false && (
