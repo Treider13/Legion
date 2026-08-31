@@ -7,7 +7,9 @@
 
 Команды (по одной JSON-строке на запрос/ответ):
   {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
-   "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int}
+   "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int,
+   "scan_enable":bool, "scan_f1_mhz":float, "scan_f2_mhz":float,
+   "scan_turn":bool, "scan_dwell_us":int, "scan_dwell_ms":float}
   {"op":"disarm"}
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
@@ -330,6 +332,10 @@ class FakeTransport:
                 freq = int(self.regs.get(lf.REG_AIR_FREQ_KHZ, 0) != 0)
                 resp[5:9] = (air | (freq << 1)).to_bytes(4, "little")
                 return bytes(resp)
+            if addr in (lf.REG_AIR_FREQ_KHZ, lf.REG_AIR_FS_HZ, lf.REG_AIR_BW_HZ):
+                val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
+                resp[5:9] = val.to_bytes(4, "little")
+                return bytes(resp)
             ctrl = self.regs.get(lf.REG_CTRL, 0)
             armed = bool(ctrl & lf.CTRL_ARM)
             mode = (ctrl >> 1) & 0x7
@@ -506,6 +512,18 @@ class LegionGateway:
             self._rx_by_us = rx
             self._tx_by_us = True
             return True, ""
+        # x40: walker читает AIR_* (AIR_PREP — no-op). Пишем явно, как micro:
+        # иначе look/LO прошлой сессии. Нет полей → 0 (дефолт NIOS 2 МГц).
+        freq = msg.get("freq_mhz")
+        if freq is not None and not self.fpga.set_air_freq_mhz(float(freq)):
+            return False, "x40: запись AIR_FREQ_KHZ не удалась"
+        fs = msg.get("fs_hz")
+        if not self.fpga.set_air_fs_hz(int(fs) if fs is not None else 0):
+            return False, "x40: запись AIR_FS_HZ не удалась"
+        bw = msg.get("bw_mhz")
+        bw_hz = int(round(float(bw) * 1e6)) if bw is not None else 0
+        if not self.fpga.set_air_bw_hz(bw_hz):
+            return False, "x40: запись AIR_BW_HZ не удалась"
         if rx:
             if not self._lms_enable(rx=True, tx=True):
                 return False, "CONTROL: не включить RX+TX (lms_*_enable)"
@@ -515,6 +533,30 @@ class LegionGateway:
             if not self._lms_enable(tx=True):
                 return False, "CONTROL: не включить TX (lms_tx_enable)"
             self._tx_by_us = True
+        return True, ""
+
+    def _program_scan(self, msg: dict) -> tuple[bool, str]:
+        """SCAN_* всегда явно: иначе walker перехвата жил бы в solo/эфире."""
+        enable = bool(msg.get("scan_enable"))
+        if not enable:
+            if not self.fpga.write_reg(lf.REG_SCAN_CTRL, 0):
+                return False, "запись SCAN_CTRL=0 не удалась"
+            return True, ""
+        f1 = msg.get("scan_f1_mhz")
+        f2 = msg.get("scan_f2_mhz")
+        if f1 is None or f2 is None:
+            return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
+        # Регистр — микросекунды. scan_dwell_us предпочтителен; ms → ×1000
+        # (0.4 мс оператора не должен стать 0 и дефолтом NIOS 3 с).
+        if msg.get("scan_dwell_us") is not None:
+            dwell = int(msg.get("scan_dwell_us") or 0)
+        elif msg.get("scan_dwell_ms") is not None:
+            dwell = int(round(float(msg.get("scan_dwell_ms") or 0) * 1000.0))
+        else:
+            dwell = 0
+        if not self.fpga.set_scan_corridor(
+                float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell):
+            return False, "запись SCAN_* не удалась"
         return True, ""
 
     def _detect_legion(self) -> None:
@@ -711,6 +753,9 @@ class LegionGateway:
             air_ok, air_why = self._air_enable(mode, msg)
             if not air_ok:
                 return {"ok": False, "reason": air_why}
+            scan_ok, scan_why = self._program_scan(msg)
+            if not scan_ok:
+                return {"ok": False, "reason": scan_why}
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             if ok:
                 self._armed = True
@@ -773,6 +818,10 @@ class LegionGateway:
             if self._armed and ARM_WARN_S > 0 and armed_s >= ARM_WARN_S:
                 st["warn"] = (f"непрерывная работа {int(armed_s) // 60} мин — "
                               "проверьте охлаждение платы или сделайте паузу / снизьте мощность")
+            if st.get("ok"):
+                okf, khz = self.fpga.read_reg(lf.REG_AIR_FREQ_KHZ)
+                if okf and khz:
+                    st["freq_mhz"] = khz / 1000.0
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
@@ -830,6 +879,9 @@ class LegionGateway:
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,
+                "scan_f1_khz": lf.REG_SCAN_F1_KHZ, "scan_f2_khz": lf.REG_SCAN_F2_KHZ,
+                "scan_ctrl": lf.REG_SCAN_CTRL, "scan_dwell_us": lf.REG_SCAN_DWELL_US,
+                "scan_dwell_ms": lf.REG_SCAN_DWELL_US,
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}

@@ -241,6 +241,8 @@ export interface FpgaStatus {
   /** flash: CLI записал, но USB обратно не занялся (Soapy держит / FPGA не поднялась).
    *  status: длительная непрерывная работа — проверить охлаждение. */
   warn?: string;
+  /** LO, кГц/1000 из NIOS AIR_FREQ — текущий взгляд платы. */
+  freq_mhz?: number;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.

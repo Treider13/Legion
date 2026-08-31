@@ -41,6 +41,14 @@ REG_AIR_GAIN_DB = 0x0A
 REG_AIR_PREP = 0x0B  # bit0: 1=поднять тракт / 0=standby; bit1: RX; bit2: TX
 REG_AIR_FS_HZ = 0x0C  # sample rate эфира/solo, Гц; 0 = 2 МГц (NIOS)
 REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
+# Онбордовый обзор коридора — только NIOS (HDL не декодирует)
+REG_SCAN_F1_KHZ = 0x0E
+REG_SCAN_F2_KHZ = 0x0F
+REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn
+REG_SCAN_DWELL_US = 0x11  # выдержка turn от первого детекта, мкс
+
+SCAN_CTRL_EN = 1 << 0
+SCAN_CTRL_TURN = 1 << 1
 
 # Режимы MODE (CTRL bits 3:1)
 MODE_PASS = 0x0
@@ -129,6 +137,21 @@ class LegionFpga:
             "lb_level": (data >> 8) & 0xFF,
             "det_count": (data >> 16) & 0xFFFF,
         }
+
+    def set_scan_corridor(self, f1_mhz: float, f2_mhz: float,
+                          enable: bool, turn: bool, dwell_us: int) -> bool:
+        """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo).
+        dwell_us — выдержка TURN от первого det в взгляде (0 → дефолт NIOS 3 с)."""
+        f1 = int(round(float(f1_mhz) * 1000.0))
+        f2 = int(round(float(f2_mhz) * 1000.0))
+        if f1 <= 0 or f2 < f1:
+            return False
+        ctrl = (SCAN_CTRL_EN if enable else 0) | (SCAN_CTRL_TURN if turn else 0)
+        dwell = max(0, int(dwell_us))
+        return (self.write_reg(REG_SCAN_F1_KHZ, f1 & 0xFFFFFFFF) and
+                self.write_reg(REG_SCAN_F2_KHZ, f2 & 0xFFFFFFFF) and
+                self.write_reg(REG_SCAN_DWELL_US, dwell & 0xFFFFFFFF) and
+                self.write_reg(REG_SCAN_CTRL, ctrl))
 
     # ---- высокоуровневые команды ----
 

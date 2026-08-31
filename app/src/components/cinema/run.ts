@@ -1,5 +1,5 @@
-// Главный старт: ESP32-коридор, автоперехват (хост-сканер → handoff в FPGA)
-// или FPGA-ревизия legion без сканера (эфир-стоянка/обход, генерация).
+// Главный старт: ESP32-коридор, онбордовый перехват (плата смотрит эфир)
+// или FPGA-ревизия legion без онбордового обзора (эфир-стоянка/обход, генерация).
 import type { WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
@@ -19,7 +19,7 @@ export async function runSmartStart(opts: {
   pattern?: FpgaSoloPattern;
   /** Автоматический перехват: приоритет сильнейшей или очередь с выдержкой. */
   dispatch?: AutoDispatch;
-  /** Автономный эфир: ручной порог чувствительности (одна стоянка). */
+  /** Автоматический перехват: порог I²+Q² (полка USB-IQ в круге не меряется). */
   detThr?: string;
 }): Promise<boolean> {
   const s = useLegion.getState();
@@ -29,19 +29,18 @@ export async function runSmartStart(opts: {
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
   if (opts.path === "auto") {
-    // Автоматический перехват: сканер → handoff → ARM lb_gated в FPGA.
-    // Волна с ноутбука не участвует — ретранслируется сам эфир (RX→TX).
+    // Онбордовый перехват: после Старта хозяин — SDR. Ноутбук — рубильник.
     s.setScanPattern("fpga");
     if (opts.dispatch) s.setAutoDispatch(opts.dispatch);
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
     if (opts.dwellMs !== undefined) s.setFpgaTurnDwellMs(opts.dwellMs);
+    if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
     s.startScan();
-    // startScan внутри асинхронный (openSdr → scanRunning): ждём подъёма
-    // скан-фазы, иначе честный отказ — причина уже в журнале.
+    if (useLegion.getState().sdrEmulation) return true;
     const t0 = Date.now();
     while (Date.now() - t0 < 8000) {
       const st = useLegion.getState();
-      if (st.scanRunning || st.fpgaBusy || st.fpgaArmed) return true;
+      if (st.fpgaBusy || st.fpgaArmed) return true;
       await new Promise((r) => setTimeout(r, 100));
     }
     return false;

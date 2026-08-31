@@ -6,7 +6,7 @@ import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
 import { detectFromBins, type SdrBackend } from "../sdr/backend";
 import type { Detection, ScanBin } from "../sdr/types";
 
-/** auto = хост-сканер RX. fpga = конвейер на SDR (µs). sweep/band/hop — TX с ноутбука. */
+/** auto = хост-сканер RX. fpga = онбордовый перехват (плата смотрит эфир). sweep/band/hop — TX с ноутбука. */
 export type ScanPattern = "auto" | "sweep" | "band" | "hop" | "fpga";
 
 export interface ScanConfig {
