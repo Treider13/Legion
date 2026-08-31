@@ -60,6 +60,48 @@ BATC, Hackaday, IEEE).
 | [BlueJammer-V2](https://github.com/EmenstaNougat/BlueJammer-V2) | Только разделение UI↔радио (BW16 vs ESP32) и UART с ACK. **Не** копируем NRF24 hop / jam. |
 | ICIE 2017 (STM32F103 + ADF4351 + OLED) | референс-архитектура |
 
+## Смежные открытые репозитории (разбор, код не копировали)
+
+Полный разбор по исходникам (README vs факт, карта на тракт LEGION) —
+[analysis-related-repos.md](analysis-related-repos.md). Ниже — только
+атрибуция; в `app/` / `firmware/` / `fpga/` из этих шести ничего не взято.
+
+| Репозиторий | Лицензия | Что смотрели | Вердикт для LEGION |
+|---|---|---|---|
+| [alexpalms/deeprl-counter-uav-swarm](https://github.com/alexpalms/deeprl-counter-uav-swarm) | MIT | MaskablePPO, назначение 4 эффекторов на 50 дронов, arXiv:2508.00641 | Идея скоринга целей богаче `max(dBm)`. PPO/PK/оружие — не наш тракт |
+| [theYsnS/drone-defense-simulator](https://github.com/theYsnS/drone-defense-simulator) | NOASSERTION | «Радар / ML / РЭБ / Kalman» | Stub без `main.py`. ML = тернарный if. РЭБ = boolean. Не копировать |
+| [Madhava005/Intelligent-Anti-Jamming.](https://github.com/Madhava005/Intelligent-Anti-Jamming.) | MIT | MUSIC + MVDR + табличный Q-learning | MUSIC не связан с MVDR; SINR фальшивый. Без решётки неприменимо |
+| [lhy6968/…Frequency-Agile-Radar](https://github.com/lhy6968/Counterfactual-Regret-Minimization-for-Anti-Jamming-Game-of-Frequency-Agile-Radar) | нет SPDX (IEEE SAM 2022 / arXiv:2202.10049) | Deep CFR, payoff = \(P_d\) | Игра с уравнением радиолокации — да; сети/таблицы — дамп. HOP у нас уже есть |
+| [njavro/SpectralEye](https://github.com/njavro/SpectralEye) | нет | Cesium + опциональный Sionna RT | Карта мощности ≠ «SJR kill». Другой продукт |
+| [AsaqeLee/EW-THREAT-DETECTION-SYSTEM](https://github.com/AsaqeLee/EW-THREAT-DETECTION-SYSTEM) | MIT | Flask, RSS log-distance, 8 виртуальных станций | Скан находит частоту, не координаты. Один SDR ≠ геолокация |
+
+## Ровесники того же класса прибора (разбор, код не копировали)
+
+Полный текст: [analysis-peer-projects.md](analysis-peer-projects.md).
+Клона «ESP32+ADF4351 + bladeRF FPGA-handoff в одном UI» нет.
+
+| Репозиторий | Лицензия | Роль | Чем они лучше / чем мы |
+|---|---|---|---|
+| [circuitvalley/ADF4351_USB_RF_GEN](https://github.com/circuitvalley/ADF4351_USB_RF_GEN) (RFGEN44, 46★) | CC BY-NC-ND | USB HID генератор, своя PCB | Лучше как изделие (HID, sync, опора). Мы — режимами/тестами/SDR. GUI не копировать |
+| [dfannin/siggen4351](https://github.com/dfannin/siggen4351) (24★) | MIT | Arduino + SV1AFN + OCXO/GPSDO | Лучше тракт опоры и ручное управление без ПК |
+| [f4exb/sdrangel](https://github.com/f4exb/sdrangel) (3948★) | GPL-3.0 | SDR RX/TX рабочая станция, есть bladeRF | Лучше спектр/демодуляторы/I/Q/remote. Нет нашего FPGA `lb_gated`. Плагины не копировать |
+| [xmikos/qspectrumanalyzer](https://github.com/xmikos/qspectrumanalyzer) (1445★) | GPL-3.0 | Водопад soapy_power / hackrf_sweep | Лучше обзор спектра. Только RX |
+| [AlexandreRouma/SDRPlusPlus](https://github.com/AlexandreRouma/SDRPlusPlus) (6290★) | GPL-3.0 | Массовый RX UI | Лучше глаз приёмника. Не наш оркестратор |
+| [BatchDrake/SigDigger](https://github.com/BatchDrake/SigDigger) (2880★) | LGPL-3.0 | Инспектор сигнала | Лучше разбор неизвестного I/Q |
+| [portapack-mayhem/mayhem-firmware](https://github.com/portapack-mayhem/mayhem-firmware) (5366★) | GPL-3.0 | HackRF без ноутбука | Лучше автономность в поле. Другое железо; TX-приложения не смотрим |
+
+Итог по идеям сообщества (GitHub + Hackaday + Crowd Supply + EEVblog + BATC +
+стенды Hellmich/dd1us): [analysis-community-ideas.md](analysis-community-ideas.md).
+
+| Источник | Что доказали |
+|---|---|
+| [Hellmich ADF4351 gen](https://www.mariohellmich.de/projects/sig-gen/sig-gen.html) | Банк ФНЧ + замкнутая АРУ + integer-N через DDS; цель по уровню выше 3 ГГц не достигнута (честно) |
+| [ERASynth](https://www.crowdsupply.com/era-instruments/erasynth) / [github.com/erainstruments](https://github.com/erainstruments) | Crowd Supply: dual-loop, калиброванный дБм, AM/FM/pulse, QCoDeS. Это прибор, не модуль |
+| [dd1us PE43702](https://www.dd1us.de/Downloads/ADF4351%20PLL%20module%20with%20OLED%201v3.pdf) | Открытый аттенюатор 0.25 дБ; разброс модуля ~9 дБ |
+| [OK1DX 4g_gen](http://ok1dx.cz/constructions/4g_gen/4g_gen.html) | Стоковый FW врёт частотой; гармоники ниже 2.2 Г — факт |
+| Analog CN-0174, [BATC LO_filters](https://wiki.batc.org.uk/LO_filters) | Банк ФНЧ обязателен, не опция |
+| Hackaday MWGEN-G1 / DSG-22.6GHz | Типичный wishlist: 15–22 ГГц, фильтр «потом», софт не написан |
+
 ## Дизайн (фаза 5)
 
 | Источник | Что взято |
