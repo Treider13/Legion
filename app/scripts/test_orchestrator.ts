@@ -48,6 +48,8 @@ import {
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_TURN_DWELL_MIN_MS,
   FPGA_OBSERVE_MS,
+  FPGA_AIR_GONE_MS,
+  detCountStagnant,
   fpgaTurnDwellUs,
   airTractParams,
   airFsHz,
@@ -89,6 +91,7 @@ import {
   heatRgb,
   nextWaterfallRow,
   rowFromBins,
+  shouldPushWaterfallRow,
 } from "../src/sense/waterfall";
 import { coolingWarn, heroStatusLine } from "../src/components/cinema/status";
 import {
@@ -1336,6 +1339,7 @@ async function main(): Promise<void> {
   );
   check("наблюдение без статуса", fpgaObserveLine(null).includes("наблюдает"));
   check("опрос водопада 80 мс", FPGA_OBSERVE_MS === 80);
+  check("стагнация — 1.2 с, не 3 тика × 80 мс", FPGA_AIR_GONE_MS === 1200);
   check("dBm −110 → 0, −40 → 1", dbmToUnit(-110) === 0 && dbmToUnit(-40) === 1);
   const wr = rowFromBins(
     [
@@ -1348,6 +1352,32 @@ async function main(): Promise<void> {
     8,
   );
   check("хост-FFT: пик в середине коридора", wr[3] > 0.7 && wr[0] < 0.2 && wr[7] < 0.2);
+  const wrWin = rowFromBins(
+    [
+      { freqMhz: 2420, powerDbm: -50 },
+      { freqMhz: 2440, powerDbm: -40 },
+      { freqMhz: 2460, powerDbm: -50 },
+    ],
+    2400,
+    2500,
+    20,
+  );
+  check("хост-FFT: вне окна бинов тишина, не полка последнего бина", wrWin[0] === 0 && wrWin[19] === 0);
+  check("хост-FFT: внутри окна 40 МГц есть энергия", wrWin[8] > 0.5 || wrWin[9] > 0.5);
+  check("водопад: стоянка живая — строка по времени", shouldPushWaterfallRow(70, 70, true, false));
+  check("водопад: простой без смены ключа — не скроллит", !shouldPushWaterfallRow(70, 70, false, false));
+  check("водопад: раньше интервала — нет", !shouldPushWaterfallRow(69, 70, true, true));
+  {
+    const a = detCountStagnant(null, 4, null, 1000);
+    const b = detCountStagnant(4, 4, a.stagnantSinceMs, 1000);
+    const c = detCountStagnant(4, 4, b.stagnantSinceMs, 2199);
+    const d = detCountStagnant(4, 4, b.stagnantSinceMs, 2200);
+    const e = detCountStagnant(4, 5, b.stagnantSinceMs, 3000);
+    check("стагнация: первый счётчик не gone", !a.gone && a.stagnantSinceMs === null);
+    check("стагнация: 1199 мс ещё держит", !c.gone && b.stagnantSinceMs === 1000);
+    check("стагнация: 1200 мс = пропал", d.gone);
+    check("стагнация: рост det_count сбрасывает", !e.gone && e.stagnantSinceMs === null);
+  }
   const look = new Float32Array(8);
   applyLook(look, 2400, 2500, 2444, 28, 0.9);
   check("взгляд FPGA: 2444 красит середину, не край", look[3] > 0.8 && look[0] === 0);
@@ -1919,7 +1949,11 @@ async function main(): Promise<void> {
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));
   check("fpgaPollStatus: ротация ОБЫЧНОГО по выдержке до стагнации",
     storeSrc.includes("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") &&
-    storeSrc.indexOf("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") < storeSrc.indexOf("gDetStagnantPolls += 1"));
+    storeSrc.indexOf("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") < storeSrc.indexOf("detCountStagnant("));
+  check("опрос STATUS не копится: inflight как у air-walk",
+    storeSrc.includes("if (gFpgaObserveInflight) return") && storeSrc.includes("gFpgaObserveInflight = true"));
+  check("stale STATUS после СТОП/нового ARM отбрасывается",
+    storeSrc.includes("if (obsGen !== gFpgaObserveGen) return") && storeSrc.includes("gFpgaObserveGen += 1"));
   check("автовозврат по стагнации работает в обоих dispatch",
     storeSrc.includes("await fpgaReturnToScan(mhz);"));
 

@@ -56,7 +56,7 @@ import { isTauriRuntime } from "../transport/types";
 import { HandoffGate, planHandoff, type HandoffPlan } from "../sense/fastpath";
 import {
   FPGA_AIR_BW_DEFAULT_MHZ,
-  FPGA_AIR_GONE_POLLS,
+  FPGA_AIR_GONE_MS,
   FPGA_OBSERVE_MS,
   FPGA_DEFAULT_DET_THR,
   FPGA_DET_THR_FLOOR,
@@ -67,6 +67,7 @@ import {
   airTractParams,
   clampDetShift,
   captureParkMhz,
+  detCountStagnant,
   detCaptureWindows,
   detThrFromMedian,
   fpgaAirSupported,
@@ -448,6 +449,10 @@ let gTxWatch: ReturnType<typeof setInterval> | null = null;
 let gFpgaKick: ReturnType<typeof setInterval> | null = null;
 /** Телеметрия наблюдения (не тракт): ноутбук читает статус, конвейер на SDR. */
 let gFpgaObserve: ReturnType<typeof setInterval> | null = null;
+/** Поколение наблюдения: СТОП/новый kick рвёт stale STATUS. */
+let gFpgaObserveGen = 0;
+/** STATUS RPC > тика — не копим очередь и не даём старому ответу перетереть новый. */
+let gFpgaObserveInflight = false;
 /** Момент, когда deadman железа последний раз был доказанно сброшен: ARM
  *  (enable 0→1 обнуляет счётчик watchdog, legion_watchdog.vhd) или успешный
  *  kick. Status-опрос сюда НЕ входит: чтение STATUS не кормит watchdog —
@@ -487,6 +492,9 @@ function stopFpgaObserve(): void {
     clearInterval(gFpgaObserve);
     gFpgaObserve = null;
   }
+  // In-flight STATUS после СТОП/нового ARM не должен красить lastForward
+  // и тем более звать DISARM уже другой сессии (окно хуже при тике 80 мс).
+  gFpgaObserveGen += 1;
 }
 
 /** Эфирный FPGA-тракт (lb_*): bladeRF 2.0 micro xA4/xA9 (AD9361 — после
@@ -585,9 +593,9 @@ let gHandoffFailAt = 0;
 void gHandoffFailAt;
 /** Страйки подряд на той же частоте: пауза 10→20→40 с, на 3-й — skip. */
 let gHandoffStrikes = 0;
-/** Автовозврат из ARM: det_count не растёт N опросов подряд = энергия пропала. */
+/** Автовозврат из ARM: det_count не растёт FPGA_AIR_GONE_MS = энергия пропала. */
 let gLastDetCount: number | null = null;
-let gDetStagnantPolls = 0;
+let gDetStagnantSinceMs: number | null = null;
 /** Последнее залогированное предупреждение шлюза (длительная работа) — не спамим. */
 let gArmWarnLast = "";
 /** Поколение авто-цикла FPGA+сканер: инкрементит операторский СТОП.
@@ -1187,7 +1195,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
       gLastDetCount = null;
-      gDetStagnantPolls = 0;
+      gDetStagnantSinceMs = null;
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
       const relRet = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
       if (!relRet.ok) pushLog("sys", `FPGA USB release: ${relRet.reason ?? "отказ"}`);
@@ -1378,7 +1386,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gHandoffFailMhz = null;
       gHandoffStrikes = 0;
       gLastDetCount = null;
-      gDetStagnantPolls = 0;
+      gDetStagnantSinceMs = null;
       gFpgaTurnLastMhz = mhz;
       set({
         fpgaArmed: true,
@@ -2440,7 +2448,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "FPGA solo: отменён оператором в полёте");
         stopSoloWalk();
         // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
-        // иначе осиротевший опрос статуса тикал бы 400 мс до следующей сессии.
+        // иначе осиротевший опрос статуса тикал бы до следующей сессии.
         stopFpgaKick();
         stopFpgaObserve();
         if (justArmed || get().fpgaArmed) {
@@ -2957,13 +2965,18 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (!get().sdrOpened && !get().sdrEmulation) await get().openSdr();
       }
       gLastDetCount = null;
-      gDetStagnantPolls = 0;
+      gDetStagnantSinceMs = null;
       gHandoffFailMhz = null;
       gHandoffStrikes = 0;
     },
 
     fpgaPollStatus: async () => {
+      if (gFpgaObserveInflight) return;
+      gFpgaObserveInflight = true;
+      const obsGen = gFpgaObserveGen;
+      try {
       const r = await hostFpga({ op: "status", token: get().fpgaToken }, get().sdrGateway);
+      if (obsGen !== gFpgaObserveGen) return;
       set({ fpgaStatus: r });
       if (r.legion !== undefined) set({ fpgaLegion: r.legion });
       if (r.ok && r.freq_mhz && r.freq_mhz > 0 && get().fpgaArmed) {
@@ -3000,9 +3013,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         return;
       }
-      // Автовозврат «энергия пропала»: det_count не растёт N опросов подряд.
+      // Автовозврат «энергия пропала»: det_count не растёт FPGA_AIR_GONE_MS.
       // Уровень det_active семплировался бы с пропусками коротких гейтов —
-      // счётчик монотонен и от фазы опроса не зависит.
+      // счётчик монотонен и от фазы опроса не зависит. Не «N опросов»:
+      // тик 80 мс иначе сжёг бы 1.2 с до 240 мс.
       if (autoAir && r.ok && !gFpgaHandoffBusy) {
         // ОБЫЧНЫЙ: выдержка на частоте истекла — ротация на следующую живую,
         // даже если энергия ещё есть. Без skip: частота не мертва, к ней
@@ -3023,21 +3037,21 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
         }
         const dc = r.det_count ?? 0;
-        if (gLastDetCount !== null && dc === gLastDetCount) {
-          gDetStagnantPolls += 1;
-        } else {
-          gDetStagnantPolls = 0;
-        }
+        const stagnant = detCountStagnant(gLastDetCount, dc, gDetStagnantSinceMs, Date.now());
         gLastDetCount = dc;
-        if (gDetStagnantPolls >= FPGA_AIR_GONE_POLLS) {
+        gDetStagnantSinceMs = stagnant.stagnantSinceMs;
+        if (stagnant.gone) {
           const mhz = get().lastForwardMhz;
           pushLog(
             "sys",
-            `Автоперехват: сигнал пропал (${FPGA_AIR_GONE_POLLS} опросов без детекта) — ` +
+            `Автоперехват: сигнал пропал (${FPGA_AIR_GONE_MS} мс без роста det_count) — ` +
               `DISARM, возврат к скану${mhz != null ? `, skip ${mhz.toFixed(3)} МГц` : ""}`,
           );
           await fpgaReturnToScan(mhz);
         }
+      }
+      } finally {
+        gFpgaObserveInflight = false;
       }
     },
 

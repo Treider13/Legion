@@ -19,7 +19,8 @@ export function colOfMhz(mhz: number, f1: number, f2: number, cols: number): num
   return Math.min(cols - 1, Math.max(0, Math.floor(x)));
 }
 
-/** Одна строка из живого Welch/FFT хоста. */
+/** Одна строка из живого Welch/FFT хоста. Колонки вне окна бинов — тишина,
+ *  не «последний бин на весь коридор» (хост-FFT 40 МГц ≠ коридор 100 МГц). */
 export function rowFromBins(
   bins: readonly ScanBin[],
   f1: number,
@@ -28,9 +29,19 @@ export function rowFromBins(
 ): Float32Array {
   const row = new Float32Array(cols);
   if (bins.length === 0 || !(f2 > f1)) return row;
+  let winLo = bins[0].freqMhz;
+  let winHi = bins[0].freqMhz;
+  for (let k = 1; k < bins.length; k++) {
+    const f = bins[k].freqMhz;
+    if (f < winLo) winLo = f;
+    if (f > winHi) winHi = f;
+  }
+  const step = bins.length >= 2 ? Math.abs(bins[1].freqMhz - bins[0].freqMhz) : 0;
+  const pad = step > 1e-9 ? step * 0.5 : 0;
   let i = 0;
   for (let c = 0; c < cols; c++) {
     const mhz = f1 + ((c + 0.5) / cols) * (f2 - f1);
+    if (mhz < winLo - pad || mhz > winHi + pad) continue;
     while (i + 1 < bins.length && bins[i + 1].freqMhz < mhz) i += 1;
     const a = bins[i];
     const b = bins[Math.min(bins.length - 1, i + 1)];
@@ -40,6 +51,18 @@ export function rowFromBins(
     row[c] = dbmToUnit(dbm);
   }
   return row;
+}
+
+/** Живой кадр — строка по времени, не только когда сменился ключ LO/бина.
+ *  Иначе стоянка (тот же центр, та же полка) замораживает водопад. */
+export function shouldPushWaterfallRow(
+  elapsedMs: number,
+  intervalMs: number,
+  live: boolean,
+  keyChanged: boolean,
+): boolean {
+  if (!(elapsedMs >= intervalMs)) return false;
+  return live || keyChanged;
 }
 
 /** Записать энергию текущего взгляда FPGA в композит (остальные колонки живы).

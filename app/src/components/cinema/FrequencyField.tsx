@@ -6,6 +6,7 @@ import {
   WATERFALL_ROWS,
   heatRgb,
   nextWaterfallRow,
+  shouldPushWaterfallRow,
 } from "../../sense/waterfall";
 import { useLegion } from "../../state/store";
 
@@ -51,6 +52,7 @@ export function FrequencyField() {
     let composite: Float32Array | null = null;
     let lastPush = 0;
     let lastKey = "";
+    let heatDirty = true;
     let raf = 0;
     let alive = true;
     const off = document.createElement("canvas");
@@ -91,7 +93,7 @@ export function FrequencyField() {
       const key = st.fpgaArmed
         ? `f:${fpgaMhz ?? 0}:${det}:${st.fpgaStatus?.det_count ?? 0}`
         : `b:${st.scanBins.length}:${st.scanBins[0]?.powerDbm ?? 0}:${st.scanCenterMhz ?? 0}`;
-      if (t - lastPush >= 70 && key !== lastKey) {
+      if (shouldPushWaterfallRow(t - lastPush, 70, st.scanRunning || st.fpgaArmed, key !== lastKey)) {
         const row = nextWaterfallRow(
           composite,
           {
@@ -115,12 +117,16 @@ export function FrequencyField() {
         }
         lastKey = key;
         lastPush = t;
+        heatDirty = true;
       }
 
       const rows = history.length > 0 ? history : [];
-      if (rows.length > 0) {
-        if (offCtx) {
-          if (off.height !== rows.length) off.height = rows.length;
+      if (rows.length > 0 && offCtx) {
+        if (off.height !== rows.length) {
+          off.height = rows.length;
+          heatDirty = true;
+        }
+        if (heatDirty) {
           const img = offCtx.createImageData(WATERFALL_COLS, rows.length);
           for (let r = 0; r < rows.length; r++) {
             const src = rows[r];
@@ -134,9 +140,10 @@ export function FrequencyField() {
             }
           }
           offCtx.putImageData(img, 0, 0);
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(off, pad, 8, plotW, wfH);
+          heatDirty = false;
         }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, pad, 8, plotW, wfH);
       }
 
       const latest = rows.length > 0 ? rows[rows.length - 1] : null;
