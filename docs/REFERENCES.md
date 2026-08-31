@@ -60,6 +60,21 @@ BATC, Hackaday, IEEE).
 | [BlueJammer-V2](https://github.com/EmenstaNougat/BlueJammer-V2) | Только разделение UI↔радио (BW16 vs ESP32) и UART с ACK. **Не** копируем NRF24 hop / jam. |
 | ICIE 2017 (STM32F103 + ADF4351 + OLED) | референс-архитектура |
 
+## Смежные открытые репозитории (разбор, код не копировали)
+
+Полный разбор по исходникам (README vs факт, карта на тракт LEGION) —
+[analysis-related-repos.md](analysis-related-repos.md). Ниже — только
+атрибуция; в `app/` / `firmware/` / `fpga/` из этих шести ничего не взято.
+
+| Репозиторий | Лицензия | Что смотрели | Вердикт для LEGION |
+|---|---|---|---|
+| [alexpalms/deeprl-counter-uav-swarm](https://github.com/alexpalms/deeprl-counter-uav-swarm) | MIT | MaskablePPO, назначение 4 эффекторов на 50 дронов, arXiv:2508.00641 | Идея скоринга целей богаче `max(dBm)`. PPO/PK/оружие — не наш тракт |
+| [theYsnS/drone-defense-simulator](https://github.com/theYsnS/drone-defense-simulator) | NOASSERTION | «Радар / ML / РЭБ / Kalman» | Stub без `main.py`. ML = тернарный if. РЭБ = boolean. Не копировать |
+| [Madhava005/Intelligent-Anti-Jamming.](https://github.com/Madhava005/Intelligent-Anti-Jamming.) | MIT | MUSIC + MVDR + табличный Q-learning | MUSIC не связан с MVDR; SINR фальшивый. Без решётки неприменимо |
+| [lhy6968/…Frequency-Agile-Radar](https://github.com/lhy6968/Counterfactual-Regret-Minimization-for-Anti-Jamming-Game-of-Frequency-Agile-Radar) | нет SPDX (IEEE SAM 2022 / arXiv:2202.10049) | Deep CFR, payoff = \(P_d\) | Игра с уравнением радиолокации — да; сети/таблицы — дамп. HOP у нас уже есть |
+| [njavro/SpectralEye](https://github.com/njavro/SpectralEye) | нет | Cesium + опциональный Sionna RT | Карта мощности ≠ «SJR kill». Другой продукт |
+| [AsaqeLee/EW-THREAT-DETECTION-SYSTEM](https://github.com/AsaqeLee/EW-THREAT-DETECTION-SYSTEM) | MIT | Flask, RSS log-distance, 8 виртуальных станций | Скан находит частоту, не координаты. Один SDR ≠ геолокация |
+
 ## Дизайн (фаза 5)
 
 | Источник | Что взято |

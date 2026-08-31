@@ -31,7 +31,7 @@ ESP32 принимает её и физически настраивает чи�
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
 | FPGA-ревизия legion | `fpga/` | ревизия `legion` для bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза, NIOS-подъём эфира на micro (AIR-регистры); цикл «сканер → handoff → lb_gated» — режим FPGA+СКАНЕР; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; сборка и запись образа из приложения — вкладка **КАСТОМ FPGA** (СОБРАТЬ → ПРОШИТЬ); см. `fpga/README.md` |
-| Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита |
+| Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита, разбор смежных репозиториев |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 
 ## Возможности
@@ -167,7 +167,8 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 [dependencies](docs/dependencies.md) · [module-quirks](docs/module-quirks.md) ·
 [compliance](docs/compliance.md) ·
 [REFERENCES](docs/REFERENCES.md) · [datasheet-facts](docs/datasheet-facts.md) ·
-[analysis-upgrade](docs/analysis-upgrade.md)
+[analysis-upgrade](docs/analysis-upgrade.md) ·
+[analysis-related-repos](docs/analysis-related-repos.md)
 
 ## Правовая заметка
 
