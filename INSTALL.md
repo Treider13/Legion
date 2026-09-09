@@ -27,7 +27,9 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm \
   Если пакета нет в вашей сборке Ubuntu — соберите из
   [Nuand/bladeRF](https://github.com/Nuand/bladeRF) (host).
 - **SoapySDR + модуль bladeRF** — сканер и стримы. SoapySDR **не ставится
-  через pip**: нужен системный биндинг (`python3-soapysdr`).
+  через pip**: нужен системный биндинг (`python3-soapysdr`). venv — только
+  с `--system-site-packages`. Если `import SoapySDR` падает при установленном
+  пакете (deadsnakes/другой python) — `LEGION_PYTHON=/usr/bin/python3`.
 - **Node.js** — нужен ≥ 20 (лучше 22 LTS). Если в репозитории Ubuntu старая
   версия: [NodeSource](https://github.com/nodesource/distributions) или nvm.
 
@@ -65,7 +67,7 @@ ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
 На современных Ubuntu системный pip блокирован (PEP 668) — ставим в venv:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv --system-site-packages .venv && source .venv/bin/activate
 pip install -r tools/requirements.txt -r fpga/requirements.txt
 ```
 

@@ -41,12 +41,51 @@ fn worker_path(app: &AppHandle) -> Result<PathBuf, String> {
     Err("sdr_worker.py не найден (tools/ или LEGION_SDR_WORKER)".into())
 }
 
-fn python_bin() -> &'static str {
-    if Command::new("python3").arg("-c").arg("1").output().is_ok() {
-        "python3"
-    } else {
-        "python"
+/// python3 из PATH часто venv или deadsnakes — там нет apt-пакета python3-soapysdr.
+/// Сначала системный интерпретатор, у которого `import SoapySDR` проходит.
+/// Принудительно: LEGION_PYTHON=/usr/bin/python3
+fn python_bin() -> PathBuf {
+    resolve_python(std::env::var("LEGION_PYTHON").ok().as_deref())
+}
+
+fn python_imports(bin: &Path, module: &str) -> bool {
+    Command::new(bin)
+        .args(["-c", &format!("import {module}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn resolve_python(override_bin: Option<&str>) -> PathBuf {
+    if let Some(p) = override_bin.map(str::trim).filter(|s| !s.is_empty()) {
+        return PathBuf::from(p);
     }
+    let mut cands: Vec<PathBuf> = vec![PathBuf::from("/usr/bin/python3")];
+    for name in [
+        "python3",
+        "python3.14",
+        "python3.13",
+        "python3.12",
+        "python3.11",
+        "python",
+    ] {
+        if let Some(p) = which(name) {
+            cands.push(p);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for c in cands {
+        if !seen.insert(c.clone()) {
+            continue;
+        }
+        if python_imports(&c, "SoapySDR") {
+            return c;
+        }
+    }
+    which("python3").unwrap_or_else(|| PathBuf::from("python3"))
 }
 
 fn spawn_reader(stdout: std::process::ChildStdout) -> Receiver<Result<String, String>> {
@@ -229,11 +268,14 @@ fn which(bin: &str) -> Option<PathBuf> {
 
 #[tauri::command]
 pub fn sdr_host_info() -> Result<serde_json::Value, String> {
+    let py = python_bin();
     Ok(serde_json::json!({
         "hasBladeRfCli": which("bladeRF-cli").is_some(),
         "hasUhdLoader": which("uhd_image_loader").is_some(),
         "hasHackrfFlash": which("hackrf_spiflash").is_some(),
         "hasSoapyUtil": which("SoapySDRUtil").is_some(),
+        "python": py.to_string_lossy(),
+        "hasSoapyPython": python_imports(&py, "SoapySDR"),
     }))
 }
 
@@ -267,5 +309,14 @@ mod tests {
             &["--args=type=usrp2,addr=192.168.10.2".into(), format!("--other={f}")],
             f
         ));
+    }
+
+    #[test]
+    fn python_override_wins() {
+        assert_eq!(
+            resolve_python(Some("/opt/legion/python3")),
+            PathBuf::from("/opt/legion/python3")
+        );
+        assert_eq!(resolve_python(Some("  ")).file_name().is_some(), true);
     }
 }

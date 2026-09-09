@@ -91,7 +91,7 @@ ESP32 принимает её и физически настраивает чи�
 2. **Прошить ESP32** (PlatformIO ставим в venv — на современных Ubuntu/Debian
    системный pip блокирован PEP 668):
    ```bash
-   python3 -m venv .venv && source .venv/bin/activate
+   python3 -m venv --system-site-packages .venv && source .venv/bin/activate
    pip install platformio
    cd firmware
    pio run -e esp32-s3 --target upload        # env под вашу плату

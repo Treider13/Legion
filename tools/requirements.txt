@@ -5,6 +5,7 @@ pyserial>=3.5
 numpy>=1.26
 # SoapySDR — НЕ pip (биндинг к libSoapySDR). На ПК/шлюзе:
 #   sudo apt install python3-soapysdr soapysdr-tools python3-numpy
+# venv только с --system-site-packages; иначе import SoapySDR падает.
 #   # bladeRF x40 / micro:
 #   sudo apt install soapysdr-module-bladerf
 # Без модуля воркер открывает Device() и честно падает на enumerate/open.
