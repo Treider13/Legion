@@ -43,6 +43,8 @@ def main() -> int:
     sys.path.insert(0, str(ROOT))
     import sdr_worker as w
 
+    check("подсказка Soapy про venv/deadsnakes",
+          "LEGION_PYTHON" in w.soapy_missing_reason() and "system-site-packages" in w.soapy_missing_reason())
     check("SoapyRemote args", w.parse_args("driver=remote,remote=tcp://10.0.0.5:55132") == {
         "driver": "remote",
         "remote": "tcp://10.0.0.5:55132",

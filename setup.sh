@@ -50,9 +50,9 @@ if [ -f .venv/bin/activate ]; then
   PY=python
   ok "venv .venv активирован"
 else
-  warn "venv не создан — python3 -m venv .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt"
+  warn "venv не создан — python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt"
   if [ "$INSTALL" = "1" ]; then
-    python3 -m venv .venv && . .venv/bin/activate && PY=python && ok "venv .venv создан"
+    python3 -m venv --system-site-packages .venv && . .venv/bin/activate && PY=python && ok "venv .venv создан"
   fi
 fi
 
@@ -91,6 +91,9 @@ fi
 echo "== SoapySDR (сканер/стримы; pip не подходит — только системный биндинг) =="
 if $PY -c "import SoapySDR" 2>/dev/null; then
   ok "python3-soapysdr"
+elif /usr/bin/python3 -c "import SoapySDR" 2>/dev/null; then
+  ok "python3-soapysdr в /usr/bin/python3 (этот venv/python его не видит)"
+  warn "пересоздайте venv: python3 -m venv --system-site-packages .venv  или  LEGION_PYTHON=/usr/bin/python3"
 else
   miss "python3-soapysdr — sudo apt install python3-soapysdr soapysdr-tools"
   maybe "soapysdr" sudo apt install -y python3-soapysdr soapysdr-tools

@@ -40,8 +40,49 @@ SOAPY_SDR_CORRUPTION = -3
 SOAPY_SDR_OVERFLOW = -4
 SOAPY_SDR_UNDERFLOW = -7
 
-try:
-    import SoapySDR
+def _import_soapy():
+    """apt python3-soapysdr кладёт модуль в dist-packages системного python.
+    venv без --system-site-packages и python с deadsnakes его не видят."""
+    try:
+        import SoapySDR as soapy
+
+        return soapy
+    except ImportError:
+        pass
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    extra = (
+        f"/usr/lib/python{ver}/dist-packages",
+        "/usr/lib/python3/dist-packages",
+        "/usr/local/lib/python3/dist-packages",
+    )
+    for p in extra:
+        if p in sys.path or not os.path.isfile(os.path.join(p, "SoapySDR.py")):
+            continue
+        sys.path.insert(0, p)
+        try:
+            import SoapySDR as soapy
+
+            return soapy
+        except Exception:
+            try:
+                sys.path.remove(p)
+            except ValueError:
+                pass
+    return None
+
+
+def soapy_missing_reason() -> str:
+    exe = sys.executable
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    return (
+        f"SoapySDR нет в {exe} (Python {ver}) — пакет python3-soapysdr "
+        "ставится в системный python, не в venv и не в deadsnakes. "
+        "LEGION_PYTHON=/usr/bin/python3 или: python3 -m venv --system-site-packages .venv"
+    )
+
+
+SoapySDR = _import_soapy()
+if SoapySDR is not None:
     from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_RX, SOAPY_SDR_TX
 
     SOAPY = True
@@ -50,8 +91,7 @@ try:
     SOAPY_SDR_CORRUPTION = int(getattr(SoapySDR, "SOAPY_SDR_CORRUPTION", SOAPY_SDR_CORRUPTION))
     SOAPY_SDR_OVERFLOW = int(getattr(SoapySDR, "SOAPY_SDR_OVERFLOW", SOAPY_SDR_OVERFLOW))
     SOAPY_SDR_UNDERFLOW = int(getattr(SoapySDR, "SOAPY_SDR_UNDERFLOW", SOAPY_SDR_UNDERFLOW))
-except ImportError:
-    SoapySDR = None  # type: ignore
+else:
     # Constants.h: TX=0 RX=1 — те же числа без модуля, чтобы park() и тесты
     # с mock-Device не сравнивали направление с None.
     SOAPY_SDR_CF32 = "CF32"
@@ -937,7 +977,7 @@ class Radio:
                 }
             return {"ok": True, "reason": "FAKE worker — не эфир", "fake": True, "hardwareKey": ""}
         if not SOAPY:
-            return {"ok": False, "reason": "SoapySDR Python не установлен (пакет python3-soapysdr / pip SoapySDR)"}
+            return {"ok": False, "reason": soapy_missing_reason()}
         if not NUMPY:
             return {
                 "ok": False,
@@ -1896,7 +1936,7 @@ def probe(args: str = "") -> dict[str, Any]:
         "numpy": NUMPY,
         "fake": FAKE,
         "devices": found,
-        "reason": "SoapySDR ок" if SOAPY else "SoapySDR не найден — поставьте python3-soapysdr на хосте/шлюзе",
+        "reason": "SoapySDR ок" if SOAPY else soapy_missing_reason(),
     }
 
 

@@ -1856,6 +1856,7 @@ async function main(): Promise<void> {
   const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
   check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",
     setupSrc.includes("SoapySDRUtil --info") && !setupSrc.includes("SoapySDRUtil --find"));
+  check("setup.sh: venv видит apt SoapySDR", setupSrc.includes("--system-site-packages"));
   const installSrc = readFileSync(join(here, "../../INSTALL.md"), "utf8");
   check("INSTALL.md: Quartus, приёмка, шлюз",
     installSrc.includes("Quartus Prime Lite 23.1.1") && installSrc.includes("run_acceptance.sh")
@@ -2022,6 +2023,8 @@ async function main(): Promise<void> {
   check("legion: вкладка в режиме SDR", modeOf("sdrCustom") === "sdr");
   const sdrRs = readFileSync(join(here, "../src-tauri/src/sdr.rs"), "utf8");
   check("legion: sdr_flash allowlist без скрипта сборки", !sdrRs.includes("build_bladerf"));
+  check("rust: воркер берёт python с import SoapySDR, не первый python3 в PATH",
+    sdrRs.includes("LEGION_PYTHON") && sdrRs.includes("import SoapySDR") && sdrRs.includes("/usr/bin/python3"));
   const legionRust = readFileSync(join(here, "../src-tauri/src/legion_build.rs"), "utf8");
   check("rust: таблица плат как в TS", legionRust.includes('("bladeRF", "40")') && legionRust.includes('("bladeRF-micro", "A9")'));
   check("rust: сборка через nios shell + build_bladerf.sh", legionRust.includes("nios2_command_shell.sh") && legionRust.includes("./build_bladerf.sh -b {board} -s {size} -r legion"));
