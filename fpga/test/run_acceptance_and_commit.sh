@@ -11,7 +11,7 @@
 # git add -f — и ТОЛЬКО при ALL PASS. Красный прогон не коммитится никогда.
 #
 # Коды возврата: 0 — ALL PASS и отчёт закоммичен (или --no-commit);
-# 1 — приёмка FAIL (ничего не закоммичено); 2 — ошибка вызова/отказ коммита.
+# 1 — FAIL; 2 — ошибка вызова/отказ коммита; 3 — неполная приёмка.
 set -u
 cd "$(dirname "$0")/../.." || { echo "FAIL: не удалось перейти в корень репозитория" >&2; exit 2; }
 
@@ -34,22 +34,9 @@ commit_report() {
   [ -f "$json" ] || { echo "FAIL: отчёт не найден: $json" >&2; return 2; }
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || { echo "FAIL: не git-репозиторий — коммитить некуда" >&2; return 2; }
-  # Коммитим только ЗЕЛЁНЫЙ отчёт: ok=true в JSON (а не по коду возврата
-  # чужого скрипта — файл читаем сами, доверия по слову нет).
-  python3 - "$json" <<'PYEOF'
-import json, sys
-try:
-    rep = json.load(open(sys.argv[1]))
-except Exception as e:
-    print(f"FAIL: отчёт не читается как JSON: {e}", file=sys.stderr)
-    sys.exit(2)
-if rep.get("ok") is not True:
-    print(f"FAIL: отчёт НЕ зелёный (ok={rep.get('ok')}, fails={rep.get('fails')}) — не коммитим", file=sys.stderr)
-    sys.exit(1)
-board = rep.get("board") or "?"
-ts = rep.get("ts") or "?"
-print(f"ОТЧЁТ ЗЕЛЁНЫЙ: плата {board}, время {ts}, проверок {len(rep.get('checks', []))}")
-PYEOF
+  # Проверяем схему, все обязательные этапы и согласованность результатов.
+  # Старого ok=true недостаточно; UNKNOWN/SKIP не означают полный PASS.
+  python3 fpga/test/acceptance_report.py "$json"
   local pyrc=$?
   [ "$pyrc" = "0" ] || return "$pyrc"
   # Чужие staged-изменения не подхватываем: коммит должен содержать ровно
@@ -62,13 +49,13 @@ PYEOF
   # results/ под .gitignore осознанно (локальные логи стендов) — нужен -f.
   git add -f "$json" ${log:+"$log"} || { echo "FAIL: git add не удался" >&2; return 2; }
   local board ts
-  board=$(python3 -c "import json; print(json.load(open('$json')).get('board') or 'board?')" 2>/dev/null)
+  board=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("board") or "board?")' "$json" 2>/dev/null)
   ts=$(basename "$json" .json | sed 's/^acceptance-//')
   git commit -m "test(acceptance): E1–E6 ALL PASS на стенде ($board, $ts)
 
 Стендовый прогон fpga/test/run_acceptance.sh; отчёт и лог — в
-fpga/test/results/. По правилу репозитория только с этого момента система
-на этой плате считается стабильной." || { echo "FAIL: git commit не удался" >&2; return 2; }
+fpga/test/results/. Зафиксированы результаты перечисленных этапов;
+они не являются доказательством отсутствия всех ошибок системы." || { echo "FAIL: git commit не удался" >&2; return 2; }
   echo "ОТЧЁТ ЗАКОММИЧЕН: $json${log:+ $log}"
   return 0
 }
@@ -83,14 +70,21 @@ if [ -n "$ONLY_JSON" ]; then
 fi
 
 # --- Режим прогона: run_acceptance.sh, затем коммит при ALL PASS ------------
-RUN_LOG=$(mktemp)
+RUN_LOG=$(mktemp) || exit 2
 fpga/test/run_acceptance.sh "${ARGS[@]}" 2>&1 | tee "$RUN_LOG"
-RC=${PIPESTATUS[0]}
+PIPE_RC=("${PIPESTATUS[@]}")
+RC=${PIPE_RC[0]}
+if [ "${PIPE_RC[1]}" != "0" ]; then
+  echo "FAIL: журнал запуска не удалось сохранить" >&2
+  RC=1
+fi
 
 if [ "$RC" != "0" ]; then
   echo
   if [ "$RC" = "2" ]; then
     echo "Приёмка не запускалась (ошибка вызова/предусловия) — коммитить нечего." >&2
+  elif [ "$RC" = "3" ]; then
+    echo "Приёмка INCOMPLETE: обязательные проверки не подтверждены — отчёт НЕ коммитим." >&2
   else
     echo "Приёмка НЕ пройдена (код $RC) — отчёт НЕ коммитим." >&2
     echo "Красный прогон = блокирующий дефект: сначала исправление, потом эксплуатация." >&2
