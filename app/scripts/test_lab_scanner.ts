@@ -2,7 +2,10 @@
 // LEGION — лабораторный PSD / журнал xA4. Не эфир, не STA/SMA PASS.
 // Запуск: npx tsx scripts/test_lab_scanner.ts
 // ============================================================================
-import { detectFromBins, estimateNoiseFloor, MockSdrBackend } from "../src/sdr/backend";
+import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, MockSdrBackend } from "../src/sdr/backend";
+import { allocAtMhz, bandsInSpan, FREQ_EUROPE_XA4 } from "../src/sense/labAlloc";
+import { PersistentDisplay, RTS_CALIBRATE_MS } from "../src/sense/labPersist2d";
+import { SpurFilter } from "../src/sense/labSpur";
 import { catalogById } from "../src/sdr/catalog";
 import {
   LAB_BASELINE_DEFAULT_SEC,
@@ -304,6 +307,43 @@ async function main(): Promise<void> {
   check("store JSR Pj=10", L().labJsr?.pJ === 10);
   const file = L().exportLabJournal();
   check("export не PASS", file.staSma === "FAIL-closed" && file.device === "bladerf-micro-xa4");
+
+  check("hop после crop = 20, не analog 56", hostPaintSpanMhz(56) === 20);
+  check("cropPsdBins как soapy half", cropPsdBins(["a", "b", "c", "d", "e", "f", "g", "h"]).join() === "c,d,e,f");
+
+  const spur = new SpurFilter(6, 4, 4, 8);
+  const spurFloor = Array.from({ length: 32 }, (_, i) => ({ freqMhz: 2400 + i, powerDbm: -90 }));
+  const spiked = spurFloor.map((b, i) => (i === 16 ? { ...b, powerDbm: -40 } : b));
+  for (let i = 0; i < 8; i++) spur.filter(spiked);
+  check("шпора калибруется за validIterations", spur.isCalibrated() === true);
+  const cleaned = spur.filter(spiked);
+  check("после калибровки стабильная шпора снята", (cleaned[16].powerDbm ?? 0) < -70);
+  const moving = new SpurFilter(6, 4, 4, 8);
+  for (let i = 0; i < 8; i++) {
+    moving.filter(spurFloor.map((b, j) => (j === 16 ? { ...b, powerDbm: -40 - i * 2 } : b)));
+  }
+  const jittered = moving.filter(spiked);
+  check("дрожащий пик > jitter не шпора", (jittered[16].powerDbm ?? 0) > -50);
+
+  const rtsa = new PersistentDisplay(32, 16, 5);
+  const row = Array.from({ length: 32 }, (_, i) => ({ freqMhz: 2400 + i, powerDbm: i === 8 ? -40 : -90 }));
+  for (let t = 0; t < 12; t++) rtsa.push(row, -120, -20, t * 100);
+  rtsa.push(row, -120, -20, RTS_CALIBRATE_MS + 200);
+  const pix = new Uint8ClampedArray(32 * 16 * 4);
+  rtsa.renderRgba(pix);
+  check("RTSA после калибровки не пустой", pix.some((v) => v > 0));
+
+  check("EFIS таблица не пустая (pavsa europe ∩ xA4)", FREQ_EUROPE_XA4.length > 50);
+  check("ISM 2400 есть в EFIS", !!allocAtMhz(2442));
+  check("bandsInSpan 2400–2500 не пустой", bandsInSpan(2400, 2500).length > 0);
+  check("вне таблицы — null", allocAtMhz(12) == null);
+
+  L().setLabShowRtsa(false);
+  L().setLabShowAlloc(false);
+  L().setLabSpurOn(false);
+  check("store тумблеры RTSA/EFIS/шпоры", L().labShowRtsa === false && L().labShowAlloc === false && L().labSpurOn === false);
+  const noHost = await L().runLabIperf();
+  check("iperf без хоста — отказ, не 80 %", noHost === false && (L().labIperf == null || L().labIperf.lostPercent !== 80));
 
   console.log(failures === 0 ? "\nLAB: ALL PASS" : `\nLAB: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

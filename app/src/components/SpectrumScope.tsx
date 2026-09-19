@@ -3,6 +3,8 @@
 // полка 120 с (poc). FPGA даёт взгляд+гейт, не выдуманный FFT.
 import { useEffect, useRef, useState } from "react";
 
+import { allocAtMhz, bandsInSpan } from "../sense/labAlloc";
+import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
 import { dbmToUnit, heatRgb } from "../sense/waterfall";
 import { useLegion } from "../state/store";
@@ -32,6 +34,14 @@ export function SpectrumScope() {
     let raf = 0;
     let alive = true;
     let cursorX = -1;
+    const rtsa = new PersistentDisplay(320, 140);
+    const rtsaCanvas = document.createElement("canvas");
+    rtsaCanvas.width = rtsa.width;
+    rtsaCanvas.height = rtsa.height;
+    const rtsaCtx = rtsaCanvas.getContext("2d");
+    const rtsaImg = rtsaCtx ? rtsaCtx.createImageData(rtsa.width, rtsa.height) : null;
+    let lastRtsaKey = "";
+    let lastAxisKey = "";
 
     const draw = () => {
       if (!alive) return;
@@ -82,6 +92,30 @@ export function SpectrumScope() {
         if (dbHi - dbLo < 20) dbHi = dbLo + 20;
       }
 
+      const axisKey = `${loF}:${hiF}:${live.length}`;
+      if (axisKey !== lastAxisKey) {
+        rtsa.reset();
+        lastAxisKey = axisKey;
+        lastRtsaKey = "";
+      }
+      const rtsaSrc = st.labPsd.composite.length ? st.labPsd.composite : live;
+      if (st.labShowRtsa && rtsaImg && rtsaCtx && rtsaSrc.some((b) => finiteDbm(b.powerDbm))) {
+        const finiteN = rtsaSrc.reduce((n, b) => n + (finiteDbm(b.powerDbm) ? 1 : 0), 0);
+        const peakLive = strongestFinite(rtsaSrc);
+        const rtsaKey = `${st.scanCenterMhz ?? ""}:${finiteN}:${peakLive?.freqMhz ?? ""}:${peakLive?.powerDbm ?? ""}`;
+        if (rtsaKey !== lastRtsaKey) {
+          const y0 = st.labSubtractBaseline ? -120 : dbLo;
+          const y1 = st.labSubtractBaseline ? -20 : dbHi;
+          rtsa.push(rtsaSrc, y0, y1, Date.now());
+          rtsa.renderRgba(rtsaImg.data);
+          rtsaCtx.putImageData(rtsaImg, 0, 0);
+          lastRtsaKey = rtsaKey;
+        }
+        ctx.globalAlpha = 0.88;
+        ctx.drawImage(rtsaCanvas, padL, padT, plotW, plotH);
+        ctx.globalAlpha = 1;
+      }
+
       if (st.labShowPersistence && persist.length) {
         for (let i = 0; i < persist.length; i++) {
           if (!finiteDbm(persist[i].powerDbm)) continue;
@@ -128,6 +162,19 @@ export function SpectrumScope() {
         ctx.fillStyle = "rgba(232,228,220,0.5)";
         ctx.textAlign = "center";
         ctx.fillText(`${f >= 1000 ? (f / 1000).toFixed(f % 1000 === 0 ? 0 : 1) + "G" : f.toFixed(0)}`, x, cssH - 6);
+      }
+
+      if (st.labShowAlloc) {
+        const allocs = bandsInSpan(loF, hiF);
+        ctx.globalAlpha = 0.22;
+        for (const band of allocs) {
+          const x0 = Math.max(padL, xOf(band.f1Mhz));
+          const x1 = Math.min(padL + plotW, xOf(band.f2Mhz));
+          if (x1 - x0 < 1) continue;
+          ctx.fillStyle = "rgba(245,193,108,0.35)";
+          ctx.fillRect(x0, padT + plotH - 7, Math.max(x1 - x0, 1), 7);
+        }
+        ctx.globalAlpha = 1;
       }
 
       const strokeBins = (bins: typeof live, color: string, width: number, dash: number[] = []) => {
@@ -250,10 +297,11 @@ export function SpectrumScope() {
           return acc;
         }, null);
         const dbm = nearest && Math.abs(nearest.freqMhz - mhz) < span / Math.max(live.length, 8) ? nearest.powerDbm : null;
+        const alloc = st.labShowAlloc ? allocAtMhz(mhz) : null;
         const text =
           dbm != null
-            ? `${mhz.toFixed(3)} МГц · ${dbm.toFixed(1)} дБм`
-            : `${mhz.toFixed(3)} МГц · нет бина`;
+            ? `${mhz.toFixed(3)} МГц · ${dbm.toFixed(1)} дБм${alloc ? ` · ${alloc.name}` : ""}`
+            : `${mhz.toFixed(3)} МГц · нет бина${alloc ? ` · ${alloc.name}` : ""}`;
         if (text !== readoutRef.current) setReadout(text);
       }
 
@@ -327,6 +375,18 @@ export function SpectrumScope() {
             onChange={(e) => st.setLabSubtractBaseline(e.target.checked)}
           />
           −полка
+        </label>
+        <label>
+          <input type="checkbox" checked={st.labShowRtsa} onChange={(e) => st.setLabShowRtsa(e.target.checked)} />
+          RTSA
+        </label>
+        <label>
+          <input type="checkbox" checked={st.labShowAlloc} onChange={(e) => st.setLabShowAlloc(e.target.checked)} />
+          EFIS
+        </label>
+        <label>
+          <input type="checkbox" checked={st.labSpurOn} onChange={(e) => st.setLabSpurOn(e.target.checked)} />
+          шпоры{st.labSpurOn && !st.labSpurReady ? " · калибровка" : ""}
         </label>
         <button type="button" className="btn-ghost" onClick={() => st.resetLabHolds()}>
           СБРОС HOLD

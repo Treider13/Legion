@@ -121,20 +121,21 @@ def main() -> int:
             w.rx_is_parked(True, 2442e6, 40e6, 2442e6, 40e6, 100, True) is False,
         )
 
-        frames_n = w.WELCH_FRAMES * 1024
+        frames_n = w.welch_need_samples(1024)
         src = (0.05 + 0.2 * np.exp(1j * 2 * np.pi * 80 * np.arange(frames_n) / 1024)).astype(np.complex64)
-        src = src.reshape(w.WELCH_FRAMES, 1024)
         live = w.IqRing(1 << 14)
-        for fr in src:
-            live.push_block(fr)
+        live.push_block(src)
         spec = w._psd_from_ring(live, 64, 40e6, 2442.0)
-        check("PSD с кольца: полный FFT 1024", len(spec) == 1024)
+        check("overlap 0.5: need = N+(F-1)*N/2", w.welch_need_samples(1024) == 1024 + 7 * 512)
+        check("soapy crop 0.5: 1024 → 512 бинов", len(spec) == 512)
         peak_i = max(range(len(spec)), key=lambda i: spec[i]["powerDbm"])
         check("PSD с кольца: пик не на LO", abs(spec[peak_i]["freqMhz"] - 2442.0) > 0.2)
-        dc_i = 1024 // 2
-        check("ось как display.cpp: DC = center", abs(spec[dc_i]["freqMhz"] - 2442.0) < 1e-9)
+        check("crop оставил центр: ось внутри ±10 МГц", spec[0]["freqMhz"] > 2442 - 10.1 and spec[-1]["freqMhz"] < 2442 + 10.1)
         step = spec[1]["freqMhz"] - spec[0]["freqMhz"]
         check("ось шаг = fs/N, не fs/(N−1)", abs(step - 40.0 / 1024) < 1e-12)
+        check("после crop DC = center", abs(spec[len(spec) // 2]["freqMhz"] - 2442.0) < 1e-6)
+        cropped = w.crop_psd_bins([{"freqMhz": i, "powerDbm": 0.0} for i in range(8)], 0.5)
+        check("crop_psd_bins half=2 на 8", len(cropped) == 4 and cropped[0]["freqMhz"] == 2)
 
         hann = w._hann(1024)
         check("Hann DIO: края ≈ 0", abs(float(hann[0])) < 1e-6 and abs(float(hann[-1])) < 1e-6)
@@ -285,9 +286,10 @@ def main() -> int:
     rpc(proc, {"op": "open", "args": "driver=fake", "analogBwMhz": 56, "canTx": True})
 
     scan = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
-    check("scan bins", scan.get("ok") is True and len(scan.get("bins") or []) == 32)
-    check("scan freqs", abs(scan["bins"][16]["freqMhz"] - 2442) < 2)
-    check("fake span = ADC 40 МГц, не окно 20", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 40) < 1.5)
+    check("scan bins after soapy crop", scan.get("ok") is True and len(scan.get("bins") or []) == 512)
+    mid = len(scan["bins"]) // 2
+    check("scan freqs", abs(scan["bins"][mid]["freqMhz"] - 2442) < 2)
+    check("fake paint = 20 МГц (40 ADC × crop 0.5)", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 20) < 1.5)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

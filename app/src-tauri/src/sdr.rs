@@ -266,6 +266,131 @@ fn which(bin: &str) -> Option<PathBuf> {
     None
 }
 
+fn iperf_host_ok(host: &str) -> bool {
+    let h = host.trim();
+    if h.is_empty() || h.len() > 253 {
+        return false;
+    }
+    h.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_'))
+        && !h.starts_with('-')
+}
+
+fn iperf_bitrate_ok(b: &str) -> bool {
+    let s = b.trim();
+    if s.is_empty() || s.len() > 12 {
+        return false;
+    }
+    let (num, suf) = match s.chars().last() {
+        Some(c) if c.is_ascii_alphabetic() => (&s[..s.len() - 1], c),
+        _ => (s, ' '),
+    };
+    if !matches!(suf, ' ' | 'k' | 'K' | 'm' | 'M' | 'g' | 'G') {
+        return false;
+    }
+    num.parse::<f64>().ok().is_some_and(|v| v > 0.0 && v <= 10_000.0)
+}
+
+/// Официальный `iperf3 --json`. Не shell, не чужие флаги. Нет бинаря / нет сервера — отказ.
+#[tauri::command]
+pub async fn lab_iperf3(
+    host: String,
+    port: u16,
+    time_sec: u32,
+    udp: bool,
+    bitrate: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || lab_iperf3_blocking(host, port, time_sec, udp, bitrate))
+        .await
+        .map_err(|e| format!("iperf3 join: {e}"))?
+}
+
+fn lab_iperf3_blocking(
+    host: String,
+    port: u16,
+    time_sec: u32,
+    udp: bool,
+    bitrate: Option<String>,
+) -> Result<String, String> {
+    if !iperf_host_ok(&host) {
+        return Err("iperf3: хост не похож на имя/IP — CLI не запущен".into());
+    }
+    if port == 0 {
+        return Err("iperf3: порт 1…65535".into());
+    }
+    if !(1..=30).contains(&time_sec) {
+        return Err("iperf3: время 1…30 с".into());
+    }
+    if which("iperf3").is_none() {
+        return Err("iperf3 не найден в PATH — отчёт не выдумываем".into());
+    }
+    let mut args: Vec<String> = vec![
+        "--json".into(),
+        "-c".into(),
+        host.trim().into(),
+        "-p".into(),
+        port.to_string(),
+        "-t".into(),
+        time_sec.to_string(),
+    ];
+    if udp {
+        args.push("-u".into());
+        let b = bitrate.unwrap_or_else(|| "1M".into());
+        if !iperf_bitrate_ok(&b) {
+            return Err("iperf3: -b только число с суффиксом k/M/G".into());
+        }
+        args.push("-b".into());
+        args.push(b);
+    } else if let Some(b) = bitrate {
+        if !iperf_bitrate_ok(&b) {
+            return Err("iperf3: -b только число с суффиксом k/M/G".into());
+        }
+        args.push("-b".into());
+        args.push(b);
+    }
+    let timeout = Duration::from_secs(u64::from(time_sec) + 8);
+    let mut child = Command::new("iperf3")
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("запуск iperf3: {e}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut out) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = out.read_to_string(&mut stdout);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = err.read_to_string(&mut stderr);
+                }
+                if !status.success() {
+                    return Err(format!(
+                        "iperf3 exit {}: {}",
+                        status.code().unwrap_or(-1),
+                        stderr.trim().chars().take(240).collect::<String>()
+                    ));
+                }
+                if stdout.trim().is_empty() {
+                    return Err("iperf3: пустой stdout — это не --json".into());
+                }
+                return Ok(stdout);
+            }
+            Ok(None) if started.elapsed() > timeout => {
+                let _ = child.kill();
+                return Err("iperf3: таймаут — сервер не ответил, цифры нет".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("iperf3 wait: {e}")),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn sdr_host_info() -> Result<serde_json::Value, String> {
     let py = python_bin();
@@ -318,5 +443,18 @@ mod tests {
             PathBuf::from("/opt/legion/python3")
         );
         assert_eq!(resolve_python(Some("  ")).file_name().is_some(), true);
+    }
+
+    #[test]
+    fn iperf_allowlist() {
+        assert!(iperf_host_ok("192.168.1.10"));
+        assert!(iperf_host_ok("lab-iperf.local"));
+        assert!(!iperf_host_ok(""));
+        assert!(!iperf_host_ok("host;rm -rf /"));
+        assert!(!iperf_host_ok("-evil"));
+        assert!(iperf_bitrate_ok("1M"));
+        assert!(iperf_bitrate_ok("10"));
+        assert!(!iperf_bitrate_ok("1;id"));
+        assert!(!iperf_bitrate_ok(""));
     }
 }

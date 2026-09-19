@@ -35,6 +35,7 @@ import {
   hostSdrAvailable,
   hostDetCapture,
   hostPark,
+  hostIperf3,
   hostScan,
   hostTx,
   hostTxOff,
@@ -49,7 +50,7 @@ import {
   requireHwForSdr,
   type FpgaStatus,
 } from "../sdr/hostClient";
-import { detectFromBins, hostScanSpanMhz } from "../sdr/backend";
+import { cropPsdBins, detectFromBins, hostPaintSpanMhz, hostScanSpanMhz } from "../sdr/backend";
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { isTauriRuntime } from "../transport/types";
@@ -120,6 +121,7 @@ import {
   startLabBaseline as beginLabBaseline,
   type LabPsdState,
 } from "../sense/labPsd";
+import { SpurFilter } from "../sense/labSpur";
 import {
   LAB_MIN_DURATION_SEC,
   LAB_MIN_WIDTH_MHZ,
@@ -283,6 +285,16 @@ interface LegionStore {
   labShowBaseline: boolean;
   labSubtractBaseline: boolean;
   labShowPersistence: boolean;
+  labShowRtsa: boolean;
+  labShowAlloc: boolean;
+  labSpurOn: boolean;
+  labSpurReady: boolean;
+  labIperfHost: string;
+  labIperfPort: string;
+  labIperfSec: string;
+  labIperfUdp: boolean;
+  labIperfLoops: string;
+  labIperfBusy: boolean;
   labPlaylist: LabPlaylist | null;
   labPlaylistIdx: number;
   labIperf: IperfRecord | null;
@@ -445,6 +457,15 @@ interface LegionStore {
   setLabShowBaseline(v: boolean): void;
   setLabSubtractBaseline(v: boolean): void;
   setLabShowPersistence(v: boolean): void;
+  setLabShowRtsa(v: boolean): void;
+  setLabShowAlloc(v: boolean): void;
+  setLabSpurOn(v: boolean): void;
+  setLabIperfHost(v: string): void;
+  setLabIperfPort(v: string): void;
+  setLabIperfSec(v: string): void;
+  setLabIperfUdp(v: boolean): void;
+  setLabIperfLoops(v: string): void;
+  runLabIperf(): Promise<boolean>;
   applyPlaylistJson(raw: string): boolean;
   applyPlaylistStep(index: number): boolean;
   setLabIperfJson(raw: string): boolean;
@@ -550,6 +571,7 @@ const gGate = new HandoffGate();
 /** Хост и FPGA — два трекера: опрос STATUS не закрывает Welch-вспышки. */
 const gLabHost = new LabEventTracker();
 const gLabFpga = new LabEventTracker();
+const gLabSpur = new SpurFilter();
 
 function labCorridor(s: { sdrBands: AllowBand[]; sdrF1: string; sdrF2: string }): { f1: number; f2: number } {
   const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
@@ -717,9 +739,13 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   const ingestHostLab = (bins: ScanBin[], now: number): void => {
     const s = get();
-    const { f1, f2 } = labCorridor(s);
-    const next = ingestLabFrame(s.labPsd, bins, f1, f2, now);
-    const peaks = hostPeaksForJournal(bins, s.scanThresholdDb, s.labMinWidthMhz);
+    const filtered = s.labSpurOn ? gLabSpur.filter(bins) : bins;
+    if (s.labSpurOn !== false && s.labSpurReady !== gLabSpur.isCalibrated()) {
+      set({ labSpurReady: gLabSpur.isCalibrated() });
+    }
+    const { f1, f2 } = labCorridor(get());
+    const next = ingestLabFrame(get().labPsd, filtered, f1, f2, now);
+    const peaks = hostPeaksForJournal(filtered, get().scanThresholdDb, get().labMinWidthMhz);
     const live = peaks
       .filter((p) => listHits(p.freqMhz, s.labKnownMhz, s.labIgnoreMhz)?.kind !== "ignore")
       .map((p) => ({
@@ -1007,7 +1033,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         bins = win.bins;
       } else {
-        bins = gSdr.scanWindow(heldMhz, hostScanSpanMhz(gSdr.analogBwMhz()), nBins);
+        bins = cropPsdBins(gSdr.scanWindow(heldMhz, hostScanSpanMhz(gSdr.analogBwMhz()), nBins));
       }
       // Стоп/сброс/закрытие, пока летал hostScan: ничего не восстанавливаем.
       if (gen !== gTxGen) return "gone";
@@ -1482,6 +1508,16 @@ export const useLegion = create<LegionStore>((set, get) => {
     labShowBaseline: true,
     labSubtractBaseline: false,
     labShowPersistence: true,
+    labShowRtsa: true,
+    labShowAlloc: true,
+    labSpurOn: true,
+    labSpurReady: false,
+    labIperfHost: "",
+    labIperfPort: "5201",
+    labIperfSec: "5",
+    labIperfUdp: true,
+    labIperfLoops: "1",
+    labIperfBusy: false,
     labPlaylist: null,
     labPlaylistIdx: 0,
     labIperf: null,
@@ -1637,7 +1673,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
     clearLabPsd: () => {
       const target = get().labPsd.baselineTargetSec;
-      set({ labPsd: resetLabPsd(target), labCoverage: null });
+      gLabSpur.recalibrate();
+      set({ labPsd: resetLabPsd(target), labCoverage: null, labSpurReady: false });
       pushLog("sys", "композит коридора очищен");
     },
     setLabKnown: (v) => set({ labKnown: v, labKnownMhz: parseMhzList(v) }),
@@ -1655,6 +1692,82 @@ export const useLegion = create<LegionStore>((set, get) => {
     setLabShowBaseline: (v) => set({ labShowBaseline: v }),
     setLabSubtractBaseline: (v) => set({ labSubtractBaseline: v }),
     setLabShowPersistence: (v) => set({ labShowPersistence: v }),
+    setLabShowRtsa: (v) => set({ labShowRtsa: v }),
+    setLabShowAlloc: (v) => set({ labShowAlloc: v }),
+    setLabSpurOn: (v) => {
+      if (!v) {
+        gLabSpur.recalibrate();
+        set({ labSpurOn: false, labSpurReady: false });
+        return;
+      }
+      gLabSpur.recalibrate();
+      set({ labSpurOn: true, labSpurReady: false });
+    },
+    setLabIperfHost: (v) => set({ labIperfHost: v }),
+    setLabIperfPort: (v) => set({ labIperfPort: v }),
+    setLabIperfSec: (v) => set({ labIperfSec: v }),
+    setLabIperfUdp: (v) => set({ labIperfUdp: v }),
+    setLabIperfLoops: (v) => set({ labIperfLoops: v }),
+    runLabIperf: async () => {
+      if (get().labIperfBusy) return false;
+      const host = get().labIperfHost.trim();
+      const port = Number(get().labIperfPort);
+      const sec = Number(get().labIperfSec);
+      const loops = Math.max(1, Math.min(20, Math.floor(Number(get().labIperfLoops) || 1)));
+      if (!host) {
+        pushLog("sys", "iperf3: задайте адрес сервера стенда — цифры не выдумываем");
+        return false;
+      }
+      if (!Number.isFinite(port) || port < 1 || port > 65535) {
+        pushLog("sys", "iperf3: порт 1…65535");
+        return false;
+      }
+      if (!Number.isFinite(sec) || sec < 1 || sec > 30) {
+        pushLog("sys", "iperf3: время 1…30 с (allowlist CLI)");
+        return false;
+      }
+      set({ labIperfBusy: true });
+      let okN = 0;
+      let badN = 0;
+      let lastRaw = "";
+      try {
+        for (let i = 0; i < loops; i++) {
+          const r = await hostIperf3({
+            host,
+            port,
+            timeSec: sec,
+            udp: get().labIperfUdp,
+          });
+          if (!r.ok) {
+            pushLog("sys", r.reason);
+            return false;
+          }
+          lastRaw = r.json;
+          const parsed = parseIperfJson(r.json);
+          if (!parsed.ok) {
+            pushLog("sys", parsed.reason);
+            return false;
+          }
+          set({ labIperf: parsed.record });
+          if (parsed.record.lostPercent === 0) okN += 1;
+          else badN += 1;
+          pushLog(
+            "sys",
+            `iperf3 ${i + 1}/${loops}: lost_percent=${parsed.record.lostPercent} · bytes=${parsed.record.bytes}`,
+          );
+        }
+        if (okN + badN > 0) {
+          const bper = recordBper(okN, badN);
+          if (bper.ok) {
+            set({ labBper: bper.record });
+            pushLog("sys", `BPER из прогонов iperf3: ${badN}/${okN + badN} = ${bper.record.bper}`);
+          }
+        }
+        return lastRaw.length > 0;
+      } finally {
+        set({ labIperfBusy: false });
+      }
+    },
     applyPlaylistJson: (raw) => {
       const parsed = parsePlaylistJson(raw);
       if (!parsed.ok) {
@@ -1726,6 +1839,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     clearLabJournal: () => {
       gLabHost.reset();
       gLabFpga.reset();
+      gLabSpur.recalibrate();
       set({
         labEvents: [],
         labIperf: null,
@@ -1734,6 +1848,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         labPlaylist: null,
         labPlaylistIdx: 0,
         labCoverage: null,
+        labSpurReady: false,
         labKnown: "",
         labIgnore: "",
         labKnownMhz: [],
@@ -3643,7 +3758,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         const st = get();
         const caps = catalogCaps(st.sdrId);
         const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
-        const windowMhz = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
+        const userWin = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
+        const windowMhz = Math.min(userWin, hostPaintSpanMhz(analog));
         const walker = new ScanWalker({
           bands: st.sdrBands,
           pattern: "sweep",
@@ -3657,7 +3773,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ scanRunning: true, scanCenterMhz: null });
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 · ADC 40 MSPS · окно LO ${walker.windowMhz} МГц`,
+          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
         );
         let inflight = false;
         let lastResenseAt = 0;
@@ -3683,7 +3799,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             }
             bins = win.bins;
           } else {
-            bins = gSdr.scanWindow(centerMhz, spanMhz, nBins);
+            bins = cropPsdBins(gSdr.scanWindow(centerMhz, spanMhz, nBins));
           }
           const now = Date.now();
           const raw = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
