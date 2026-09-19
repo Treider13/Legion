@@ -51,13 +51,17 @@ struct lms_freq;
 static int lms_n;
 static int band_n;
 static bool lms_tx_off_during_set;
+static bool lms_fail_tx;
 
 int lms_set_precalculated_frequency(struct bladerf *dev, bladerf_module mod,
                                     struct lms_freq *f)
 {
-    (void)dev; (void)mod; (void)f;
+    (void)dev; (void)f;
     if ((t_control & 0x4u) == 0) lms_tx_off_during_set = true;
     lms_n++;
+    if (lms_fail_tx && mod == BLADERF_MODULE_TX) {
+        return -1;
+    }
     return 0;
 }
 
@@ -645,6 +649,22 @@ int main(void)
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
         CHECK("SCAN x40: AIR_FREQ после hop", khz == 2442000);
     }
+    /* U4 x40: отказ TX PLL — AIR_FREQ не чужая; unmute только после отката RX. */
+    lms_fail_tx = true;
+    lms_tx_off_during_set = false;
+    lms_n = 0;
+    t_tamer += 140001;
+    legion_work();
+    CHECK("U4 x40: hop пытался LMS", lms_n >= 2);
+    CHECK("U4 x40: PLL писался при снятом TX enable", lms_tx_off_during_set);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("U4 x40: AIR_FREQ не сменилась на чужую стоянку", khz == 2442000);
+    }
+    CHECK("U4 x40: после отката RX на старый LO TX enable возвращён",
+          (t_control & 0x4u) != 0);
+    lms_fail_tx = false;
     lms_n = 0; band_n = 0;
     t_tamer = 50;
     legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
