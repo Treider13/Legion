@@ -15,7 +15,9 @@
 - [analysis-legion-us-path.md](analysis-legion-us-path.md) — путь
   detect→`dac_streams`→усилитель за микросекунды;
 - [analysis-legion-recheck.md](analysis-legion-recheck.md) — первый
-  независимый разбор Codex.
+  независимый разбор Codex;
+- [analysis-legion-rx1-tx1.md](analysis-legion-rx1-tx1.md) — антенна RX1,
+  усилитель на TX1, кнопка перехвата не хост-сканер.
 
 ---
 

@@ -6,6 +6,8 @@
 гейта): [analysis-legion-us-path.md](analysis-legion-us-path.md).
 Уточнение «нашлась 2450 → на усилитель 2445…2455»:
 [analysis-legion-look-window.md](analysis-legion-look-window.md).
+Кабель RX1→TX1 и кнопка «сканер» vs перехват:
+[analysis-legion-rx1-tx1.md](analysis-legion-rx1-tx1.md).
 
 Предыдущий разбор (`analysis-legion-recheck.md`) откладывал железо, timing
 xA4, физические 400 мкс и «частоту внутри окна». Это противоречит требованию
