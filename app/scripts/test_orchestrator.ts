@@ -1862,6 +1862,9 @@ async function main(): Promise<void> {
   check("V1: водопад FPGA подписан как взгляд+гейт, не спектр",
     fieldSrc.includes("взгляд+гейт, не спектр") && !fieldSrc.includes("водопад · эфир→усилитель"));
   const scanSrc = readFileSync(join(here, "../src/components/ScanPanel.tsx"), "utf8");
+  check("антенна RX1, усилитель TX1 (не RX1 на оба)",
+    scanSrc.includes("RX1 / RX SMA") && scanSrc.includes("TX1 / TX SMA") &&
+    gateSrc.includes("TX1 / TX SMA"));
   const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",

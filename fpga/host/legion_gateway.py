@@ -319,6 +319,10 @@ class FakeTransport:
             # Новый ARM снимает латч deadman (как NIOS legion_cmds.c)
             if addr == lf.REG_CTRL and (data & lf.CTRL_ARM):
                 self.wd_latch = False
+            # DISARM: NIOS гасит эфир (AIR_PREP down). Иначе leftover up
+            # после предыдущего ARM врёт U1-readback.
+            if addr == lf.REG_CTRL and (data & lf.CTRL_ARM) == 0:
+                self.regs[lf.REG_AIR_PREP] = 0
             # Модель capture: player_ctl 1→0 = «захватили» (как липкий флаг в HDL)
             if addr == lf.REG_PLAYER_CTL:
                 if data == 0 and self.regs.get(lf.REG_PLAYER_CTL, 0) == 1:

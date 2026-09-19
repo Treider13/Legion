@@ -462,9 +462,34 @@ int main(void)
                              BLADERF_RFIC_TXFIR_DEFAULT);
         int i_srx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
                              10000000);
-        CHECK("R1: 10e6 FILTER RX default до SAMPLERATE",
-              i_frx >= 0 && i_srx > i_frx);
-        CHECK("R1: 10e6 FILTER TX default", i_ftx >= 0);
+        int i_stx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_TX(0),
+                             10000000);
+        CHECK("R1: 10e6 FILTER RX default после SAMPLERATE (Nuand leave-4x)",
+              i_frx >= 0 && i_srx >= 0 && i_frx > i_srx);
+        CHECK("R1: 10e6 FILTER TX default после SAMPLERATE",
+              i_ftx >= 0 && i_stx >= 0 && i_ftx > i_stx);
+    }
+    /* leftover DEC4 @ 0.2 → 10e6: rate сначала, затем default (стенд E). */
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 520834);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 200000);
+    CHECK("R1: leftover 0.2 AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    legion_reg_write(LEGION_REG_AIR_PREP, 0);
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 10000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 10000000);
+    CHECK("R1: 0.2→10e6 AIR ok", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    {
+        int i_frx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_RX(0),
+                             BLADERF_RFIC_RXFIR_DEFAULT);
+        int i_srx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
+                             10000000);
+        int i_dec4 = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_RX(0),
+                              BLADERF_RFIC_RXFIR_DEC4);
+        CHECK("R1: 0.2→10e6 SAMPLERATE до FILTER default",
+              i_frx >= 0 && i_srx >= 0 && i_frx > i_srx);
+        CHECK("R1: 0.2→10e6 не оставляет DEC4 последним",
+              i_dec4 < 0 || i_frx > i_dec4);
     }
     legion_reg_write(LEGION_REG_AIR_PREP, 0);
 

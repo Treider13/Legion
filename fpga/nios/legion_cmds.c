@@ -89,7 +89,8 @@ static bool legion_fs_needs_4x(uint32_t fs)
     return fs >= LEGION_FS_4X_MIN && fs <= LEGION_FS_4X_MAX;
 }
 
-/* Nuand/foxhunt: FILTER до SAMPLERATE. 4x только в [520834, 2083334]. */
+/* Nuand: 4x только в [520834, 2083334]. Вход — FILTER затем rate;
+ * выход из 4x — rate затем FILTER default (bladerf2.c). */
 static bool legion_rfic_write_filters(uint32_t fs_hz)
 {
     uint32_t const rx_fir = legion_fs_needs_4x(fs_hz)
@@ -225,16 +226,21 @@ bool legion_air_up(bool rx, bool tx)
 
     uint32_t const fs_hz = legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
     uint32_t const bw_hz = legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
-    uint32_t const rx_fir = legion_fs_needs_4x(fs_hz)
+    bool const use_4x = legion_fs_needs_4x(fs_hz);
+    uint32_t const rx_fir = use_4x
         ? (uint32_t)BLADERF_RFIC_RXFIR_DEC4
         : (uint32_t)BLADERF_RFIC_RXFIR_DEFAULT;
-    uint32_t const tx_fir = legion_fs_needs_4x(fs_hz)
+    uint32_t const tx_fir = use_4x
         ? (uint32_t)BLADERF_RFIC_TXFIR_INT4
         : (uint32_t)BLADERF_RFIC_TXFIR_DEFAULT;
 
-    /* FILTER до любой SAMPLERATE — как Nuand bladerf2_set_sample_rate и foxhunt. */
-    if (!legion_rfic_write_filters(fs_hz)) {
-        DBG("LEGION: RFIC FILTER — отказ\n");
+    /* Nuand bladerf2_set_sample_rate (libbladeRF bladerf2.c):
+     *   вход в [520834,2083334]: FIR DEC4/INT4, затем rate (foxhunt так же);
+     *   выход из 4x: сначала rate, потом FIR default.
+     * FILTER default при живом 520834 нарушает MUST 4x Nuand — leftover
+     * DEC4 после взгляда 0.2 иначе не снять на 10 MSPS. */
+    if (use_4x && !legion_rfic_write_filters(fs_hz)) {
+        DBG("LEGION: RFIC FILTER 4x — отказ\n");
         legion_air_fail_rollback();
         return false;
     }
@@ -254,6 +260,29 @@ bool legion_air_up(bool rx, bool tx)
             legion_air_fail_rollback();
             return false;
         }
+    }
+
+    if (tx) {
+        /* TX уже заглушён (сразу после INIT). Unmute — после ENABLE. */
+        if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
+                                      BLADERF_CHANNEL_TX(0), freq_hz) ||
+            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
+                                      BLADERF_CHANNEL_TX(0), fs_hz) ||
+            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
+                                      BLADERF_CHANNEL_TX(0), bw_hz)) {
+            DBG("LEGION: RFIC TX cfg — отказ\n");
+            legion_air_fail_rollback();
+            return false;
+        }
+    }
+
+    if (!use_4x && !legion_rfic_write_filters(fs_hz)) {
+        DBG("LEGION: RFIC FILTER default — отказ\n");
+        legion_air_fail_rollback();
+        return false;
+    }
+
+    if (rx) {
         /* Readback GAINMODE: записанный MGC без подтверждения — вайб (как
          * readback LO/fs в park). Молча живой AGC уплыл бы после ARM. */
         uint64_t gm = 0;
@@ -289,18 +318,7 @@ bool legion_air_up(bool rx, bool tx)
     }
 
     if (tx) {
-        /* TX уже заглушён (сразу после INIT). Unmute — после ENABLE. */
         uint32_t fs_got = 0;
-        if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
-                                      BLADERF_CHANNEL_TX(0), freq_hz) ||
-            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
-                                      BLADERF_CHANNEL_TX(0), fs_hz) ||
-            !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
-                                      BLADERF_CHANNEL_TX(0), bw_hz)) {
-            DBG("LEGION: RFIC TX cfg — отказ\n");
-            legion_air_fail_rollback();
-            return false;
-        }
         if (!legion_rfic_readback_filter(BLADERF_CHANNEL_TX(0), tx_fir) ||
             !legion_rfic_readback_fs(BLADERF_CHANNEL_TX(0), fs_hz, &fs_got) ||
             !legion_rfic_readback_bw(BLADERF_CHANNEL_TX(0), bw_hz)) {
