@@ -125,12 +125,14 @@ import { SpurFilter } from "../sense/labSpur";
 import {
   LAB_MIN_DURATION_SEC,
   LAB_MIN_WIDTH_MHZ,
+  XA4_RX_MHZ,
   LabEventTracker,
   buildLabJournal,
   hostPeaksForJournal,
   listHits,
   parseIperfJson,
   parseMhzList,
+  buildPlaylist,
   parsePlaylistJson,
   playlistStepPatch,
   recordBper,
@@ -466,6 +468,7 @@ interface LegionStore {
   setLabIperfUdp(v: boolean): void;
   setLabIperfLoops(v: string): void;
   runLabIperf(): Promise<boolean>;
+  applyPlaylist(data: unknown): boolean;
   applyPlaylistJson(raw: string): boolean;
   applyPlaylistStep(index: number): boolean;
   setLabIperfJson(raw: string): boolean;
@@ -1768,14 +1771,22 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ labIperfBusy: false });
       }
     },
-    applyPlaylistJson: (raw) => {
-      const parsed = parsePlaylistJson(raw);
+    applyPlaylist: (data) => {
+      const parsed = buildPlaylist(data);
       if (!parsed.ok) {
         pushLog("sys", parsed.reason);
         return false;
       }
       set({ labPlaylist: parsed.playlist, labPlaylistIdx: 0 });
       return get().applyPlaylistStep(0);
+    },
+    applyPlaylistJson: (raw) => {
+      const parsed = parsePlaylistJson(raw);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      return get().applyPlaylist(parsed.playlist);
     },
     applyPlaylistStep: (index) => {
       const pl = get().labPlaylist;
@@ -1784,11 +1795,21 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
       const patch = playlistStepPatch(pl.steps[index]);
-      const band = parseBand(patch.sdrF1, patch.sdrF2);
+      // parseBand — потолок ADF4351 4400 МГц. Плейлист xA4 до 6000 (пресет 5800).
+      const f1 = parseFloat(patch.sdrF1);
+      const f2 = parseFloat(patch.sdrF2);
+      const xa4Band =
+        Number.isFinite(f1) &&
+        Number.isFinite(f2) &&
+        f2 >= f1 &&
+        f1 >= XA4_RX_MHZ[0] &&
+        f2 <= XA4_RX_MHZ[1]
+          ? { f1Mhz: f1, f2Mhz: f2 }
+          : null;
       set({
         sdrF1: patch.sdrF1,
         sdrF2: patch.sdrF2,
-        sdrBands: band ? [band] : get().sdrBands,
+        sdrBands: xa4Band ? [xa4Band] : get().sdrBands,
         fpgaAirBwMhz: patch.fpgaAirBwMhz,
         fpgaTurnDwellMs: patch.fpgaTurnDwellMs,
         scanWindowMhz: patch.scanWindowMhz,

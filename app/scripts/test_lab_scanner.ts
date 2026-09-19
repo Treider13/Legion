@@ -28,16 +28,19 @@ import {
 } from "../src/sense/labPsd";
 import {
   LAB_MIN_DURATION_SEC,
+  LAB_PLAYLIST_PRESETS,
   LabEventTracker,
   XA4_ANALOG_MHZ,
   XA4_RX_MHZ,
   XA4_TX_MHZ,
   buildLabJournal,
+  buildPlaylist,
   hostPeaksForJournal,
   listHits,
   parseIperfJson,
   parseMhzList,
   parsePlaylistJson,
+  playlistStepFromScanner,
   playlistStepPatch,
   recordBper,
   recordJsr,
@@ -242,6 +245,31 @@ async function main(): Promise<void> {
   }
   const plWave = parsePlaylistJson(`{"name":"x","steps":[{"centerMhz":915,"lookMhz":2,"dwellMs":1,"wave":"no-such"}]}`);
   check("чужая волна playlist — отказ", plWave.ok === false);
+  const fromFields = buildPlaylist({
+    name: "поля",
+    steps: [{ name: "u", centerMhz: 433, lookMhz: 2, dwellMs: 0.4, wave: "awgn" }],
+  });
+  check("buildPlaylist без строки JSON", fromFields.ok && fromFields.playlist.steps[0].centerMhz === 433);
+  check("пустые шаги — отказ", buildPlaylist({ name: "x", steps: [] }).ok === false);
+  check(
+    "пресеты 433/2442/5800 в RX xA4",
+    LAB_PLAYLIST_PRESETS.length === 3 &&
+      LAB_PLAYLIST_PRESETS.every((p) => p.centerMhz >= XA4_RX_MHZ[0] && p.centerMhz <= XA4_RX_MHZ[1]),
+  );
+  const fromScan = playlistStepFromScanner({
+    signalFreqMhz: "2442.000",
+    sdrF1: "2400",
+    sdrF2: "2500",
+    fpgaAirBwMhz: "2",
+    scanWindowMhz: "20",
+    fpgaTurnDwellMs: "3000",
+    scanDwellMs: "40",
+    txWaveKind: "tone",
+  });
+  check(
+    "шаг со сканера копирует уже выставленное",
+    fromScan.centerMhz === 2442 && fromScan.lookMhz === 2 && fromScan.dwellMs === 3000 && fromScan.wave === "tone",
+  );
 
   const journal = buildLabJournal({
     f1: 100,
@@ -271,11 +299,28 @@ async function main(): Promise<void> {
   L().setLabKnown("433 915");
   L().setLabIgnore("2442");
   check("store known/ignore парсятся", L().labKnownMhz.length === 2 && L().labIgnoreMhz[0] === 2442);
-  const applied = L().applyPlaylistJson(
-    JSON.stringify({ name: "store", steps: [{ name: "u", centerMhz: 3500, lookMhz: 8, dwellMs: 0.4, wave: "qpsk" }] }),
-  );
-  check("store playlist без ARM", applied === true && L().fpgaArmed === false && L().scanPattern !== undefined);
+  const applied = L().applyPlaylist({
+    name: "store",
+    steps: [{ name: "u", centerMhz: 3500, lookMhz: 8, dwellMs: 0.4, wave: "qpsk" }],
+  });
+  check("store playlist полями без ARM", applied === true && L().fpgaArmed === false && L().scanPattern !== undefined);
   check("store шаг выставил взгляд 8", L().fpgaAirBwMhz === "8" && L().signalFreqMhz === "3500.000");
+  const two = L().applyPlaylist({
+    name: "uhf-c",
+    steps: [
+      { name: "u", centerMhz: 433, lookMhz: 2, dwellMs: 1, wave: null },
+      { name: "c", centerMhz: 5800, lookMhz: 10, dwellMs: 1, wave: "tone" },
+    ],
+  });
+  check("два шага: первый 433 записал полосу", two === true && L().sdrBands[0]?.f1Mhz === 432);
+  const stepped = L().applyPlaylistStep(1);
+  check(
+    "шаг 5800 пишет sdrBands 5795…5805, не оставляет 433 (parseBand синтез 4400 не годится)",
+    stepped === true &&
+      L().sdrF1 === "5795.000" &&
+      L().sdrBands[0]?.f1Mhz === 5795 &&
+      L().sdrBands[0]?.f2Mhz === 5805,
+  );
   L().stopScan();
   useLegion.setState({
     scanPattern: "auto",
