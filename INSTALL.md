@@ -20,7 +20,8 @@ legion привязаны к Linux-инструментам (pyusb/systemd/Quart
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip nodejs npm \
   bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxA4 \
-  python3-soapysdr soapysdr-tools soapysdr-module-bladerf python3-numpy
+  python3-soapysdr soapysdr-tools soapysdr-module-bladerf python3-numpy \
+  python3-usb
 ```
 
 - **bladeRF-cli / libbladeRF** — прошивка FPGA/FX3 и драйвер платы.
@@ -30,6 +31,8 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm \
   через pip**: нужен системный биндинг (`python3-soapysdr`). venv — только
   с `--system-site-packages`. Если `import SoapySDR` падает при установленном
   пакете (deadsnakes/другой python) — `LEGION_PYTHON=/usr/bin/python3`.
+- **python3-usb** — шлюз FPGA под systemd зовёт `/usr/bin/python3`, не venv.
+  Без системного пакета юнит падает на `import usb`, даже если pyusb стоит в `.venv`.
 - **Node.js** — нужен ≥ 20 (лучше 22 LTS). Если в репозитории Ubuntu старая
   версия: [NodeSource](https://github.com/nodesource/distributions) или nvm.
 
@@ -113,9 +116,14 @@ python3 fpga/host/legion_gateway.py  # порт 5531
 эксклюзивно: `legion_gateway.py` и `SoapySDRServer` одновременно на одной
 плате **не работают** (факт из дескриптора FX3, подробности —
 `fpga/README.md`, «Эксплуатационные факты»). Порядок смены владельца —
-только через команды шлюза `usb release`/`usb acquire` (приложение делает
-это само в цикле сканер↔FPGA). Прошивка платы: стоп агента →
-`bladeRF-cli -l/-L` → старт агента.
+только через команды шлюза `usb release`/`usb acquire`.
+
+Прошивка ревизии legion **не требует останавливать агент**, если идёте
+через вкладку **КАСТОМ FPGA** (desktop Tauri) или `{"op":"flash",...}`:
+шлюз сам отпускает USB, гоняет `bladeRF-cli -l` (RAM) или `-L` (autoload),
+потом занимает USB обратно и читает target 0x80. SoapySDRServer на той же
+плате перед этим остановить. Ручной CLI с этой машины — тогда да: стоп
+агента → `bladeRF-cli -l/-L` → старт агента.
 
 Автозапуск — systemd-юнит `fpga/systemd/legion-gateway.service`:
 
@@ -150,9 +158,13 @@ cd fpga/vendor/bladerf/hdl/quartus
 ./build_bladerf.sh -b bladeRF -s 40 -r legion         # → legionx40.rbf (bladeRF 1 x40)
 ```
 
-Запись в плату — из приложения, вкладка **КАСТОМ FPGA** (СОБРАТЬ → ПРОШИТЬ),
-или вручную: `bladeRF-cli -l legionxA4.rbf` (RAM, откат — power cycle),
-`bladeRF-cli -L legionxA4.rbf` (flash autoload).
+Запись в плату — из **desktop** LEGION (Tauri: `npm run tauri dev` / собранное
+приложение), вкладка **КАСТОМ FPGA**: СОБРАТЬ (Quartus на этом ПК) → ПРОШИТЬ
+локальный USB или путь к уже скопированному `.rbf` на шлюзе. Браузерный
+`npm run dev` сборку и `bladeRF-cli` не запускает (`hostSdrAvailable` = Tauri).
+Вручную: `bladeRF-cli -l legionxA4.rbf` (RAM, откат — power cycle),
+`bladeRF-cli -L legionxA4.rbf` (flash autoload). Официальный `hostedxA4.rbf` —
+это hosted, не legion: ARM откажет (`legion:false`).
 
 ## 6. Приёмка на железе (обязательна)
 

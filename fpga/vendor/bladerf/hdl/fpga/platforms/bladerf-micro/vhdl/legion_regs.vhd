@@ -77,6 +77,26 @@ architecture rtl of legion_regs is
     -- CDC порогов детектора → rx_clock
     signal thr_meta, thr_rx     : std_logic_vector(31 downto 0);
     signal sh_meta, sh_rx       : std_logic_vector(3 downto 0);
+
+    -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
+    signal det_gray_rx   : std_logic_vector(15 downto 0);
+    signal det_gray_meta : std_logic_vector(15 downto 0);
+    signal det_gray_nios : std_logic_vector(15 downto 0);
+
+    function bin2gray(b : std_logic_vector) return std_logic_vector is
+    begin
+        return b xor ('0' & b(b'high downto b'low + 1));
+    end function;
+
+    function gray2bin(g : std_logic_vector) return std_logic_vector is
+        variable b : std_logic_vector(g'range);
+    begin
+        b(g'high) := g(g'high);
+        for i in g'high - 1 downto g'low loop
+            b(i) := b(i + 1) xor g(i);
+        end loop;
+        return b;
+    end function;
 begin
 
     -- ---------------- Запись регистров (80 МГц) ----------------
@@ -155,19 +175,15 @@ begin
     tx_wd_kick    <= kick_tx and not kick_tx_d;
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
-    -- det_count — многобитный счётчик из rx-домена без синхронизатора
-    -- (на micro rx_clock = tx_clock = ad9361.clock — одно; на x40 — CDC).
-    -- Разрыв чтения возможен только у МЕНЯЮЩЕГОСЯ счётчика; критерий
-    -- автовозврата хоста («не растёт N опросов подряд») к разрыву устойчив:
-    -- у статичного счётчика разрыву неоткуда взяться, у живого три
-    -- одинаковых чтения подряд не случаются.
+    -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
+    -- Остальные статус-биты квазистатичны / однобитные.
     status_tx(0)           <= tx_playing;
     status_tx(1)           <= tx_cap_done;
     status_tx(2)           <= tx_det_active;
     status_tx(3)           <= tx_wd_fired;
     status_tx(7 downto 4)  <= (others => '0');
     status_tx(15 downto 8) <= std_logic_vector(tx_lb_level);
-    status_tx(31 downto 16) <= std_logic_vector(tx_det_count);
+    status_tx(31 downto 16) <= (others => '0');
 
     cdc_status : process(nios_clk, nios_reset)
     begin
@@ -195,5 +211,27 @@ begin
     rx_det_thr   <= thr_rx;
     rx_det_shift <= unsigned(sh_rx);
 
-    pio_status <= st_nios;
+    -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
+    cdc_det_src : process(rx_clock, rx_reset)
+    begin
+        if rx_reset = '1' then
+            det_gray_rx <= (others => '0');
+        elsif rising_edge(rx_clock) then
+            det_gray_rx <= bin2gray(std_logic_vector(tx_det_count));
+        end if;
+    end process;
+
+    cdc_det_dst : process(nios_clk, nios_reset)
+    begin
+        if nios_reset = '1' then
+            det_gray_meta <= (others => '0');
+            det_gray_nios <= (others => '0');
+        elsif rising_edge(nios_clk) then
+            det_gray_meta <= det_gray_rx;
+            det_gray_nios <= det_gray_meta;
+        end if;
+    end process;
+
+    pio_status(15 downto 0)  <= st_nios(15 downto 0);
+    pio_status(31 downto 16) <= gray2bin(det_gray_nios);
 end architecture;

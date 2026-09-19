@@ -71,9 +71,13 @@ bool legion_reg_read(uint8_t addr, uint32_t *data);
 
 /* Эфир micro: подъём/стендбай воздушного тракта через Nuand RFIC-интерфейс
  * NIOS (rfic_command_write_immed, devices_rfic.c). На bladeRF 1 — no-op.
- * Подъём: INIT(ON) → TX mute → LO/fs/BW/gain(+readback GAINMODE) →
- * ENABLE → TX unmute последним. Первый подъём после питания — полный
- * ad9361_init (сотни мс): хост ждёт длинным таймаутом. */
+ * Подъём: INIT(ON) → TX mute → (вход в 4x: FILTER DEC4/INT4, затем LO/fs/BW;
+ * выход из 4x: LO/fs/BW, затем FILTER default — Nuand bladerf2.c) →
+ * readback FILTER/SAMPLERATE/BANDWIDTH/GAINMODE → ENABLE → TX unmute.
+ * Отказ после INIT → STANDBY.
+ * DISARM: CTRL=0, затем air_down; отказ STANDBY = write false.
+ * Первый подъём после питания — полный ad9361_init (сотни мс): хост
+ * ждёт длинным таймаутом. */
 bool legion_air_up(bool rx, bool tx);
 bool legion_air_down(void);
 

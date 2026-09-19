@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp } from "../../sense/fpgaFastpath";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { autoDispatchOptionRu, type AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
@@ -186,9 +186,14 @@ export function StartGate({ mode, onClose }: Props) {
         setErr("Автоматический перехват: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).");
         return;
       }
-      const ch = parseFloat(windowMhz);
+      const ch = parseLocaleNumber(windowMhz);
       if (!Number.isFinite(ch) || ch <= 0) {
         setErr("Задайте ширину взгляда платы в мегагерцах.");
+        return;
+      }
+      const dwell = parseLocaleNumber(dwellMs);
+      if (dispatch === "turn" && (!Number.isFinite(dwell) || dwell <= 0)) {
+        setErr("Задайте выдержку числом (0,4 и 0.4 — 400 мкс).");
         return;
       }
       const thr = parseFloat(detThr);
@@ -234,7 +239,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-gate-lead">
               После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
               усилителя на найденной частоте, Старт и Стоп. Плата сама видит
-              энергию (антенна на RX SMA) и сама открывает TX SMA на усилитель.
+              энергию (антенна на RX1 / RX SMA) и сама открывает TX1 / TX SMA на усилитель.
               Нашёл взгляд — держал выдержку (например 0.4 мс) — шагнул дальше.
               Две частоты ближе ширины взгляда — одно TX-окно; уже взгляд —
               2450 и 2465 МГц как разные стоянки. USB не в круге «увидел → усилитель».
@@ -278,13 +283,13 @@ export function StartGate({ mode, onClose }: Props) {
                 title="Каждая найденная частота: усилитель на выдержке, затем следующая в коридоре."
               >
                 <strong>По очереди</strong>
-                <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseFloat(dwellMs))} мс.</span>
+                <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
               </button>
             </div>
             <p className="cinema-gate-lead">
               {fpgaAirSupported(sdrId)
-                ? `взгляд ${clampAirBwMhz(parseFloat(windowMhz), analogMax)} МГц · гейт ${
-                    airTractParams(parseFloat(windowMhz), analogMax, detShift).windowUs.toFixed(1)
+                ? `взгляд ${clampAirBwMhz(parseLocaleNumber(windowMhz), analogMax)} МГц · гейт ${
+                    airTractParams(parseLocaleNumber(windowMhz), analogMax, detShift).windowUs.toFixed(1)
                   } мкс · обзор коридора — шаги LO, мс · ноутбук наблюдает и стопит`
                 : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 — выбирается на вкладке SDR в Настройках."}
             </p>

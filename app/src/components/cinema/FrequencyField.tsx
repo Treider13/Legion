@@ -274,7 +274,7 @@ export function FrequencyField() {
         <span>{f1.toFixed(0)}</span>
         <span className={live ? "cinema-field-read live" : "cinema-field-read"}>
           {read}
-          {fpgaArmed && fpgaPath === "air" ? " · водопад · эфир→усилитель" : ""}
+          {fpgaArmed && fpgaPath === "air" ? " · взгляд+гейт, не спектр" : ""}
           {fpgaArmed && fpgaPath === "solo" ? " · FPGA" : ""}
           {transmitArmed && hostUs != null ? ` · ${hostUs} µs host` : ""}
           {scanRunning && !transmitArmed && !fpgaArmed ? " · водопад · слушает" : ""}

@@ -197,7 +197,8 @@ def main() -> int:
     if d1 > d0:
         check("кабель TX→RX: детектор слышит свой тон", True)
     else:
-        print("  SKIP  кабель TX→RX не подключён (det_count не растёт) — RF-проверка на стенде")
+        check("кабель TX→RX: детектор слышит свой тон", False,
+              "нет кабеля TX1→RX1 / det_count не растёт — SKIP=PASS запрещён")
     gw({"op": "disarm"})
     if board != "micro":
         gw({"op": "rx", "on": False})

@@ -67,6 +67,16 @@ export const FPGA_TURN_DWELL_DEFAULT_MS = 3000;
 export const FPGA_TURN_DWELL_MIN_MS = 0.1;
 export const FPGA_TURN_DWELL_MAX_MS = 60_000;
 
+/** Поле оператора: «0,4» и «0.4» — одно число. Мусор → NaN, не 0. */
+export function parseLocaleNumber(raw: string | number): number {
+  if (typeof raw === "number") return raw;
+  const t = String(raw).trim().replace(/\s+/g, "").replace(",", ".");
+  if (!t || t === "+" || t === "-" || t === ".") return Number.NaN;
+  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(t)) return Number.NaN;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
 export function fpgaTurnDwellClamp(ms: number): number {
   if (!Number.isFinite(ms) || ms <= 0) return FPGA_TURN_DWELL_DEFAULT_MS;
   const c = Math.min(FPGA_TURN_DWELL_MAX_MS, Math.max(FPGA_TURN_DWELL_MIN_MS, ms));
@@ -82,8 +92,10 @@ export function fpgaTurnDwellUs(ms: number): number {
  *  чипа), analog BW = полоса. Дефолт 2 МГц — поведение до появления параметра.
  *  Потолок — analog платы (x40 28 / micro 56 МГц, каталог). */
 export const FPGA_AIR_BW_DEFAULT_MHZ = 2;
-/** AD9361 BW min 200 кГц (Nuand). x40 ниже 1.5 МГц откажет честно в park. */
+/** AD9361 BW min 200 кГц (Nuand). x40 ниже 1.5 МГц — отказ до park/ARM. */
 export const FPGA_AIR_BW_MIN_MHZ = 0.2;
+/** LMS6002D: программируемые фильтры 1.5–28 МГц (каталог). */
+export const FPGA_X40_ANALOG_MIN_MHZ = 1.5;
 /** AD9361 sample-rate min (Nuand bladerf2_sample_rate_range): BW 200 кГц ≠ fs. */
 export const FPGA_AIR_FS_MIN_HZ = 520_834;
 
@@ -237,6 +249,11 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
   if (!i.loadOk) {
     return fail("FPGA эфир: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
   }
+  if (i.sdrId === "bladerf-x40" && bwMhz < FPGA_X40_ANALOG_MIN_MHZ) {
+    return fail(
+      `FPGA эфир: x40 канал ${bwMhz} МГц ниже фильтра LMS ${FPGA_X40_ANALOG_MIN_MHZ} МГц — отказ до park`,
+    );
+  }
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
     return fail("FPGA эфир: задайте порог чувствительности больше нуля (нулевой порог — гейт открывается на шум)");
   }
@@ -328,6 +345,11 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   }
   if (!i.loadOk) {
     return fail("Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+  }
+  if (i.sdrId === "bladerf-x40" && lookMhz < FPGA_X40_ANALOG_MIN_MHZ) {
+    return fail(
+      `Автоперехват: x40 взгляд ${lookMhz} МГц ниже фильтра LMS ${FPGA_X40_ANALOG_MIN_MHZ} МГц — отказ до ARM`,
+    );
   }
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
     return fail("Автоперехват: задайте порог чувствительности больше нуля (нулевой порог — гейт на шум)");

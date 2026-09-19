@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -35,7 +35,7 @@ export function ScanPanel() {
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);
-  const tract = airTractParams(parseFloat(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
+  const tract = airTractParams(parseLocaleNumber(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
   const fpgaWindowUs = tract.windowUs;
 
   return (
@@ -53,7 +53,7 @@ export function ScanPanel() {
         {taskLive
           ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не автоперехват и не хост-скан. Стоп — там или кнопкой ниже."
           : fpgaAir
-            ? "Автоматический перехват: после Старта хозяин — SDR. Антенна SMA → RX, плата сама видит энергию в аналоговом окне и сама открывает TX на усилитель. Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ)."
+            ? "Автоматический перехват: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Плата сама видит энергию в аналоговом окне и сама открывает TX. Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ)."
             : airLive
               ? "Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не автоперехват. Стоп — кнопкой ниже."
               : "АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: автоматический перехват. Хост-скан и FPGA вместе не работают (один USB)."}
@@ -244,7 +244,7 @@ export function ScanPanel() {
           : fpgaAir
           ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${
               s.autoDispatch === "turn"
-                ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseFloat(s.fpgaTurnDwellMs))} мс на частоту`
+                ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на частоту`
                 : "Приоритет: сильнейшая, пока жива"
             }`
           : auto

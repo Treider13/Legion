@@ -51,6 +51,8 @@ import {
   FPGA_AIR_GONE_MS,
   detCountStagnant,
   fpgaTurnDwellUs,
+  parseLocaleNumber,
+  FPGA_X40_ANALOG_MIN_MHZ,
   airTractParams,
   airFsHz,
   airThrTable,
@@ -1231,6 +1233,11 @@ async function main(): Promise<void> {
   check("handoff backoff: страйк 0/мусор → базовые 10 с", handoffRetryMs(0) === 10_000);
   check("turn dwell: дефолт 3000", FPGA_TURN_DWELL_DEFAULT_MS === 3000 && fpgaTurnDwellClamp(Number.NaN) === 3000 && fpgaTurnDwellClamp(0) === 3000);
   check("turn dwell: 0.4 мс оператора не клампится", fpgaTurnDwellClamp(0.4) === 0.4 && fpgaTurnDwellUs(0.4) === 400);
+  check("U7: 0,4 и 0.4 — одно число",
+    parseLocaleNumber("0,4") === 0.4 && parseLocaleNumber("0.4") === 0.4 &&
+    fpgaTurnDwellUs(parseLocaleNumber("0,4")) === 400);
+  check("U7: мусор поля — NaN, не 0",
+    Number.isNaN(parseLocaleNumber("нет")) && Number.isNaN(parseLocaleNumber("")));
   check("turn dwell: пол 0.1 мс, потолок 60000", FPGA_TURN_DWELL_MIN_MS === 0.1 && fpgaTurnDwellClamp(0.05) === 0.1 && fpgaTurnDwellClamp(999999) === 60_000);
   check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500 && fpgaTurnDwellClamp(40) === 40);
   check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
@@ -1292,6 +1299,14 @@ async function main(): Promise<void> {
     sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
     loadOk: false, detThr: 5000, detShift: 4, turn: false, dwellMs: 3000,
   }).ok === false);
+  check("R4: x40 взгляд 0.2 МГц — отказ до ARM", planOnboardIntercept({
+    sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 2445, f2Mhz: 2455 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 0.2, turn: false, dwellMs: 0.4,
+  }).ok === false && FPGA_X40_ANALOG_MIN_MHZ === 1.5);
+  check("R4: micro взгляд 0.2 МГц законен в плане", planOnboardIntercept({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2445, f2Mhz: 2455 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 0.2, turn: false, dwellMs: 0.4,
+  }).ok === true);
   check("ARM lb_gated с scan_enable несёт коридор", (() => {
     const c = fpgaArmCmd("lb_gated", {
       detThr: 5000, detShift: 4, token: "t", freqMhz: 2414,
@@ -1631,28 +1646,27 @@ async function main(): Promise<void> {
   const gateSrc = readFileSync(join(here, "../src/components/cinema/StartGate.tsx"), "utf8");
   const dockSrc = readFileSync(join(here, "../src/components/cinema/CinemaDock.tsx"), "utf8");
   const nuandHdr = readFileSync(join(here, "../../fpga/vendor/bladerf/fpga_common/include/bladerf2_common.h"), "utf8");
-  check("эфирный тракт по полосе оператора (airTractParams)", storeSrc.includes("airTractParams(parseFloat(get().fpgaAirBwMhz)"));
+  check("эфирный тракт по полосе оператора (airTractParams)",
+    storeSrc.includes("airTractParams(") && storeSrc.includes("parseLocaleNumber(s.fpgaAirBwMhz)"));
   const airBlock = storeSrc.slice(storeSrc.indexOf('set({ fpgaMode: "lb_gated" })'), storeSrc.indexOf("const kind = get().txWaveKind"));
   check("air start шлёт fs_hz/bw_mhz в ARM (NIOS поднимает тракт под канал)",
     airBlock.includes("fs_hz: tract.fsHz") && airBlock.includes("bw_mhz: tract.bwMhz"));
   check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked"));
-  check("handoff паркует канал оператора, не зашитые 2 МГц",
-    storeSrc.includes("hostPark(mhz, tract.bwMhz, tract.fsHz, true, true)"));
-  check("handoff ARM несёт fs/bw канала", storeSrc.includes("fsHz: tract.fsHz,") && storeSrc.includes("bwMhz: tract.bwMhz,"));
+  check("онбордовый ARM несёт fs/bw взгляда",
+    storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
   // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
   // юнитом fpgaGatewayRefused выше; здесь — факт и порядок врезки.
   const handoffHead = storeSrc.slice(
     storeSrc.indexOf("const fpgaHandoff = async"),
-    storeSrc.indexOf("park захвата"),
+    storeSrc.indexOf("void fpgaHandoff"),
   );
-  check("handoff: ping шлюза до парковки", handoffHead.includes('gw({ op: "ping" })'));
-  check("handoff: FAKE/мёртвый шлюз → fail до stopScan",
-    handoffHead.includes("fpgaGatewayRefused(ping)") &&
-    handoffHead.indexOf("fpgaGatewayRefused(ping)") < handoffHead.indexOf("get().stopScan()"));
-  check("handoff: отказ шлюза уходит в fail() (страйк/возврат к скану)",
-    handoffHead.includes("await fail(gwNo)"));
+  check("T5: handoff мёртв — нет ARM и нет auto-cycle",
+    handoffHead.includes("путь убран") &&
+    !handoffHead.includes("fpgaAutoCycle: true") &&
+    !handoffHead.includes("fpgaArmCmd") &&
+    !handoffHead.includes("hostPark("));
   // Аудит P1-4: отзыв эфира обязан гасить сам интервал обхода (как solo),
   // а тик — сверять поколение: между abort и disarm fpgaArmed ещё true.
   const abortAirBody = storeSrc.slice(
@@ -1669,8 +1683,8 @@ async function main(): Promise<void> {
     airWalkBody.split("gen !== gFpgaAirGen").length - 1 >= 2);
   check("захват полки по окну детектора оператора",
     storeSrc.includes("hostDetCapture(1 << tract.detShift, detCaptureWindows(tract.detShift))"));
-  check("захват полки с отстройкой под ширину канала",
-    storeSrc.includes("captureParkMhz(mhz, row?.rxMhz?.[1] ?? 6000, row?.rxMhz?.[0] ?? 70, tract.bwMhz)"));
+  check("T5: USB-handoff не паркует полку — путь убран",
+    !storeSrc.includes("captureParkMhz(mhz,"));
   check("air-обход: калибровочная таблица порогов", storeSrc.includes("airThrTable(medians)"));
   check("air-обход: таймер beginAirWalk после ARM",
     storeSrc.includes("beginAirWalk(walker, walk, tract, thrTable, walk.centers, gw)"));
@@ -1679,8 +1693,8 @@ async function main(): Promise<void> {
     storeSrc.includes("walk.centers.indexOf(first)") && storeSrc.includes("detThr: thrTable[firstIdx]"));
   check("air-обход: время калибровки логируется", storeSrc.includes("мс/стоянка"));
   check("air-обход: micro-only честно", storeSrc.includes("airHopBlockedReason(get().sdrId, walk.hop)"));
-  check("автовозврат в скан — только авто-цикл сканера (fpgaAutoCycle в сторе)",
-    storeSrc.includes("fpgaAutoCycle: true") && storeSrc.includes("&& get().fpgaAutoCycle"));
+  check("автовозврат в скан только если fpgaAutoCycle (handoff его больше не ставит)",
+    storeSrc.includes("&& get().fpgaAutoCycle") && !storeSrc.includes("fpgaAutoCycle: true"));
   check("нет устаревшего «чип видит центр, не обход» (air-обход существует)",
     !storeSrc.includes("не обход F1–F2"));
   const appSrc = readFileSync(join(here, "../src/App.tsx"), "utf8");
@@ -1842,9 +1856,15 @@ async function main(): Promise<void> {
   // Регрессия: окно детектора в мастере — от реального канала (fs следует за
   // полосой), а не фиксированные 8 мкс при любом канале.
   check("cinema перехват: окно детектора от канала (airTractParams), не константа",
-    gateSrc.includes("airTractParams(parseFloat(windowMhz), analogMax, detShift)"));
+    gateSrc.includes("airTractParams(parseLocaleNumber(windowMhz), analogMax, detShift)"));
   const navSrc = readFileSync(join(here, "../src/components/WorkspaceNav.tsx"), "utf8");
+  const fieldSrc = readFileSync(join(here, "../src/components/cinema/FrequencyField.tsx"), "utf8");
+  check("V1: водопад FPGA подписан как взгляд+гейт, не спектр",
+    fieldSrc.includes("взгляд+гейт, не спектр") && !fieldSrc.includes("водопад · эфир→усилитель"));
   const scanSrc = readFileSync(join(here, "../src/components/ScanPanel.tsx"), "utf8");
+  check("антенна RX1, усилитель TX1 (не RX1 на оба)",
+    scanSrc.includes("RX1 / RX SMA") && scanSrc.includes("TX1 / TX SMA") &&
+    gateSrc.includes("TX1 / TX SMA"));
   const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
@@ -1896,9 +1916,20 @@ async function main(): Promise<void> {
   check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
-  const fpgaStatusClears = (storeSrc.match(/set\(\{ fpgaBusy: true[^}]*fpgaStatus: null \}\)/g) || []).length;
-  check("все входа ARM (handoff/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
-    fpgaStatusClears >= 3);
+  const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
+  const onboardHead = storeSrc.slice(
+    storeSrc.indexOf("const startOnboardIntercept"),
+    storeSrc.indexOf("const fpgaReturnToScan"),
+  );
+  const pathHead = storeSrc.slice(
+    storeSrc.indexOf("startFpgaPath: async"),
+    storeSrc.indexOf("abortFpgaSolo:"),
+  );
+  check("все входа ARM (onboard/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
+    onboardHead.includes("fpgaStatus: null") &&
+    armBlock.includes("fpgaStatus: null") &&
+    pathHead.includes("fpgaStatus: null") &&
+    !handoffHead.includes("fpgaStatus: null"));
   check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
   check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
   check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
@@ -1907,7 +1938,6 @@ async function main(): Promise<void> {
   const soloSrc = readFileSync(join(here, "../src/sense/fpgaSoloWalk.ts"), "utf8");
   check("solo-модуль без дубля WD (limit считает только шлюз)", !soloSrc.includes("FPGA_WD") && !soloSrc.includes("65536"));
   check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
-  const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
   check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
   check("ручной fpgaArm держит метку fpgaPath solo в UI", armBlock.includes('fpgaPath: air ? "air" : "solo"'));
   check("fpgaArm busy до первого await (кино-старт откажет)",
@@ -1948,12 +1978,15 @@ async function main(): Promise<void> {
     scanSrc.indexOf("fpgaAir") < scanSrc.indexOf("АВТОНОМНЫЙ ЭФИР") &&
     !scanSrc.includes("airLive && !s.fpgaAutoCycle") &&
     !scanSrc.includes("парковка пика"));
-  check("handoff commit помнит частоту очереди", storeSrc.includes("gFpgaTurnLastMhz = mhz;"));
+  check("T5: startOnboardIntercept пишет fpgaAutoCycle false",
+    storeSrc.includes('fpgaAutoCycle: false') &&
+    storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"),
+      storeSrc.indexOf("const fpgaReturnToScan")).includes("fpgaAutoCycle: false"));
   check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));
-  check("fpgaPollStatus: ротация ОБЫЧНОГО по выдержке до стагнации",
-    storeSrc.includes("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") &&
-    storeSrc.indexOf("fpgaTurnDwellClamp(parseFloat(get().fpgaTurnDwellMs))") < storeSrc.indexOf("detCountStagnant("));
+  check("T5: хост не DISARM onboard по выдержке — выдержку делает NIOS",
+    !storeSrc.includes("выдержка ${dwellMs} мс истекла") &&
+    storeSrc.includes("Выдержку TURN делает NIOS"));
   check("опрос STATUS не копится: inflight как у air-walk",
     storeSrc.includes("if (gFpgaObserveInflight) return") && storeSrc.includes("gFpgaObserveInflight = true"));
   check("stale STATUS после СТОП/нового ARM отбрасывается",
