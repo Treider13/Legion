@@ -8,7 +8,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
@@ -35,7 +35,7 @@ export function ScanPanel() {
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);
-  const tract = airTractParams(parseFloat(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
+  const tract = airTractParams(parseLocaleNumber(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
   const fpgaWindowUs = tract.windowUs;
 
   return (
@@ -244,7 +244,7 @@ export function ScanPanel() {
           : fpgaAir
           ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${
               s.autoDispatch === "turn"
-                ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseFloat(s.fpgaTurnDwellMs))} мс на частоту`
+                ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на частоту`
                 : "Приоритет: сильнейшая, пока жива"
             }`
           : auto

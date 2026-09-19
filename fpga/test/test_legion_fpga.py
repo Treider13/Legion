@@ -948,12 +948,12 @@ gw_m.fpga._t.fail_ctrl_write = False
 rpcm({"op": "disarm"})
 
 # Solo: fs/BW окна до AIR_PREP. Без полей — пишется ЯВНЫЙ дефолт (0 = NIOS
-# 2 МГц, WD_LIMIT=61): статики/регистры переживают сессии, «не писать»
-# работало бы только на свежей NIOS после питания.
+# 2 МГц, WD_LIMIT от 2e6 на micro = 31): статики/регистры переживают сессии.
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
 check("micro: без fs_hz AIR_FS = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
-check("micro: без fs_hz WD_LIMIT = дефолт 61 явно", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
+check("micro: без fs_hz WD_LIMIT от 2e6 (=31), не зашитый 61",
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
 check("micro: без bw_mhz AIR_BW = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
 
@@ -1005,8 +1005,8 @@ check("micro: AIR_FS_HZ сброшен в дефолт после 20-МГц се
       gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
 check("micro: AIR_BW_HZ сброшен в дефолт после 20-МГц сессии",
       gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
-check("micro: WD_LIMIT сброшен в 61 (не 305 прошлой сессии)",
-      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 61)
+check("micro: WD_LIMIT сброшен от 2e6 (31), не 305 прошлой сессии",
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
 rpcm({"op": "disarm"})
 r = rpcm({"op": "tune", "freq_mhz": 2475.0})
 check("micro: tune после DISARM → отказ (не поднимаем TX)", r.get("ok") is False and "ARM" in (r.get("reason") or ""))
@@ -1125,6 +1125,52 @@ rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000,
           "freq_mhz": 2414.0, "scan_enable": True})
 check("micro: scan_enable без коридора → отказ", r.get("ok") is False)
+ok_air, air = gw_m.fpga.read_reg(lf.REG_AIR_PREP)
+check("U1: отказ SCAN до эфира — AIR_PREP down",
+      ok_air and (air & 0x1) == 0)
+check("U1: флаги владения эфиром сняты",
+      gw_m._rx_by_us is False and gw_m._tx_by_us is False)
+
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2450.0, "fs_hz": 10_000_000, "bw_mhz": 10,
+          "scan_enable": True, "scan_f1_mhz": 2445, "scan_f2_mhz": 2455,
+          "scan_turn": True, "scan_dwell_us": 400})
+check("micro: ARM взгляд 10 / 2450 ok", r.get("ok") is True)
+ok_s, f1 = gw_m.fpga.read_reg(lf.REG_SCAN_F1_KHZ)
+ok_s2, f2 = gw_m.fpga.read_reg(lf.REG_SCAN_F2_KHZ)
+ok_sd, dwell = gw_m.fpga.read_reg(lf.REG_SCAN_DWELL_US)
+ok_sc, sctrl = gw_m.fpga.read_reg(lf.REG_SCAN_CTRL)
+check("U5: read SCAN_F1 по проводу, не STATUS",
+      ok_s and f1 == 2_445_000)
+check("U5: read SCAN_F2 по проводу", ok_s2 and f2 == 2_455_000)
+check("U5: read SCAN_DWELL 400", ok_sd and dwell == 400)
+check("U5: read SCAN_CTRL не STATUS",
+      ok_sc and sctrl == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
+check("T1: 10e6 micro WD_LIMIT=153",
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(10_000_000, "bladerf2"))
+rpcm({"op": "disarm"})
+
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000,
+          "freq_mhz": 2450.0, "fs_hz": 520834, "bw_mhz": 0.2})
+check("T1: ARM 520834 micro WD_LIMIT=8",
+      r.get("ok") is True and
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 8)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
+check("T1: ARM без fs_hz — WD от дефолта 2e6, не 61",
+      r.get("ok") is True and
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
+rpcm({"op": "disarm"})
+
+r = rpcm({"op": "set", "reg": "scan_dwell_ms", "value": 0.4})
+check("U6: set scan_dwell_ms 0.4 → регистр 400",
+      r.get("ok") is True and gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_US) == 400)
+ok_rd, dwell_rd = gw_m.fpga.read_reg(lf.REG_SCAN_DWELL_US)
+check("U6: readback dwell 400", ok_rd and dwell_rd == 400)
+r = rpcm({"op": "set", "reg": "scan_dwell_ms", "value": "0,4"})
+check("U6: set 0,4 — отказ", r.get("ok") is False)
+r = rpcm({"op": "set", "reg": "scan_dwell_ms", "value": "нет"})
+check("U6: set нечисло — отказ", r.get("ok") is False)
 
 r = rpcm({"op": "ping"})
 check("micro: ping несёт board=bladerf2 (авто-детект приёмки)",

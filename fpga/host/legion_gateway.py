@@ -332,7 +332,9 @@ class FakeTransport:
                 freq = int(self.regs.get(lf.REG_AIR_FREQ_KHZ, 0) != 0)
                 resp[5:9] = (air | (freq << 1)).to_bytes(4, "little")
                 return bytes(resp)
-            if addr in (lf.REG_AIR_FREQ_KHZ, lf.REG_AIR_FS_HZ, lf.REG_AIR_BW_HZ):
+            if addr in (lf.REG_AIR_FREQ_KHZ, lf.REG_AIR_FS_HZ, lf.REG_AIR_BW_HZ,
+                        lf.REG_SCAN_F1_KHZ, lf.REG_SCAN_F2_KHZ,
+                        lf.REG_SCAN_CTRL, lf.REG_SCAN_DWELL_US):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -535,6 +537,37 @@ class LegionGateway:
             self._tx_by_us = True
         return True, ""
 
+    def _scan_dwell_us(self, msg: dict) -> tuple[int | None, str]:
+        """Регистр — микросекунды. 0.4 мс → 400. Запятая и мусор — отказ."""
+        if msg.get("scan_dwell_us") is not None:
+            raw = msg.get("scan_dwell_us")
+            if isinstance(raw, str) and ("," in raw or not raw.strip()):
+                return None, "scan_dwell_us: не число"
+            try:
+                return max(0, int(raw)), ""
+            except (TypeError, ValueError):
+                return None, "scan_dwell_us: не число"
+        if msg.get("scan_dwell_ms") is not None:
+            raw = msg.get("scan_dwell_ms")
+            if isinstance(raw, str) and "," in raw:
+                return None, "scan_dwell_ms: запятая не принимается (нужен 0.4)"
+            try:
+                return max(0, int(round(float(raw) * 1000.0))), ""
+            except (TypeError, ValueError):
+                return None, "scan_dwell_ms: не число"
+        return 0, ""
+
+    def _validate_scan(self, msg: dict) -> tuple[bool, str]:
+        """Границы и выдержка до подъёма эфира (U1)."""
+        if not bool(msg.get("scan_enable")):
+            return True, ""
+        if msg.get("scan_f1_mhz") is None or msg.get("scan_f2_mhz") is None:
+            return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
+        dwell, why = self._scan_dwell_us(msg)
+        if dwell is None:
+            return False, why
+        return True, ""
+
     def _program_scan(self, msg: dict) -> tuple[bool, str]:
         """SCAN_* всегда явно: иначе walker перехвата жил бы в solo/эфире."""
         enable = bool(msg.get("scan_enable"))
@@ -542,18 +575,14 @@ class LegionGateway:
             if not self.fpga.write_reg(lf.REG_SCAN_CTRL, 0):
                 return False, "запись SCAN_CTRL=0 не удалась"
             return True, ""
+        ok, why = self._validate_scan(msg)
+        if not ok:
+            return False, why
         f1 = msg.get("scan_f1_mhz")
         f2 = msg.get("scan_f2_mhz")
-        if f1 is None or f2 is None:
-            return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
-        # Регистр — микросекунды. scan_dwell_us предпочтителен; ms → ×1000
-        # (0.4 мс оператора не должен стать 0 и дефолтом NIOS 3 с).
-        if msg.get("scan_dwell_us") is not None:
-            dwell = int(msg.get("scan_dwell_us") or 0)
-        elif msg.get("scan_dwell_ms") is not None:
-            dwell = int(round(float(msg.get("scan_dwell_ms") or 0) * 1000.0))
-        else:
-            dwell = 0
+        dwell, why = self._scan_dwell_us(msg)
+        if dwell is None:
+            return False, why
         if not self.fpga.set_scan_corridor(
                 float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell):
             return False, "запись SCAN_* не удалась"
@@ -734,11 +763,11 @@ class LegionGateway:
             # регистр переживает сессии (сброс только по nios_reset) — иначе
             # ARM наследовал бы limit прошлого fs (limit=854 от 56 МГц на
             # тракте 2 МГц растянул бы deadman до ~28 с вместо ~1–2 с).
+            # WD от запрошенного fs; нет поля → дефолт тракта 2 МГц, не
+            # зашитый 61 (на micro 61×65536/10e6 < kick 500 мс).
             fs_wd = msg.get("fs_hz")
-            if fs_wd is not None:
-                limit = lf.watchdog_limit_for_fs(int(fs_wd), self.board)
-            else:
-                limit = lf.WD_LIMIT_DEFAULT
+            fs_for_wd = int(fs_wd) if fs_wd is not None else 2_000_000
+            limit = lf.watchdog_limit_for_fs(fs_for_wd, self.board)
             if not self.fpga.set_watchdog(limit):
                 return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
             if msg.get("nco_ftw") is not None:
@@ -750,11 +779,25 @@ class LegionGateway:
                     return {"ok": False, "reason": "NCO FTW по умолчанию (fs/8) не записался"}
             # Аналог: x40 — CONTROL bit1/2; micro — AIR-регистры NIOS (AD9361).
             # Цифровой IQ после close Soapy держит HDL/RFIC, не USB-линк.
+            # U1: границы SCAN до эфира — отказной Старт не поднимает RFIC.
+            scan_ok, scan_why = self._validate_scan(msg)
+            if not scan_ok:
+                return {"ok": False, "reason": scan_why}
             air_ok, air_why = self._air_enable(mode, msg)
             if not air_ok:
                 return {"ok": False, "reason": air_why}
             scan_ok, scan_why = self._program_scan(msg)
             if not scan_ok:
+                if (self._rx_by_us or self._tx_by_us) and not self._armed:
+                    if self.board == "bladerf2":
+                        self.fpga.air_prepare(False, rx=False, tx=False)
+                    else:
+                        self._lms_enable(
+                            rx=False if self._rx_by_us else None,
+                            tx=False if self._tx_by_us else None,
+                        )
+                    self._rx_by_us = False
+                    self._tx_by_us = False
                 return {"ok": False, "reason": scan_why}
             ok = self.fpga.arm(mode, bool(msg.get("wd", True)))
             if ok:
@@ -870,7 +913,20 @@ class LegionGateway:
             return {"ok": False, "reason": f"usb: неизвестный action {action}"}
         if op == "set":
             reg = str(msg.get("reg") or "")
-            val = int(msg.get("value") or 0)
+            raw = msg.get("value")
+            if reg == "scan_dwell_ms":
+                if isinstance(raw, str) and "," in raw:
+                    return {"ok": False,
+                            "reason": "scan_dwell_ms: запятая не принимается (нужен 0.4)"}
+                try:
+                    val = int(round(float(raw) * 1000.0))
+                except (TypeError, ValueError):
+                    return {"ok": False, "reason": "scan_dwell_ms: не число"}
+            else:
+                try:
+                    val = int(raw or 0)
+                except (TypeError, ValueError):
+                    return {"ok": False, "reason": f"{reg}: не число"}
             regmap = {
                 "nco_ftw": lf.REG_NCO_FTW, "det_thr": lf.REG_DET_THR,
                 "det_shift": lf.REG_DET_SHIFT, "player_len": lf.REG_PLAYER_LEN,

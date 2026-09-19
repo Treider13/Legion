@@ -105,7 +105,24 @@ static bool pio_wrote_reg(uint8_t addr, uint32_t data)
 static struct { uint8_t cmd, ch; uint64_t data; } rfic_log[512];
 static int rfic_n;
 static bool rfic_read_ok = true;
-static uint64_t rfic_read_value;
+static uint64_t rfic_read_value; /* GAINMODE, если нет теневой записи */
+static uint64_t rfic_shadow[16][4]; /* cmd × канал 0..3 */
+static bool rfic_shadow_set[16][4];
+static uint64_t rfic_read_override[16];
+static bool rfic_read_override_set[16];
+static bool rfic_fail_enable_tx;
+static bool rfic_fail_tx_freq;
+static bool rfic_fail_standby;
+static bool rfic_fail_filter;
+
+static int rfic_ch_slot(bladerf_channel ch)
+{
+    if (ch == BLADERF_CHANNEL_RX(0)) return 0;
+    if (ch == BLADERF_CHANNEL_TX(0)) return 1;
+    if (ch == BLADERF_CHANNEL_RX(1)) return 2;
+    if (ch == BLADERF_CHANNEL_TX(1)) return 3;
+    return 0;
+}
 
 bool rfic_command_write_immed(bladerf_rfic_command cmd, bladerf_channel ch,
                               uint64_t data)
@@ -116,15 +133,53 @@ bool rfic_command_write_immed(bladerf_rfic_command cmd, bladerf_channel ch,
         rfic_log[rfic_n].data = data;
         rfic_n++;
     }
+    if (rfic_fail_standby && cmd == BLADERF_RFIC_COMMAND_INIT &&
+        data == BLADERF_RFIC_INIT_STATE_STANDBY) {
+        return false;
+    }
+    if (rfic_fail_enable_tx && cmd == BLADERF_RFIC_COMMAND_ENABLE &&
+        ch == BLADERF_CHANNEL_TX(0) && data == 1) {
+        return false;
+    }
+    if (rfic_fail_tx_freq && cmd == BLADERF_RFIC_COMMAND_FREQUENCY &&
+        ch == BLADERF_CHANNEL_TX(0)) {
+        return false;
+    }
+    if (rfic_fail_filter && cmd == BLADERF_RFIC_COMMAND_FILTER) {
+        return false;
+    }
+    if ((unsigned)cmd < 16) {
+        int const slot = rfic_ch_slot(ch);
+        rfic_shadow[cmd][slot] = data;
+        rfic_shadow_set[cmd][slot] = true;
+    }
     return true;
 }
 
 bool rfic_command_read_immed(bladerf_rfic_command cmd, bladerf_channel ch,
                              uint64_t *data)
 {
-    (void)cmd; (void)ch;
+    if (!rfic_read_ok) {
+        *data = 0;
+        return false;
+    }
+    if ((unsigned)cmd < 16 && rfic_read_override_set[cmd]) {
+        *data = rfic_read_override[cmd];
+        return true;
+    }
+    if (cmd == BLADERF_RFIC_COMMAND_GAINMODE) {
+        *data = rfic_read_value;
+        return true;
+    }
+    if ((unsigned)cmd < 16) {
+        int const slot = rfic_ch_slot(ch);
+        if (rfic_shadow_set[cmd][slot]) {
+            *data = rfic_shadow[cmd][slot];
+            return true;
+        }
+    }
     *data = rfic_read_value;
-    return rfic_read_ok;
+    return true;
 }
 
 /* Индекс первого вызова cmd на канале ch с data==want (−1 = не было) */
@@ -337,6 +392,169 @@ int main(void)
           pio_wrote_reg(LEGION_REG_CTRL, 0));
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
+
+    /* --- U5: чтение SCAN_* = последние записи, не STATUS --- */
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2445000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2455000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_TURN);
+    t_status = 0x00A50004u;
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_SCAN_F1_KHZ, &v);
+        CHECK("U5: SCAN_F1 readback", v == 2445000);
+        legion_reg_read(LEGION_REG_SCAN_F2_KHZ, &v);
+        CHECK("U5: SCAN_F2 readback", v == 2455000);
+        legion_reg_read(LEGION_REG_SCAN_DWELL_US, &v);
+        CHECK("U5: SCAN_DWELL readback 400", v == 400);
+        legion_reg_read(LEGION_REG_SCAN_CTRL, &v);
+        CHECK("U5: SCAN_CTRL readback",
+              v == (LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_TURN));
+        legion_reg_read(0, &v);
+        CHECK("U5: addr 0 по-прежнему STATUS", (v & 0x4u) != 0);
+    }
+
+    /* --- R1/R5: FILTER 4x до SAMPLERATE на 2e6 и 520834 --- */
+    rfic_n = 0;
+    rfic_read_value = BLADERF_GAIN_MGC;
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 2000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 2000000);
+    CHECK("R5: AIR 2e6 ok", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    {
+        int i_frx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_RX(0),
+                             BLADERF_RFIC_RXFIR_DEC4);
+        int i_ftx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_TX(0),
+                             BLADERF_RFIC_TXFIR_INT4);
+        int i_srx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
+                             2000000);
+        int i_stx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_TX(0),
+                             2000000);
+        CHECK("R1/R5: FILTER RX DEC4 до SAMPLERATE RX @ 2e6",
+              i_frx >= 0 && i_srx > i_frx);
+        CHECK("R1/R5: FILTER TX INT4 до SAMPLERATE TX @ 2e6",
+              i_ftx >= 0 && i_stx > i_ftx);
+    }
+    legion_reg_write(LEGION_REG_AIR_PREP, 0);
+
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 520834);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 200000);
+    CHECK("R1: AIR 520834 ok", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    {
+        int i_frx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_RX(0),
+                             BLADERF_RFIC_RXFIR_DEC4);
+        int i_srx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
+                             520834);
+        CHECK("R1: FILTER DEC4 до SAMPLERATE @ 520834",
+              i_frx >= 0 && i_srx > i_frx);
+    }
+    legion_reg_write(LEGION_REG_AIR_PREP, 0);
+
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 10000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 10000000);
+    CHECK("R1: AIR 10e6 ok (вне 4x)", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    {
+        int i_frx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_RX(0),
+                             BLADERF_RFIC_RXFIR_DEFAULT);
+        int i_ftx = rfic_idx(BLADERF_RFIC_COMMAND_FILTER, BLADERF_CHANNEL_TX(0),
+                             BLADERF_RFIC_TXFIR_DEFAULT);
+        int i_srx = rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
+                             10000000);
+        CHECK("R1: 10e6 FILTER RX default до SAMPLERATE",
+              i_frx >= 0 && i_srx > i_frx);
+        CHECK("R1: 10e6 FILTER TX default", i_ftx >= 0);
+    }
+    legion_reg_write(LEGION_REG_AIR_PREP, 0);
+
+    /* --- R2/R3: подмена actual fs → AIR отказ, не тихо 2e6 --- */
+    rfic_n = 0;
+    rfic_read_override[BLADERF_RFIC_COMMAND_SAMPLERATE] = 2000000;
+    rfic_read_override_set[BLADERF_RFIC_COMMAND_SAMPLERATE] = true;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 520834);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 200000);
+    CHECK("R2/R3: actual 2e6 при запросе 520834 → AIR отказ",
+          !legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("R2: отказ → STANDBY, unmute не ушёл",
+          rfic_idx(BLADERF_RFIC_COMMAND_INIT, RFIC_SYSTEM_CHANNEL,
+                   BLADERF_RFIC_INIT_STATE_STANDBY) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    rfic_read_override_set[BLADERF_RFIC_COMMAND_SAMPLERATE] = false;
+    {
+        uint32_t prep = 0;
+        legion_reg_read(LEGION_REG_AIR_PREP, &prep);
+        CHECK("R2: AIR_PREP readback down", (prep & 0x1u) == 0);
+    }
+
+    /* --- U2: ENABLE TX fail → STANDBY; dirty down не silent --- */
+    rfic_n = 0;
+    rfic_fail_enable_tx = true;
+    rfic_fail_standby = true;
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 2000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 2000000);
+    CHECK("U2: ENABLE TX fail → air_up false",
+          !legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("U2: STANDBY попытка после частичного ENABLE",
+          rfic_idx(BLADERF_RFIC_COMMAND_INIT, RFIC_SYSTEM_CHANNEL,
+                   BLADERF_RFIC_INIT_STATE_STANDBY) >= 0);
+    CHECK("U2: dirty down не silent-success", !legion_air_down());
+    rfic_fail_standby = false;
+    rfic_fail_enable_tx = false;
+    CHECK("U2: повторный down шлёт STANDBY и проходит", legion_air_down());
+
+    /* --- U3: STANDBY fail → DISARM write false, повтор шлёт STANDBY --- */
+    rfic_n = 0;
+    CHECK("U3: AIR для DISARM", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("U3: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    rfic_fail_standby = true;
+    rfic_n = 0;
+    pio_n = 0;
+    CHECK("U3: DISARM при STANDBY fail → write false",
+          !legion_reg_write(LEGION_REG_CTRL, 0));
+    CHECK("U3: CTRL=0 всё же записан в HDL", pio_wrote_reg(LEGION_REG_CTRL, 0));
+    CHECK("U3: STANDBY ушёл",
+          rfic_idx(BLADERF_RFIC_COMMAND_INIT, RFIC_SYSTEM_CHANNEL,
+                   BLADERF_RFIC_INIT_STATE_STANDBY) >= 0);
+    rfic_fail_standby = false;
+    rfic_n = 0;
+    CHECK("U3: повторный DISARM шлёт STANDBY и ok",
+          legion_reg_write(LEGION_REG_CTRL, 0) &&
+          rfic_idx(BLADERF_RFIC_COMMAND_INIT, RFIC_SYSTEM_CHANNEL,
+                   BLADERF_RFIC_INIT_STATE_STANDBY) >= 0);
+
+    /* --- U4: отказ TX FREQUENCY — mute остаётся, unmute запрещён --- */
+    rfic_n = 0;
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 28000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    CHECK("U4: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("U4: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    t_status = 0;
+    t_tamer = 1000;
+    legion_work();
+    rfic_fail_tx_freq = true;
+    rfic_n = 0;
+    t_tamer += 140001;
+    legion_work();
+    CHECK("U4: hop пытался TX FREQUENCY",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0),
+                   2442000ULL * 1000ULL) >= 0);
+    CHECK("U4: mute остался (TXMUTE 1 есть)",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0);
+    CHECK("U4: unmute=0 запрещён при отказе TX freq",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("U4: AIR_FREQ не сменилась на чужую стоянку", khz == 2414000);
+    }
+    rfic_fail_tx_freq = false;
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
 #else
     printf("== конфиг: x40 (LMS6002D, CONTROL со шлюза) ==\n");
 
@@ -410,6 +628,16 @@ int main(void)
     lms_n = 0; band_n = 0;
     for (int k = 0; k < 20; k++) legion_work();
     CHECK("SCAN x40: tamer стоит → hop нет", lms_n == 0 && band_n == 0);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2445000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2455000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_SCAN_F1_KHZ, &v);
+        CHECK("U5 x40: SCAN_F1 readback", v == 2445000);
+        legion_reg_read(LEGION_REG_SCAN_DWELL_US, &v);
+        CHECK("U5 x40: SCAN_DWELL readback", v == 400);
+    }
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
 #endif

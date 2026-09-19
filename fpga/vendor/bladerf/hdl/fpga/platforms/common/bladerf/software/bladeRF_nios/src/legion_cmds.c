@@ -54,7 +54,11 @@ static uint32_t legion_air_freq_khz;
 static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
 static uint32_t legion_air_fs_hz;
 static uint32_t legion_air_bw_hz;
+static uint32_t legion_air_fs_actual; /* прочитанный с чипа fs; 0 = нет факта */
 static bool     legion_air_is_up;
+static bool     legion_air_dirty;     /* INIT прошёл, RFIC может быть жив */
+#define LEGION_FS_4X_MIN 520834u
+#define LEGION_FS_4X_MAX 2083334u
 /* CTRL.ARM, как записан хостом (нужен legion_work: в STATUS бита armed нет —
  * там playing/cap_done/det_active/wd_fired, legion_regs.vhd). */
 static bool     legion_armed;
@@ -78,6 +82,100 @@ static uint64_t legion_hold_t0;
 
 #define LEGION_SCAN_QUIET_MS     5u
 #define LEGION_SCAN_DWELL_DEFAULT_US 3000000u
+
+#if defined(LEGION_HAVE_RFIC)
+static bool legion_fs_needs_4x(uint32_t fs)
+{
+    return fs >= LEGION_FS_4X_MIN && fs <= LEGION_FS_4X_MAX;
+}
+
+/* Nuand/foxhunt: FILTER до SAMPLERATE. 4x только в [520834, 2083334]. */
+static bool legion_rfic_write_filters(uint32_t fs_hz)
+{
+    uint32_t const rx_fir = legion_fs_needs_4x(fs_hz)
+        ? (uint32_t)BLADERF_RFIC_RXFIR_DEC4
+        : (uint32_t)BLADERF_RFIC_RXFIR_DEFAULT;
+    uint32_t const tx_fir = legion_fs_needs_4x(fs_hz)
+        ? (uint32_t)BLADERF_RFIC_TXFIR_INT4
+        : (uint32_t)BLADERF_RFIC_TXFIR_DEFAULT;
+
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FILTER,
+                                  BLADERF_CHANNEL_RX(0), rx_fir)) {
+        return false;
+    }
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FILTER,
+                                  BLADERF_CHANNEL_TX(0), tx_fir)) {
+        return false;
+    }
+    return true;
+}
+
+static bool legion_rfic_readback_filter(bladerf_channel ch, uint64_t want)
+{
+    uint64_t got = 0;
+    if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_FILTER, ch, &got)) {
+        return false;
+    }
+    return got == want;
+}
+
+/* Допуск park: fs 15%. */
+static bool legion_rfic_readback_fs(bladerf_channel ch, uint32_t want,
+                                    uint32_t *actual)
+{
+    uint64_t got = 0;
+    uint64_t diff;
+
+    if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_SAMPLERATE, ch, &got)) {
+        return false;
+    }
+    if (want == 0) {
+        return false;
+    }
+    diff = got > want ? got - want : want - got;
+    if (diff * 100ull > (uint64_t)want * 15ull) {
+        return false;
+    }
+    if (actual != NULL) {
+        *actual = (uint32_t)got;
+    }
+    return true;
+}
+
+/* Допуск park: BW не «1.5 вместо окна» — факт ≥ половины запроса. */
+static bool legion_rfic_readback_bw(bladerf_channel ch, uint32_t want)
+{
+    uint64_t got = 0;
+
+    if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_BANDWIDTH, ch, &got)) {
+        return false;
+    }
+    return got >= ((uint64_t)want / 2ull);
+}
+
+static bool legion_rfic_standby(void)
+{
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_INIT,
+                                  RFIC_SYSTEM_CHANNEL,
+                                  BLADERF_RFIC_INIT_STATE_STANDBY)) {
+        DBG("LEGION: RFIC STANDBY — отказ\n");
+        return false;
+    }
+    legion_air_is_up = false;
+    legion_air_dirty = false;
+    legion_air_fs_actual = 0;
+    legion_air_gain_db = 0xFFFFFFFFU;
+    DBG("LEGION: эфир в standby\n");
+    return true;
+}
+
+static void legion_air_fail_rollback(void)
+{
+    legion_air_is_up = false;
+    legion_air_fs_actual = 0;
+    (void)legion_rfic_standby();
+}
+#endif
 
 static void legion_scan_reset(void)
 {
@@ -107,6 +205,7 @@ bool legion_air_up(bool rx, bool tx)
         DBG("LEGION: RFIC INIT ON — отказ\n");
         return false;
     }
+    legion_air_dirty = true;
 
     /* TX глушим сразу после INIT, ДО любых перестроек. Раньше нельзя:
      * TXMUTE требует init_state==ON (RFIC_CMD_INIT_REQD, devices_rfic.c).
@@ -118,11 +217,27 @@ bool legion_air_up(bool rx, bool tx)
     if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
                                         BLADERF_CHANNEL_TX(0), 1)) {
         DBG("LEGION: RFIC TX mute — отказ\n");
+        legion_air_fail_rollback();
         return false;
     }
 
+    legion_air_fs_actual = 0;
+
     uint32_t const fs_hz = legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
     uint32_t const bw_hz = legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
+    uint32_t const rx_fir = legion_fs_needs_4x(fs_hz)
+        ? (uint32_t)BLADERF_RFIC_RXFIR_DEC4
+        : (uint32_t)BLADERF_RFIC_RXFIR_DEFAULT;
+    uint32_t const tx_fir = legion_fs_needs_4x(fs_hz)
+        ? (uint32_t)BLADERF_RFIC_TXFIR_INT4
+        : (uint32_t)BLADERF_RFIC_TXFIR_DEFAULT;
+
+    /* FILTER до любой SAMPLERATE — как Nuand bladerf2_set_sample_rate и foxhunt. */
+    if (!legion_rfic_write_filters(fs_hz)) {
+        DBG("LEGION: RFIC FILTER — отказ\n");
+        legion_air_fail_rollback();
+        return false;
+    }
 
     if (rx) {
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
@@ -136,17 +251,28 @@ bool legion_air_up(bool rx, bool tx)
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAINMODE,
                                       BLADERF_CHANNEL_RX(0), BLADERF_GAIN_MGC)) {
             DBG("LEGION: RFIC RX cfg — отказ\n");
+            legion_air_fail_rollback();
             return false;
         }
         /* Readback GAINMODE: записанный MGC без подтверждения — вайб (как
          * readback LO/fs в park). Молча живой AGC уплыл бы после ARM. */
         uint64_t gm = 0;
+        uint32_t fs_got = 0;
         if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_GAINMODE,
                                      BLADERF_CHANNEL_RX(0), &gm) ||
             gm != BLADERF_GAIN_MGC) {
             DBG("LEGION: RFIC GAINMODE readback != MGC — отказ\n");
+            legion_air_fail_rollback();
             return false;
         }
+        if (!legion_rfic_readback_filter(BLADERF_CHANNEL_RX(0), rx_fir) ||
+            !legion_rfic_readback_fs(BLADERF_CHANNEL_RX(0), fs_hz, &fs_got) ||
+            !legion_rfic_readback_bw(BLADERF_CHANNEL_RX(0), bw_hz)) {
+            DBG("LEGION: RFIC RX FILTER/fs/BW readback — отказ\n");
+            legion_air_fail_rollback();
+            return false;
+        }
+        legion_air_fs_actual = fs_got;
         /* Усиление — ровно то, при котором хост мерил шумовую полку:
          * парк пиннит MGC, читает gain и шлёт его в ARM (gain_db).
          * На проводе — смещение +1000 (сентинел 0xFFFFFFFF = «не задан»). */
@@ -156,6 +282,7 @@ bool legion_air_up(bool rx, bool tx)
                                           BLADERF_CHANNEL_RX(0),
                                           (uint32_t)gain_db)) {
                 DBG("LEGION: RFIC RX gain — отказ\n");
+                legion_air_fail_rollback();
                 return false;
             }
         }
@@ -163,6 +290,7 @@ bool legion_air_up(bool rx, bool tx)
 
     if (tx) {
         /* TX уже заглушён (сразу после INIT). Unmute — после ENABLE. */
+        uint32_t fs_got = 0;
         if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
                                       BLADERF_CHANNEL_TX(0), freq_hz) ||
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_SAMPLERATE,
@@ -170,7 +298,18 @@ bool legion_air_up(bool rx, bool tx)
             !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
                                       BLADERF_CHANNEL_TX(0), bw_hz)) {
             DBG("LEGION: RFIC TX cfg — отказ\n");
+            legion_air_fail_rollback();
             return false;
+        }
+        if (!legion_rfic_readback_filter(BLADERF_CHANNEL_TX(0), tx_fir) ||
+            !legion_rfic_readback_fs(BLADERF_CHANNEL_TX(0), fs_hz, &fs_got) ||
+            !legion_rfic_readback_bw(BLADERF_CHANNEL_TX(0), bw_hz)) {
+            DBG("LEGION: RFIC TX FILTER/fs/BW readback — отказ\n");
+            legion_air_fail_rollback();
+            return false;
+        }
+        if (legion_air_fs_actual == 0) {
+            legion_air_fs_actual = fs_got;
         }
     }
 
@@ -179,11 +318,13 @@ bool legion_air_up(bool rx, bool tx)
     if (rx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_ENABLE,
                                         BLADERF_CHANNEL_RX(0), 1)) {
         DBG("LEGION: RFIC RX enable — отказ\n");
+        legion_air_fail_rollback();
         return false;
     }
     if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_ENABLE,
                                         BLADERF_CHANNEL_TX(0), 1)) {
         DBG("LEGION: RFIC TX enable — отказ\n");
+        legion_air_fail_rollback();
         return false;
     }
 
@@ -192,12 +333,14 @@ bool legion_air_up(bool rx, bool tx)
     if (tx && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
                                         BLADERF_CHANNEL_TX(0), 0)) {
         DBG("LEGION: RFIC TX unmute — отказ\n");
+        legion_air_fail_rollback();
         return false;
     }
 
     legion_air_is_up = true;
-    DBG("LEGION: эфир поднят: %lu кГц, RX=%d TX=%d\n",
-        (unsigned long)legion_air_freq_khz, (int)rx, (int)tx);
+    DBG("LEGION: эфир поднят: %lu кГц, RX=%d TX=%d fs=%lu\n",
+        (unsigned long)legion_air_freq_khz, (int)rx, (int)tx,
+        (unsigned long)legion_air_fs_actual);
     return true;
 #elif defined(BOARD_BLADERF_MICRO)
     /* micro без libad936x (RAM_SPAN < 128 KiB, devices.h) — эфир не поднять */
@@ -216,22 +359,10 @@ bool legion_air_up(bool rx, bool tx)
 bool legion_air_down(void)
 {
 #if defined(LEGION_HAVE_RFIC)
-    /* Следующий подъём мерит полку при другом усилении — gain не кэшируем. */
-    legion_air_gain_db = 0xFFFFFFFFU;
-    if (!legion_air_is_up) {
+    if (!legion_air_is_up && !legion_air_dirty) {
         return true;
     }
-    /* STANDBY = тёплое гашение: clear RFFE + TX mute, чип остаётся
-     * сконфигурированным — следующий подъём быстрый (без ad9361_init). */
-    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_INIT,
-                                  RFIC_SYSTEM_CHANNEL,
-                                  BLADERF_RFIC_INIT_STATE_STANDBY)) {
-        DBG("LEGION: RFIC STANDBY — отказ\n");
-        return false;
-    }
-    legion_air_is_up = false;
-    DBG("LEGION: эфир в standby\n");
-    return true;
+    return legion_rfic_standby();
 #else
     return true;
 #endif
@@ -244,6 +375,9 @@ static uint32_t legion_look_hz(void)
 
 static uint32_t legion_fs_hz(void)
 {
+    if (legion_air_fs_actual != 0) {
+        return legion_air_fs_actual;
+    }
     return legion_air_fs_hz ? legion_air_fs_hz : LEGION_AIR_FS_HZ;
 }
 
@@ -426,13 +560,20 @@ static bool legion_hop_lo(uint32_t freq_khz)
                                   BLADERF_CHANNEL_TX(0), 1)) {
         return false;
     }
-    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
-                                  BLADERF_CHANNEL_RX(0), freq_hz) ||
-        !rfic_command_write_immed(BLADERF_RFIC_COMMAND_FREQUENCY,
-                                  BLADERF_CHANNEL_TX(0), freq_hz)) {
-        (void)rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
-                                       BLADERF_CHANNEL_TX(0), 0);
-        return false;
+    {
+        bool const rx_ok = rfic_command_write_immed(
+            BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0), freq_hz);
+        bool const tx_ok = rfic_command_write_immed(
+            BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0), freq_hz);
+        if (!rx_ok || !tx_ok) {
+            /* Mute остаётся. Unmute на разных LO запрещён. */
+            if (rx_ok && legion_air_freq_khz != 0) {
+                (void)rfic_command_write_immed(
+                    BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                    (uint64_t)legion_air_freq_khz * 1000ULL);
+            }
+            return false;
+        }
     }
     if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
                                   BLADERF_CHANNEL_TX(0), 0)) {
@@ -656,9 +797,17 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 legion_wd_latch = false;
                 legion_scan_reset();
             }
-            if ((data & 0x1) == 0 && legion_air_is_up) {
-                /* DISARM: эфир гасим сами — шлюз про RFIC не знает */
-                legion_air_down();
+            if ((data & 0x1) == 0) {
+                /* DISARM: цифру гасим сразу (mux нули), эфир — честно.
+                 * STANDBY отказ → запись CTRL=0 уже ушла, write не ok. */
+                legion_armed = false;
+                IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
+                IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80 | addr);
+                IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+                if (!legion_air_down()) {
+                    return false;
+                }
+                return true;
             }
             break;
 
@@ -691,6 +840,22 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_AIR_BW_HZ) {
         *data = legion_air_bw_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_SCAN_F1_KHZ) {
+        *data = legion_scan_f1_khz;
+        return true;
+    }
+    if (addr == LEGION_REG_SCAN_F2_KHZ) {
+        *data = legion_scan_f2_khz;
+        return true;
+    }
+    if (addr == LEGION_REG_SCAN_CTRL) {
+        *data = legion_scan_ctrl;
+        return true;
+    }
+    if (addr == LEGION_REG_SCAN_DWELL_US) {
+        *data = legion_scan_dwell_us;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

@@ -26,6 +26,9 @@ architecture tb of legion_regs_tb is
     signal tx_player_len : unsigned(11 downto 0);
     signal tx_cap_arm    : std_logic;
     signal tx_wd_kick    : std_logic;
+    signal rx_clock      : std_logic := '0';
+    signal rx_reset      : std_logic := '1';
+    signal det_cnt       : unsigned(15 downto 0) := x"00A5";
     signal done          : boolean := false;
 
     procedure write_reg(signal clk : in std_logic;
@@ -45,6 +48,7 @@ architecture tb of legion_regs_tb is
 begin
     nios_clk <= not nios_clk after 6.25 ns when not done;  -- 80 МГц
     tx_clock <= not tx_clock after 5 ns when not done;     -- 100 МГц (модель)
+    rx_clock <= not rx_clock after 7.1 ns when not done;   -- асинхронно к nios (x40)
 
     dut : entity work.legion_regs
         port map (
@@ -56,10 +60,10 @@ begin
             tx_nco_ftw => tx_nco_ftw, tx_lb_shift => tx_lb_shift,
             tx_wd_limit => tx_wd_limit, tx_player_len => tx_player_len,
             tx_cap_arm => tx_cap_arm, tx_wd_kick => tx_wd_kick,
-            rx_clock => nios_clk, rx_reset => nios_reset,
+            rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
-            tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => x"00A5"
+            tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt
         );
 
     stim : process
@@ -69,6 +73,7 @@ begin
         wait for 30 ns;
         nios_reset <= '0';
         tx_reset <= '0';
+        rx_reset <= '0';
         wait for 30 ns;
 
         -- CTRL: ARM(bit0)=1 + MODE(bits3:1)=PLAYER(001) + WD_EN(bit4)=1
@@ -108,6 +113,15 @@ begin
         assert pio_status(2) = '1' report "FAIL: status.det_active" severity failure;
         assert pio_status(15 downto 8) = x"2A" report "FAIL: status.lb_level" severity failure;
         assert pio_status(31 downto 16) = x"00A5" report "FAIL: status.det_count" severity failure;
+
+        -- Gray CDC: смена 00FF→0100 не даёт рваного 01FF/0000
+        det_cnt <= x"00FF";
+        for k in 0 to 15 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status(31 downto 16) = x"00FF" report "FAIL: det_count 00FF after gray CDC" severity failure;
+        det_cnt <= x"0100";
+        for k in 0 to 15 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status(31 downto 16) = x"0100" report "FAIL: det_count 0100 after gray CDC" severity failure;
+        assert pio_status(31 downto 16) /= x"01FF" report "FAIL: torn det_count 01FF" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;
