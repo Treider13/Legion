@@ -105,13 +105,13 @@ export function SpectrumScope() {
       ctx.font = "10px ui-monospace, JetBrains Mono, monospace";
       for (let db = firstDb; db <= dbHi + 1e-9; db += gridDb) {
         const y = yOf(db, dbLo, dbHi, padT, plotH);
-        ctx.strokeStyle = "rgba(232,228,220,0.06)";
+        ctx.strokeStyle = "rgba(232,228,220,0.14)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(padL, y);
         ctx.lineTo(padL + plotW, y);
         ctx.stroke();
-        ctx.fillStyle = "rgba(232,228,220,0.38)";
+        ctx.fillStyle = "rgba(232,228,220,0.58)";
         ctx.textAlign = "right";
         ctx.fillText(`${db.toFixed(0)}`, padL - 6, y + 3);
       }
@@ -120,12 +120,12 @@ export function SpectrumScope() {
       const first = Math.ceil(loF / step) * step;
       for (let f = first; f <= hiF + 1e-9; f += step) {
         const x = xOf(f);
-        ctx.strokeStyle = "rgba(232,228,220,0.05)";
+        ctx.strokeStyle = "rgba(232,228,220,0.10)";
         ctx.beginPath();
         ctx.moveTo(x, padT);
         ctx.lineTo(x, padT + plotH);
         ctx.stroke();
-        ctx.fillStyle = "rgba(232,228,220,0.32)";
+        ctx.fillStyle = "rgba(232,228,220,0.5)";
         ctx.textAlign = "center";
         ctx.fillText(`${f >= 1000 ? (f / 1000).toFixed(f % 1000 === 0 ? 0 : 1) + "G" : f.toFixed(0)}`, x, cssH - 6);
       }
@@ -229,8 +229,8 @@ export function SpectrumScope() {
       ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
 
       if (!live.some((b) => finiteDbm(b.powerDbm))) {
-        ctx.fillStyle = "rgba(232,228,220,0.42)";
-        ctx.font = "12px ui-monospace, JetBrains Mono, monospace";
+        ctx.fillStyle = "rgba(232,228,220,0.62)";
+        ctx.font = "13px ui-monospace, JetBrains Mono, monospace";
         ctx.textAlign = "center";
         const msg = st.fpgaArmed
           ? "USB у платы · host-FFT молчит · взгляд analog, не выдуманный спектр"

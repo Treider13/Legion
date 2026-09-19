@@ -681,7 +681,7 @@
   gap: 10px 14px;
   padding: 8px 12px;
   font-size: 11px;
-  color: var(--lg-dim);
+  color: var(--lg-text);
   border-bottom: 1px solid var(--lg-border);
 }
 
