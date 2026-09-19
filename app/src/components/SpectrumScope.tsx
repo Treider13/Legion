@@ -40,7 +40,7 @@ export function SpectrumScope() {
     rtsaCanvas.height = rtsa.height;
     const rtsaCtx = rtsaCanvas.getContext("2d");
     const rtsaImg = rtsaCtx ? rtsaCtx.createImageData(rtsa.width, rtsa.height) : null;
-    let lastRtsaKey = "";
+    let lastRtsaSrc: readonly { freqMhz: number; powerDbm: number }[] | null = null;
     let lastAxisKey = "";
 
     const draw = () => {
@@ -96,20 +96,19 @@ export function SpectrumScope() {
       if (axisKey !== lastAxisKey) {
         rtsa.reset();
         lastAxisKey = axisKey;
-        lastRtsaKey = "";
+        lastRtsaSrc = null;
       }
       const rtsaSrc = st.labPsd.composite.length ? st.labPsd.composite : live;
       if (st.labShowRtsa && rtsaImg && rtsaCtx && rtsaSrc.some((b) => finiteDbm(b.powerDbm))) {
-        const finiteN = rtsaSrc.reduce((n, b) => n + (finiteDbm(b.powerDbm) ? 1 : 0), 0);
-        const peakLive = strongestFinite(rtsaSrc);
-        const rtsaKey = `${st.scanCenterMhz ?? ""}:${finiteN}:${peakLive?.freqMhz ?? ""}:${peakLive?.powerDbm ?? ""}`;
-        if (rtsaKey !== lastRtsaKey) {
+        // pavsa: PersistentDisplay.drawSpectrumFloat на каждый новый DatasetSpectrum,
+        // не «только если пик сменился» — иначе EMA не гаснет на стоянке.
+        if (rtsaSrc !== lastRtsaSrc) {
           const y0 = st.labSubtractBaseline ? -120 : dbLo;
           const y1 = st.labSubtractBaseline ? -20 : dbHi;
           rtsa.push(rtsaSrc, y0, y1, Date.now());
           rtsa.renderRgba(rtsaImg.data);
           rtsaCtx.putImageData(rtsaImg, 0, 0);
-          lastRtsaKey = rtsaKey;
+          lastRtsaSrc = rtsaSrc;
         }
         ctx.globalAlpha = 0.88;
         ctx.drawImage(rtsaCanvas, padL, padT, plotW, plotH);

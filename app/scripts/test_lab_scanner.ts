@@ -290,6 +290,7 @@ async function main(): Promise<void> {
   L().startScan();
   await new Promise((r) => setTimeout(r, 40));
   check("хост-скан поднялся в эмуляции", L().scanRunning === true);
+  check("старт скана сбрасывает калибровку шпор (pavsa new SpurFilter на sweep)", L().labSpurReady === false);
   const again = L().applyPlaylistJson(
     JSON.stringify({ name: "re", steps: [{ name: "u", centerMhz: 915, lookMhz: 4, dwellMs: 1 }] }),
   );

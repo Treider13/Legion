@@ -3770,7 +3770,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         });
         gWalker = walker;
         const nBins = 1024;
-        set({ scanRunning: true, scanCenterMhz: null });
+        gLabSpur.recalibrate();
+        set({ scanRunning: true, scanCenterMhz: null, labSpurReady: false });
         pushLog(
           "sys",
           `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
