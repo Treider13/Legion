@@ -1686,6 +1686,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         labPlaylistIdx: index,
       });
       pushLog("sys", patch.reason);
+      if (get().scanRunning && !isFpgaAirPattern(get().scanPattern)) {
+        get().stopScan();
+        get().startScan();
+        pushLog("sys", "playlist: хост-скан перезапущен на новый коридор (старый walker не пишет в чужую ось)");
+      }
       return true;
     },
     setLabIperfJson: (raw) => {

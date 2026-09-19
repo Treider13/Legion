@@ -59,7 +59,7 @@ function toneWindow(center: number, bw: number, n: number, toneMhz: number, peak
   });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   console.log("LAB SCANNER");
 
   const xa4 = catalogById("bladerf-micro-xa4");
@@ -273,6 +273,29 @@ function main(): void {
   );
   check("store playlist без ARM", applied === true && L().fpgaArmed === false && L().scanPattern !== undefined);
   check("store шаг выставил взгляд 8", L().fpgaAirBwMhz === "8" && L().signalFreqMhz === "3500.000");
+  L().stopScan();
+  useLegion.setState({
+    scanPattern: "auto",
+    sdrEmulation: true,
+    sdrLoadOk: true,
+    rfOn: false,
+    paOn: false,
+    fpgaArmed: false,
+    signalTxActive: false,
+    flashBusy: false,
+  });
+  L().startScan();
+  await new Promise((r) => setTimeout(r, 40));
+  check("хост-скан поднялся в эмуляции", L().scanRunning === true);
+  const again = L().applyPlaylistJson(
+    JSON.stringify({ name: "re", steps: [{ name: "u", centerMhz: 915, lookMhz: 4, dwellMs: 1 }] }),
+  );
+  await new Promise((r) => setTimeout(r, 40));
+  check(
+    "playlist в живом скане перезапускает walker на новую ось",
+    again && L().scanRunning === true && L().sdrF1 === "913.000" && L().sdrF2 === "917.000",
+  );
+  L().stopScan();
   L().setLabIperfJson(JSON.stringify({ end: { sum: { lost_percent: 1.2, bytes: 9 } } }));
   check("store iperf записан", L().labIperf?.lostPercent === 1.2 && L().labIperf?.bytes === 9);
   L().setLabBper(10, 2);

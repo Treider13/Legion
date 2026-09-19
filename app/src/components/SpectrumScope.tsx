@@ -156,6 +156,39 @@ export function SpectrumScope() {
       if (st.labShowBaseline && base.some((b) => finiteDbm(b.powerDbm))) {
         strokeBins(base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
       }
+      ctx.fillStyle = "rgba(45,212,191,0.14)";
+      ctx.beginPath();
+      let fillStarted = false;
+      let fillX = padL;
+      for (const b of live) {
+        if (!finiteDbm(b.powerDbm)) {
+          if (fillStarted) {
+            ctx.lineTo(fillX, padT + plotH);
+            ctx.lineTo(padL, padT + plotH);
+            ctx.closePath();
+            ctx.fill();
+            ctx.beginPath();
+            fillStarted = false;
+          }
+          continue;
+        }
+        const x = xOf(b.freqMhz);
+        const y = yOf(b.powerDbm, dbLo, dbHi, padT, plotH);
+        if (!fillStarted) {
+          ctx.moveTo(x, padT + plotH);
+          ctx.lineTo(x, y);
+          fillStarted = true;
+          fillX = x;
+        } else {
+          ctx.lineTo(x, y);
+          fillX = x;
+        }
+      }
+      if (fillStarted) {
+        ctx.lineTo(fillX, padT + plotH);
+        ctx.closePath();
+        ctx.fill();
+      }
       strokeBins(live, "#2dd4bf", 1.6);
       if (st.labShowPeak && peak.length) strokeBins(peak, "#f5c16c", 1.25);
 
