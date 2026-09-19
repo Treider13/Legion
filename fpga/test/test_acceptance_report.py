@@ -10,7 +10,8 @@ import unittest
 from pathlib import Path
 
 from acceptance_report import (
-    REQUIRED_STAGES, boolean_evidence, complete_report_error, gateway_identity, summarize,
+    REQUIRED_STAGES, boolean_evidence, complete_report_error, decode_report,
+    gateway_identity, summarize,
 )
 
 
@@ -121,6 +122,49 @@ class ReportValidationTests(unittest.TestCase):
             report = copy.deepcopy(original)
             report[field] = value
             self.assertIsNotNone(complete_report_error(report), field)
+
+    def test_nested_counters_require_exact_integer_types(self):
+        rows = check_rows()
+        original = {**summarize(rows), "checks": rows}
+        for key, value in (("FAIL", False), ("ERROR", 0.0), ("PASS", 6.0),
+                           ("UNKNOWN", "0"), ("SKIP", None)):
+            report = copy.deepcopy(original)
+            report["counts"][key] = value
+            self.assertIsNotNone(complete_report_error(report), (key, value))
+
+    def test_duplicate_json_keys_are_rejected_at_any_depth(self):
+        for text in ('{"ok":false,"ok":true}',
+                     '{"counts":{"FAIL":1,"FAIL":0}}',
+                     '{"checks":[{"status":"FAIL","status":"PASS"}]}'):
+            with self.assertRaisesRegex(ValueError, "повторяющийся ключ"):
+                decode_report(text)
+
+    def test_non_json_constants_are_rejected(self):
+        for value in ("NaN", "Infinity", "-Infinity"):
+            with self.assertRaisesRegex(ValueError, "недопустимое значение"):
+                decode_report('{"value":' + value + '}')
+
+    def test_shell_wrapper_rejects_missing_gateway_before_device_access(self):
+        script = Path(__file__).with_name("run_acceptance.sh")
+        for arguments in (("--gw",), ("--gw", ""), ("--gw", "--skip-e6")):
+            result = subprocess.run(["bash", str(script), *arguments],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("--gw требует адрес", result.stderr)
+            self.assertNotIn("предусловия", result.stdout)
+
+    def test_validator_cli_rejects_contradictory_duplicate_keys(self):
+        rows = check_rows()
+        data = json.dumps({**summarize(rows), "checks": rows})
+        data = data.replace('"ok": true', '"ok": false, "ok": true', 1)
+        script = Path(__file__).with_name("acceptance_report.py")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ambiguous-report.json"
+            path.write_text(data, encoding="utf-8")
+            result = subprocess.run([sys.executable, str(script), str(path)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("повторяющийся ключ", result.stderr)
 
     def test_validator_cli_rejects_old_report_and_invalid_json(self):
         script = Path(__file__).with_name("acceptance_report.py")

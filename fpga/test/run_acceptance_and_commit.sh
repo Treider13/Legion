@@ -31,6 +31,10 @@ done
 # --- commit_report <json> [log]: коммит зелёного отчёта, и ничего больше ----
 commit_report() {
   local json="$1" log="${2:-}"
+  local -a report_paths=("$json")
+  if [ -n "$log" ]; then
+    report_paths+=("$log")
+  fi
   [ -f "$json" ] || { echo "FAIL: отчёт не найден: $json" >&2; return 2; }
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || { echo "FAIL: не git-репозиторий — коммитить некуда" >&2; return 2; }
@@ -47,15 +51,17 @@ commit_report() {
     return 2
   fi
   # results/ под .gitignore осознанно (локальные логи стендов) — нужен -f.
-  git add -f "$json" ${log:+"$log"} || { echo "FAIL: git add не удался" >&2; return 2; }
+  git --literal-pathspecs add -f -- "${report_paths[@]}" || { echo "FAIL: git add не удался" >&2; return 2; }
   local board ts
   board=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("board") or "board?")' "$json" 2>/dev/null)
   ts=$(basename "$json" .json | sed 's/^acceptance-//')
-  git commit -m "test(acceptance): E1–E6 ALL PASS на стенде ($board, $ts)
+  # Проверка пустого индекса выше не блокирует другие процессы Git.
+  # Явный список путей исключает чужие staged-файлы из этого коммита.
+  git --literal-pathspecs commit --only -m "test(acceptance): E1–E6 ALL PASS на стенде ($board, $ts)
 
 Стендовый прогон fpga/test/run_acceptance.sh; отчёт и лог — в
 fpga/test/results/. Зафиксированы результаты перечисленных этапов;
-они не являются доказательством отсутствия всех ошибок системы." || { echo "FAIL: git commit не удался" >&2; return 2; }
+они не являются доказательством отсутствия всех ошибок системы." -- "${report_paths[@]}" || { echo "FAIL: git commit не удался" >&2; return 2; }
   echo "ОТЧЁТ ЗАКОММИЧЕН: $json${log:+ $log}"
   return 0
 }

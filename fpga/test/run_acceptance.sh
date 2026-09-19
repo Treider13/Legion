@@ -15,7 +15,12 @@ GW=""
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --gw) GW="$2"; shift 2 ;;
+    --gw)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
+        echo "FAIL: --gw требует адрес шлюза" >&2
+        exit 2
+      fi
+      GW="$2"; shift 2 ;;
     *) EXTRA+=("$1"); shift ;;
   esac
 done

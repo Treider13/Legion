@@ -2,9 +2,41 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 
 REQUIRED_STAGES = tuple(f"E{i}" for i in range(1, 7))
 CHECK_STATUSES = frozenset({"PASS", "FAIL", "ERROR", "UNKNOWN", "SKIP"})
+
+
+def decode_report(text: str) -> object:
+    """Reject ambiguous JSON instead of silently keeping the last duplicate key."""
+    def unique_object(pairs: list[tuple[str, object]]) -> dict:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"повторяющийся ключ JSON: {key}")
+            result[key] = value
+        return result
+
+    def invalid_constant(value: str) -> None:
+        raise ValueError(f"недопустимое значение JSON: {value}")
+
+    return json.loads(text, object_pairs_hook=unique_object,
+                      parse_constant=invalid_constant)
+
+
+def _same_typed_value(actual: object, expected: object) -> bool:
+    """JSON booleans and floats must not impersonate integer counters."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return (actual.keys() == expected.keys()
+                and all(_same_typed_value(actual[key], value)
+                        for key, value in expected.items()))
+    if isinstance(expected, list):
+        return (len(actual) == len(expected)
+                and all(_same_typed_value(a, b) for a, b in zip(actual, expected)))
+    return actual == expected
 
 
 def gateway_identity(reply: object) -> tuple[bool | None, str]:
@@ -76,7 +108,7 @@ def complete_report_error(report: object) -> str | None:
         return "нет результатов отдельных проверок"
     expected = summarize(checks)
     for key, value in expected.items():
-        if type(report.get(key)) is not type(value) or report.get(key) != value:
+        if not _same_typed_value(report.get(key), value):
             return f"поле {key} не соответствует результатам проверок"
     if not expected["ok"]:
         return f"аппаратная приёмка не завершена успешно: {expected['status']}"
@@ -85,7 +117,6 @@ def complete_report_error(report: object) -> str | None:
 
 def main() -> int:
     import argparse
-    import json
     import sys
     from pathlib import Path
 
@@ -93,7 +124,7 @@ def main() -> int:
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
     try:
-        report = json.loads(args.report.read_text(encoding="utf-8"))
+        report = decode_report(args.report.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         print(f"FAIL: отчёт не читается: {exc}", file=sys.stderr)
         return 2
