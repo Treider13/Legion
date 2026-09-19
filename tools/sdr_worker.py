@@ -191,9 +191,13 @@ TX_N = 4096  # кратно 8 → целое число периодов при 
 TX_FAIL_LIMIT = 8
 # DIO-sys/spectrum_analyzer: FFT 1024/2048/4096, Welch 8 кадров, Hann, |X|²/N².
 # capture.hpp: 40 MSPS, 4096 сэмплов/USB, 32 буфера; main.cpp: кольцо 2^18.
+# soapy_power/psd.py: fft_overlap=0.5, crop_factor=overlap если --crop.
+# soapy_power/power.py: после setFrequency крутит read_stream, пока не пройдёт tune_delay.
 FFT_SIZES = (1024, 2048, 4096)
 WELCH_FRAMES = 8
 FFT_MIN = 1024
+FFT_OVERLAP = 0.5
+CROP_FACTOR = 0.5
 DIO_SAMPLE_RATE_HZ = 40_000_000
 DIO_BANDWIDTH_HZ = 40_000_000
 TRANSFER_SAMPLES = 4096
@@ -233,6 +237,8 @@ def rx_is_parked(
 # (capture.cpp: set_frequency и дальше sync_rx), а 32×4096 на 2 MSPS — это
 # 65.5 мс задержки handoff на каждой парковке, не физика.
 SETTLE_TIME_S = 5e-3
+# soapy_power setup(tune_delay=...): у нас то же 5 мс, что уже обоснованы PLL.
+TUNE_DELAY_S = SETTLE_TIME_S
 
 
 def settle_samples(fs: float = 0.0) -> int:
@@ -886,6 +892,7 @@ class Radio:
         self._ring: IqRing | None = None
         self._discard_left = 0
         self._rx_gen = 0
+        self._tune_until = 0.0
         self._rx_io = threading.Lock()
         self._tone = None
         self._tx_fs = float(TX_FS)
@@ -1191,6 +1198,7 @@ class Radio:
                     if self._ring is not None:
                         self._ring.reset()
                     self._discard_left = settle_samples(fs)
+                    self._tune_until = time.monotonic() + TUNE_DELAY_S
                     pending = self._rx_gen + 1
                 else:
                     pending = self._rx_gen
@@ -1202,9 +1210,12 @@ class Radio:
 
     def _wait_psd(self, gen: int, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
         fft_n = _pick_fft_size(n)
-        need = WELCH_FRAMES * fft_n
+        need = welch_need_samples(fft_n)
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
+            if self._tune_until and time.monotonic() < self._tune_until:
+                time.sleep(0.0005)
+                continue
             if (
                 self._rx_gen >= gen
                 and self._ring is not None
@@ -1227,9 +1238,10 @@ class Radio:
                 **extra,
             }
         if self.fake:
-            # Живой scan() игнорирует bw: ось = fs = 40 MSPS. FAKE не должен врать 20 МГц.
+            # Живой scan() игнорирует bw: ось = fs = 40 MSPS, потом crop soapy.
             adc_mhz = DIO_SAMPLE_RATE_HZ / 1e6
-            return {"ok": True, "bins": _fake_bins(center_mhz, adc_mhz, n), "centerMhz": center_mhz, **extra}
+            raw = _fake_bins(center_mhz, adc_mhz, _pick_fft_size(n))
+            return {"ok": True, "bins": crop_psd_bins(raw, CROP_FACTOR), "centerMhz": center_mhz, **extra}
         if self.dev is None:
             return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
         if not NUMPY:
@@ -1797,6 +1809,31 @@ def _pick_fft_size(n: int) -> int:
     return FFT_SIZES[-1]
 
 
+def welch_overlap_bins(fft_n: int, overlap: float = FFT_OVERLAP) -> int:
+    """soapy_power/psd.py: floor(bins * fft_overlap) → noverlap Welch."""
+    return int(math.floor(int(fft_n) * float(overlap)))
+
+
+def welch_hop_samples(fft_n: int, overlap: float = FFT_OVERLAP) -> int:
+    return max(1, int(fft_n) - welch_overlap_bins(fft_n, overlap))
+
+
+def welch_need_samples(fft_n: int, frames: int = WELCH_FRAMES, overlap: float = FFT_OVERLAP) -> int:
+    """Кадры с перекрытием: N + (frames−1)*hop. soapy welch noverlap=floor(N/2)."""
+    return int(fft_n) + max(0, int(frames) - 1) * welch_hop_samples(fft_n, overlap)
+
+
+def crop_psd_bins(bins: list[dict[str, float]], crop_factor: float = CROP_FACTOR) -> list[dict[str, float]]:
+    """soapy_power/psd.py result(): crop_bins_half = round((crop_factor * bins) / 2)."""
+    n = len(bins)
+    if crop_factor <= 0 or n < 4:
+        return bins
+    half = int(round((float(crop_factor) * n) / 2.0))
+    if half <= 0 or 2 * half >= n:
+        return bins
+    return bins[half : n - half]
+
+
 def _hann(n: int) -> Any:
     """w[n] = 0.5 * (1 − cos(2πn / (N−1))) — processing.cpp rebuild_plan."""
     idx = np.arange(n, dtype=np.float64)
@@ -1862,26 +1899,28 @@ def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
 
 
 def _psd_from_ring(ring: IqRing, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-    """PSD как DIO-sys: Hann + Welch-8 + |X|²/N² + DC-bin, полный FFT без pooling."""
+    """Hann + Welch-8 + overlap 0.5 + crop soapy. Ось display.cpp, потом обрезка краёв."""
     if not NUMPY:
         raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
     fft_n = _pick_fft_size(n)
-    need = WELCH_FRAMES * fft_n
+    hop = welch_hop_samples(fft_n)
+    need = welch_need_samples(fft_n)
     extra = ring.available() - need
     if extra > 0:
         ring.drop_oldest(extra)
+    block = ring.pop_batch(need)
+    if block is None:
+        raise RuntimeError("кольцо RX: нет полного кадра FFT")
     frames = np.zeros((WELCH_FRAMES, fft_n), dtype=np.complex64)
     for i in range(WELCH_FRAMES):
-        batch = ring.pop_batch(fft_n)
-        if batch is None:
-            raise RuntimeError("кольцо RX: нет полного кадра FFT")
-        frames[i] = batch
+        a = i * hop
+        frames[i] = block[a : a + fft_n]
     db = welch_dbm(frames)
-    # display.cpp: freq[k] = (center − fs/2) + k * (fs / N).
-    # linspace(..., N) даёт шаг fs/(N−1) — DC-бин (k=N/2) уезжает с LO.
+    # display.cpp: freq[k] = (center − fs/2) + k * (fs / N). Crop — после оси.
     span = fs / 1e6
     freqs = (center_mhz - span / 2.0) + np.arange(fft_n, dtype=np.float64) * (span / fft_n)
-    return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
+    raw = [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
+    return crop_psd_bins(raw, CROP_FACTOR)
 
 
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))

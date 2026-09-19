@@ -202,6 +202,24 @@ export function hostScanSpanMhz(_analogBwMhz?: number): number {
   return 40;
 }
 
+/** soapy_power/psd.py: crop_factor = overlap если --crop. overlap default 0.5. */
+export const SOAPY_FFT_OVERLAP = 0.5;
+export const SOAPY_CROP_FACTOR = 0.5;
+
+/** После crop 0.5 из 40 МГц ADC остаётся 20 МГц (soapy freq_plan hop). */
+export function hostPaintSpanMhz(analogBwMhz?: number): number {
+  return hostScanSpanMhz(analogBwMhz) * (1 - SOAPY_CROP_FACTOR);
+}
+
+/** soapy_power result(): crop_bins_half = round((crop_factor * bins) / 2). */
+export function cropPsdBins<T>(bins: readonly T[], cropFactor = SOAPY_CROP_FACTOR): T[] {
+  const n = bins.length;
+  if (cropFactor <= 0 || n < 4) return bins.slice();
+  const half = Math.round((cropFactor * n) / 2);
+  if (half <= 0 || 2 * half >= n) return bins.slice();
+  return bins.slice(half, n - half);
+}
+
 /** DIO-sys/spectrum_analyzer: медиана нижних 60%. */
 export function estimateNoiseFloor(bins: readonly ScanBin[]): number {
   if (bins.length === 0) return 0;

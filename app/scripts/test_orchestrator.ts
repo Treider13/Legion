@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
-import { detectFromBins, estimateNoiseFloor, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
+import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
@@ -351,6 +351,8 @@ async function main(): Promise<void> {
   );
   check("хост FFT span = ADC 40, не analog 28", hostScanSpanMhz(28) === 40);
   check("хост FFT span xa4 тоже 40", hostScanSpanMhz(56) === 40);
+  check("soapy crop 0.5 → hop/paint 20 МГц", hostPaintSpanMhz(56) === 20);
+  check("cropPsdBins 8→4", cropPsdBins([0, 1, 2, 3, 4, 5, 6, 7], 0.5).join() === "2,3,4,5");
 
   const centers = planCenters(ism, 20);
   check("план скана непустой", centers.length >= 5);

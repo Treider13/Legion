@@ -22,6 +22,7 @@ pub fn run() {
       sdr::sdr_rpc,
       sdr::sdr_flash,
       sdr::sdr_host_info,
+      sdr::lab_iperf3,
       esp32_flash::esp32_chip_id,
       esp32_flash::esp32_flash,
       legion_build::legion_env_info,

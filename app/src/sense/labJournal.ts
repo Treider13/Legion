@@ -452,6 +452,6 @@ export function buildLabJournal(opts: {
     note:
       "Журнал хоста. Гейт lb_gated на плате не ждёт min_duration. " +
       "STA/SMA остаются FAIL-closed, пока нет Quartus на этой машине и кабеля 50 Ом на стенде оператора. " +
-      "lost_percent и BPER — только если оператор вставил свой прогон.",
+      "lost_percent и BPER — только iperf3 --json (автопрогон или вставка). STA/SMA без квартуса остаются закрытыми.",
   };
 }

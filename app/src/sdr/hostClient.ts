@@ -75,6 +75,30 @@ export async function hostOpen(
   });
 }
 
+export async function hostIperf3(opts: {
+  host: string;
+  port: number;
+  timeSec: number;
+  udp: boolean;
+  bitrate?: string;
+}): Promise<{ ok: true; json: string } | { ok: false; reason: string }> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "iperf3: нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    const json = await invoke<string>("lab_iperf3", {
+      host: opts.host,
+      port: opts.port,
+      timeSec: opts.timeSec,
+      udp: opts.udp,
+      bitrate: opts.bitrate ?? null,
+    });
+    return { ok: true, json };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostScan(centerMhz: number, bwMhz: number, bins: number): Promise<HostScanResult> {
   const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
     op: "scan",

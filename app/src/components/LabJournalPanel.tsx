@@ -41,7 +41,8 @@ export function LabJournalPanel() {
       <span className="panel-title">ЖУРНАЛ СТЕНДА · xA4 · не гейт FPGA</span>
       <p className="sens-hint">
         Полка {target} с как у bladerf-jamming-poc. Событие в лог после {s.labMinDurationSec} с (rtl-sdr-analyzer) —
-        гейт платы не ждёт. iperf3 --json и BPER — ваш прогон, цифры не подставляются. STA/SMA FAIL-closed.
+        гейт платы не ждёт. iperf3 --json — автопрогон CLI или вставка. Нет бинаря/сервера — отказ, не 80 %.
+        STA/SMA FAIL-closed.
       </p>
 
       <div className="lab-progress" aria-label="Сбор полки">
@@ -182,8 +183,46 @@ export function LabJournalPanel() {
         )}
       </div>
 
+      <div className="corr-grid">
+        <label>
+          IPERF ХОСТ
+          <input
+            aria-label="Адрес iperf3 сервера стенда"
+            value={s.labIperfHost}
+            onChange={(e) => s.setLabIperfHost(e.target.value)}
+            placeholder="192.168.1.10"
+          />
+        </label>
+        <label>
+          ПОРТ
+          <input aria-label="Порт iperf3" value={s.labIperfPort} onChange={(e) => s.setLabIperfPort(e.target.value)} />
+        </label>
+        <label>
+          СЕК
+          <input aria-label="Длительность iperf3" value={s.labIperfSec} onChange={(e) => s.setLabIperfSec(e.target.value)} />
+        </label>
+        <label>
+          ПРОГОНЫ
+          <input aria-label="Число прогонов iperf3" value={s.labIperfLoops} onChange={(e) => s.setLabIperfLoops(e.target.value)} />
+        </label>
+        <label>
+          <input type="checkbox" checked={s.labIperfUdp} onChange={(e) => s.setLabIperfUdp(e.target.checked)} />
+          UDP
+        </label>
+      </div>
+      <div className="power-row">
+        <button type="button" className="btn-primary" onClick={() => void s.runLabIperf()} disabled={s.labIperfBusy}>
+          {s.labIperfBusy ? "IPERF…" : "ПРОГНАТЬ IPERF3"}
+        </button>
+        <span className="sens-hint">
+          {s.labIperf
+            ? `lost ${s.labIperf.lostPercent} % · ${s.labIperf.bytes} байт`
+            : "нет отчёта — не выдумываем 80 %"}
+        </span>
+      </div>
+
       <label className="file-row">
-        iperf3 --json (lost_percent + bytes, как jamrf)
+        iperf3 --json (lost_percent + bytes, как jamrf) — если CLI недоступен
         <textarea
           aria-label="iperf3 JSON"
           className="lab-textarea"
