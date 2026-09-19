@@ -175,7 +175,8 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 [analysis-community-ideas](docs/analysis-community-ideas.md) ·
 [analysis-legion-recheck](docs/analysis-legion-recheck.md) ·
 [analysis-legion-intent-complete](docs/analysis-legion-intent-complete.md) ·
-[analysis-legion-us-path](docs/analysis-legion-us-path.md)
+[analysis-legion-us-path](docs/analysis-legion-us-path.md) ·
+[analysis-legion-look-window](docs/analysis-legion-look-window.md)
 
 ## Правовая заметка
 

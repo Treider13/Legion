@@ -4,6 +4,8 @@
 
 Путь «нашёл → SDR → усилитель за микросекунды» (форумы Nuand, FIR, бюджет
 гейта): [analysis-legion-us-path.md](analysis-legion-us-path.md).
+Уточнение «нашлась 2450 → на усилитель 2445…2455»:
+[analysis-legion-look-window.md](analysis-legion-look-window.md).
 
 Предыдущий разбор (`analysis-legion-recheck.md`) откладывал железо, timing
 xA4, физические 400 мкс и «частоту внутри окна». Это противоречит требованию
