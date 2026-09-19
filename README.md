@@ -172,7 +172,12 @@ Tauri на каждый пуш; релизы (win/mac/linux бандлы) — п
 [analysis-upgrade](docs/analysis-upgrade.md) ·
 [analysis-related-repos](docs/analysis-related-repos.md) ·
 [analysis-peer-projects](docs/analysis-peer-projects.md) ·
-[analysis-community-ideas](docs/analysis-community-ideas.md)
+[analysis-community-ideas](docs/analysis-community-ideas.md) ·
+[analysis-legion-recheck](docs/analysis-legion-recheck.md) ·
+[analysis-legion-intent-complete](docs/analysis-legion-intent-complete.md) ·
+[analysis-legion-us-path](docs/analysis-legion-us-path.md) ·
+[analysis-legion-look-window](docs/analysis-legion-look-window.md) ·
+[analysis-legion-rx1-tx1](docs/analysis-legion-rx1-tx1.md)
 
 ## Правовая заметка
 
