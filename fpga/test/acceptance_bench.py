@@ -25,7 +25,7 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
                     watchdog, плата, время) — артефакт готовности xA4.
 
 Этапы (зеркало fpga/README.md):
-  E1 канал/образ живы: ping + VERSION (штатный пакет target 0x00)
+  E1 шлюз сообщает реальную плату и интерфейс Legion (не точный образ)
   E2 NCO из FPGA: arm nco → (кабель) det_count растёт
      (micro: arm nco с freq_mhz поднимает AIR_PREP up+TX, RX дожимается
       записью air_prep=0x7 — CONTROL на micro не существует)
@@ -34,7 +34,8 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
   E4 детектор: det_thr → стрим тона → det_count вырос (гейт — по HDL-симу)
   E5 watchdog: перестали слать kick → wd_fired=1 (латентность меряется:
      x40 ~1.0 с, micro ~2.0 с при дефолтном WD_LIMIT=61 — tx_clock=fs)
-  E6 autoload: операторская (power cycle), подтверждение канала после
+  E6 канал после ручного power cycle; autoload остаётся UNKNOWN, пока
+     шлюз не предоставляет измеренный источник загрузки и идентичность образа
 
 Один владелец USB на шлюзе: скрипт сам гоняет usb release/acquire
 (агент) вокруг стрим-фаз (SoapySDRServer на шлюзе поднимается по --ssh
@@ -43,6 +44,7 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import socket
 import subprocess
@@ -51,19 +53,18 @@ import threading
 import time
 from pathlib import Path
 
-fails = 0
+from acceptance_report import boolean_evidence, gateway_identity, summarize
+
 # Протокол приёмки для JSON-отчёта: (этап, имя, ok, detail).
 results: list[dict] = []
 stage = ""
 
 
-def check(name: str, cond: bool, detail: str = "") -> None:
-    global fails
-    print(("  PASS  " if cond else "  FAIL  ") + name + ("" if cond else f"  {detail}"))
-    results.append({"stage": stage, "name": name, "ok": bool(cond),
-                    **({"detail": detail} if detail and not cond else {})})
-    if not cond:
-        fails += 1
+def check(name: str, cond: bool | None, detail: str = "") -> None:
+    status = "UNKNOWN" if cond is None else "PASS" if cond else "FAIL"
+    print(f"  {status}  {name}" + (f"  {detail}" if detail and cond is not True else ""))
+    results.append({"stage": stage, "name": name, "ok": cond is True,
+                    "status": status, **({"detail": detail} if detail else {})})
 
 
 class Gw:
@@ -105,6 +106,8 @@ class Worker:
 
 def main() -> int:
     global stage
+    results.clear()
+    stage = ""
     ap = argparse.ArgumentParser()
     ap.add_argument("--gw", required=True, help="IP шлюза с платой")
     ap.add_argument("--port", type=int, default=5531)
@@ -124,6 +127,33 @@ def main() -> int:
                     help="JSON-отчёт приёмки (артефакт готовности платы)")
     args = ap.parse_args()
     gw = Gw(args.gw, args.port)
+    context = {"board": args.board or None, "wd_fired_after_s": None}
+
+    def finish() -> int:
+        report = {
+            "system": "LEGION fpga legion",
+            "gateway": f"{args.gw}:{args.port}",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "report_sources_sha256": {
+                name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                for name in ("acceptance_bench.py", "acceptance_report.py")
+            },
+            **context,
+            **summarize(results),
+            "checks": results,
+        }
+        if report["ok"]:
+            print("ПРИЁМКА: ALL PASS")
+        else:
+            print(f"ПРИЁМКА: {report['status']} — ошибок {report['fails']}, "
+                  f"UNKNOWN {report['counts']['UNKNOWN']}, SKIP {report['counts']['SKIP']}; "
+                  f"не выполнены этапы: {', '.join(report['missing_stages']) or 'нет'}")
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"  отчёт: {out}")
+        return 0 if report["ok"] else 1 if report["fails"] else 3
 
     def soapy_server(up: bool) -> None:
         """SoapySDRServer на шлюзе: по ssh — сами, иначе пауза оператора."""
@@ -156,164 +186,186 @@ def main() -> int:
             except Exception:
                 pass  # сеть мертва — watchdog в FPGA отработает сам
 
-    kick_thr = threading.Thread(target=kick_loop, daemon=True)
-    kick_thr.start()
-
     stage = "E1"
     print("== E1: канал и образ ==")
-    r = gw({"op": "ping"})
-    check("агент шлюза отвечает", r.get("ok") is True, str(r))
-    board = args.board or ("micro" if r.get("board") == "bladerf2" else "x40")
-    print(f"  плата: {board}" + (" (авто-детект по ping)" if not args.board else ""))
-    # micro: ARM без freq_mhz честно отказывает (LO для AD9361 обязателен).
-    arm_freq = {"freq_mhz": 2450.0} if board == "micro" else {}
-    r = gw({"op": "set", "reg": "det_shift", "value": 8})
-    check("запись регистра через агента (det_shift)", r.get("ok") is True, str(r))
-    r = gw({"op": "set", "reg": "det_thr", "value": 1000})
-    check("запись регистра через агента (det_thr)", r.get("ok") is True, str(r))
-
-    stage = "E2"
-    print("== E2: NCO из FPGA ==")
-    r = gw({"op": "set", "reg": "nco_ftw", "value": int(0.25e6 / 2e6 * 2**32)})
-    check("FTW записан (250 кГц при fs=2 МГц)", r.get("ok") is True, str(r))
-    if board == "micro":
-        # CONTROL на micro не существует: ARM nco поднимает AIR_PREP up+TX,
-        # RX для детектора дожимаем записью AIR_PREP up+RX+TX (NIOS, тёплый
-        # подъём — freq/fs/BW статики уже заданы ARM'ом).
-        r = gw({"op": "arm", "mode": "nco", **arm_freq})
-        check("ARM nco (micro: freq_mhz обязателен)", r.get("ok") is True, str(r))
-        r = gw({"op": "set", "reg": "air_prep", "value": 0x7})
-        check("micro: AIR_PREP up+RX+TX — детектор слышит", r.get("ok") is True, str(r))
-    else:
-        r = gw({"op": "rx", "on": True})
-        check("RX включён (CONTROL bit1) — детектор слышит", r.get("ok") is True, str(r))
-        r = gw({"op": "arm", "mode": "nco"})
-        check("ARM nco", r.get("ok") is True, str(r))
-    d0 = gw({"op": "status"}).get("det_count", 0) or 0
-    time.sleep(1.2)
-    st = gw({"op": "status"})
-    check("watchdog жив при heartbeat", not st.get("wd_fired"), str(st))
-    d1 = st.get("det_count", 0) or 0
-    if d1 > d0:
-        check("кабель TX→RX: детектор слышит свой тон", True)
-    else:
-        check("кабель TX→RX: детектор слышит свой тон", False,
-              "нет кабеля TX1→RX1 / det_count не растёт — SKIP=PASS запрещён")
-    gw({"op": "disarm"})
-    if board != "micro":
-        gw({"op": "rx", "on": False})
-
-    stage = "E3"
-    print("== E3: плеер (capture → play) ==")
-    gw({"op": "set", "reg": "player_len", "value": 4095})
-    r = gw({"op": "set", "reg": "player_ctl", "value": 1})
-    check("capture_arm=1", r.get("ok") is True, str(r))
-    r = gw({"op": "usb", "action": "release"})
-    check("агент отпустил USB для стрима", r.get("ok") is True, str(r))
-    soapy_server(up=True)
-    wk = Worker(Path(args.worker), args.gw)
     try:
-        r = wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
-        check("воркер открыл SDR через SoapyRemote", r.get("ok") is True, str(r))
-        r = wk.rpc({"op": "tx_wave", "freqMhz": 2450.0, "wave": "qpsk", "params": {"amp": 0.25}})
-        check("стрим волны (capture идёт в FPGA)", r.get("ok") is True, str(r))
-        time.sleep(1.5)
-        wk.rpc({"op": "tx_off"})
-    finally:
-        wk.close()
-    soapy_server(up=False)
-    r = gw({"op": "usb", "action": "acquire"})
-    check("агент занял USB обратно", r.get("ok") is True, str(r))
-    st = gw({"op": "status"})
-    check("capture_done=1 (волна в RAM FPGA)", st.get("capture_done") is True, str(st))
-    r = gw({"op": "arm", "mode": "player", **arm_freq})
-    st = gw({"op": "status"})
-    check("PLAYER играет из RAM автономно", r.get("ok") is True and st.get("playing") is True,
-          f"{r} / {st}")
-
-    stage = "E4"
-    print("== E4: детектор (стимул — стрим тона) ==")
-    gw({"op": "disarm"})
-    r = gw({"op": "set", "reg": "det_thr", "value": 1000})
-    check("det_thr записан", r.get("ok") is True, str(r))
-    d0 = gw({"op": "status"}).get("det_count", 0) or 0
-    gw({"op": "usb", "action": "release"})
-    soapy_server(up=True)
-    wk = Worker(Path(args.worker), args.gw)
-    try:
-        wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
-        wk.rpc({"op": "tx_wave", "freqMhz": 2450.0, "wave": "tone", "params": {"fj": 0.1, "amp": 0.25}})
-        time.sleep(1.5)
-        # RX у воркера активен при scan — детектор в FPGA слышит тон с кабеля
-        wk.rpc({"op": "scan", "centerMhz": 2450.0, "bwMhz": 2, "bins": 64})
-        wk.rpc({"op": "tx_off"})
-    finally:
-        wk.close()
-    soapy_server(up=False)
-    gw({"op": "usb", "action": "acquire"})
-    d1 = gw({"op": "status"}).get("det_count", 0) or 0
-    check("детектор FPGA засёк тон (det_count вырос)", d1 > d0, f"{d0} → {d1}")
-
-    stage = "E5"
-    print("== E5: watchdog (deadman) ==")
-    r = gw({"op": "arm", "mode": "nco", **arm_freq})
-    check("ARM для watchdog-теста", r.get("ok") is True, str(r))
-    print("  … heartbeat останавливаем — ждём срабатывания")
-    kick_stop.set()  # имитация смерти ноутбука/сети
-    # Не спим фиксированные 1.6 с: дефолт WD_LIMIT=61 даёт на x40 ~1.0 с
-    # (tx_clock = 2×fs), на micro ~2.0 с (tx_clock = fs — см.
-    # watchdog_limit_for_fs). Опросом меряем фактическую латентность — заодно
-    # это и есть стендовое число для сверки модели тактирования watchdog.
-    t0 = time.monotonic()
-    fired_after: float | None = None
-    st: dict = {}
-    while time.monotonic() - t0 < 4.0:
-        st = gw({"op": "status"})
-        if st.get("wd_fired"):
-            fired_after = time.monotonic() - t0
-            break
-        time.sleep(0.1)
-    check("watchdog сработал (wd_fired=1)", fired_after is not None, str(st))
-    if fired_after is not None:
-        print(f"  … wd_fired через {fired_after:.1f} с после потери heartbeat")
-    gw({"op": "disarm"})
-
-    if not args.skip_e6:
-        stage = "E6"
-        print("== E6: autoload (оператор) ==")
-        # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf). Размер
-        # micro по USB PID не отличить (xA4 и xA9 — оба 0x5250): --size A9.
-        size = args.size or ("40" if board != "micro" else "A4")
-        if board == "micro" and not args.size:
-            print("  … micro без --size: считаю A4; на xA9 перезапустите с --size A9")
-        rbf = f"legionx{size}.rbf"
-        if args.non_interactive:
-            print(f"  … --non-interactive: на шлюзе должно быть сделано: "
-                  f"bladeRF-cli -L {rbf}; питание off/on")
-        else:
-            print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
-            input()
         r = gw({"op": "ping"})
-        check("канал жив после power cycle (наш образ autoload)", r.get("ok") is True, str(r))
+    except (OSError, ValueError) as exc:
+        check("идентификация шлюза и платы", None, str(exc))
+        return finish()
+    identified, reason = gateway_identity(r)
+    check("идентификация шлюза и платы", identified, reason)
+    context["gateway_identity"] = r
+    if identified is not True:
+        return finish()
+    board = "micro" if r["board"] == "bladerf2" else "x40"
+    context["board"] = board
+    if args.board and args.board != board:
+        check("выбранная плата совпадает с ответом шлюза", False,
+              f"выбрано {args.board}, шлюз сообщил {board}")
+        return finish()
+    kick_thr = threading.Thread(target=kick_loop, daemon=True)
+    kick_thr.start()
+    try:
+        print(f"  плата: {board}" + (" (авто-детект по ping)" if not args.board else ""))
+        # micro: ARM без freq_mhz честно отказывает (LO для AD9361 обязателен).
+        arm_freq = {"freq_mhz": 2450.0} if board == "micro" else {}
+        r = gw({"op": "set", "reg": "det_shift", "value": 8})
+        check("запись регистра через агента (det_shift)", r.get("ok") is True, str(r))
+        r = gw({"op": "set", "reg": "det_thr", "value": 1000})
+        check("запись регистра через агента (det_thr)", r.get("ok") is True, str(r))
 
-    ok_all = fails == 0
-    print("ПРИЁМКА: ALL PASS" if ok_all else f"ПРИЁМКА: {fails} FAILURES")
-    if args.out:
-        report = {
-            "system": "LEGION fpga legion",
-            "board": board,
-            "gateway": f"{args.gw}:{args.port}",
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "ok": ok_all,
-            "fails": fails,
-            "wd_fired_after_s": fired_after,
-            "checks": results,
-        }
-        out = Path(args.out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-        print(f"  отчёт: {out}")
-    return 0 if ok_all else 1
+        stage = "E2"
+        print("== E2: NCO из FPGA ==")
+        r = gw({"op": "set", "reg": "nco_ftw", "value": int(0.25e6 / 2e6 * 2**32)})
+        check("FTW записан (250 кГц при fs=2 МГц)", r.get("ok") is True, str(r))
+        if board == "micro":
+            # CONTROL на micro не существует: ARM nco поднимает AIR_PREP up+TX,
+            # RX для детектора дожимаем записью AIR_PREP up+RX+TX (NIOS, тёплый
+            # подъём — freq/fs/BW статики уже заданы ARM'ом).
+            r = gw({"op": "arm", "mode": "nco", **arm_freq})
+            check("ARM nco (micro: freq_mhz обязателен)", r.get("ok") is True, str(r))
+            r = gw({"op": "set", "reg": "air_prep", "value": 0x7})
+            check("micro: AIR_PREP up+RX+TX — детектор слышит", r.get("ok") is True, str(r))
+        else:
+            r = gw({"op": "rx", "on": True})
+            check("RX включён (CONTROL bit1) — детектор слышит", r.get("ok") is True, str(r))
+            r = gw({"op": "arm", "mode": "nco"})
+            check("ARM nco", r.get("ok") is True, str(r))
+        d0 = gw({"op": "status"}).get("det_count", 0) or 0
+        time.sleep(1.2)
+        st = gw({"op": "status"})
+        wd_ok, wd_detail = boolean_evidence(st, "wd_fired", False)
+        check("телеметрия watchdog при heartbeat", wd_ok, wd_detail)
+        d1 = st.get("det_count", 0) or 0
+        if d1 > d0:
+            check("кабель TX→RX: детектор слышит свой тон", True)
+        else:
+            check("кабель TX→RX: детектор слышит свой тон", False,
+                  "нет кабеля TX1→RX1 / det_count не растёт — SKIP=PASS запрещён")
+        gw({"op": "disarm"})
+        if board != "micro":
+            gw({"op": "rx", "on": False})
+
+        stage = "E3"
+        print("== E3: плеер (capture → play) ==")
+        gw({"op": "set", "reg": "player_len", "value": 4095})
+        r = gw({"op": "set", "reg": "player_ctl", "value": 1})
+        check("capture_arm=1", r.get("ok") is True, str(r))
+        r = gw({"op": "usb", "action": "release"})
+        check("агент отпустил USB для стрима", r.get("ok") is True, str(r))
+        soapy_server(up=True)
+        wk = Worker(Path(args.worker), args.gw)
+        try:
+            r = wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
+            check("воркер открыл SDR через SoapyRemote", r.get("ok") is True, str(r))
+            r = wk.rpc({"op": "tx_wave", "freqMhz": 2450.0, "wave": "qpsk", "params": {"amp": 0.25}})
+            check("стрим волны (capture идёт в FPGA)", r.get("ok") is True, str(r))
+            time.sleep(1.5)
+            wk.rpc({"op": "tx_off"})
+        finally:
+            wk.close()
+        soapy_server(up=False)
+        r = gw({"op": "usb", "action": "acquire"})
+        check("агент занял USB обратно", r.get("ok") is True, str(r))
+        st = gw({"op": "status"})
+        check("capture_done=1 (волна в RAM FPGA)", st.get("capture_done") is True, str(st))
+        r = gw({"op": "arm", "mode": "player", **arm_freq})
+        st = gw({"op": "status"})
+        check("PLAYER играет из RAM автономно", r.get("ok") is True and st.get("playing") is True,
+              f"{r} / {st}")
+
+        stage = "E4"
+        print("== E4: детектор (стимул — стрим тона) ==")
+        gw({"op": "disarm"})
+        r = gw({"op": "set", "reg": "det_thr", "value": 1000})
+        check("det_thr записан", r.get("ok") is True, str(r))
+        d0 = gw({"op": "status"}).get("det_count", 0) or 0
+        gw({"op": "usb", "action": "release"})
+        soapy_server(up=True)
+        wk = Worker(Path(args.worker), args.gw)
+        try:
+            wk.rpc({"op": "open", "args": wk.args, "analogBwMhz": 28, "canTx": True, "fullDuplex": True})
+            wk.rpc({"op": "tx_wave", "freqMhz": 2450.0, "wave": "tone", "params": {"fj": 0.1, "amp": 0.25}})
+            time.sleep(1.5)
+            # RX у воркера активен при scan — детектор в FPGA слышит тон с кабеля
+            wk.rpc({"op": "scan", "centerMhz": 2450.0, "bwMhz": 2, "bins": 64})
+            wk.rpc({"op": "tx_off"})
+        finally:
+            wk.close()
+        soapy_server(up=False)
+        gw({"op": "usb", "action": "acquire"})
+        d1 = gw({"op": "status"}).get("det_count", 0) or 0
+        check("детектор FPGA засёк тон (det_count вырос)", d1 > d0, f"{d0} → {d1}")
+
+        stage = "E5"
+        print("== E5: watchdog (deadman) ==")
+        r = gw({"op": "arm", "mode": "nco", **arm_freq})
+        check("ARM для watchdog-теста", r.get("ok") is True, str(r))
+        print("  … heartbeat останавливаем — ждём срабатывания")
+        kick_stop.set()  # имитация смерти ноутбука/сети
+        # Не спим фиксированные 1.6 с: дефолт WD_LIMIT=61 даёт на x40 ~1.0 с
+        # (tx_clock = 2×fs), на micro ~2.0 с (tx_clock = fs — см.
+        # watchdog_limit_for_fs). Опросом меряем фактическую латентность — заодно
+        # это и есть стендовое число для сверки модели тактирования watchdog.
+        t0 = time.monotonic()
+        fired_after: float | None = None
+        st: dict = {}
+        wd_ok, wd_detail = None, "нет ответа телеметрии watchdog"
+        while time.monotonic() - t0 < 4.0:
+            st = gw({"op": "status"})
+            wd_ok, wd_detail = boolean_evidence(st, "wd_fired", True)
+            if wd_ok is True:
+                fired_after = time.monotonic() - t0
+                break
+            time.sleep(0.1)
+        check("телеметрия сообщает wd_fired=true",
+              True if fired_after is not None else wd_ok, wd_detail)
+        context["wd_fired_after_s"] = fired_after
+        if fired_after is not None:
+            print(f"  … wd_fired через {fired_after:.1f} с после потери heartbeat")
+        gw({"op": "disarm"})
+
+        if not args.skip_e6:
+            stage = "E6"
+            print("== E6: autoload (оператор) ==")
+            # Имя артефакта — факт build_bladerf.sh ($rev"x"$size.rbf). Размер
+            # micro по USB PID не отличить (xA4 и xA9 — оба 0x5250): --size A9.
+            size = args.size or ("40" if board != "micro" else "A4")
+            if board == "micro" and not args.size:
+                print("  … micro без --size: считаю A4; на xA9 перезапустите с --size A9")
+            rbf = f"legionx{size}.rbf"
+            if args.non_interactive:
+                print(f"  … --non-interactive: на шлюзе должно быть сделано: "
+                      f"bladeRF-cli -L {rbf}; питание off/on")
+            else:
+                print(f"  … на шлюзе: bladeRF-cli -L {rbf}; питание off/on; Enter")
+                input()
+            r = gw({"op": "ping"})
+            identified, reason = gateway_identity(r)
+            check("шлюз сообщает реальную плату и Legion после ручного перезапуска",
+                  identified, reason)
+            # Текущий ping содержит только ok/fake/board/legion. Даже успешный
+            # ответ не измеряет источник загрузки и не идентифицирует RBF.
+            check("autoload и идентичность установленного образа", None,
+                  "шлюз не предоставляет эти данные; ping не доказывает autoload")
+        else:
+            stage = "E6"
+            results.append({"stage": stage, "name": "проверка autoload",
+                            "status": "SKIP", "ok": False,
+                            "detail": "оператор выбрал --skip-e6"})
+            print("  SKIP  E6 (--skip-e6): аппаратная приёмка неполная")
+
+    except (Exception, KeyboardInterrupt) as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        results.append({"stage": stage, "name": "выполнение этапа",
+                        "status": "ERROR", "ok": False, "detail": detail})
+        print(f"  ERROR  {stage}: {detail}")
+    finally:
+        kick_stop.set()
+        kick_thr.join(timeout=5)
+
+    return finish()
 
 
 if __name__ == "__main__":

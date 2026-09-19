@@ -5,7 +5,7 @@
 #
 # Лог и JSON-отчёт складываются в fpga/test/results/acceptance-<время>.log/.json
 # (плата — внутри JSON, поле board; в имя не входит).
-# Код возврата = код acceptance_bench.py (0 = ALL PASS).
+# Коды: 0 = ALL PASS, 1 = FAIL, 2 = ошибка запуска, 3 = INCOMPLETE.
 # Без успешного прогона на целевой плате система стабильной НЕ считается
 # (см. README.md, раздел «Приёмка на железе»).
 set -u
@@ -15,7 +15,12 @@ GW=""
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --gw) GW="$2"; shift 2 ;;
+    --gw)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
+        echo "FAIL: --gw требует адрес шлюза" >&2
+        exit 2
+      fi
+      GW="$2"; shift 2 ;;
     *) EXTRA+=("$1"); shift ;;
   esac
 done
@@ -44,19 +49,26 @@ $PY -c "import SoapySDR" 2>/dev/null && echo "  OK: SoapySDR python (ворке�
   || { echo "  FAIL: python3-soapysdr — sudo apt install python3-soapysdr soapysdr-module-bladerf"; FAIL=1; }
 [ "$FAIL" = "0" ] || { echo "Предусловия не выполнены — приёмка не запускалась."; exit 1; }
 
-TS=$(date +%Y%m%d-%H%M%S)
 OUT_DIR="fpga/test/results"
-mkdir -p "$OUT_DIR"
-LOG="$OUT_DIR/acceptance-$TS.log"
-JSON="$OUT_DIR/acceptance-$TS.json"
+mkdir -p "$OUT_DIR" || exit 2
+# Одновременные запуски не перезаписывают журнал и JSON друг друга.
+LOG=$(mktemp "$OUT_DIR/acceptance-$(date +%Y%m%d-%H%M%S)-XXXXXX.log") || exit 2
+JSON="${LOG%.log}.json"
 
 echo "== приёмка E1–E6: лог $LOG =="
 $PY fpga/test/acceptance_bench.py --gw "$GW" --out "$JSON" "${EXTRA[@]}" 2>&1 | tee "$LOG"
-RC=${PIPESTATUS[0]}
+PIPE_RC=("${PIPESTATUS[@]}")
+RC=${PIPE_RC[0]}
+if [ "${PIPE_RC[1]}" != "0" ]; then
+  echo "FAIL: журнал не удалось сохранить" >&2
+  RC=1
+fi
 
 echo
 if [ "$RC" = "0" ]; then
   echo "ПРИЁМКА: ALL PASS — артефакты: $LOG, $JSON"
+elif [ "$RC" = "3" ]; then
+  echo "ПРИЁМКА: INCOMPLETE — обязательные проверки не подтверждены; лог: $LOG; отчёт: $JSON"
 else
   echo "ПРИЁМКА: FAIL (код $RC) — лог: $LOG; отчёт: $JSON"
   echo "Система НЕ считается стабильной до зелёного прогона E1–E6 на целевой плате."
