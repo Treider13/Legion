@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
+import { finiteDbm } from "../../sense/labPsd";
 import {
   WATERFALL_COLS,
   WATERFALL_ROWS,
+  dbmToUnit,
   heatRgb,
   nextWaterfallRow,
   shouldPushWaterfallRow,
@@ -160,6 +162,28 @@ export function FrequencyField() {
         ctx.drawImage(off, pad, 8, plotW, wfH);
       }
 
+      const strokeDbm = (bins: { freqMhz: number; powerDbm: number }[], color: string, width: number, dash: number[] = []) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        let started = false;
+        for (const b of bins) {
+          if (!finiteDbm(b.powerDbm)) {
+            started = false;
+            continue;
+          }
+          const x = xOf(b.freqMhz);
+          const y = baseY - dbmToUnit(b.powerDbm) * specH;
+          if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+          } else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      };
+
       const latest = rows.length > 0 ? rows[rows.length - 1] : null;
       if (latest) {
         ctx.beginPath();
@@ -185,6 +209,12 @@ export function FrequencyField() {
         ctx.strokeStyle = "rgba(232, 228, 220, 0.14)";
         ctx.lineWidth = 1;
         ctx.stroke();
+      }
+      if (st.labShowPeak && st.labPsd.peakHold.length) {
+        strokeDbm(st.labPsd.peakHold, "rgba(245, 193, 108, 0.85)", 1.1);
+      }
+      if (st.labShowBaseline && st.labPsd.baseline.some((b) => finiteDbm(b.powerDbm))) {
+        strokeDbm(st.labPsd.baseline, "rgba(232, 228, 220, 0.4)", 1, [3, 3]);
       }
 
       if (st.fpgaArmed && fpgaMhz != null) {

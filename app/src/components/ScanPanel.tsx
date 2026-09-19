@@ -14,12 +14,13 @@ import { catalogCaps } from "../sdr/hostClient";
 import { parseBand } from "../policy/allowlist";
 import { waveMeta } from "../sdr/waveforms";
 import { useLegion } from "../state/store";
+import { LabJournalPanel } from "./LabJournalPanel";
+import { SpectrumScope } from "./SpectrumScope";
 
 export function ScanPanel() {
   const s = useLegion();
   const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
   const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
-  const span = Math.max(f2 - f1, 1e-6);
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
   const fpgaAir = isFpgaAirPattern(s.scanPattern);
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
@@ -374,44 +375,7 @@ export function ScanPanel() {
         ))}
       </ul>
 
-      <div className="spectrum-wrap" aria-label="Спектр скана">
-        {auto && s.scanBins.length > 0 ? (
-          <svg className="spectrum-svg" viewBox="0 0 640 88" preserveAspectRatio="none" role="img">
-            {s.scanBins
-              .filter((b) => b.freqMhz >= f1 && b.freqMhz <= f2)
-              .map((b, i) => {
-                // Позиция по РЕАЛЬНОЙ частоте бина: раньше x брался по индексу —
-                // содержимое окна растягивалось на всю полосу (аудит N2).
-                const x = ((b.freqMhz - f1) / span) * 640;
-                const n = 88;
-                const h = Math.min(n, Math.max(2, ((b.powerDbm + 100) / 70) * n));
-                const hit = s.detections.some((d) => Math.abs(d.freqMhz - b.freqMhz) < 0.3);
-                const tx =
-                  s.lastForwardMhz != null && Math.abs(b.freqMhz - s.lastForwardMhz) < 0.3;
-                return (
-                  <rect
-                    key={`${b.freqMhz}-${i}`}
-                    x={x}
-                    y={88 - h}
-                    width={Math.max(640 / s.scanBins.length - 0.4, 1)}
-                    height={h}
-                    fill={tx ? "#ff6b73" : hit ? "#5eead4" : "rgba(45,212,191,0.28)"}
-                  />
-                );
-              })}
-          </svg>
-        ) : (
-          <div className="spectrum-strip">
-            <div className="spectrum-fill" />
-          </div>
-        )}
-        {s.scanCenterMhz !== null && auto && (
-          <div
-            className="spectrum-center"
-            style={{ left: `${Math.min(100, Math.max(0, ((s.scanCenterMhz - f1) / span) * 100))}%` }}
-          />
-        )}
-      </div>
+      <SpectrumScope />
       <div className="range-labels">
         <span>{f1}</span>
         <span className="range-cur">
@@ -491,6 +455,7 @@ export function ScanPanel() {
           </tbody>
         </table>
       )}
+      <LabJournalPanel />
     </section>
   );
 }
