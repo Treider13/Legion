@@ -30,7 +30,7 @@ ESP32 принимает её и физически настраивает чи�
 | Прошивка ESP32 | `firmware/` | PlatformIO; 6 плат: classic / S3 / S2 / C3 / C6 / H2 |
 | ПО на ПК | `app/` | Tauri v2 desktop (React 19 + TS); та же сборка работает в браузере (Web Serial) и на ESP32 (lite-UI) |
 | CLI и эмулятор | `tools/` | `legion_cli.py` (автоматизация), `esp32_emulator.py` (разработка без железа), `fuzz_protocol.py` (фаззинг) |
-| FPGA-ревизия legion | `fpga/` | ревизия `legion` для bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза, NIOS-подъём эфира на micro (AIR-регистры); цикл «сканер → handoff → lb_gated» — режим FPGA+СКАНЕР; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; сборка и запись образа из приложения — вкладка **КАСТОМ FPGA** (СОБРАТЬ → ПРОШИТЬ); см. `fpga/README.md` |
+| FPGA-ревизия legion | `fpga/` | ревизия `legion` для bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40: автономный тракт в FPGA (плеер RAM / NCO / loopback по детектору), watchdog, агент шлюза, NIOS-подъём эфира на micro (AIR-регистры); **автоперехват** — плата сама смотрит RX1 и открывает TX1, USB не в круге detect→TX; вендоренное дерево Nuand в `fpga/vendor/` — сборка из репозитория; сборка и запись образа — вкладка **КАСТОМ FPGA** (desktop Tauri: СОБРАТЬ → ПРОШИТЬ) или `bladeRF-cli -l/-L`; см. `fpga/README.md` |
 | Документация | `docs/` | архитектура, протокол, распиновка, грабли модулей, compliance, реестр заимствований, факты даташита, разбор смежных репозиториев |
 | Локальные референсы | `third_party/` | см. [docs/REFERENCES.md](docs/REFERENCES.md) |
 

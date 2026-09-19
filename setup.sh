@@ -62,6 +62,13 @@ $PY -c "import serial" 2>/dev/null && ok "pyserial (CLI/эмулятор ESP32)"
   || { miss "pyserial — pip install -r tools/requirements.txt"; maybe "pyserial" $PY -m pip install -r tools/requirements.txt; }
 $PY -c "import usb" 2>/dev/null && ok "pyusb (агент шлюза FPGA)" \
   || { miss "pyusb — pip install -r fpga/requirements.txt"; maybe "pyusb" $PY -m pip install -r fpga/requirements.txt; }
+# systemd-юнит ExecStart=/usr/bin/python3 — venv его не кормит.
+if /usr/bin/python3 -c "import usb" 2>/dev/null; then
+  ok "python3-usb в /usr/bin/python3 (systemd шлюз)"
+else
+  miss "python3-usb — sudo apt install python3-usb (юнит зовёт системный python, не venv)"
+  maybe "python3-usb" sudo apt install -y python3-usb
+fi
 
 echo "== bladeRF =="
 if command -v bladeRF-cli >/dev/null; then
