@@ -109,6 +109,37 @@ import {
   withoutOwnTx,
 } from "../sense/orchestrator";
 import { clampWindowMhz, clipToAllowlist, ScanWalker, type ScanPattern } from "../sense/scan";
+import {
+  emptyLabPsd,
+  freezeLabBaseline as freezeLabPsd,
+  ingestLabFrame,
+  occupancyCoverage,
+  occupancyMask,
+  resetLabHolds as resetLabPsdHolds,
+  resetLabPsd,
+  startLabBaseline as beginLabBaseline,
+  type LabPsdState,
+} from "../sense/labPsd";
+import {
+  LAB_MIN_DURATION_SEC,
+  LAB_MIN_WIDTH_MHZ,
+  LabEventTracker,
+  buildLabJournal,
+  hostPeaksForJournal,
+  listHits,
+  parseIperfJson,
+  parseMhzList,
+  parsePlaylistJson,
+  playlistStepPatch,
+  recordBper,
+  recordJsr,
+  type BperRecord,
+  type IperfRecord,
+  type JsrRecord,
+  type LabEvent,
+  type LabJournalFile,
+  type LabPlaylist,
+} from "../sense/labJournal";
 import { sensitivityToThresholdDb, thresholdToSensitivity } from "../sense/sensitivity";
 import { MockTransport } from "../transport/mock";
 import { Sl22Transport } from "../sl22/transport";
@@ -238,6 +269,26 @@ interface LegionStore {
   lastCueReason: string;
   lastSdrTxUs: number | null;
   lastForwardPowerDbm: number | null;
+  /** Композит коридора + peak/min/полка. Не гейт FPGA. */
+  labPsd: LabPsdState;
+  labEvents: LabEvent[];
+  labKnown: string;
+  labIgnore: string;
+  labKnownMhz: number[];
+  labIgnoreMhz: number[];
+  labMinDurationSec: number;
+  labMinWidthMhz: number;
+  labShowPeak: boolean;
+  labShowMin: boolean;
+  labShowBaseline: boolean;
+  labSubtractBaseline: boolean;
+  labShowPersistence: boolean;
+  labPlaylist: LabPlaylist | null;
+  labPlaylistIdx: number;
+  labIperf: IperfRecord | null;
+  labBper: BperRecord | null;
+  labJsr: JsrRecord | null;
+  labCoverage: number | null;
   // ТИП СИГНАЛА (baseband → SDR, нагрузка 50 Ом)
   signalKind: WaveKind;
   signalParams: Record<string, number>;
@@ -381,6 +432,26 @@ interface LegionStore {
   stopFpgaAir(): Promise<void>;
   fpgaPollStatus(): Promise<void>;
   clearLog(): void;
+  startLabBaseline(): void;
+  freezeLabBaseline(): void;
+  resetLabHolds(): void;
+  clearLabPsd(): void;
+  setLabKnown(v: string): void;
+  setLabIgnore(v: string): void;
+  setLabMinDurationSec(v: number): void;
+  setLabMinWidthMhz(v: number): void;
+  setLabShowPeak(v: boolean): void;
+  setLabShowMin(v: boolean): void;
+  setLabShowBaseline(v: boolean): void;
+  setLabSubtractBaseline(v: boolean): void;
+  setLabShowPersistence(v: boolean): void;
+  applyPlaylistJson(raw: string): boolean;
+  applyPlaylistStep(index: number): boolean;
+  setLabIperfJson(raw: string): boolean;
+  setLabBper(ok: number, bad: number): boolean;
+  setLabJsr(opts: { jsr?: number; eSig?: number; pJ?: number }): boolean;
+  clearLabJournal(): void;
+  exportLabJournal(): LabJournalFile;
 }
 
 const MAX_LOG = 500;
@@ -476,6 +547,15 @@ export function pokeLastKickOkMs(v: number | null): void {
 /** Двойной клик ЗАШИТЬ в async-окне между кликом и set(transmitArmed). */
 let gSignalBusy = false;
 const gGate = new HandoffGate();
+/** Хост и FPGA — два трекера: опрос STATUS не закрывает Welch-вспышки. */
+const gLabHost = new LabEventTracker();
+const gLabFpga = new LabEventTracker();
+
+function labCorridor(s: { sdrBands: AllowBand[]; sdrF1: string; sdrF2: string }): { f1: number; f2: number } {
+  const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
+  const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
+  return { f1, f2 };
+}
 
 function stopFpgaKick(): void {
   if (gFpgaKick) {
@@ -634,6 +714,54 @@ function ownTxGuardMhz(armed: boolean): number {
 export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
+
+  const ingestHostLab = (bins: ScanBin[], now: number): void => {
+    const s = get();
+    const { f1, f2 } = labCorridor(s);
+    const next = ingestLabFrame(s.labPsd, bins, f1, f2, now);
+    const peaks = hostPeaksForJournal(bins, s.scanThresholdDb, s.labMinWidthMhz);
+    const live = peaks
+      .filter((p) => listHits(p.freqMhz, s.labKnownMhz, s.labIgnoreMhz)?.kind !== "ignore")
+      .map((p) => ({
+        source: "host-welch" as const,
+        freqMhz: p.freqMhz,
+        powerDbm: p.powerDbm,
+        noiseDbm: p.noiseDbm,
+        snrDb: p.snrDb,
+        widthMhz: p.widthMhz,
+        widthKind: "3db" as const,
+        forwarded: s.lastForwardMhz != null && Math.abs(p.freqMhz - s.lastForwardMhz) < 0.3,
+      }));
+    const closed = gLabHost.ingest(live, now, s.labMinDurationSec);
+    const mask = occupancyMask(next.composite, next.baseline);
+    set({
+      labPsd: next,
+      labEvents: closed.length ? [...s.labEvents, ...closed].slice(-200) : s.labEvents,
+      labCoverage: occupancyCoverage(mask),
+    });
+  };
+
+  const ingestFpgaLab = (freqMhz: number | null, detActive: boolean, now: number): void => {
+    const s = get();
+    const look = parseLocaleNumber(s.fpgaAirBwMhz);
+    const live =
+      detActive && freqMhz != null && freqMhz > 0 && listHits(freqMhz, s.labKnownMhz, s.labIgnoreMhz)?.kind !== "ignore"
+        ? [
+            {
+              source: "fpga-gate" as const,
+              freqMhz,
+              powerDbm: null,
+              noiseDbm: null,
+              snrDb: null,
+              widthMhz: Number.isFinite(look) && look > 0 ? look : 2,
+              widthKind: "look" as const,
+              forwarded: true,
+            },
+          ]
+        : [];
+    const closed = gLabFpga.ingest(live, now, s.labMinDurationSec);
+    if (closed.length) set({ labEvents: [...get().labEvents, ...closed].slice(-200) });
+  };
 
   const beginSoloWalk = (
     walker: ReturnType<typeof makeSoloWalker>,
@@ -1341,6 +1469,25 @@ export const useLegion = create<LegionStore>((set, get) => {
     lastCueReason: "",
     lastSdrTxUs: null,
     lastForwardPowerDbm: null,
+    labPsd: emptyLabPsd(),
+    labEvents: [],
+    labKnown: "",
+    labIgnore: "",
+    labKnownMhz: [],
+    labIgnoreMhz: [],
+    labMinDurationSec: LAB_MIN_DURATION_SEC,
+    labMinWidthMhz: LAB_MIN_WIDTH_MHZ,
+    labShowPeak: true,
+    labShowMin: false,
+    labShowBaseline: true,
+    labSubtractBaseline: false,
+    labShowPersistence: true,
+    labPlaylist: null,
+    labPlaylistIdx: 0,
+    labIperf: null,
+    labBper: null,
+    labJsr: null,
+    labCoverage: null,
     signalKind: "qpsk",
     signalParams: defaultParams("qpsk"),
     signalFreqMhz: "2442.000",
@@ -1475,6 +1622,138 @@ export const useLegion = create<LegionStore>((set, get) => {
     setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
     setScanDwellMs: (v) => set({ scanDwellMs: v }),
     clearLog: () => set({ log: [] }),
+    startLabBaseline: () => {
+      const now = Date.now();
+      set({ labPsd: beginLabBaseline(get().labPsd, now, get().labPsd.baselineTargetSec) });
+      pushLog("sys", `полка спектра: сбор ${get().labPsd.baselineTargetSec} с (poc 120). Гейт FPGA не ждёт.`);
+    },
+    freezeLabBaseline: () => {
+      set({ labPsd: freezeLabPsd(get().labPsd) });
+      pushLog("sys", "полка спектра: заморожена оператором (не 120 с автоматически)");
+    },
+    resetLabHolds: () => {
+      set({ labPsd: resetLabPsdHolds(get().labPsd) });
+      pushLog("sys", "peak/min/persistence сброшены");
+    },
+    clearLabPsd: () => {
+      const target = get().labPsd.baselineTargetSec;
+      set({ labPsd: resetLabPsd(target), labCoverage: null });
+      pushLog("sys", "композит коридора очищен");
+    },
+    setLabKnown: (v) => set({ labKnown: v, labKnownMhz: parseMhzList(v) }),
+    setLabIgnore: (v) => set({ labIgnore: v, labIgnoreMhz: parseMhzList(v) }),
+    setLabMinDurationSec: (v) => {
+      const n = Number.isFinite(v) && v >= 0 ? v : LAB_MIN_DURATION_SEC;
+      set({ labMinDurationSec: n });
+    },
+    setLabMinWidthMhz: (v) => {
+      const n = Number.isFinite(v) && v >= 0 ? v : LAB_MIN_WIDTH_MHZ;
+      set({ labMinWidthMhz: n });
+    },
+    setLabShowPeak: (v) => set({ labShowPeak: v }),
+    setLabShowMin: (v) => set({ labShowMin: v }),
+    setLabShowBaseline: (v) => set({ labShowBaseline: v }),
+    setLabSubtractBaseline: (v) => set({ labSubtractBaseline: v }),
+    setLabShowPersistence: (v) => set({ labShowPersistence: v }),
+    applyPlaylistJson: (raw) => {
+      const parsed = parsePlaylistJson(raw);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      set({ labPlaylist: parsed.playlist, labPlaylistIdx: 0 });
+      return get().applyPlaylistStep(0);
+    },
+    applyPlaylistStep: (index) => {
+      const pl = get().labPlaylist;
+      if (!pl || index < 0 || index >= pl.steps.length) {
+        pushLog("sys", "playlist: нет такого шага");
+        return false;
+      }
+      const patch = playlistStepPatch(pl.steps[index]);
+      const band = parseBand(patch.sdrF1, patch.sdrF2);
+      set({
+        sdrF1: patch.sdrF1,
+        sdrF2: patch.sdrF2,
+        sdrBands: band ? [band] : get().sdrBands,
+        fpgaAirBwMhz: patch.fpgaAirBwMhz,
+        fpgaTurnDwellMs: patch.fpgaTurnDwellMs,
+        scanWindowMhz: patch.scanWindowMhz,
+        scanDwellMs: patch.scanDwellMs,
+        signalFreqMhz: patch.signalFreqMhz,
+        txWaveKind: patch.txWaveKind,
+        txWaveParams: patch.txWaveKind ? get().txWaveParams : {},
+        labPlaylistIdx: index,
+      });
+      pushLog("sys", patch.reason);
+      return true;
+    },
+    setLabIperfJson: (raw) => {
+      const parsed = parseIperfJson(raw);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      set({ labIperf: parsed.record });
+      pushLog("sys", `iperf3: lost_percent=${parsed.record.lostPercent} · bytes=${parsed.record.bytes}`);
+      return true;
+    },
+    setLabBper: (ok, bad) => {
+      const parsed = recordBper(ok, bad);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      set({ labBper: parsed.record });
+      pushLog("sys", `BPER: ${parsed.record.batchesBad}/${parsed.record.batchesOk + parsed.record.batchesBad} = ${parsed.record.bper}`);
+      return true;
+    },
+    setLabJsr: (opts) => {
+      const parsed = recordJsr(opts);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      set({ labJsr: parsed.record });
+      pushLog("sys", `JSR: ${parsed.record.jsr} (${parsed.record.jsrDb.toFixed(2)} дБ) · Pj=${parsed.record.pJ} · Esig=${parsed.record.eSig}`);
+      return true;
+    },
+    clearLabJournal: () => {
+      gLabHost.reset();
+      gLabFpga.reset();
+      set({
+        labEvents: [],
+        labIperf: null,
+        labBper: null,
+        labJsr: null,
+        labPlaylist: null,
+        labPlaylistIdx: 0,
+        labCoverage: null,
+        labKnown: "",
+        labIgnore: "",
+        labKnownMhz: [],
+        labIgnoreMhz: [],
+        labPsd: emptyLabPsd(get().labPsd.baselineTargetSec),
+      });
+    },
+    exportLabJournal: () => {
+      const s = get();
+      const { f1, f2 } = labCorridor(s);
+      return buildLabJournal({
+        f1,
+        f2,
+        baselineTargetSec: s.labPsd.baselineTargetSec,
+        baselineFrozen: s.labPsd.baselineFrozen,
+        coverage: s.labCoverage,
+        events: s.labEvents,
+        iperf: s.labIperf,
+        bper: s.labBper,
+        jsr: s.labJsr,
+        playlist: s.labPlaylist,
+        knownMhz: s.labKnownMhz,
+        ignoreMhz: s.labIgnoreMhz,
+      });
+    },
 
     refreshPorts: async () => {
       const kind = get().transportKind;
@@ -2818,6 +3097,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.ok && r.freq_mhz && r.freq_mhz > 0 && get().fpgaArmed) {
         set({ lastForwardMhz: r.freq_mhz });
       }
+      if (get().fpgaArmed && get().fpgaMode === "lb_gated") {
+        ingestFpgaLab(r.ok ? r.freq_mhz ?? null : null, r.ok && r.det_active === true, Date.now());
+      }
       // Длительная непрерывная работа (шлюз считает armed_s): лог один раз
       // на смену текста, не каждый опрос.
       if (r.ok && r.warn && r.warn !== gArmWarnLast) {
@@ -3413,7 +3695,10 @@ export const useLegion = create<LegionStore>((set, get) => {
               lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
             });
           }
-          if (bins.length > 0) set({ scanBins: bins });
+          if (bins.length > 0) {
+            set({ scanBins: bins });
+            ingestHostLab(bins, now);
+          }
           const cur = get();
           if (isFpgaAirPattern(cur.scanPattern)) {
             // Fail-closed: Старт перехвата не ставит scanRunning и не отдаёт

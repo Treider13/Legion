@@ -666,6 +666,91 @@
   bottom: 2px;
 }
 
+.scope-wrap {
+  margin-top: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--lg-border);
+  background: rgba(5, 7, 13, 0.72);
+  overflow: hidden;
+}
+
+.scope-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--lg-dim);
+  border-bottom: 1px solid var(--lg-border);
+}
+
+.scope-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.scope-live {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lg-faint);
+}
+
+.scope-live.on {
+  color: var(--lg-accent-hi);
+}
+
+.scope-canvas {
+  display: block;
+  width: 100%;
+  height: 280px;
+  cursor: crosshair;
+}
+
+.scope-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px 8px;
+  font-size: 11px;
+  color: var(--lg-dim);
+}
+
+.lab-journal {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--lg-border);
+}
+
+.lab-progress {
+  position: relative;
+  height: 6px;
+  margin: 8px 0 6px;
+  border-radius: 99px;
+  background: var(--lg-glass-2);
+  overflow: hidden;
+}
+
+.lab-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--lg-accent), var(--lg-accent-hi));
+}
+
+.lab-textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  font-family: var(--lg-font-mono);
+  font-size: 12px;
+  color: var(--lg-text);
+  background: var(--lg-ink);
+  border: 1px solid var(--lg-border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
 .check-row {
   display: flex;
   align-items: center;
