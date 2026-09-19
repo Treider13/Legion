@@ -131,6 +131,7 @@ import {
   listHits,
   parseIperfJson,
   parseMhzList,
+  buildPlaylist,
   parsePlaylistJson,
   playlistStepPatch,
   recordBper,
@@ -466,6 +467,7 @@ interface LegionStore {
   setLabIperfUdp(v: boolean): void;
   setLabIperfLoops(v: string): void;
   runLabIperf(): Promise<boolean>;
+  applyPlaylist(data: unknown): boolean;
   applyPlaylistJson(raw: string): boolean;
   applyPlaylistStep(index: number): boolean;
   setLabIperfJson(raw: string): boolean;
@@ -1768,14 +1770,22 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ labIperfBusy: false });
       }
     },
-    applyPlaylistJson: (raw) => {
-      const parsed = parsePlaylistJson(raw);
+    applyPlaylist: (data) => {
+      const parsed = buildPlaylist(data);
       if (!parsed.ok) {
         pushLog("sys", parsed.reason);
         return false;
       }
       set({ labPlaylist: parsed.playlist, labPlaylistIdx: 0 });
       return get().applyPlaylistStep(0);
+    },
+    applyPlaylistJson: (raw) => {
+      const parsed = parsePlaylistJson(raw);
+      if (!parsed.ok) {
+        pushLog("sys", parsed.reason);
+        return false;
+      }
+      return get().applyPlaylist(parsed.playlist);
     },
     applyPlaylistStep: (index) => {
       const pl = get().labPlaylist;

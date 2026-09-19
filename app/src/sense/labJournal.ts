@@ -7,8 +7,9 @@
 //   jamrf: iperf3 JSON `lost_percent` + `bytes`; JSR MATLAB Pj = JSR * Esig.
 //     Не утверждаем «шум всегда лучше тона» — exp1 у них это опроверг.
 //   eris: BPER пакетами/батчами, не ML-заглушка.
-//   CleverJAM: JSON playlist (name, center, look, dwell, wave). Их XML-RPC
-//     hop (issue #9) ненадёжен — шаг применяет параметры, ARM не стартует.
+//   CleverJAM: шаг name/center/look/dwell/wave. Их XML-RPC hop (issue #9)
+//     ненадёжен — шаг применяет параметры, ARM не стартует. В UI — поля,
+//     JSON только импорт файла.
 //   HckRF-Spectral: known/ignore. У них списки пустые — здесь сверка по МГц.
 // xA4: RX 70–6000, TX 47–6000, analog ≤56. Частота любая в диапазоне,
 // 2450 не зашита. STA/SMA в журнал не пишем как PASS.
@@ -326,19 +327,53 @@ export function inRange(mhz: number, lo: number, hi: number): boolean {
   return Number.isFinite(mhz) && mhz >= lo && mhz <= hi;
 }
 
-export function parsePlaylistJson(raw: string): { ok: true; playlist: LabPlaylist } | { ok: false; reason: string } {
-  let data: unknown;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    return { ok: false, reason: "playlist: это не JSON" };
-  }
+/** Частоты из прежнего демо-плейлиста журнала + демо-несущая 2442. Не выдуманный диапазон. */
+export const LAB_PLAYLIST_PRESETS: readonly LabPlaylistStep[] = [
+  { name: "UHF", centerMhz: 433, lookMhz: 2, dwellMs: 0.4, wave: "awgn" },
+  { name: "2.4 ГГц", centerMhz: 2442, lookMhz: 2, dwellMs: 1, wave: "tone" },
+  { name: "5.8 ГГц", centerMhz: 5800, lookMhz: 10, dwellMs: 1, wave: "tone" },
+];
+
+export interface ScannerPlaylistSource {
+  signalFreqMhz: string;
+  sdrF1: string;
+  sdrF2: string;
+  fpgaAirBwMhz: string;
+  scanWindowMhz: string;
+  fpgaTurnDwellMs: string;
+  scanDwellMs: string;
+  txWaveKind: WaveKind | null;
+}
+
+/** Копия уже выставленных полей сканера / типа сигнала. Цифр не придумываем. */
+export function playlistStepFromScanner(s: ScannerPlaylistSource): LabPlaylistStep {
+  const f1 = Number(String(s.sdrF1).replace(",", "."));
+  const f2 = Number(String(s.sdrF2).replace(",", "."));
+  const fromBand = Number.isFinite(f1) && Number.isFinite(f2) ? (f1 + f2) / 2 : Number.NaN;
+  const typed = Number(String(s.signalFreqMhz).replace(",", "."));
+  const centerMhz = Number.isFinite(typed) && typed > 0 ? typed : fromBand;
+  const lookTyped = Number(String(s.fpgaAirBwMhz).replace(",", "."));
+  const lookWin = Number(String(s.scanWindowMhz).replace(",", "."));
+  const lookMhz = Number.isFinite(lookTyped) && lookTyped > 0 ? lookTyped : lookWin;
+  const dwellFpga = Number(String(s.fpgaTurnDwellMs).replace(",", "."));
+  const dwellScan = Number(String(s.scanDwellMs).replace(",", "."));
+  const dwellMs = Number.isFinite(dwellFpga) && dwellFpga > 0 ? dwellFpga : dwellScan;
+  return {
+    name: "сканер",
+    centerMhz,
+    lookMhz,
+    dwellMs,
+    wave: s.txWaveKind,
+  };
+}
+
+export function buildPlaylist(data: unknown): { ok: true; playlist: LabPlaylist } | { ok: false; reason: string } {
   if (!data || typeof data !== "object") return { ok: false, reason: "playlist: корень не объект" };
   const name = String((data as { name?: unknown }).name ?? "").trim();
   const stepsIn = (data as { steps?: unknown }).steps;
   if (!name) return { ok: false, reason: "playlist: пустое имя" };
   if (!Array.isArray(stepsIn) || stepsIn.length === 0) {
-    return { ok: false, reason: "playlist: нужен непустой steps[]" };
+    return { ok: false, reason: "playlist: добавьте хотя бы один шаг" };
   }
   const steps: LabPlaylistStep[] = [];
   for (let i = 0; i < stepsIn.length; i++) {
@@ -368,9 +403,19 @@ export function parsePlaylistJson(raw: string): { ok: true; playlist: LabPlaylis
     if (!Number.isFinite(dwellMs) || dwellMs <= 0) {
       return { ok: false, reason: `playlist: шаг «${stepName}» dwell должна быть > 0 мс` };
     }
-    steps.push({ name: stepName, centerMhz, lookMhz, dwellMs, wave });
+    steps.push({ name: stepName || `step-${i + 1}`, centerMhz, lookMhz, dwellMs, wave });
   }
   return { ok: true, playlist: { name, steps } };
+}
+
+export function parsePlaylistJson(raw: string): { ok: true; playlist: LabPlaylist } | { ok: false; reason: string } {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return { ok: false, reason: "playlist: это не JSON" };
+  }
+  return buildPlaylist(data);
 }
 
 export interface PlaylistPatch {

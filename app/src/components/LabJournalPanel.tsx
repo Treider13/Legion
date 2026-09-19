@@ -1,9 +1,48 @@
 // LEGION — журнал стенда: полка 120 с, события, iperf/BPER/JSR, playlist.
-// Не стартует ARM. Не подменяет гейт. STA/SMA в export — FAIL-closed.
-import { useEffect, useState } from "react";
+// Плейлист — поля и кнопки (CleverJAM-шаг: параметры, не ARM). JSON только
+// как импорт файла. Не стартует ARM. STA/SMA в export — FAIL-closed.
+import { useEffect, useRef, useState } from "react";
 
+import { LAB_PLAYLIST_PRESETS, playlistStepFromScanner, type LabPlaylistStep } from "../sense/labJournal";
 import { LAB_BASELINE_DEFAULT_SEC, baselineElapsedSec } from "../sense/labPsd";
+import { WAVE_CATALOG, type WaveKind } from "../sdr/waveforms";
 import { useLegion } from "../state/store";
+
+type DraftStep = {
+  key: string;
+  name: string;
+  center: string;
+  look: string;
+  dwell: string;
+  wave: string;
+};
+
+let draftSeq = 0;
+function nextKey(): string {
+  draftSeq += 1;
+  return `step-${draftSeq}`;
+}
+
+function draftFromStep(step: LabPlaylistStep): DraftStep {
+  return {
+    key: nextKey(),
+    name: step.name,
+    center: String(step.centerMhz),
+    look: String(step.lookMhz),
+    dwell: String(step.dwellMs),
+    wave: step.wave ?? "",
+  };
+}
+
+function draftsToSteps(drafts: readonly DraftStep[]): LabPlaylistStep[] {
+  return drafts.map((d, i) => ({
+    name: d.name.trim() || `step-${i + 1}`,
+    centerMhz: Number(d.center.replace(",", ".")),
+    lookMhz: Number(d.look.replace(",", ".")),
+    dwellMs: Number(d.dwell.replace(",", ".")),
+    wave: (d.wave || null) as WaveKind | null,
+  }));
+}
 
 function downloadJournal(): void {
   const file = useLegion.getState().exportLabJournal();
@@ -17,10 +56,10 @@ function downloadJournal(): void {
 
 export function LabJournalPanel() {
   const s = useLegion();
-  const [iperfText, setIperfText] = useState("");
-  const [playlistText, setPlaylistText] = useState(
-    '{"name":"lab-xa4","steps":[{"name":"uhf","centerMhz":433,"lookMhz":2,"dwellMs":0.4,"wave":"awgn"},{"name":"c","centerMhz":5800,"lookMhz":10,"dwellMs":1,"wave":"tone"}]}',
-  );
+  const playlistFileRef = useRef<HTMLInputElement>(null);
+  const iperfFileRef = useRef<HTMLInputElement>(null);
+  const [plName, setPlName] = useState("стенд");
+  const [drafts, setDrafts] = useState<DraftStep[]>([]);
   const [bperOk, setBperOk] = useState("0");
   const [bperBad, setBperBad] = useState("0");
   const [jsr, setJsr] = useState("");
@@ -36,13 +75,36 @@ export function LabJournalPanel() {
     return () => window.clearInterval(id);
   }, [collecting]);
 
+  const patchDraft = (key: string, part: Partial<DraftStep>) => {
+    setDrafts((rows) => rows.map((row) => (row.key === key ? { ...row, ...part } : row)));
+  };
+
+  const moveDraft = (index: number, dir: -1 | 1) => {
+    setDrafts((rows) => {
+      const j = index + dir;
+      if (j < 0 || j >= rows.length) return rows;
+      const next = rows.slice();
+      const tmp = next[index];
+      next[index] = next[j];
+      next[j] = tmp;
+      return next;
+    });
+  };
+
+  const applyDrafts = (): boolean => s.applyPlaylist({ name: plName, steps: draftsToSteps(drafts) });
+
+  const readPickedFile = (file: File | undefined, onText: (text: string) => void) => {
+    if (!file) return;
+    void file.text().then(onText);
+  };
+
   return (
     <div className="lab-journal">
       <span className="panel-title">ЖУРНАЛ СТЕНДА · xA4 · не гейт FPGA</span>
       <p className="sens-hint">
         Полка {target} с как у bladerf-jamming-poc. Событие в лог после {s.labMinDurationSec} с (rtl-sdr-analyzer) —
-        гейт платы не ждёт. iperf3 --json — автопрогон CLI или вставка. Нет бинаря/сервера — отказ, не 80 %.
-        STA/SMA FAIL-closed.
+        гейт платы не ждёт. Шаги плейлиста — поля, не скобки. iperf3 — прогон CLI или файл с другого ПК. STA/SMA
+        FAIL-closed.
       </p>
 
       <div className="lab-progress" aria-label="Сбор полки">
@@ -69,7 +131,7 @@ export function LabJournalPanel() {
           ОЧИСТИТЬ PSD
         </button>
         <button type="button" className="btn-ghost" onClick={downloadJournal}>
-          СКАЧАТЬ JSON
+          СКАЧАТЬ ЖУРНАЛ
         </button>
       </div>
 
@@ -154,19 +216,131 @@ export function LabJournalPanel() {
         </tbody>
       </table>
 
-      <label className="file-row">
-        PLAYLIST JSON (CleverJAM-шаг: параметры, не ARM)
-        <textarea
-          aria-label="Playlist JSON"
-          className="lab-textarea"
-          rows={4}
-          value={playlistText}
-          onChange={(e) => setPlaylistText(e.target.value)}
-        />
-      </label>
+      <span className="panel-title">ШАГИ СТЕНДА · поля, не JSON</span>
+      <p className="sens-hint">
+        Выставляет коридор, взгляд и волну. Старт / ARM сами. 433 / 2442 / 5800 — те же частоты, что уже были в
+        журнале и демо-несущей.
+      </p>
+      <div className="corr-grid">
+        <label>
+          ИМЯ НАБОРА
+          <input aria-label="Имя набора шагов" value={plName} onChange={(e) => setPlName(e.target.value)} />
+        </label>
+      </div>
       <div className="power-row">
-        <button type="button" className="btn-primary" onClick={() => s.applyPlaylistJson(playlistText)}>
-          ПРИМЕНИТЬ PLAYLIST
+        {LAB_PLAYLIST_PRESETS.map((pre) => (
+          <button
+            key={pre.name}
+            type="button"
+            className="btn-ghost"
+            onClick={() => setDrafts((rows) => [...rows, draftFromStep(pre)])}
+          >
+            + {pre.name} {pre.centerMhz}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => setDrafts((rows) => [...rows, draftFromStep(playlistStepFromScanner(useLegion.getState()))])}
+        >
+          КАК СЕЙЧАС НА СКАНЕРЕ
+        </button>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() =>
+            setDrafts((rows) => [
+              ...rows,
+              { key: nextKey(), name: `шаг ${rows.length + 1}`, center: "", look: "2", dwell: "1", wave: "" },
+            ])
+          }
+        >
+          + ШАГ
+        </button>
+      </div>
+
+      {drafts.length === 0 && <p className="sens-hint">нет шагов — нажмите UHF / 2.4 / 5.8 или «как на сканере»</p>}
+
+      {drafts.map((d, i) => (
+        <div key={d.key} className="lab-step">
+          <div className="lab-step-head">
+            <span>
+              ШАГ {i + 1}
+              {s.labPlaylist && s.labPlaylistIdx === i ? " · сейчас" : ""}
+            </span>
+            <span className="lab-step-tools">
+              <button type="button" className="btn-ghost" aria-label="Шаг вверх" disabled={i === 0} onClick={() => moveDraft(i, -1)}>
+                ↑
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                aria-label="Шаг вниз"
+                disabled={i === drafts.length - 1}
+                onClick={() => moveDraft(i, 1)}
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                aria-label="Удалить шаг"
+                onClick={() => setDrafts((rows) => rows.filter((row) => row.key !== d.key))}
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+          <div className="corr-grid">
+            <label>
+              ИМЯ
+              <input aria-label={`Имя шага ${i + 1}`} value={d.name} onChange={(e) => patchDraft(d.key, { name: e.target.value })} />
+            </label>
+            <label>
+              ЦЕНТР МГц
+              <input
+                aria-label={`Центр шага ${i + 1}`}
+                inputMode="decimal"
+                value={d.center}
+                onChange={(e) => patchDraft(d.key, { center: e.target.value })}
+              />
+            </label>
+            <label>
+              ВЗГЛЯД МГц
+              <input
+                aria-label={`Взгляд шага ${i + 1}`}
+                inputMode="decimal"
+                value={d.look}
+                onChange={(e) => patchDraft(d.key, { look: e.target.value })}
+              />
+            </label>
+            <label>
+              ВЫДЕРЖКА мс
+              <input
+                aria-label={`Выдержка шага ${i + 1}`}
+                inputMode="decimal"
+                value={d.dwell}
+                onChange={(e) => patchDraft(d.key, { dwell: e.target.value })}
+              />
+            </label>
+            <label>
+              ВОЛНА
+              <select aria-label={`Волна шага ${i + 1}`} value={d.wave} onChange={(e) => patchDraft(d.key, { wave: e.target.value })}>
+                <option value="">копия IQ / CW</option>
+                {WAVE_CATALOG.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      ))}
+
+      <div className="power-row">
+        <button type="button" className="btn-primary" onClick={() => applyDrafts()}>
+          ПРИМЕНИТЬ ШАГИ
         </button>
         <button
           type="button"
@@ -176,6 +350,29 @@ export function LabJournalPanel() {
         >
           СЛЕДУЮЩИЙ ШАГ
         </button>
+        <button type="button" className="btn-ghost" onClick={() => playlistFileRef.current?.click()}>
+          ФАЙЛ JSON
+        </button>
+        <input
+          ref={playlistFileRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          aria-label="Импорт плейлиста JSON"
+          onChange={(e) => {
+            const input = e.currentTarget;
+            readPickedFile(input.files?.[0], (text) => {
+              if (s.applyPlaylistJson(text)) {
+                const pl = useLegion.getState().labPlaylist;
+                if (pl) {
+                  setPlName(pl.name);
+                  setDrafts(pl.steps.map(draftFromStep));
+                }
+              }
+              input.value = "";
+            });
+          }}
+        />
         {s.labPlaylist && (
           <span className="sens-hint">
             {s.labPlaylist.name} · {s.labPlaylistIdx + 1}/{s.labPlaylist.steps.length} · Старт сами
@@ -214,46 +411,41 @@ export function LabJournalPanel() {
         <button type="button" className="btn-primary" onClick={() => void s.runLabIperf()} disabled={s.labIperfBusy}>
           {s.labIperfBusy ? "IPERF…" : "ПРОГНАТЬ IPERF3"}
         </button>
-        <span className="sens-hint">
-          {s.labIperf
-            ? `lost ${s.labIperf.lostPercent} % · ${s.labIperf.bytes} байт`
-            : "нет отчёта — не выдумываем 80 %"}
-        </span>
-      </div>
-
-      <label className="file-row">
-        iperf3 --json (lost_percent + bytes, как jamrf) — если CLI недоступен
-        <textarea
-          aria-label="iperf3 JSON"
-          className="lab-textarea"
-          rows={3}
-          value={iperfText}
-          onChange={(e) => setIperfText(e.target.value)}
-          placeholder='{"end":{"sum":{"lost_percent":0.75,"bytes":1250000}}}'
-        />
-      </label>
-      <div className="power-row">
-        <button type="button" className="btn-ghost" onClick={() => s.setLabIperfJson(iperfText)}>
-          ЗАПИСАТЬ IPERF
+        <button type="button" className="btn-ghost" onClick={() => iperfFileRef.current?.click()}>
+          ФАЙЛ IPERF3
         </button>
+        <input
+          ref={iperfFileRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          aria-label="Файл iperf3 --json с другого ПК"
+          onChange={(e) => {
+            const input = e.currentTarget;
+            readPickedFile(input.files?.[0], (text) => {
+              s.setLabIperfJson(text);
+              input.value = "";
+            });
+          }}
+        />
         <span className="sens-hint">
           {s.labIperf
             ? `lost ${s.labIperf.lostPercent} % · ${s.labIperf.bytes} байт`
-            : "нет отчёта — не выдумываем 80 %"}
+            : "нет отчёта — не выдумываем 80 %. Потери руками не ставить"}
         </span>
       </div>
 
       <div className="corr-grid">
         <label>
-          BPER OK
+          БАТЧИ ОК
           <input aria-label="Батчи без ошибки" value={bperOk} onChange={(e) => setBperOk(e.target.value)} />
         </label>
         <label>
-          BPER BAD
+          БАТЧИ ПЛОХИЕ
           <input aria-label="Плохие батчи" value={bperBad} onChange={(e) => setBperBad(e.target.value)} />
         </label>
         <label>
-          JSR лин.
+          JSR = Pj/Esig
           <input aria-label="JSR линейный" value={jsr} onChange={(e) => setJsr(e.target.value)} placeholder="Pj/Esig" />
         </label>
         <label>

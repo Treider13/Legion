@@ -751,6 +751,31 @@
   padding: 8px;
 }
 
+.lab-step {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--lg-border);
+  border-radius: 8px;
+  background: var(--lg-glass-2);
+}
+
+.lab-step-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--lg-dim);
+}
+
+.lab-step-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .check-row {
   display: flex;
   align-items: center;
