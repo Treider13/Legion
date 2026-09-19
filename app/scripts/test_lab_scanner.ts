@@ -305,6 +305,22 @@ async function main(): Promise<void> {
   });
   check("store playlist полями без ARM", applied === true && L().fpgaArmed === false && L().scanPattern !== undefined);
   check("store шаг выставил взгляд 8", L().fpgaAirBwMhz === "8" && L().signalFreqMhz === "3500.000");
+  const two = L().applyPlaylist({
+    name: "uhf-c",
+    steps: [
+      { name: "u", centerMhz: 433, lookMhz: 2, dwellMs: 1, wave: null },
+      { name: "c", centerMhz: 5800, lookMhz: 10, dwellMs: 1, wave: "tone" },
+    ],
+  });
+  check("два шага: первый 433 записал полосу", two === true && L().sdrBands[0]?.f1Mhz === 432);
+  const stepped = L().applyPlaylistStep(1);
+  check(
+    "шаг 5800 пишет sdrBands 5795…5805, не оставляет 433 (parseBand синтез 4400 не годится)",
+    stepped === true &&
+      L().sdrF1 === "5795.000" &&
+      L().sdrBands[0]?.f1Mhz === 5795 &&
+      L().sdrBands[0]?.f2Mhz === 5805,
+  );
   L().stopScan();
   useLegion.setState({
     scanPattern: "auto",

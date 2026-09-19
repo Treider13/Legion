@@ -125,6 +125,7 @@ import { SpurFilter } from "../sense/labSpur";
 import {
   LAB_MIN_DURATION_SEC,
   LAB_MIN_WIDTH_MHZ,
+  XA4_RX_MHZ,
   LabEventTracker,
   buildLabJournal,
   hostPeaksForJournal,
@@ -1794,11 +1795,21 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
       const patch = playlistStepPatch(pl.steps[index]);
-      const band = parseBand(patch.sdrF1, patch.sdrF2);
+      // parseBand — потолок ADF4351 4400 МГц. Плейлист xA4 до 6000 (пресет 5800).
+      const f1 = parseFloat(patch.sdrF1);
+      const f2 = parseFloat(patch.sdrF2);
+      const xa4Band =
+        Number.isFinite(f1) &&
+        Number.isFinite(f2) &&
+        f2 >= f1 &&
+        f1 >= XA4_RX_MHZ[0] &&
+        f2 <= XA4_RX_MHZ[1]
+          ? { f1Mhz: f1, f2Mhz: f2 }
+          : null;
       set({
         sdrF1: patch.sdrF1,
         sdrF2: patch.sdrF2,
-        sdrBands: band ? [band] : get().sdrBands,
+        sdrBands: xa4Band ? [xa4Band] : get().sdrBands,
         fpgaAirBwMhz: patch.fpgaAirBwMhz,
         fpgaTurnDwellMs: patch.fpgaTurnDwellMs,
         scanWindowMhz: patch.scanWindowMhz,
