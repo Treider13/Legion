@@ -1916,9 +1916,20 @@ async function main(): Promise<void> {
   check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
-  const fpgaStatusClears = (storeSrc.match(/set\(\{ fpgaBusy: true[^}]*fpgaStatus: null \}\)/g) || []).length;
-  check("все входа ARM (handoff/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
-    fpgaStatusClears >= 3);
+  const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
+  const onboardHead = storeSrc.slice(
+    storeSrc.indexOf("const startOnboardIntercept"),
+    storeSrc.indexOf("const fpgaReturnToScan"),
+  );
+  const pathHead = storeSrc.slice(
+    storeSrc.indexOf("startFpgaPath: async"),
+    storeSrc.indexOf("abortFpgaSolo:"),
+  );
+  check("все входа ARM (onboard/fpgaArm/startFpgaPath) чистят уставший fpgaStatus",
+    onboardHead.includes("fpgaStatus: null") &&
+    armBlock.includes("fpgaStatus: null") &&
+    pathHead.includes("fpgaStatus: null") &&
+    !handoffHead.includes("fpgaStatus: null"));
   check("solo start сверяет поколение после await", storeSrc.includes("abortSoloIfRevoked") && storeSrc.includes("gFpgaSoloGen"));
   check("hop-таймер не стартует после revoke", storeSrc.includes("if (await abortSoloIfRevoked()) return false;\n          beginSoloWalk"));
   check("Nuand header: sample-rate min 520834", /bladerf2_sample_rate_range = \{[\s\S]*?520834/.test(nuandHdr));
@@ -1927,7 +1938,6 @@ async function main(): Promise<void> {
   const soloSrc = readFileSync(join(here, "../src/sense/fpgaSoloWalk.ts"), "utf8");
   check("solo-модуль без дубля WD (limit считает только шлюз)", !soloSrc.includes("FPGA_WD") && !soloSrc.includes("65536"));
   check("хост sweep не назван туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ" && !patternLabelRu("sweep").includes("туда"));
-  const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
   check("ручной fpgaArm не зовёт beginSoloWalk (таймер только из startFpgaPath)", !armBlock.includes("beginSoloWalk"));
   check("ручной fpgaArm держит метку fpgaPath solo в UI", armBlock.includes('fpgaPath: air ? "air" : "solo"'));
   check("fpgaArm busy до первого await (кино-старт откажет)",
