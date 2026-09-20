@@ -584,11 +584,22 @@ static bool legion_hop_lo(uint32_t freq_khz)
         bool const tx_ok = rfic_command_write_immed(
             BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0), freq_hz);
         if (!rx_ok || !tx_ok) {
-            /* Mute остаётся. Unmute на разных LO запрещён. */
-            if (rx_ok && legion_air_freq_khz != 0) {
-                (void)rfic_command_write_immed(
-                    BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
-                    (uint64_t)legion_air_freq_khz * 1000ULL);
+            /* Mute остаётся. Unmute на разных LO запрещён.
+             * Откат каждой сдвинутой стороны — как x40 ниже: иначе
+             * tx_ok && !rx_ok оставляет TX на новой, RX на старой. */
+            if (legion_air_freq_khz != 0) {
+                uint64_t const old_hz =
+                    (uint64_t)legion_air_freq_khz * 1000ULL;
+                if (rx_ok) {
+                    (void)rfic_command_write_immed(
+                        BLADERF_RFIC_COMMAND_FREQUENCY,
+                        BLADERF_CHANNEL_RX(0), old_hz);
+                }
+                if (tx_ok) {
+                    (void)rfic_command_write_immed(
+                        BLADERF_RFIC_COMMAND_FREQUENCY,
+                        BLADERF_CHANNEL_TX(0), old_hz);
+                }
             }
             return false;
         }
