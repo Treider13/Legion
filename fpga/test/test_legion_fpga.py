@@ -1144,6 +1144,21 @@ check("micro: BAND_COUNT 1", gw_m.fpga._t.regs.get(lf.REG_BAND_COUNT) == 1)
 check("settle_n_for_fs 56e6 = 336000", lf.settle_n_for_fs(56_000_000) == 336000)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2428.0, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2500,
+          "scan_turn": True, "scan_dwell_us": 400,
+          "fft_enable": True, "fire_bw_mhz": 2})
+check("micro: ARM FFT+TURN 2400-2500 ok", r.get("ok") is True)
+check("micro: FFT+TURN SCAN_CTRL enable|turn",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
+check("micro: FFT+TURN SCAN_DWELL 400 мкс",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_DWELL_US) == 400)
+check("micro: FFT+TURN FFT_CTRL enable|notch",
+      gw_m.fpga._t.regs.get(lf.REG_FFT_CTRL) == (lf.FFT_CTRL_EN | lf.FFT_CTRL_DC_NOTCH))
+check("micro: FFT+TURN SEARCH_BW 56e6",
+      gw_m.fpga._t.regs.get(lf.REG_SEARCH_BW_HZ) == 56_000_000)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 5400.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 5000, "scan_f2_mhz": 5800,
           "fft_enable": True, "fire_bw_mhz": 2,

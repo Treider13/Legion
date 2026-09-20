@@ -1345,6 +1345,25 @@ async function main(): Promise<void> {
     return p.ok && p.fftEnable && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
       && p.reason.includes("точный Гц") && !p.reason.includes("не шагает");
   })());
+  check("онбордовый xA4: 2400–2500 @ 56 FFT+TURN — 2 взгляда, выдержка 0.4", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: true, dwellMs: 0.4,
+      fftEnable: true,
+    });
+    return p.ok && p.fftEnable && p.turn && p.dwellMs === 0.4
+      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2484
+      && p.reason.includes("точный Гц");
+  })());
+  check("ARM FFT+TURN несёт scan_turn и 400 мкс", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2428,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+      scanTurn: true, scanDwellMs: 0.4, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.fft_enable === true && c.scan_turn === true && c.scan_dwell_us === 400
+      && c.scan_f1_mhz === 2400 && c.scan_f2_mhz === 2500;
+  })());
   check("онбордовый план без fftEnable — walker как раньше", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
@@ -1724,6 +1743,9 @@ async function main(): Promise<void> {
     storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
   check("онбордовый ARM включает FFT-пик (точный Гц)",
     storeSrc.includes("fftEnable: true") && storeSrc.includes("fireBwMhz: plan.fireBwMhz"));
+  check("онбордовый ARM несёт TURN и выдержку оператора",
+    storeSrc.includes("scanTurn: plan.turn") && storeSrc.includes("scanDwellMs: plan.dwellMs")
+    && storeSrc.includes('turn: s.autoDispatch === "turn"'));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
   // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
