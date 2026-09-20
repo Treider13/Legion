@@ -116,6 +116,7 @@ static uint64_t rfic_read_override[16];
 static bool rfic_read_override_set[16];
 static bool rfic_fail_enable_tx;
 static bool rfic_fail_tx_freq;
+static bool rfic_fail_rx_freq;
 static bool rfic_fail_standby;
 static bool rfic_fail_filter;
 
@@ -147,6 +148,10 @@ bool rfic_command_write_immed(bladerf_rfic_command cmd, bladerf_channel ch,
     }
     if (rfic_fail_tx_freq && cmd == BLADERF_RFIC_COMMAND_FREQUENCY &&
         ch == BLADERF_CHANNEL_TX(0)) {
+        return false;
+    }
+    if (rfic_fail_rx_freq && cmd == BLADERF_RFIC_COMMAND_FREQUENCY &&
+        ch == BLADERF_CHANNEL_RX(0)) {
         return false;
     }
     if (rfic_fail_filter && cmd == BLADERF_RFIC_COMMAND_FILTER) {
@@ -582,6 +587,38 @@ int main(void)
         CHECK("U4: AIR_FREQ не сменилась на чужую стоянку", khz == 2414000);
     }
     rfic_fail_tx_freq = false;
+    /* U4b: отказ RX FREQUENCY после удачной записи TX — откатить TX. */
+    CHECK("U4b: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("U4b: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    t_status = 0;
+    t_tamer = 1000;
+    legion_work();
+    rfic_fail_rx_freq = true;
+    rfic_n = 0;
+    t_tamer += 140001;
+    legion_work();
+    CHECK("U4b: hop пытался RX FREQUENCY",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2442000ULL * 1000ULL) >= 0);
+    CHECK("U4b: hop записал TX на новую",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0),
+                   2442000ULL * 1000ULL) >= 0);
+    CHECK("U4b: TX откатили на старый LO",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0),
+                   2414000ULL * 1000ULL) >
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_TX(0),
+                   2442000ULL * 1000ULL));
+    CHECK("U4b: unmute=0 запрещён при отказе RX freq",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("U4b: AIR_FREQ не сменилась на чужую стоянку", khz == 2414000);
+    }
+    rfic_fail_rx_freq = false;
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
 #else
