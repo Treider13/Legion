@@ -4,7 +4,7 @@ import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
 import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
-import { autoDispatchOptionRu, type AutoDispatch } from "../../sense/modes";
+import { autoDispatchOptionRu, FPGA_AIR_MODE_RU, type AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -183,7 +183,7 @@ export function StartGate({ mode, onClose }: Props) {
     }
     if (path === "auto") {
       if (!fpgaAirSupported(sdrId)) {
-        setErr("Автоматический перехват: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).");
+        setErr(`${FPGA_AIR_MODE_RU}: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).`);
         return;
       }
       const ch = parseLocaleNumber(windowMhz);
@@ -234,7 +234,7 @@ export function StartGate({ mode, onClose }: Props) {
       <div className="cinema-gate-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         {mode === "sdr" && step === "walk" && path === "auto" ? (
           <>
-            <p className="cinema-kicker">Умный · Автоматический перехват</p>
+            <p className="cinema-kicker">Умный · {FPGA_AIR_MODE_RU}</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
               После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
@@ -373,7 +373,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              Перехват: после Старта хозяин — плата (USB не в круге увидел→TX).
+              {FPGA_AIR_MODE_RU}: после Старта хозяин — плата (USB не в круге увидел→TX).
               Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
               либо Soapy ставит LO, либо агент держит FPGA.
             </p>
@@ -386,7 +386,7 @@ export function StartGate({ mode, onClose }: Props) {
                 onClick={() => setPath("auto")}
                 title="После Старта хозяин — SDR. Плата сама видит энергию и открывает TX. Ноутбук — рубильник."
               >
-                <strong>Автоматический перехват</strong>
+                <strong>{FPGA_AIR_MODE_RU}</strong>
                 <span>
                   Антенна на RX SMA. Плата смотрит эфир в аналоговом окне и сама
                   решает, что энергия есть. USB не в круге «увидел → усилитель».{" "}
@@ -435,7 +435,7 @@ export function StartGate({ mode, onClose }: Props) {
             <h2 id={titleId}>{mode === "sdr" ? "Коридор и тип сигнала" : "Коридор синтезатора"}</h2>
             <p className="cinema-gate-lead">
               {mode === "sdr"
-                ? "Дальше: автоматический перехват (плата смотрит эфир сама), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA."
+                ? `Дальше: ${FPGA_AIR_MODE_RU.toLowerCase()} (плата сама ищет всплеск и ставит окно), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA.`
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 

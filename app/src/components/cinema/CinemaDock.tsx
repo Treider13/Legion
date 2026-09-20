@@ -56,7 +56,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={lastCue || lastLog}>
-          {lastCue || lastLog || "Запустить → коридор → перехват, эфир+FPGA или только FPGA."}
+          {lastCue || lastLog || "Запустить → коридор → умная атака, эфир+FPGA или только FPGA."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

@@ -93,6 +93,7 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  FPGA_AIR_MODE_RU,
   fpgaRunModeRu,
   isFpgaAirPattern,
   modeConflict,
@@ -1218,7 +1219,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       return;
     }
     if (!s.sdrLoadOk) {
-      pushLog("sys", "Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: подтвердите нагрузку 50 Ом на выходе усилителя SDR`);
       return;
     }
     const analog = catalogCaps(s.sdrId).analogBwMhz;
@@ -1227,11 +1228,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     const lookRaw = parseLocaleNumber(s.fpgaAirBwMhz);
     const dwellRaw = parseLocaleNumber(s.fpgaTurnDwellMs);
     if (!Number.isFinite(lookRaw) || lookRaw <= 0) {
-      pushLog("sys", "Автоперехват: задайте ширину взгляда числом (например 10 или 0.2)");
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте ширину взгляда числом (например 10 или 0.2)`);
       return;
     }
     if (!Number.isFinite(dwellRaw) || dwellRaw <= 0) {
-      pushLog("sys", "Автоперехват: задайте выдержку числом (0,4 и 0.4 — 400 мкс)");
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте выдержку числом (0,4 и 0.4 — 400 мкс)`);
       return;
     }
     const plan = planOnboardIntercept({
@@ -1254,7 +1255,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     if (s.sdrEmulation) {
       pushLog(
         "sys",
-        "Автоперехват: эмуляция — платы нет, ARM нет. USB-IQ handoff убран: без железа эфир не смотрим.",
+        `${FPGA_AIR_MODE_RU}: эмуляция — платы нет, ARM нет. USB-IQ handoff убран: без железа эфир не смотрим.`,
       );
       return;
     }
@@ -1276,12 +1277,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
       const no = fpgaGatewayRefused(ping);
       if (no) {
-        pushLog("sys", `Автоперехват: ${no}`);
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${no}`);
         return;
       }
       const noLegion = fpgaLegionMissing(ping);
       if (noLegion) {
-        pushLog("sys", `Автоперехват: ${noLegion}`);
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${noLegion}`);
         return;
       }
       const bands = get().sdrBands;
@@ -1300,7 +1301,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         });
         if (gFpgaAirGen !== airGen) return;
         if (!pk.ok) {
-          pushLog("sys", "Автоперехват: x40 — Soapy не поставил fs/BW/первый LO, ARM нет");
+          pushLog("sys", `${FPGA_AIR_MODE_RU}: x40 — Soapy не поставил fs/BW/первый LO, ARM нет`);
           return;
         }
         fsHz = pk.fsHz;
@@ -1343,7 +1344,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       if (!r.ok) {
-        pushLog("sys", `Автоперехват ARM: ${r.reason ?? "отказ"}`);
+        pushLog("sys", `${FPGA_AIR_MODE_RU} ARM: ${r.reason ?? "отказ"}`);
         return;
       }
       set({
@@ -1354,7 +1355,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastCueReason: plan.reason,
       });
       beginFpgaKick();
-      pushLog("sys", `Автоперехват: ${plan.reason} · порог ${plan.detThr} (не полка USB-IQ)`);
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: ${plan.reason} · порог ${plan.detThr} (не полка USB-IQ)`);
     } finally {
       set({ fpgaBusy: false });
     }
@@ -1412,7 +1413,7 @@ export const useLegion = create<LegionStore>((set, get) => {
   const fpgaHandoff = async (mhz: number, _powerDbm: number): Promise<void> => {
     pushLog(
       "sys",
-      `FPGA handoff ${mhz.toFixed(3)} МГц: путь убран — USB не в круге увидел→усилитель. Старт = Автоперехват (антенна RX1, усилитель TX1).`,
+      `FPGA handoff ${mhz.toFixed(3)} МГц: путь убран — USB не в круге увидел→усилитель. Старт = ${FPGA_AIR_MODE_RU} (антенна RX1, усилитель TX1).`,
     );
   };
 
@@ -3277,7 +3278,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // без DISARM (CTRL=0) следующий ARM молчал бы навсегда.
         if (autoAir) {
           // Авария транспорта, не эфир: возврат к скану без skip частоты.
-          pushLog("sys", "Автоперехват: сторожевой таймер — стоп, возврат к поиску");
+          pushLog("sys", `${FPGA_AIR_MODE_RU}: сторожевой таймер — стоп, возврат к поиску`);
           await fpgaReturnToScan(null);
         } else {
           // Solo: stopSoloWalk сразу — иначе tune до следующего dwell
@@ -3300,7 +3301,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           const mhz = get().lastForwardMhz;
           pushLog(
             "sys",
-            `Автоперехват: сигнал пропал (${FPGA_AIR_GONE_MS} мс без роста det_count) — ` +
+            `${FPGA_AIR_MODE_RU}: сигнал пропал (${FPGA_AIR_GONE_MS} мс без роста det_count) — ` +
               `DISARM, возврат к скану${mhz != null ? `, skip ${mhz.toFixed(3)} МГц` : ""}`,
           );
           await fpgaReturnToScan(mhz);
@@ -3916,7 +3917,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (get().scanRunning) set({ scanRunning: false });
       // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
       // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
-      // что в меню выбран пункт «Автоматический перехват».
+      // что в меню выбран пункт «Умная атака».
       if (get().transmitArmed) {
         // Re-sense живёт внутри tickScan: без скана удержание слепое —
         // жива ли частота, больше никто не проверяет (только watch потока).
@@ -3932,7 +3933,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // а не ручной ARM на середину полосы с порогом «на глаз».
         pushLog(
           "sys",
-          "ПЕРЕДАТЬ в режиме автоматического перехвата не участвует: после Старта хозяин — плата; ноутбук только Стоп",
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: после Старта хозяин — плата; ноутбук только Стоп`,
         );
         return;
       }

@@ -43,6 +43,11 @@ export function scannerParticipates(pattern: SdrWalkPattern): boolean {
   return pattern === "auto";
 }
 
+/** Имя онбордового режима для оператора. Wire id — scanPattern="fpga". */
+export const FPGA_AIR_MODE_RU = "Умная атака";
+export const FPGA_AIR_MODE_RU_CAPS = "УМНАЯ АТАКА";
+export const FPGA_AIR_MODE_START_RU = "СТАРТ УМНОЙ АТАКИ";
+
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
 export function patternLabelRu(pattern: SdrWalkPattern): string {
   switch (pattern) {
@@ -55,7 +60,7 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ";
     case "fpga":
-      return "АВТОПЕРЕХВАТ";
+      return FPGA_AIR_MODE_RU_CAPS;
   }
 }
 
@@ -70,7 +75,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
     case "fpga":
-      return "Автоматический перехват (плата смотрит эфир → TX на усилитель, USB не в круге)";
+      return `${FPGA_AIR_MODE_RU} (плата сама: обзор всплеска → окно на него → выдержка → снова обзор; USB не в круге)`;
   }
 }
 
@@ -103,7 +108,7 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        "Автоматический перехват: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. " +
+        `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. ` +
         "Гейт в текущем взгляде — микросекунды. Стоянка: LO на середине коридора, хопы внутри окна — на усилитель без PLL. По очереди — плитка взглядов и выдержка. USB не в круге увидел→усилитель. Ноутбук — коридор, Старт/Стоп и наблюдение.",
     };
   }

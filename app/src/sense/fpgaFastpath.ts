@@ -9,6 +9,7 @@
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
 import { catalogById } from "../sdr/catalog";
+import { FPGA_AIR_MODE_RU } from "./modes";
 import { planCenters, planParkCenters } from "./scan";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
@@ -375,25 +376,25 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     settleN,
   });
   if (!fpgaAirSupported(i.sdrId)) {
-    return fail("Автоперехват: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
+    return fail(`${FPGA_AIR_MODE_RU}: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40`);
   }
   if (!i.loadOk) {
-    return fail("Автоперехват: подтвердите нагрузку 50 Ом на выходе усилителя SDR");
+    return fail(`${FPGA_AIR_MODE_RU}: подтвердите нагрузку 50 Ом на выходе усилителя SDR`);
   }
   if (i.sdrId === "bladerf-x40" && lookMhz < FPGA_X40_ANALOG_MIN_MHZ) {
     return fail(
-      `Автоперехват: x40 взгляд ${lookMhz} МГц ниже фильтра LMS ${FPGA_X40_ANALOG_MIN_MHZ} МГц — отказ до ARM`,
+      `${FPGA_AIR_MODE_RU}: x40 взгляд ${lookMhz} МГц ниже фильтра LMS ${FPGA_X40_ANALOG_MIN_MHZ} МГц — отказ до ARM`,
     );
   }
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
-    return fail("Автоперехват: задайте порог чувствительности больше нуля (нулевой порог — гейт на шум)");
+    return fail(`${FPGA_AIR_MODE_RU}: задайте порог чувствительности больше нуля (нулевой порог — гейт на шум)`);
   }
   if (centers.length === 0) {
-    return fail("Автоперехват: задайте коридор F1…F2");
+    return fail(`${FPGA_AIR_MODE_RU}: задайте коридор F1…F2`);
   }
   const rx = catalogById(i.sdrId)?.rxMhz;
   if (rx && i.bands.some((b) => b.f1Mhz < rx[0] || b.f2Mhz > rx[1])) {
-    return fail(`Автоперехват: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
+    return fail(`${FPGA_AIR_MODE_RU}: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
   }
   const hops = Math.max(0, centers.length - 1);
   const how = survey

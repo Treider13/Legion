@@ -1,6 +1,9 @@
 // LEGION — режим SDR: антенна RX, усилитель на RF out. ESP32 не вызывается.
 import {
   autoDispatchOptionRu,
+  FPGA_AIR_MODE_RU,
+  FPGA_AIR_MODE_RU_CAPS,
+  FPGA_AIR_MODE_START_RU,
   isFpgaAirLive,
   isFpgaAirPattern,
   isFpgaTaskLive,
@@ -45,19 +48,19 @@ export function ScanPanel() {
         {taskLive
           ? "РЕЖИМ SDR // FPGA · ЗАДАЧА С НОУТБУКА"
           : fpgaAir
-            ? "РЕЖИМ SDR // АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ · РЕТРАНСЛЯЦИЯ В FPGA"
+            ? `РЕЖИМ SDR // ${FPGA_AIR_MODE_RU_CAPS} · РЕТРАНСЛЯЦИЯ В FPGA`
             : airLive
               ? "РЕЖИМ SDR // FPGA · АВТОНОМНЫЙ ЭФИР (БЕЗ СКАНЕРА)"
               : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
       </span>
       <p className="panel-note">
         {taskLive
-          ? "Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не автоперехват и не хост-скан. Стоп — там или кнопкой ниже."
+          ? `Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан. Стоп — там или кнопкой ниже.`
           : fpgaAir
-            ? "Автоматический перехват: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Плата сама видит энергию в аналоговом окне и сама открывает TX. Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ)."
+            ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Плата сама ищет всплеск, ставит окно взгляда на него, держит выдержку, снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
-              ? "Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не автоперехват. Стоп — кнопкой ниже."
-              : "АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: автоматический перехват. Хост-скан и FPGA вместе не работают (один USB)."}
+              ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
+              : `АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: ${FPGA_AIR_MODE_RU.toLowerCase()}. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -246,7 +249,7 @@ export function ScanPanel() {
       </div>
       <p className="sens-hint">
         {taskLive
-          ? "FPGA-задача с вкладки ТИП СИГНАЛА — не автоперехват и не хост-скан"
+          ? `FPGA-задача с вкладки ТИП СИГНАЛА — не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан`
           : fpgaAir
           ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${
               s.autoDispatch === "park"
@@ -326,7 +329,7 @@ export function ScanPanel() {
               onClick={() => void s.startScan()}
               title="Плата смотрит эфир сама и открывает TX. Ноутбук — рубильник."
             >
-              СТАРТ ПЕРЕХВАТА
+              {FPGA_AIR_MODE_START_RU}
             </button>
           )
         ) : (
@@ -362,7 +365,7 @@ export function ScanPanel() {
       </div>
       {fpgaAir && !taskLive && (
         <p className="sens-hint">
-          Автоперехват: окно {fpgaWindowUs.toFixed(1)} µs · канал {tract.bwMhz} МГц · коридор{" "}
+          {FPGA_AIR_MODE_RU}: окно {fpgaWindowUs.toFixed(1)} µs · канал {tract.bwMhz} МГц · коридор{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
           {!fpgaAirSupported(s.sdrId)
             ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
@@ -396,9 +399,9 @@ export function ScanPanel() {
           {airLive
             ? " · ретрансляция в FPGA · ноутбук наблюдает"
             : taskLive
-              ? " · FPGA-задача · не перехват"
+              ? " · FPGA-задача · не умная атака"
               : fpgaAir
-                ? " · автоперехват выбран"
+                ? ` · ${FPGA_AIR_MODE_RU.toLowerCase()} выбрана`
             : s.transmitArmed
               ? auto
                 ? " · авто TX"
@@ -413,12 +416,12 @@ export function ScanPanel() {
         {airLive
           ? fpgaObserveLine(s.fpgaStatus) || s.lastCueReason
           : taskLive
-            ? s.lastCueReason || "FPGA-задача с вкладки ТИП СИГНАЛА — не автоперехват"
+            ? s.lastCueReason || `FPGA-задача с вкладки ТИП СИГНАЛА — не ${FPGA_AIR_MODE_RU.toLowerCase()}`
             : fpgaAir
               ? s.lastCueReason ||
                 (!fpgaAirSupported(s.sdrId)
-                  ? "Автоперехват: выберите bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
-                  : "Автоперехват: СТАРТ — сканер ищет сигнал, FPGA ретранслирует, ноутбук наблюдает")
+                  ? `${FPGA_AIR_MODE_RU}: выберите bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR`
+                  : `${FPGA_AIR_MODE_RU}: СТАРТ — плата ищет всплеск и ставит окно, ноутбук наблюдает`)
               : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>
       {airLive && s.fpgaStatus && (

@@ -497,7 +497,7 @@ async function main(): Promise<void> {
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
-  check("автоперехват имя", patternLabelRu("fpga") === "АВТОПЕРЕХВАТ");
+  check("умная атака имя", patternLabelRu("fpga") === "УМНАЯ АТАКА");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
@@ -1992,8 +1992,8 @@ async function main(): Promise<void> {
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
-  check("cinema: путь автоматического перехвата в мастере",
-    gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("cinema: путь умной атаки в мастере",
+    gateSrc.includes("FPGA_AIR_MODE_RU") && gateSrc.includes('path === "auto"'));
   check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
     gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
   check("cinema перехват: стратегии приоритет/очередь на шаге walk",
@@ -2029,7 +2029,7 @@ async function main(): Promise<void> {
   check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
   check("жаргон убран: пользовательские строки стора без «конвейер на SDR»/«det_thr=»",
     !storeSrc.includes("конвейер на SDR, ноутбук") && !storeSrc.includes("det_thr=${detThr}"));
-  check("док кино зовёт в перехват", dockSrc.includes("перехват"));
+  check("док кино зовёт в умную атаку", dockSrc.includes("умная атака"));
   const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
   check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",
     setupSrc.includes("SoapySDRUtil --info") && !setupSrc.includes("SoapySDRUtil --find"));

@@ -1,5 +1,5 @@
 // ============================================================================
-// LEGION — GUI-тест кино-мастера: путь «Автоматический перехват».
+// LEGION — GUI-тест кино-мастера: путь «Умная атака».
 // Браузерная сборка (dev server) → sdrEmulation=true → startScan на моке:
 // мастер обязан поднять скан-фазу (hero ПОИСК), Стоп — вернуть ОЖИДАНИЕ.
 // Запуск: npm run dev (терминал 1) · npx tsx scripts/gui_test_fpga.ts
@@ -54,8 +54,8 @@ async function main(): Promise<void> {
   await click(page, "Запустить", true);
   await waitFor(page, `!!document.querySelector(".cinema-gate-card")`);
   await click(page, "Продолжить"); // band → path
-  await waitFor(page, `Array.from(document.querySelectorAll("button")).some(b => b.textContent?.includes("Автоматический перехват"))`);
-  await click(page, "Автоматический перехват");
+  await waitFor(page, `Array.from(document.querySelectorAll("button")).some(b => b.textContent?.includes("Умная атака"))`);
+  await click(page, "Умная атака");
   await click(page, "Продолжить"); // path → walk
   await waitFor(page, `Array.from(document.querySelectorAll("button")).some(b => b.textContent?.includes("По очереди"))`);
   // Стратегия «По очереди» → появляется поле выдержки.

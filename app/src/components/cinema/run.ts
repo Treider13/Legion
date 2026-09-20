@@ -17,9 +17,9 @@ export async function runSmartStart(opts: {
   windowMhz?: string;
   dwellMs?: string;
   pattern?: FpgaSoloPattern;
-  /** Автоматический перехват: приоритет сильнейшей или очередь с выдержкой. */
+  /** Умная атака: приоритет сильнейшей или очередь с выдержкой. */
   dispatch?: AutoDispatch;
-  /** Автоматический перехват: порог I²+Q² (полка USB-IQ в круге не меряется). */
+  /** Умная атака: порог I²+Q² (полка USB-IQ в круге не меряется). */
   detThr?: string;
 }): Promise<boolean> {
   const s = useLegion.getState();
