@@ -32,6 +32,7 @@ architecture tb of legion_regs_tb is
     signal peak_word     : std_logic_vector(31 downto 0) := x"81AB3410";
     signal rx_fft_en     : std_logic;
     signal rx_fft_notch  : std_logic;
+    signal rx_fft_lock   : std_logic;
     signal done          : boolean := false;
 
     procedure write_reg(signal clk : in std_logic;
@@ -66,6 +67,7 @@ begin
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
+            rx_fft_lock => rx_fft_lock,
             rx_peak_word => peak_word,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt
@@ -131,8 +133,12 @@ begin
         -- FFT_CTRL default 0; запись bit0+bit1 пересекает CDC в rx
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_FFT_CTRL, 3);
         for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
-        assert rx_fft_en = '1' and rx_fft_notch = '1'
+        assert rx_fft_en = '1' and rx_fft_notch = '1' and rx_fft_lock = '0'
             report "FAIL: FFT_CTRL did not cross CDC" severity failure;
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_FFT_CTRL, 7);
+        for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
+        assert rx_fft_en = '1' and rx_fft_notch = '1' and rx_fft_lock = '1'
+            report "FAIL: FFT_CTRL lock did not cross CDC" severity failure;
 
         -- STATUS mux: addr=0x15, we=0 → слово пика, не det_count
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_PEAK_BIN, 7));

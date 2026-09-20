@@ -1,5 +1,6 @@
 -- Тестбенч legion_lb_xlat: bypass; нули без valid; тон bin16 жив;
--- тон bin16 при пике bin80 глушится (MA-16 ноль на fs/4).
+-- тон bin16 при пике bin80 глушится (MA-16 ноль на fs/4);
+-- lock держит FTW на bin16, пока live-пик уехал на 80.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -12,6 +13,7 @@ architecture tb of legion_lb_xlat_tb is
     signal clk  : std_logic := '0';
     signal rst  : std_logic := '1';
     signal en   : std_logic := '0';
+    signal lck  : std_logic := '0';
     signal peak : std_logic_vector(31 downto 0) := (others => '0');
     signal in_i : signed(15 downto 0) := (others => '0');
     signal in_q : signed(15 downto 0) := (others => '0');
@@ -74,7 +76,7 @@ begin
 
     dut : entity work.legion_lb_xlat
         port map (
-            clock => clk, reset => rst, enable => en, peak_word => peak,
+            clock => clk, reset => rst, enable => en, lock => lck, peak_word => peak,
             in_i => in_i, in_q => in_q, in_valid => in_v,
             out_i => o_i, out_q => o_q, out_valid => o_v
         );
@@ -123,6 +125,20 @@ begin
         assert e_out > e_in / 4
             report "FAIL: same-bin energy lost e_in=" & integer'image(e_in) &
                    " e_out=" & integer'image(e_out) severity failure;
+
+        -- lock: защёлкнуть bin16, затем live-пик уехал на 80 — FTW остаётся
+        lck <= '1';
+        e_in := 0; e_out := 0; n_out := 0;
+        feed_tone(clk, in_i, in_q, in_v, 16, 8, e_in, e_out, n_out, 0);
+        peak <= mk_peak(80);
+        e_in := 0; e_out := 0; n_out := 0;
+        feed_tone(clk, in_i, in_q, in_v, 16, 80, e_in, e_out, n_out, 20);
+        assert n_out > 40
+            report "FAIL: lock no samples" severity failure;
+        assert e_out > e_in / 4
+            report "FAIL: lock lost bin16 e_in=" & integer'image(e_in) &
+                   " e_out=" & integer'image(e_out) severity failure;
+        lck <= '0';
 
         -- тон bin16 + пик bin80: MA-16 ноль на fs/4
         peak <= mk_peak(80);

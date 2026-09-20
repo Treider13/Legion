@@ -45,24 +45,27 @@ REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
 REG_SCAN_F1_KHZ = 0x0E
 REG_SCAN_F2_KHZ = 0x0F
 REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn, bit2 park, bit3 survey
-REG_SCAN_DWELL_US = 0x11  # выдержка turn / survey-стоянки, мкс
+REG_SCAN_DWELL_US = 0x11  # выдержка на сигнал внутри окна, мкс
 REG_SEARCH_BW_HZ = 0x12  # analog BW обзора, Гц; 0 = AIR_BW
 REG_FIRE_BW_HZ = 0x13  # leftover; вырез цифровой, analog не узжаем
 REG_PEAK_KHZ = 0x14  # найденная частота, кГц (считает NIOS)
 REG_PEAK_BIN = 0x15  # слово пика HDL: bin/mag/frame/valid
-REG_FFT_CTRL = 0x16  # bit0 enable, bit1 dc_notch
+REG_FFT_CTRL = 0x16  # bit0 enable, bit1 dc_notch, bit2 lock
 REG_BAND_IDX = 0x17
 REG_BAND_F1_KHZ = 0x18
 REG_BAND_F2_KHZ = 0x19
 REG_BAND_COUNT = 0x1A  # 0 = один коридор SCAN_F1/F2
 REG_SETTLE_N = 0x1B  # сэмплы после hop; 0 = 4096
+REG_SCAN_SURVEY_US = 0x1C  # период глухого прохода, мкс; 0 = 5e6
+REG_SCAN_EVENT = 0x1D  # [7:0] код, [31:8] seq
 
 SCAN_CTRL_EN = 1 << 0
 SCAN_CTRL_TURN = 1 << 1
-SCAN_CTRL_PARK = 1 << 2  # ICE9: один LO на середине коридора
-SCAN_CTRL_SURVEY = 1 << 3  # глухой обзор → стоянка на всплеск → T
+SCAN_CTRL_PARK = 1 << 2  # ИИ: 56 МГц на всплеск (с SURVEY не схлопывает плитку)
+SCAN_CTRL_SURVEY = 1 << 3  # глухой обзор → окно → период → снова обзор
 FFT_CTRL_EN = 1 << 0
 FFT_CTRL_DC_NOTCH = 1 << 1
+FFT_CTRL_LOCK = 1 << 2
 FIRE_BW_DEFAULT_HZ = 2_000_000
 SETTLE_N_DEFAULT = 4096
 LO_SETTLE_S = 0.006  # AD9361/LMS hop; 4096 сэмплов мало на 56e6
@@ -165,22 +168,28 @@ class LegionFpga:
 
     def set_scan_corridor(self, f1_mhz: float, f2_mhz: float,
                           enable: bool, turn: bool, dwell_us: int,
-                          park: bool = False, survey: bool = False) -> bool:
+                          park: bool = False, survey: bool = False,
+                          survey_us: int = 0) -> bool:
         """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo).
-        dwell_us — выдержка TURN от первого det / SURVEY-стоянки (0 → 3 с).
-        park — ICE9: одна стоянка на середине, без плитки взглядов.
-        survey — глухой проход плитки, затем LO на пик; park при survey не ставится."""
+        dwell_us — выдержка на сигнал внутри окна (0 → 3 с).
+        survey_us — период глухого прохода (0 → 5 с, пишет NIOS).
+        park — ICE9 один LO / с survey — ИИ (плитка не схлопывается).
+        survey — глухой проход, затем LO на пик. Биты OR, не взаимно исключены.
+        turn при survey — обычный внутри окна; иначе приоритет."""
         f1 = int(round(float(f1_mhz) * 1000.0))
         f2 = int(round(float(f2_mhz) * 1000.0))
         if f1 <= 0 or f2 < f1:
             return False
         ctrl = ((SCAN_CTRL_EN if enable else 0) |
                 (SCAN_CTRL_TURN if turn else 0) |
-                (SCAN_CTRL_SURVEY if survey else (SCAN_CTRL_PARK if park else 0)))
+                (SCAN_CTRL_PARK if park else 0) |
+                (SCAN_CTRL_SURVEY if survey else 0))
         dwell = max(0, int(dwell_us))
+        period = max(0, int(survey_us))
         return (self.write_reg(REG_SCAN_F1_KHZ, f1 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_F2_KHZ, f2 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_DWELL_US, dwell & 0xFFFFFFFF) and
+                self.write_reg(REG_SCAN_SURVEY_US, period & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_CTRL, ctrl))
 
     def set_fft(self, enable: bool, dc_notch: bool = False,

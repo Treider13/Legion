@@ -7,6 +7,7 @@
 -- Фаза шагает только на in_valid (каденс ADC, не свободный 2-такт NCO).
 -- enable=0: in→out (walker / FFT выкл, замысел не ломаем).
 -- enable=1 и peak.valid=0: нули с тем же valid (SEARCH после hop).
+-- lock=1: FTW на защёлкнутом bin (обычный держит выдержку; NIOS читает live-пик).
 -- Детектор остаётся на сыром ADC — здесь только то, что уходит в TX FIFO.
 -- ============================================================================
 library ieee;
@@ -18,6 +19,7 @@ entity legion_lb_xlat is
         clock     : in  std_logic;
         reset     : in  std_logic;
         enable    : in  std_logic;
+        lock      : in  std_logic;
         peak_word : in  std_logic_vector(31 downto 0);
         in_i      : in  signed(15 downto 0);
         in_q      : in  signed(15 downto 0);
@@ -73,6 +75,8 @@ architecture rtl of legion_lb_xlat is
     signal acc_q     : signed(20 downto 0) := (others => '0');
     signal ma_bin    : signed(7 downto 0) := (others => '0');
     signal ma_have   : std_logic := '0';
+    signal lock_bin  : signed(7 downto 0) := (others => '0');
+    signal lock_have : std_logic := '0';
     signal out_i_r   : signed(15 downto 0) := (others => '0');
     signal out_q_r   : signed(15 downto 0) := (others => '0');
     signal out_v_r   : std_logic := '0';
@@ -135,6 +139,8 @@ begin
             acc_q     <= (others => '0');
             ma_bin    <= (others => '0');
             ma_have   <= '0';
+            lock_bin  <= (others => '0');
+            lock_have <= '0';
             out_i_r   <= (others => '0');
             out_q_r   <= (others => '0');
             out_v_r   <= '0';
@@ -145,11 +151,12 @@ begin
                 out_q_r   <= in_q;
                 out_v_r   <= in_valid;
                 ma_have   <= '0';
+                lock_have <= '0';
                 acc_i     <= (others => '0');
                 acc_q     <= (others => '0');
                 ma_i      <= (others => (others => '0'));
                 ma_q      <= (others => (others => '0'));
-            elsif peak_word(31) = '0' then
+            elsif peak_word(31) = '0' and not (lock = '1' and lock_have = '1') then
                 out_i_r <= (others => '0');
                 out_q_r <= (others => '0');
                 out_v_r <= in_valid;
@@ -159,7 +166,17 @@ begin
                 ma_i    <= (others => (others => '0'));
                 ma_q    <= (others => (others => '0'));
             elsif in_valid = '1' then
-                bin := signed(peak_word(7 downto 0));
+                if lock = '1' and lock_have = '1' then
+                    bin := lock_bin;
+                else
+                    bin := signed(peak_word(7 downto 0));
+                    if lock = '1' then
+                        lock_bin  <= bin;
+                        lock_have <= '1';
+                    else
+                        lock_have <= '0';
+                    end if;
+                end if;
                 ftw := unsigned(shift_left(resize(bin, 32), 24));
                 flush := (ma_have = '0') or (bin /= ma_bin);
                 c_i := sine_lookup(phase_acc(31 downto 22) + 256);

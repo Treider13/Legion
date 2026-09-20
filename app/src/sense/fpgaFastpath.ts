@@ -90,6 +90,21 @@ export function fpgaTurnDwellUs(ms: number): number {
   return Math.round(fpgaTurnDwellClamp(ms) * 1000);
 }
 
+/** Период глухого прохода коридора (Умная атака). 0 / мусор → 5 с. */
+export const FPGA_SURVEY_PERIOD_DEFAULT_MS = 5000;
+export const FPGA_SURVEY_PERIOD_MIN_MS = FPGA_TURN_DWELL_MIN_MS;
+export const FPGA_SURVEY_PERIOD_MAX_MS = FPGA_TURN_DWELL_MAX_MS;
+
+export function fpgaSurveyPeriodClamp(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return FPGA_SURVEY_PERIOD_DEFAULT_MS;
+  const c = Math.min(FPGA_SURVEY_PERIOD_MAX_MS, Math.max(FPGA_SURVEY_PERIOD_MIN_MS, ms));
+  return Math.round(c * 10) / 10;
+}
+
+export function fpgaSurveyPeriodUs(ms: number): number {
+  return Math.round(fpgaSurveyPeriodClamp(ms) * 1000);
+}
+
 /** Полоса канала подавления lb_*-тракта: fs = max(полоса, минимум sample-rate
  *  чипа), analog BW = полоса. Дефолт 2 МГц — поведение до появления параметра.
  *  Потолок — analog платы (x40 28 / micro 56 МГц, каталог). */
@@ -309,8 +324,10 @@ export interface OnboardInterceptInput {
   lookMhz?: number;
   turn: boolean;
   dwellMs: number;
+  /** Период глухого прохода, мс. 0 / мусор → 5 с. */
+  surveyPeriodMs?: number;
   /** ICE9: один LO на середине коридора, без плитки взглядов.
-   *  Коридор шире взгляда + FFT: хост ставит SURVEY, не этот PARK. */
+   *  Умная атака (FFT): ИИ всегда — PARK+SURVEY, плитка не схлопывается. */
   park?: boolean;
   /** Точный Гц: FFT-пик на FPGA. Дефолт false — walker как раньше. */
   fftEnable?: boolean;
@@ -329,6 +346,7 @@ export interface OnboardInterceptPlan {
   detThr: number;
   detShift: number;
   dwellMs: number;
+  surveyPeriodMs: number;
   turn: boolean;
   park: boolean;
   /** Глухой обзор плитки, затем 56 МГц на всплеск. */
@@ -348,10 +366,12 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const wantPark = !!i.park;
   const tile = planCenters(i.bands, lookMhz);
   const fftEnable = !!i.fftEnable;
-  const survey = wantPark && fftEnable && tile.length > 1;
-  const park = wantPark && !survey;
-  const centers = park ? planParkCenters(i.bands) : tile;
+  /* Умная атака: ИИ всегда (PARK+SURVEY). Без FFT — старый walker / ICE9 park. */
+  const survey = fftEnable;
+  const park = fftEnable ? true : wantPark;
+  const centers = !fftEnable && park ? planParkCenters(i.bands) : tile;
   const dwellMs = fpgaTurnDwellClamp(i.dwellMs);
+  const surveyPeriodMs = fpgaSurveyPeriodClamp(i.surveyPeriodMs ?? FPGA_SURVEY_PERIOD_DEFAULT_MS);
   const fireBwMhz = fftEnable
     ? clampAirBwMhz(i.fireBwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog)
     : FPGA_AIR_BW_DEFAULT_MHZ;
@@ -368,6 +388,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detThr: i.detThr,
     detShift,
     dwellMs,
+    surveyPeriodMs,
     turn: i.turn,
     park,
     survey,
@@ -397,14 +418,11 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     return fail(`${FPGA_AIR_MODE_RU}: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
   }
   const hops = Math.max(0, centers.length - 1);
+  const inner = i.turn ? "обычный" : "приоритет";
   const how = survey
-    ? `обзор ${centers.length} взглядов по ${lookMhz} МГц · глухой проход · взгляд на всплеск · выдержка ${dwellMs} мс · снова обзор`
+    ? `ИИ · обзор ${centers.length} взглядов по ${lookMhz} МГц · глухой проход каждые ${surveyPeriodMs} мс · взгляд на всплеск · ${inner} выдержка ${dwellMs} мс`
     : park
     ? `стоянка ${(centers[0] ?? 0).toFixed(1)} МГц · взгляд ${lookMhz} МГц (фильтр ≤${analog}) · хопы внутри окна — цифровой вырез на стоящем LO, PLL не гоняем`
-    : fftEnable
-    ? hops === 0
-      ? `коридор ${spanMhz.toFixed(1)} МГц в взгляде ${lookMhz} МГц — FFT пик, цифровой вырез на стоящем LO (точный Гц, не hop PLL)`
-      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц · FFT пик → точный Гц на стоящем LO (не hop PLL) · шаг взгляда на плате, не USB`
     : hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
@@ -420,6 +438,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detThr: i.detThr,
     detShift,
     dwellMs,
+    surveyPeriodMs,
     turn: i.turn,
     park,
     survey,
@@ -499,6 +518,8 @@ export function fpgaArmCmd(
     scanSurvey?: boolean;
     scanDwellMs?: number;
     scanDwellUs?: number;
+    scanSurveyMs?: number;
+    scanSurveyUs?: number;
     fftEnable?: boolean;
     fftDcNotch?: boolean;
     fireBwMhz?: number;
@@ -534,13 +555,19 @@ export function fpgaArmCmd(
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
     if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;
     cmd.scan_turn = !!opts.scanTurn;
-    cmd.scan_park = !!opts.scanPark && !opts.scanSurvey;
+    cmd.scan_park = !!opts.scanPark;
     cmd.scan_survey = !!opts.scanSurvey;
     if (opts.scanDwellUs !== undefined && Number.isFinite(opts.scanDwellUs)) {
       cmd.scan_dwell_us = Math.max(0, Math.round(opts.scanDwellUs));
     } else if (opts.scanDwellMs !== undefined) {
       cmd.scan_dwell_us = fpgaTurnDwellUs(opts.scanDwellMs);
       cmd.scan_dwell_ms = fpgaTurnDwellClamp(opts.scanDwellMs);
+    }
+    if (opts.scanSurveyUs !== undefined && Number.isFinite(opts.scanSurveyUs)) {
+      cmd.scan_survey_us = Math.max(0, Math.round(opts.scanSurveyUs));
+    } else if (opts.scanSurveyMs !== undefined) {
+      cmd.scan_survey_us = fpgaSurveyPeriodUs(opts.scanSurveyMs);
+      cmd.scan_survey_ms = fpgaSurveyPeriodClamp(opts.scanSurveyMs);
     }
     if (opts.fftEnable) {
       cmd.fft_enable = true;

@@ -61,6 +61,7 @@ import {
   FPGA_OBSERVE_MS,
   FPGA_DEFAULT_DET_THR,
   FPGA_TURN_DWELL_DEFAULT_MS,
+  FPGA_SURVEY_PERIOD_DEFAULT_MS,
   FPGA_US_DET_SHIFT,
   airThrTable,
   airTractParams,
@@ -94,6 +95,8 @@ import {
 } from "../sense/hold";
 import {
   FPGA_AIR_MODE_RU,
+  FPGA_AI_LABEL_RU,
+  fpgaInnerDispatch,
   fpgaRunModeRu,
   isFpgaAirPattern,
   modeConflict,
@@ -329,8 +332,10 @@ interface LegionStore {
   fpgaDetThr: number;
   /** win_shift 4..12. По умолчанию 4 → 16 сэмплов @ 2 МГц = 8 µs. */
   fpgaDetShift: number;
-  /** ОБЫЧНЫЙ в FPGA+сканер: выдержка на частоте до ротации, мс (строка UI). */
+  /** Выдержка на сигнал внутри окна, мс (строка UI). Обычный и приоритет. */
   fpgaTurnDwellMs: string;
+  /** Период глухого прохода коридора, мс (строка UI). */
+  fpgaSurveyPeriodMs: string;
   /** Полоса канала подавления lb_* (fs = max(полоса, 520834 Гц)), МГц, строка UI. */
   fpgaAirBwMhz: string;
   /** Эфир-обход (air-hop): выдержка на стоянке, мс (строка UI). */
@@ -427,6 +432,7 @@ interface LegionStore {
   setFpgaDetThr(v: number): void;
   setFpgaDetShift(v: number): void;
   setFpgaTurnDwellMs(v: string): void;
+  setFpgaSurveyPeriodMs(v: string): void;
   setFpgaAirBwMhz(v: string): void;
   setFpgaAirDwellMs(v: string): void;
   setFpgaAirWalkPattern(p: FpgaSoloPattern): void;
@@ -701,6 +707,7 @@ void gHandoffFailAt;
 /** Автовозврат из ARM: det_count не растёт FPGA_AIR_GONE_MS = энергия пропала. */
 let gLastDetCount: number | null = null;
 let gDetStagnantSinceMs: number | null = null;
+let gLastScanEventSeq = 0;
 /** Последнее залогированное предупреждение шлюза (длительная работа) — не спамим. */
 let gArmWarnLast = "";
 /** Поколение авто-цикла FPGA+сканер: инкрементит операторский СТОП.
@@ -1227,12 +1234,17 @@ export const useLegion = create<LegionStore>((set, get) => {
       Number.isFinite(s.fpgaDetThr) && s.fpgaDetThr > 0 ? s.fpgaDetThr : FPGA_DEFAULT_DET_THR;
     const lookRaw = parseLocaleNumber(s.fpgaAirBwMhz);
     const dwellRaw = parseLocaleNumber(s.fpgaTurnDwellMs);
+    const periodRaw = parseLocaleNumber(s.fpgaSurveyPeriodMs);
     if (!Number.isFinite(lookRaw) || lookRaw <= 0) {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте ширину взгляда числом (например 10 или 0.2)`);
       return;
     }
     if (!Number.isFinite(dwellRaw) || dwellRaw <= 0) {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте выдержку числом (0,4 и 0.4 — 400 мкс)`);
+      return;
+    }
+    if (!Number.isFinite(periodRaw) || periodRaw <= 0) {
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте период глухого прохода числом (например 5)`);
       return;
     }
     const plan = planOnboardIntercept({
@@ -1243,9 +1255,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       detThr,
       detShift: s.fpgaDetShift,
       lookMhz: lookRaw,
-      turn: s.autoDispatch === "turn",
-      park: s.autoDispatch === "park",
+      turn: fpgaInnerDispatch(s.autoDispatch) === "turn",
+      park: true,
       dwellMs: dwellRaw,
+      surveyPeriodMs: periodRaw,
       fftEnable: true,
     });
     if (!plan.ok) {
@@ -1259,6 +1272,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       );
       return;
     }
+    gLastScanEventSeq = 0;
     set({ fpgaMode: "lb_gated", fpgaBusy: true, fpgaStatus: null, fpgaAutoCycle: false });
     gFpgaAirGen += 1;
     const airGen = gFpgaAirGen;
@@ -1330,6 +1344,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanPark: plan.park,
           scanSurvey: plan.survey,
           scanDwellMs: plan.dwellMs,
+          scanSurveyMs: plan.surveyPeriodMs,
           fftEnable: true,
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
@@ -1386,6 +1401,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
       gLastDetCount = null;
+      gLastScanEventSeq = 0;
       gDetStagnantSinceMs = null;
       // USB обратно хосту; startScan ниже сам переоткроет SDR (openSdr).
       const relRet = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
@@ -1556,6 +1572,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
     fpgaTurnDwellMs: String(FPGA_TURN_DWELL_DEFAULT_MS),
+    fpgaSurveyPeriodMs: String(FPGA_SURVEY_PERIOD_DEFAULT_MS),
     fpgaAirBwMhz: String(FPGA_AIR_BW_DEFAULT_MHZ),
     fpgaAirDwellMs: String(FPGA_SOLO_DWELL_DEFAULT_MS),
     fpgaAirWalkPattern: "sweep",
@@ -2465,6 +2482,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
 
     setFpgaTurnDwellMs: (v) => set({ fpgaTurnDwellMs: v }),
+    setFpgaSurveyPeriodMs: (v) => set({ fpgaSurveyPeriodMs: v }),
     setFpgaAirBwMhz: (v) => set({ fpgaAirBwMhz: v }),
     setFpgaAirDwellMs: (v) => set({ fpgaAirDwellMs: v }),
     setFpgaAirWalkPattern: (p) => set({ fpgaAirWalkPattern: p === "hop" ? "hop" : "sweep" }),
@@ -3252,6 +3270,31 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.legion !== undefined) set({ fpgaLegion: r.legion });
       if (r.ok && r.freq_mhz && r.freq_mhz > 0 && get().fpgaArmed) {
         set({ lastForwardMhz: r.freq_mhz });
+      }
+      if (
+        r.ok &&
+        isFpgaAirPattern(get().scanPattern) &&
+        get().fpgaArmed &&
+        typeof r.scan_event_seq === "number" &&
+        r.scan_event_seq > 0 &&
+        r.scan_event_seq !== gLastScanEventSeq
+      ) {
+        gLastScanEventSeq = r.scan_event_seq;
+        const ts = Date.now();
+        const d = new Date(ts);
+        const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+        const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+        const code = r.scan_event_code ?? (typeof r.scan_event === "number" ? r.scan_event & 0xff : 0);
+        const hz = r.peak_mhz && r.peak_mhz > 0 ? r.peak_mhz : r.freq_mhz;
+        const at = hz && hz > 0 ? ` ${hz.toFixed(3)} МГц` : "";
+        const what =
+          code === 1 ? "глухой проход" :
+          code === 2 ? `окно ${FPGA_AI_LABEL_RU} на всплеск${at}` :
+          code === 3 ? `захват${at} (выдержка)` :
+          code === 4 ? `перескок${at} (выдержка заново)` :
+          code === 5 ? "новый глухой проход" :
+          `событие ${code}${at}`;
+        pushLog("sys", `${FPGA_AIR_MODE_RU} ${clock}: ${what}`);
       }
       if (get().fpgaArmed && get().fpgaMode === "lb_gated") {
         ingestFpgaLab(r.ok ? r.freq_mhz ?? null : null, r.ok && r.det_active === true, Date.now());

@@ -19,7 +19,11 @@
  *   FFT+TURN: FIRE без hop PLL (цифровой вырез, AIR=центр взгляда, PEAK=~2444);
  *             выдержка SCAN_DWELL_US, затем следующий взгляд 2484.
  *   FFT+PARK: 2400–2487 → один центр 2443.5; dwell+энергия не гоняет PLL.
- *   FFT+SURVEY: 2000–3000 глухой 18 клеток; пик 2434 → LO 2434; T → снова 2028.
+ *   FFT+SURVEY: 2000–3000 глухой 18 клеток; пик 2434 → LO 2434;
+ *             SCAN_SURVEY_US → снова 2028. События: PASS / STARE / LOCK /
+ *             SWITCH / RESURVEY (один код на work — иначе хост теряет).
+ *             Внутри окна: обычный держит выдержку; приоритет тоже держит
+ *             и на сильнее перескакивает с новой выдержкой.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -948,6 +952,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -961,6 +966,12 @@ int main(void)
         int li;
         for (li = 0; li < 18; li++) {
             legion_work(); /* SEARCH */
+            if (li == 0) {
+                uint32_t ev = 0;
+                legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+                CHECK("FFT SURVEY: первый проход — событие PASS",
+                      (ev & 0xffu) == LEGION_EVT_PASS);
+            }
             t_tamer += 8;
             legion_work(); /* SETTLE → FRAME, mute */
             if (li == 7) {
@@ -984,6 +995,9 @@ int main(void)
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
         CHECK("FFT SURVEY: после прохода AIR = 2434, не 2500",
               khz == 2434000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &khz);
+        CHECK("FFT SURVEY: взгляд — событие STARE",
+              (khz & 0xffu) == LEGION_EVT_STARE);
         legion_reg_read(LEGION_REG_SCAN_F1_KHZ, &khz);
         CHECK("FFT SURVEY: F1 конверт 2000", khz == 2000000);
         legion_reg_read(LEGION_REG_SCAN_F2_KHZ, &khz);
@@ -1008,6 +1022,9 @@ int main(void)
         CHECK("FFT SURVEY: F1 после T не стёрт", khz == 2000000);
         legion_reg_read(LEGION_REG_SCAN_F2_KHZ, &khz);
         CHECK("FFT SURVEY: F2 после T не стёрт", khz == 3000000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &khz);
+        CHECK("FFT SURVEY: после T — событие RESURVEY, не PASS",
+              (khz & 0xffu) == LEGION_EVT_RESURVEY);
     }
 
     /* После T hop на 2028 отказал: без сброса look_set/HOLD PASS молчит навсегда. */
@@ -1016,6 +1033,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1076,6 +1094,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1159,6 +1178,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1184,6 +1204,9 @@ int main(void)
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
         CHECK("FFT SURVEY empty: AIR ≠ 2500", khz != 2500000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &khz);
+        CHECK("FFT SURVEY empty: снова глухой — событие PASS",
+              (khz & 0xffu) == LEGION_EVT_PASS);
     }
 
     /* 2300–2500: 4 взгляда. Пик bin128 @ 2328 → ~2300, clip LO=2328. */
@@ -1195,6 +1218,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1241,6 +1265,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL,
@@ -1296,6 +1321,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1346,6 +1372,216 @@ int main(void)
         CHECK("FFT SURVEY hopfail: повтор → clip LO 2328", khz == 2328000);
     }
 
+    /* PARK+SURVEY: плитка 18 клеток, не середина 2500. */
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_PARK |
+                     LEGION_SCAN_CTRL_SURVEY | LEGION_SCAN_CTRL_TURN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY ИИ 18: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY ИИ 18: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 7) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 64);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 64);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY ИИ: PARK не схлопнул — LO 2434, не 2500", khz == 2434000);
+    }
+    t_tamer += 8;
+    legion_work(); /* stare unmute */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 0, 0x2000, 16);
+    legion_work();
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    pio_n = 0;
+    legion_work(); /* ordinary LOCK */
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY ordinary: захват bin16 → 2437.5", khz == 2437500);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY ordinary: событие LOCK", (ev & 0xffu) == LEGION_EVT_LOCK);
+        CHECK("FFT SURVEY ordinary: HDL lock",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
+    }
+    t_peak_word = mk_peak(1, 2, 0x4000, 32);
+    legion_work();
+    t_peak_word = mk_peak(1, 3, 0x4000, 32);
+    legion_work();
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY ordinary: сильнее в выдержке не сбивает", khz == 2437500);
+    }
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_peak_word = mk_peak(1, 4, 0x4000, 32);
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY ordinary: после выдержки берёт текущий пик", khz == 2441000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY ordinary: событие SWITCH", (ev & 0xffu) == LEGION_EVT_SWITCH);
+    }
+    t_tamer += (uint64_t)56000000 * 5000000 / 1000000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY ordinary: после периода — RESURVEY",
+              (ev & 0xffu) == LEGION_EVT_RESURVEY);
+    }
+
+    /* Приоритет: сильнее в выдержке — перескок и новая выдержка. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_PARK |
+                     LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY priority: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY priority: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 7) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 64);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 64);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    t_tamer += 8;
+    legion_work();
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 0, 0x2000, 16);
+    legion_work();
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    pio_n = 0;
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY priority: захват bin16", khz == 2437500);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: событие LOCK", (ev & 0xffu) == LEGION_EVT_LOCK);
+        CHECK("FFT SURVEY priority: HDL lock",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
+    }
+    t_peak_word = mk_peak(1, 2, 0x4000, 32);
+    legion_work();
+    t_peak_word = mk_peak(1, 3, 0x4000, 32);
+    pio_n = 0;
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY priority: перескок на сильнее в выдержке", khz == 2441000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: событие SWITCH", (ev & 0xffu) == LEGION_EVT_SWITCH);
+        CHECK("FFT SURVEY priority: после перескока HDL lock",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
+    }
+    t_peak_word = mk_peak(1, 4, 0x1000, 8);
+    legion_work();
+    t_peak_word = mk_peak(1, 5, 0x1000, 8);
+    legion_work();
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY priority: слабее в новой выдержке не сбивает",
+              khz == 2441000);
+    }
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_peak_word = mk_peak(1, 6, 0x2000, 64);
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY priority: после выдержки не берёт слабее",
+              khz == 2441000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: после выдержки не SWITCH на слабее",
+              (ev & 0xffu) == LEGION_EVT_SWITCH);
+    }
+    t_peak_word = mk_peak(1, 7, 0x5000, 80);
+    legion_work();
+    t_peak_word = mk_peak(1, 8, 0x5000, 80);
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT SURVEY priority: сильнее после выдержки — снова перескок",
+              khz == 2451500);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: снова SWITCH",
+              (ev & 0xffu) == LEGION_EVT_SWITCH);
+    }
+    t_tamer += (uint64_t)56000000 * 5000000 / 1000000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: после периода — RESURVEY",
+              (ev & 0xffu) == LEGION_EVT_RESURVEY);
+    }
+
     /* U5: FFT/BAND readback не STATUS */
     legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
     legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);
@@ -1363,6 +1599,11 @@ int main(void)
         CHECK("U5: FIRE_BW readback", v == 2000000);
         legion_reg_read(LEGION_REG_SETTLE_N, &v);
         CHECK("U5: SETTLE_N readback", v == 16);
+        legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
+        legion_reg_read(LEGION_REG_SCAN_SURVEY_US, &v);
+        CHECK("U5: SCAN_SURVEY_US readback", v == 5000000);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &v);
+        CHECK("U5: SCAN_EVENT не STATUS", v != t_status);
         legion_reg_read(LEGION_REG_BAND_F1_KHZ, &v);
         CHECK("U5: BAND_F1 readback", v == 2400000);
         legion_reg_read(LEGION_REG_BAND_COUNT, &v);
@@ -1538,6 +1779,7 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2450000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);

@@ -39,6 +39,7 @@ entity legion_regs is
         rx_det_shift  : out unsigned(3 downto 0);
         rx_fft_en     : out std_logic;
         rx_fft_dc_notch : out std_logic;
+        rx_fft_lock   : out std_logic;
         rx_peak_word  : in  std_logic_vector(31 downto 0);
         -- Статусные входы из TX/RX доменов
         tx_playing    : in  std_logic;
@@ -60,7 +61,7 @@ architecture rtl of legion_regs is
     signal r_cap_arm    : std_logic;
     signal r_lb_shift   : std_logic_vector(3 downto 0);
     signal r_wd_limit   : std_logic_vector(15 downto 0);
-    signal r_fft_ctrl   : std_logic_vector(1 downto 0);
+    signal r_fft_ctrl   : std_logic_vector(2 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -81,7 +82,7 @@ architecture rtl of legion_regs is
     -- CDC порогов детектора → rx_clock
     signal thr_meta, thr_rx     : std_logic_vector(31 downto 0);
     signal sh_meta, sh_rx       : std_logic_vector(3 downto 0);
-    signal fft_meta, fft_rx     : std_logic_vector(1 downto 0);
+    signal fft_meta, fft_rx     : std_logic_vector(2 downto 0);
     signal pk_meta, pk_nios     : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
@@ -117,7 +118,7 @@ begin
             r_cap_arm    <= '0';
             r_lb_shift   <= (others => '0');
             r_wd_limit   <= x"003D";        -- 61 × 16.4 мс ≈ 1 с
-            r_fft_ctrl   <= "00";           -- FFT выкл: walker как раньше
+            r_fft_ctrl   <= "000";          -- FFT выкл: walker как раньше
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -138,7 +139,7 @@ begin
                             r_wd_limit <= pio_wdata(15 downto 0);
                         end if;
                     when LEGION_REG_WD_KICK    => kick_toggle  <= not kick_toggle;
-                    when LEGION_REG_FFT_CTRL   => r_fft_ctrl   <= pio_wdata(1 downto 0);
+                    when LEGION_REG_FFT_CTRL   => r_fft_ctrl   <= pio_wdata(2 downto 0);
                     when others => null;
                 end case;
             end if;
@@ -222,6 +223,7 @@ begin
     rx_det_shift    <= unsigned(sh_rx);
     rx_fft_en       <= fft_rx(0);
     rx_fft_dc_notch <= fft_rx(1);
+    rx_fft_lock     <= fft_rx(2);
 
     -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
     cdc_det_src : process(rx_clock, rx_reset)

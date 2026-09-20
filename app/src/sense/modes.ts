@@ -75,7 +75,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
     case "fpga":
-      return `${FPGA_AIR_MODE_RU} (плата сама: обзор всплеска → окно на него → выдержка → снова обзор; USB не в круге)`;
+      return `${FPGA_AIR_MODE_RU} (плата сама: глухой обзор → ИИ окно на всплеск → выдержка внутри → снова обзор; USB не в круге)`;
   }
 }
 
@@ -91,9 +91,17 @@ export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
 }
 
 export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
-  if (dispatch === "priority") return "ПРИОРИТЕТ (сильнее рядом — на неё)";
+  if (dispatch === "priority") return "ПРИОРИТЕТ (сильнее — перескок и новая выдержка)";
   if (dispatch === "park") return "СТОЯНКА (узкий — один LO, хопы цифрой; шире взгляда — обзор и взгляд на всплеск)";
   return "ОБЫЧНЫЙ (по очереди, выдержка)";
+}
+
+/** Умная атака: ИИ снаружи всегда. park leftover → обычный. */
+export const FPGA_AI_LABEL_RU = "ИИ";
+export const FPGA_AI_OPTION_RU = "ИИ (окно на всплеск, хопы цифрой)";
+
+export function fpgaInnerDispatch(dispatch: AutoDispatch): "turn" | "priority" {
+  return dispatch === "priority" ? "priority" : "turn";
 }
 
 export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "turn"): {
@@ -109,7 +117,7 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       useFpgaAir: true,
       reason:
         `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. ` +
-        "Гейт в текущем взгляде — микросекунды. Стоянка: LO на середине коридора, хопы внутри окна — на усилитель без PLL. По очереди — плитка взглядов и выдержка. USB не в круге увидел→усилитель. Ноутбук — коридор, Старт/Стоп и наблюдение.",
+        "Гейт в текущем взгляде — микросекунды. ИИ: глухой обзор коридора, затем 56 МГц на всплеск. Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка). USB не в круге увидел→усилитель. Ноутбук — коридор, два времени, Старт/Стоп и наблюдение.",
     };
   }
   if (pattern === "auto") {

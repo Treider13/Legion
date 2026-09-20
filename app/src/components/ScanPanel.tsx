@@ -3,7 +3,9 @@ import {
   autoDispatchOptionRu,
   FPGA_AIR_MODE_RU,
   FPGA_AIR_MODE_RU_CAPS,
+  FPGA_AI_OPTION_RU,
   FPGA_AIR_MODE_START_RU,
+  fpgaInnerDispatch,
   isFpgaAirLive,
   isFpgaAirPattern,
   isFpgaTaskLive,
@@ -11,7 +13,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaSurveyPeriodClamp, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
@@ -57,7 +59,7 @@ export function ScanPanel() {
         {taskLive
           ? `Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан. Стоп — там или кнопкой ниже.`
           : fpgaAir
-            ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Плата сама ищет всплеск, ставит окно взгляда на него, держит выдержку, снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
+            ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
               : `АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: ${FPGA_AIR_MODE_RU.toLowerCase()}. Хост-скан и FPGA вместе не работают (один USB).`}
@@ -174,28 +176,49 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
-            {(s.autoDispatch === "turn" || s.autoDispatch === "park") && (
-              <label title={s.autoDispatch === "park"
-                ? "Сколько миллисекунд держать взгляд на всплеске после обзора, затем снова глухой проход."
-                : "Сколько миллисекунд держать усилитель на найденной частоте, затем шаг дальше (можно 0.4)."}>
-                ВЫДЕРЖКА НА ЧАСТОТЕ мс
-                <input
-                  aria-label={s.autoDispatch === "park"
-                    ? "Выдержка взгляда на всплеске после обзора"
-                    : "Выдержка на частоте до переключения по очереди"}
-                  type="number"
-                  min={0.1}
-                  max={60000}
-                  step={0.1}
-                  value={s.fpgaTurnDwellMs}
-                  onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
-                  disabled={busy || s.fpgaBusy}
-                />
-              </label>
-            )}
+            <label title="Сколько миллисекунд держать усилитель на найденном сигнале внутри окна. Обычный и приоритет.">
+              ВЫДЕРЖКА НА СИГНАЛ мс
+              <input
+                aria-label="Выдержка на сигнал внутри окна"
+                type="number"
+                min={0.1}
+                max={60000}
+                step={0.1}
+                value={s.fpgaTurnDwellMs}
+                onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
+              ГЛУХОЙ ПРОХОД мс
+              <input
+                aria-label="Период глухого прохода коридора"
+                type="number"
+                min={0.1}
+                max={60000}
+                step={0.1}
+                value={s.fpgaSurveyPeriodMs}
+                onChange={(e) => s.setFpgaSurveyPeriodMs(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
           </>
         )}
-        {(auto || interceptSetup) && (
+        {interceptSetup && (
+          <label>
+            В ОКНЕ
+            <select
+              aria-label="Обычный или приоритет внутри окна"
+              value={fpgaInnerDispatch(s.autoDispatch)}
+              onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
+              disabled={busy}
+            >
+              <option value="turn">{autoDispatchOptionRu("turn")}</option>
+              <option value="priority">{autoDispatchOptionRu("priority")}</option>
+            </select>
+          </label>
+        )}
+        {auto && (
           <label>
             АВТО
             <select
@@ -251,12 +274,10 @@ export function ScanPanel() {
         {taskLive
           ? `FPGA-задача с вкладки ТИП СИГНАЛА — не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан`
           : fpgaAir
-          ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${
-              s.autoDispatch === "park"
-                ? "Стоянка: узкий коридор — один LO; шире взгляда — глухой обзор, взгляд на всплеск, снова обзор"
-                : s.autoDispatch === "turn"
-                ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на частоту`
-                : "Приоритет: сильнейшая, пока жива"
+          ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${FPGA_AI_OPTION_RU}. ${
+              fpgaInnerDispatch(s.autoDispatch) === "turn"
+                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал, глухой проход каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
+                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс, глухой проход каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
             }`
           : auto
             ? s.autoDispatch === "priority"

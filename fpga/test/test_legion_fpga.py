@@ -137,6 +137,8 @@ py_map = {
     "LEGION_REG_BAND_F2_KHZ": lf.REG_BAND_F2_KHZ,
     "LEGION_REG_BAND_COUNT": lf.REG_BAND_COUNT,
     "LEGION_REG_SETTLE_N": lf.REG_SETTLE_N,
+    "LEGION_REG_SCAN_SURVEY_US": lf.REG_SCAN_SURVEY_US,
+    "LEGION_REG_SCAN_EVENT": lf.REG_SCAN_EVENT,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -1177,8 +1179,21 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
 check("micro: ARM FFT+SURVEY 2000-3000 ok", r.get("ok") is True)
 check("micro: FFT+SURVEY SCAN_CTRL enable|survey",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_SURVEY))
-check("micro: FFT+SURVEY не ставит PARK",
+check("micro: FFT+SURVEY без park не ставит PARK",
       (gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) & lf.SCAN_CTRL_PARK) == 0)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2028.0, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2000, "scan_f2_mhz": 3000,
+          "scan_park": True, "scan_survey": True, "scan_turn": True,
+          "scan_dwell_us": 400, "scan_survey_us": 5_000_000,
+          "fft_enable": True, "fire_bw_mhz": 2})
+check("micro: ARM ИИ park+survey+turn ok", r.get("ok") is True)
+check("micro: ИИ SCAN_CTRL en|turn|park|survey",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (
+          lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN | lf.SCAN_CTRL_PARK | lf.SCAN_CTRL_SURVEY))
+check("micro: ИИ SCAN_SURVEY_US 5e6",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_SURVEY_US) == 5_000_000)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 5400.0, "fs_hz": 56_000_000, "bw_mhz": 56,

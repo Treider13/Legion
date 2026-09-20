@@ -9,7 +9,9 @@
   {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
    "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int,
    "scan_enable":bool, "scan_f1_mhz":float, "scan_f2_mhz":float,
-   "scan_turn":bool, "scan_park":bool, "scan_survey":bool, "scan_dwell_us":int, "scan_dwell_ms":float,
+   "scan_turn":bool, "scan_park":bool, "scan_survey":bool,
+   "scan_dwell_us":int, "scan_dwell_ms":float,
+   "scan_survey_us":int, "scan_survey_ms":float,
    "fft_enable":bool, "fft_dc_notch":bool, "fire_bw_mhz":float,
    "search_bw_mhz":float, "settle_n":int,
    "scan_bands":[{"f1_mhz":float,"f2_mhz":float}, ...]}
@@ -568,6 +570,26 @@ class LegionGateway:
                 return None, "scan_dwell_ms: не число"
         return 0, ""
 
+    def _scan_survey_us(self, msg: dict) -> tuple[int | None, str]:
+        """Период глухого прохода, мкс. 0 → NIOS 5 с. Запятая и мусор — отказ."""
+        if msg.get("scan_survey_us") is not None:
+            raw = msg.get("scan_survey_us")
+            if isinstance(raw, str) and ("," in raw or not raw.strip()):
+                return None, "scan_survey_us: не число"
+            try:
+                return max(0, int(raw)), ""
+            except (TypeError, ValueError):
+                return None, "scan_survey_us: не число"
+        if msg.get("scan_survey_ms") is not None:
+            raw = msg.get("scan_survey_ms")
+            if isinstance(raw, str) and "," in raw:
+                return None, "scan_survey_ms: запятая не принимается (нужен 5)"
+            try:
+                return max(0, int(round(float(raw) * 1000.0))), ""
+            except (TypeError, ValueError):
+                return None, "scan_survey_ms: не число"
+        return 0, ""
+
     def _validate_scan(self, msg: dict) -> tuple[bool, str]:
         """Границы и выдержка до подъёма эфира (U1)."""
         if not bool(msg.get("scan_enable")):
@@ -576,6 +598,9 @@ class LegionGateway:
             return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
         dwell, why = self._scan_dwell_us(msg)
         if dwell is None:
+            return False, why
+        period, why = self._scan_survey_us(msg)
+        if period is None:
             return False, why
         return True, ""
 
@@ -599,9 +624,13 @@ class LegionGateway:
         dwell, why = self._scan_dwell_us(msg)
         if dwell is None:
             return False, why
+        period, why = self._scan_survey_us(msg)
+        if period is None:
+            return False, why
         if not self.fpga.set_scan_corridor(
                 float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell,
-                bool(msg.get("scan_park")), bool(msg.get("scan_survey"))):
+                bool(msg.get("scan_park")), bool(msg.get("scan_survey")),
+                period):
             return False, "запись SCAN_* не удалась"
         if not bool(msg.get("fft_enable")):
             if not self.fpga.write_reg(lf.REG_FFT_CTRL, 0):
@@ -923,6 +952,11 @@ class LegionGateway:
                 okp, pk = self.fpga.read_reg(lf.REG_PEAK_KHZ)
                 if okp and pk:
                     st["peak_mhz"] = pk / 1000.0
+                oke, ev = self.fpga.read_reg(lf.REG_SCAN_EVENT)
+                if oke:
+                    st["scan_event"] = ev
+                    st["scan_event_code"] = ev & 0xFF
+                    st["scan_event_seq"] = ev >> 8
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)

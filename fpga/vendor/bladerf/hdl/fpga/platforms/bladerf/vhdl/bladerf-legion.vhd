@@ -315,6 +315,7 @@ architecture legion of bladerf is
     signal lg_det_count     : unsigned(15 downto 0);
     signal lg_fft_en        : std_logic;
     signal lg_fft_dc_notch  : std_logic;
+    signal lg_fft_lock      : std_logic;
     signal lg_peak_word     : std_logic_vector(31 downto 0);
     signal lg_xlat_i        : signed(15 downto 0);
     signal lg_xlat_q        : signed(15 downto 0);
@@ -1501,6 +1502,7 @@ begin
         rx_det_shift  => lg_det_shift_rx,
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
+        rx_fft_lock   => lg_fft_lock,
         rx_peak_word  => lg_peak_word
       );
 
@@ -1548,6 +1550,7 @@ begin
         clock     => rx_clock,
         reset     => rx_reset,
         enable    => lg_fft_en,
+        lock      => lg_fft_lock,
         peak_word => lg_peak_word,
         in_i      => rx_sample_corrected_i,
         in_q      => rx_sample_corrected_q,
