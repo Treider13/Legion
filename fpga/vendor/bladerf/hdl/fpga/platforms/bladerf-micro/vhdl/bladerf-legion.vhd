@@ -222,6 +222,9 @@ architecture legion of bladerf is
     signal lg_det_count     : unsigned(15 downto 0);
     signal lg_det_thr_rx    : std_logic_vector(31 downto 0);
     signal lg_det_shift_rx  : unsigned(3 downto 0);
+    signal lg_fft_en        : std_logic;
+    signal lg_fft_dc_notch  : std_logic;
+    signal lg_peak_word     : std_logic_vector(31 downto 0);
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1125,7 +1128,10 @@ begin
         rx_clock      => rx_clock,
         rx_reset      => rx_reset,
         rx_det_thr    => lg_det_thr_rx,
-        rx_det_shift  => lg_det_shift_rx
+        rx_det_shift  => lg_det_shift_rx,
+        rx_fft_en     => lg_fft_en,
+        rx_fft_dc_notch => lg_fft_dc_notch,
+        rx_peak_word  => lg_peak_word
       );
 
     U_legion_detector : entity work.legion_detector
@@ -1139,6 +1145,19 @@ begin
         win_shift   => lg_det_shift_rx,
         det_active  => lg_det_active_rx,
         det_count   => lg_det_count
+      );
+
+    -- FFT-пик на том же тапе, что детектор (adc_streams(0))
+    U_legion_fft_peak : entity work.legion_fft_peak
+      port map (
+        clock     => rx_clock,
+        reset     => rx_reset,
+        enable    => lg_fft_en,
+        dc_notch  => lg_fft_dc_notch,
+        in_i      => adc_streams(0).data_i,
+        in_q      => adc_streams(0).data_q,
+        in_valid  => adc_streams(0).data_v,
+        peak_word => lg_peak_word
       );
 
     U_legion_det_sync : entity work.synchronizer

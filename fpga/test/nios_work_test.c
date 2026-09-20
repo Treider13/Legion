@@ -38,6 +38,16 @@ static int pio_n;
 static uint32_t t_status;    /* STATUS-PIO (бит 3 = wd_fired) */
 static uint32_t t_control;   /* CONTROL-PIO Nuand (x40: бит1 rx, бит2 tx) */
 static uint64_t t_tamer;     /* RX time tamer (сэмплы) */
+static uint32_t t_aws;       /* последний AWS: mux 0x15 → peak, не STATUS */
+static uint32_t t_peak_word; /* слово пика HDL: valid/frame/mag/bin */
+
+static uint32_t mk_peak(int valid, unsigned frame, unsigned mag_hi, unsigned bin)
+{
+    return ((valid ? 0x80000000u : 0u) |
+            ((frame & 0x7fu) << 24) |
+            ((mag_hi & 0xffffu) << 8) |
+            (bin & 0xffu));
+}
 
 uint64_t time_tamer_read(bladerf_module m)
 {
@@ -75,7 +85,12 @@ int band_select(struct bladerf *dev, bladerf_module module, bool low_band)
 
 uint32_t t_pio_read(uint32_t base)
 {
-    if (base == (uint32_t)LEGION_STATUS_BASE) return t_status;
+    if (base == (uint32_t)LEGION_STATUS_BASE) {
+        if ((t_aws & 0x7Fu) == LEGION_REG_PEAK_BIN && (t_aws & 0x80u) == 0) {
+            return t_peak_word;
+        }
+        return t_status;
+    }
     if (base == (uint32_t)CONTROL_BASE) return t_control;
     return 0;
 }
@@ -88,6 +103,7 @@ void t_pio_write(uint32_t base, uint32_t data)
         pio_n++;
     }
     if (base == (uint32_t)CONTROL_BASE) t_control = data;
+    if (base == (uint32_t)LEGION_AWS_BASE) t_aws = data;
 }
 
 /* Ищем последовательность записи регистра LEGION: WDATA=data, AWS=0x80|addr */
@@ -621,6 +637,149 @@ int main(void)
     rfic_fail_rx_freq = false;
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
+
+    /* --- FFT: mux 0x15 и SEARCH→FIRE. FFT_CTRL=0 выше не тронут. --- */
+    t_status = 0x00A50004u;
+    t_peak_word = 0x81AB3410u;
+    t_aws = 0;
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_PEAK_BIN, &v);
+        CHECK("FFT: PEAK_BIN mux, не STATUS", v == 0x81AB3410u);
+        legion_reg_read(0, &v);
+        CHECK("FFT: addr 0 после mux — снова STATUS", (v & 0x4u) != 0);
+    }
+
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2436000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2464000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT n==1: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT n==1: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_n = 0;
+    legion_work(); /* SEARCH: тот же LO, mute */
+    CHECK("FFT n==1: SEARCH глушит TX",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0);
+    CHECK("FFT n==1: SEARCH не unmute",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    CHECK("FFT n==1: SEARCH не hop на пик",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2453500ULL * 1000ULL) < 0);
+    t_tamer += 8;
+    legion_work(); /* SETTLE → FRAME */
+    rfic_n = 0;
+    t_peak_word = mk_peak(1, 3, 0x1000, 16);
+    legion_work();
+    CHECK("FFT: без энергии шумовой bin не шагает", rfic_n == 0);
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 3, 0x2000, 16);
+    legion_work(); /* запомнить кадр */
+    CHECK("FFT: ждём новый кадр", rfic_n == 0);
+    t_peak_word = mk_peak(1, 4, 0x2000, 16);
+    rfic_n = 0;
+    legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → 2453.5 */
+    CHECK("FFT n==1: hop LO на точный Гц (не весь взгляд)",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2453500ULL * 1000ULL) >= 0);
+    CHECK("FFT n==1: FIRE unmute",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
+    CHECK("FFT n==1: FIRE analog BW 2 МГц, fs не трогаем",
+          rfic_idx(BLADERF_RFIC_COMMAND_BANDWIDTH, BLADERF_CHANNEL_RX(0),
+                   2000000) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
+                   56000000) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT n==1: AIR_FREQ = пик", khz == 2453500);
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT n==1: PEAK_KHZ = пик", khz == 2453500);
+    }
+
+    /* n>1: тишина после SETTLE → следующий взгляд, mute */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 28000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT n>1: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT n>1: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = mk_peak(1, 1, 0x00ff, 16);
+    rfic_n = 0;
+    legion_work(); /* SEARCH 2414 */
+    t_tamer += 8;
+    legion_work(); /* FRAME */
+    rfic_n = 0;
+    t_tamer += 140001;
+    legion_work();
+    CHECK("FFT n>1: тишина → hop на центр 1, mute",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2442000ULL * 1000ULL) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+
+    /* U5: FFT/BAND readback не STATUS */
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 16);
+    legion_reg_write(LEGION_REG_BAND_IDX, 0);
+    legion_reg_write(LEGION_REG_BAND_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_BAND_F2_KHZ, 2410000);
+    legion_reg_write(LEGION_REG_BAND_COUNT, 1);
+    t_status = 0x00A50004u;
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_SEARCH_BW_HZ, &v);
+        CHECK("U5: SEARCH_BW readback", v == 56000000);
+        legion_reg_read(LEGION_REG_FIRE_BW_HZ, &v);
+        CHECK("U5: FIRE_BW readback", v == 2000000);
+        legion_reg_read(LEGION_REG_SETTLE_N, &v);
+        CHECK("U5: SETTLE_N readback", v == 16);
+        legion_reg_read(LEGION_REG_BAND_F1_KHZ, &v);
+        CHECK("U5: BAND_F1 readback", v == 2400000);
+        legion_reg_read(LEGION_REG_BAND_COUNT, &v);
+        CHECK("U5: BAND_COUNT readback", v == 1);
+        legion_reg_read(LEGION_REG_FFT_CTRL, &v);
+        CHECK("U5: FFT_CTRL readback enable", (v & LEGION_FFT_CTRL_EN) != 0);
+    }
+
+    /* FFT выкл: n==1 снова «LO не шагает» */
+    legion_reg_write(LEGION_REG_FFT_CTRL, 0);
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2436000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2464000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    CHECK("FFT off n==1: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT off n==1: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    legion_work();
+    rfic_n = 0;
+    t_tamer += 10000000;
+    legion_work();
+    CHECK("FFT off n==1: LO не шагает", rfic_n == 0);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_FFT_CTRL, 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
 #else
     printf("== конфиг: x40 (LMS6002D, CONTROL со шлюза) ==\n");
 
@@ -720,7 +879,43 @@ int main(void)
         legion_reg_read(LEGION_REG_SCAN_DWELL_US, &v);
         CHECK("U5 x40: SCAN_DWELL readback", v == 400);
     }
+
+    /* FFT x40: SEARCH глушит LMS TX (bit2), FIRE hop на пик и unmute. */
+    t_peak_word = 0;
+    t_aws = 0;
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2436000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2464000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    t_control = 0x6;
+    CHECK("FFT x40: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    lms_n = 0; band_n = 0;
+    legion_work(); /* SEARCH same LO → mute bit2 */
+    CHECK("FFT x40: SEARCH снял LMS TX enable", (t_control & 0x4u) == 0);
+    CHECK("FFT x40: SEARCH same-LO без LMS hop", lms_n == 0);
+    t_tamer += 8;
+    legion_work(); /* FRAME */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    legion_work();
+    t_peak_word = mk_peak(1, 2, 0x2000, 16);
+    lms_n = 0; band_n = 0;
+    legion_work();
+    CHECK("FFT x40: FIRE hop LMS RX+TX", lms_n == 2 && band_n == 2);
+    CHECK("FFT x40: FIRE вернул TX enable", (t_control & 0x4u) != 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT x40: AIR_FREQ = пик 2453.5", khz == 2453500);
+    }
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_FFT_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
 #endif
 

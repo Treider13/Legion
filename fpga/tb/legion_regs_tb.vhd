@@ -29,6 +29,9 @@ architecture tb of legion_regs_tb is
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
     signal det_cnt       : unsigned(15 downto 0) := x"00A5";
+    signal peak_word     : std_logic_vector(31 downto 0) := x"81AB3410";
+    signal rx_fft_en     : std_logic;
+    signal rx_fft_notch  : std_logic;
     signal done          : boolean := false;
 
     procedure write_reg(signal clk : in std_logic;
@@ -62,6 +65,8 @@ begin
             tx_cap_arm => tx_cap_arm, tx_wd_kick => tx_wd_kick,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
+            rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
+            rx_peak_word => peak_word,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt
         );
@@ -122,6 +127,22 @@ begin
         for k in 0 to 15 loop wait until rising_edge(nios_clk); end loop;
         assert pio_status(31 downto 16) = x"0100" report "FAIL: det_count 0100 after gray CDC" severity failure;
         assert pio_status(31 downto 16) /= x"01FF" report "FAIL: torn det_count 01FF" severity failure;
+
+        -- FFT_CTRL default 0; запись bit0+bit1 пересекает CDC в rx
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_FFT_CTRL, 3);
+        for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
+        assert rx_fft_en = '1' and rx_fft_notch = '1'
+            report "FAIL: FFT_CTRL did not cross CDC" severity failure;
+
+        -- STATUS mux: addr=0x15, we=0 → слово пика, не det_count
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_PEAK_BIN, 7));
+        pio_we <= '0';
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = peak_word
+            report "FAIL: PEAK_BIN mux" severity failure;
+        pio_addr <= (others => '0');
+        for k in 0 to 5 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status(2) = '1' report "FAIL: status restored after peak mux" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;

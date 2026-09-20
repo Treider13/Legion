@@ -66,6 +66,7 @@ import {
   parkSpanMhz,
   planFpgaAir,
   planOnboardIntercept,
+  fpgaSettleN,
 } from "../src/sense/fpgaFastpath";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -1309,6 +1310,22 @@ async function main(): Promise<void> {
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2445, f2Mhz: 2455 }],
     loadOk: true, detThr: 5000, detShift: 4, lookMhz: 0.2, turn: false, dwellMs: 0.4,
   }).ok === true);
+  check("онбордовый FFT: точный Гц, не «LO не шагает»", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.fftEnable && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
+      && p.reason.includes("точный Гц") && !p.reason.includes("не шагает");
+  })());
+  check("онбордовый план без fftEnable — walker как раньше", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    });
+    return p.ok && p.fftEnable === false && p.reason.includes("не шагает");
+  })());
   check("ARM lb_gated с scan_enable несёт коридор", (() => {
     const c = fpgaArmCmd("lb_gated", {
       detThr: 5000, detShift: 4, token: "t", freqMhz: 2414,
@@ -1322,6 +1339,21 @@ async function main(): Promise<void> {
     detThr: 5000, detShift: 4, token: "t", scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
     scanTurn: true, scanDwellMs: 0.4,
   }).scan_dwell_us === 400);
+  check("ARM FFT несёт пик/FIRE/полосы, без fft_enable поле отсутствует", (() => {
+    const on = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2428,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2600,
+      fftEnable: true, fireBwMhz: 2, settleN: fpgaSettleN(56e6),
+      scanBands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
+    });
+    const off = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+    });
+    return on.fft_enable === true && on.fire_bw_mhz === 2 && on.fft_dc_notch === true
+      && on.settle_n === fpgaSettleN(56e6)
+      && Array.isArray(on.scan_bands) && (on.scan_bands as { f1_mhz: number }[])[0].f1_mhz === 2400
+      && off.fft_enable === undefined;
+  })());
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
     return t !== null && t.join(",") === "4000,8000,12000";
@@ -1656,6 +1688,8 @@ async function main(): Promise<void> {
   check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked"));
   check("онбордовый ARM несёт fs/bw взгляда",
     storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
+  check("онбордовый ARM включает FFT-пик (точный Гц)",
+    storeSrc.includes("fftEnable: true") && storeSrc.includes("fireBwMhz: plan.fireBwMhz"));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
   // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта

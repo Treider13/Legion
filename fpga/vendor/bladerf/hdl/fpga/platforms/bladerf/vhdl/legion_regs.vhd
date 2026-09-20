@@ -37,6 +37,9 @@ entity legion_regs is
         rx_reset      : in  std_logic;
         rx_det_thr    : out std_logic_vector(31 downto 0);
         rx_det_shift  : out unsigned(3 downto 0);
+        rx_fft_en     : out std_logic;
+        rx_fft_dc_notch : out std_logic;
+        rx_peak_word  : in  std_logic_vector(31 downto 0);
         -- Статусные входы из TX/RX доменов
         tx_playing    : in  std_logic;
         tx_cap_done   : in  std_logic;
@@ -57,6 +60,7 @@ architecture rtl of legion_regs is
     signal r_cap_arm    : std_logic;
     signal r_lb_shift   : std_logic_vector(3 downto 0);
     signal r_wd_limit   : std_logic_vector(15 downto 0);
+    signal r_fft_ctrl   : std_logic_vector(1 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -77,6 +81,8 @@ architecture rtl of legion_regs is
     -- CDC порогов детектора → rx_clock
     signal thr_meta, thr_rx     : std_logic_vector(31 downto 0);
     signal sh_meta, sh_rx       : std_logic_vector(3 downto 0);
+    signal fft_meta, fft_rx     : std_logic_vector(1 downto 0);
+    signal pk_meta, pk_nios     : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
     signal det_gray_rx   : std_logic_vector(15 downto 0);
@@ -111,6 +117,7 @@ begin
             r_cap_arm    <= '0';
             r_lb_shift   <= (others => '0');
             r_wd_limit   <= x"003D";        -- 61 × 16.4 мс ≈ 1 с
+            r_fft_ctrl   <= "00";           -- FFT выкл: walker как раньше
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -131,6 +138,7 @@ begin
                             r_wd_limit <= pio_wdata(15 downto 0);
                         end if;
                     when LEGION_REG_WD_KICK    => kick_toggle  <= not kick_toggle;
+                    when LEGION_REG_FFT_CTRL   => r_fft_ctrl   <= pio_wdata(1 downto 0);
                     when others => null;
                 end case;
             end if;
@@ -202,14 +210,18 @@ begin
         if rx_reset = '1' then
             thr_meta <= (others => '0'); thr_rx <= (others => '0');
             sh_meta  <= (others => '0'); sh_rx  <= (others => '0');
+            fft_meta <= (others => '0'); fft_rx <= (others => '0');
         elsif rising_edge(rx_clock) then
             thr_meta <= r_det_thr;   thr_rx <= thr_meta;
             sh_meta  <= r_det_shift; sh_rx  <= sh_meta;
+            fft_meta <= r_fft_ctrl;  fft_rx <= fft_meta;
         end if;
     end process;
 
-    rx_det_thr   <= thr_rx;
-    rx_det_shift <= unsigned(sh_rx);
+    rx_det_thr      <= thr_rx;
+    rx_det_shift    <= unsigned(sh_rx);
+    rx_fft_en       <= fft_rx(0);
+    rx_fft_dc_notch <= fft_rx(1);
 
     -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
     cdc_det_src : process(rx_clock, rx_reset)
@@ -232,6 +244,21 @@ begin
         end if;
     end process;
 
-    pio_status(15 downto 0)  <= st_nios(15 downto 0);
-    pio_status(31 downto 16) <= gray2bin(det_gray_nios);
+    -- Пик FFT: 2FF rx→nios. Слово квазистатично между кадрами (~80 µs).
+    cdc_peak : process(nios_clk, nios_reset)
+    begin
+        if nios_reset = '1' then
+            pk_meta <= (others => '0');
+            pk_nios <= (others => '0');
+        elsif rising_edge(nios_clk) then
+            pk_meta <= rx_peak_word;
+            pk_nios <= pk_meta;
+        end if;
+    end process;
+
+    -- Чтение 0x15: IOWR(AWS,0x15) we=0 → STATUS = peak, не playing/det.
+    -- we=1 или другой addr — прежний STATUS (биты 7:4 по-прежнему 0).
+    pio_status <= pk_nios when (pio_we = '0' and
+                                 to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK_BIN)
+                  else (gray2bin(det_gray_nios) & st_nios(15 downto 0));
 end architecture;

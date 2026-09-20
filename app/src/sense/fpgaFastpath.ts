@@ -289,6 +289,13 @@ export function planFpgaAir(i: FpgaAirInput): FpgaAirPlan {
 export const FPGA_SCAN_QUIET_MS = 5;
 /** Опрос STATUS для водопада/героя. Регистр дешёвый; 400 мс пропускал hop. */
 export const FPGA_OBSERVE_MS = 80;
+/** Hop LO AD9361/LMS: 6 мс × fs. NIOS дефолт 4096 сэмплов мал на 56e6. */
+export const FPGA_LO_SETTLE_S = 0.006;
+
+export function fpgaSettleN(fsHz: number): number {
+  const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : LEGION_FPGA_FS_HZ;
+  return Math.max(4096, Math.round(fs * FPGA_LO_SETTLE_S));
+}
 
 export interface OnboardInterceptInput {
   sdrId: string;
@@ -300,6 +307,9 @@ export interface OnboardInterceptInput {
   lookMhz?: number;
   turn: boolean;
   dwellMs: number;
+  /** Точный Гц: FFT-пик на FPGA. Дефолт false — walker как раньше. */
+  fftEnable?: boolean;
+  fireBwMhz?: number;
 }
 
 export interface OnboardInterceptPlan {
@@ -315,6 +325,9 @@ export interface OnboardInterceptPlan {
   detShift: number;
   dwellMs: number;
   turn: boolean;
+  fftEnable: boolean;
+  fireBwMhz: number;
+  settleN: number;
 }
 
 export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
@@ -326,6 +339,11 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const spanMhz = parkSpanMhz(i.bands);
   const centers = planCenters(i.bands, lookMhz);
   const dwellMs = fpgaTurnDwellClamp(i.dwellMs);
+  const fftEnable = !!i.fftEnable;
+  const fireBwMhz = fftEnable
+    ? clampAirBwMhz(i.fireBwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog)
+    : FPGA_AIR_BW_DEFAULT_MHZ;
+  const settleN = fftEnable ? fpgaSettleN(fsHz) : 0;
   const fail = (reason: string): OnboardInterceptPlan => ({
     ok: false,
     reason,
@@ -339,6 +357,9 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detShift,
     dwellMs,
     turn: i.turn,
+    fftEnable,
+    fireBwMhz,
+    settleN,
   });
   if (!fpgaAirSupported(i.sdrId)) {
     return fail("Автоперехват: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40");
@@ -358,8 +379,11 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     return fail("Автоперехват: задайте коридор F1…F2");
   }
   const hops = Math.max(0, centers.length - 1);
-  const survey =
-    hops === 0
+  const survey = fftEnable
+    ? hops === 0
+      ? `коридор ${spanMhz.toFixed(1)} МГц в взгляде ${lookMhz} МГц — FFT пик, hop LO на точный Гц, FIRE ${fireBwMhz} МГц`
+      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц · FFT пик → точный Гц (не весь взгляд) · FIRE ${fireBwMhz} МГц · шаг LO на плате, не USB`
+    : hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
   return {
@@ -375,6 +399,9 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detShift,
     dwellMs,
     turn: i.turn,
+    fftEnable,
+    fireBwMhz,
+    settleN,
   };
 }
 
@@ -446,6 +473,12 @@ export function fpgaArmCmd(
     scanTurn?: boolean;
     scanDwellMs?: number;
     scanDwellUs?: number;
+    fftEnable?: boolean;
+    fftDcNotch?: boolean;
+    fireBwMhz?: number;
+    searchBwMhz?: number;
+    settleN?: number;
+    scanBands?: readonly { f1Mhz: number; f2Mhz: number }[];
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -470,7 +503,7 @@ export function fpgaArmCmd(
   if (opts.bwMhz !== undefined && Number.isFinite(opts.bwMhz) && opts.bwMhz > 0) {
     cmd.bw_mhz = opts.bwMhz;
   }
-  if (opts.scanEnable) {
+    if (opts.scanEnable) {
     cmd.scan_enable = true;
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
     if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;
@@ -480,6 +513,20 @@ export function fpgaArmCmd(
     } else if (opts.scanDwellMs !== undefined) {
       cmd.scan_dwell_us = fpgaTurnDwellUs(opts.scanDwellMs);
       cmd.scan_dwell_ms = fpgaTurnDwellClamp(opts.scanDwellMs);
+    }
+    if (opts.fftEnable) {
+      cmd.fft_enable = true;
+      cmd.fft_dc_notch = opts.fftDcNotch !== false;
+      cmd.fire_bw_mhz = opts.fireBwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ;
+      if (opts.searchBwMhz !== undefined && Number.isFinite(opts.searchBwMhz) && opts.searchBwMhz > 0) {
+        cmd.search_bw_mhz = opts.searchBwMhz;
+      }
+      if (opts.settleN !== undefined && Number.isFinite(opts.settleN) && opts.settleN > 0) {
+        cmd.settle_n = Math.round(opts.settleN);
+      }
+      if (opts.scanBands && opts.scanBands.length > 0) {
+        cmd.scan_bands = opts.scanBands.map((b) => ({ f1_mhz: b.f1Mhz, f2_mhz: b.f2Mhz }));
+      }
     }
   }
   return cmd;

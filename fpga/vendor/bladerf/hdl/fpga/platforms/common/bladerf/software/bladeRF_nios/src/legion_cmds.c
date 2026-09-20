@@ -80,6 +80,29 @@ static uint64_t legion_quiet_t0;
 static bool     legion_hold_armed;    /* TURN: выдержка от первого det в взгляде */
 static uint64_t legion_hold_t0;
 
+/* FFT-путь (выкл по умолчанию — существующий walker не меняется). */
+static uint32_t legion_search_bw_hz;
+static uint32_t legion_fire_bw_hz;
+static uint32_t legion_peak_khz;
+static uint32_t legion_fft_ctrl;
+static uint32_t legion_band_idx;
+static uint32_t legion_band_f1[8];
+static uint32_t legion_band_f2[8];
+static uint32_t legion_band_count;
+static uint32_t legion_settle_n;
+static uint32_t legion_look_center_khz;
+static uint32_t legion_fire_khz;
+static uint32_t legion_fire_mag;
+static uint32_t legion_snap_frame;
+static uint8_t  legion_fft_st;
+static uint64_t legion_settle_t0;
+static bool     legion_resense;
+
+#define LEGION_FFT_ST_SEARCH  0
+#define LEGION_FFT_ST_SETTLE  1
+#define LEGION_FFT_ST_FRAME   2
+#define LEGION_FFT_ST_HOLD    3
+
 #define LEGION_SCAN_QUIET_MS     5u
 #define LEGION_SCAN_DWELL_DEFAULT_US 3000000u
 
@@ -186,6 +209,13 @@ static void legion_scan_reset(void)
     legion_quiet_t0 = 0;
     legion_hold_armed = false;
     legion_hold_t0 = 0;
+    legion_look_center_khz = 0;
+    legion_fire_khz = 0;
+    legion_fire_mag = 0;
+    legion_snap_frame = 0;
+    legion_fft_st = LEGION_FFT_ST_SEARCH;
+    legion_settle_t0 = 0;
+    legion_resense = false;
 }
 
 bool legion_air_up(bool rx, bool tx)
@@ -388,7 +418,28 @@ bool legion_air_down(void)
 
 static uint32_t legion_look_hz(void)
 {
+    if ((legion_fft_ctrl & LEGION_FFT_CTRL_EN) != 0 && legion_search_bw_hz != 0) {
+        return legion_search_bw_hz;
+    }
     return legion_air_bw_hz ? legion_air_bw_hz : LEGION_AIR_BW_HZ;
+}
+
+static uint32_t legion_search_bw(void)
+{
+    if (legion_search_bw_hz != 0) {
+        return legion_search_bw_hz;
+    }
+    return legion_look_hz();
+}
+
+static uint32_t legion_fire_bw(void)
+{
+    return legion_fire_bw_hz ? legion_fire_bw_hz : LEGION_FIRE_BW_DEFAULT_HZ;
+}
+
+static uint32_t legion_settle_samples(void)
+{
+    return legion_settle_n ? legion_settle_n : LEGION_SETTLE_N_DEFAULT;
 }
 
 static uint32_t legion_fs_hz(void)
@@ -401,44 +452,78 @@ static uint32_t legion_fs_hz(void)
 
 /* Сетка стоянок — та же формула, что planCenters в app/src/sense/scan.ts:
  * n = ceil(span/look), центр i = f1 + look/2 + i·look, клип к f2. */
-static uint32_t legion_scan_n(void)
+static uint32_t legion_looks_in(uint32_t f1_khz, uint32_t f2_khz)
 {
     uint32_t const look_khz = legion_look_hz() / 1000u;
     uint32_t span;
 
-    if (legion_scan_f1_khz == 0 || legion_scan_f2_khz < legion_scan_f1_khz) {
+    if (f1_khz == 0 || f2_khz < f1_khz || look_khz == 0) {
         return 0;
     }
-    if (look_khz == 0) {
-        return 0;
-    }
-    span = legion_scan_f2_khz - legion_scan_f1_khz;
+    span = f2_khz - f1_khz;
     if (span <= look_khz) {
         return 1;
     }
     return (span + look_khz - 1u) / look_khz;
 }
 
-static uint32_t legion_scan_center_khz(uint32_t i)
+static uint32_t legion_center_in(uint32_t f1_khz, uint32_t f2_khz, uint32_t i)
 {
     uint32_t const look_khz = legion_look_hz() / 1000u;
-    uint32_t const n = legion_scan_n();
+    uint32_t const n = legion_looks_in(f1_khz, f2_khz);
     uint32_t c;
 
     if (n == 0) {
         return 0;
     }
     if (n == 1) {
-        return (legion_scan_f1_khz / 2u) + (legion_scan_f2_khz / 2u);
+        return (f1_khz / 2u) + (f2_khz / 2u);
     }
     if (i >= n) {
         i = n - 1u;
     }
-    c = legion_scan_f1_khz + (look_khz / 2u) + i * look_khz;
-    if (c > legion_scan_f2_khz) {
-        c = legion_scan_f2_khz;
+    c = f1_khz + (look_khz / 2u) + i * look_khz;
+    if (c > f2_khz) {
+        c = f2_khz;
     }
     return c;
+}
+
+static uint32_t legion_scan_n(void)
+{
+    uint32_t n = 0;
+    uint32_t b;
+
+    if (legion_band_count == 0) {
+        return legion_looks_in(legion_scan_f1_khz, legion_scan_f2_khz);
+    }
+    for (b = 0; b < legion_band_count && b < LEGION_BAND_MAX; b++) {
+        n += legion_looks_in(legion_band_f1[b], legion_band_f2[b]);
+    }
+    return n;
+}
+
+static uint32_t legion_scan_center_khz(uint32_t i)
+{
+    uint32_t b;
+    uint32_t nb;
+
+    if (legion_band_count == 0) {
+        return legion_center_in(legion_scan_f1_khz, legion_scan_f2_khz, i);
+    }
+    for (b = 0; b < legion_band_count && b < LEGION_BAND_MAX; b++) {
+        nb = legion_looks_in(legion_band_f1[b], legion_band_f2[b]);
+        if (i < nb) {
+            return legion_center_in(legion_band_f1[b], legion_band_f2[b], i);
+        }
+        i -= nb;
+    }
+    if (legion_band_count == 0) {
+        return 0;
+    }
+    b = legion_band_count - 1u;
+    nb = legion_looks_in(legion_band_f1[b], legion_band_f2[b]);
+    return nb == 0 ? 0 : legion_center_in(legion_band_f1[b], legion_band_f2[b], nb - 1u);
 }
 
 static void legion_scan_advance(void)
@@ -561,12 +646,88 @@ static int legion_lms_fill(uint32_t freq, struct lms_freq *f)
 }
 #endif
 
-static bool legion_hop_lo(uint32_t freq_khz)
+static bool legion_set_tx_mute(bool mute)
+{
+#if defined(LEGION_HAVE_RFIC)
+    if (!legion_air_is_up) {
+        return false;
+    }
+    return rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                    BLADERF_CHANNEL_TX(0), mute ? 1u : 0u);
+#elif defined(BOARD_BLADERF_MICRO)
+    (void)mute;
+    return false;
+#else
+    uint32_t cr = control_reg_read();
+    if (mute) {
+        control_reg_write(cr & ~0x4u);
+    } else {
+        control_reg_write(cr | 0x4u);
+    }
+    return true;
+#endif
+}
+
+static bool legion_apply_bw(uint32_t bw_hz)
+{
+#if defined(LEGION_HAVE_RFIC)
+    if (bw_hz == 0) {
+        return true;
+    }
+    if (!legion_air_is_up) {
+        return false;
+    }
+    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
+                                  BLADERF_CHANNEL_RX(0), bw_hz) ||
+        !rfic_command_write_immed(BLADERF_RFIC_COMMAND_BANDWIDTH,
+                                  BLADERF_CHANNEL_TX(0), bw_hz)) {
+        return false;
+    }
+    return legion_rfic_readback_bw(BLADERF_CHANNEL_RX(0), bw_hz) &&
+           legion_rfic_readback_bw(BLADERF_CHANNEL_TX(0), bw_hz);
+#else
+    (void)bw_hz;
+    return true;
+#endif
+}
+
+static uint32_t legion_peak_word(void)
+{
+    uint32_t w;
+
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, LEGION_REG_PEAK_BIN);
+    w = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+    return w;
+}
+
+/* signed bin (k≥128 → k−256), off = k·fs/256, кГц = round. */
+static int32_t legion_bin_to_khz(uint32_t bin)
+{
+    int32_t k = (int32_t)(bin & 0xffu);
+    int64_t num;
+    uint32_t fs;
+
+    if (k >= 128) {
+        k -= 256;
+    }
+    fs = legion_fs_hz();
+    num = (int64_t)k * (int64_t)fs;
+    if (num >= 0) {
+        return (int32_t)((num + 128000) / 256000);
+    }
+    return (int32_t)((num - 128000) / 256000);
+}
+
+static bool legion_hop_lo_ex(uint32_t freq_khz, bool unmute)
 {
     uint64_t const freq_hz = (uint64_t)freq_khz * 1000ULL;
 
     if (freq_khz == 0 || freq_hz == 0) {
         return false;
+    }
+    if (freq_khz == legion_air_freq_khz) {
+        return legion_set_tx_mute(!unmute);
     }
 
 #if defined(LEGION_HAVE_RFIC)
@@ -604,8 +765,8 @@ static bool legion_hop_lo(uint32_t freq_khz)
             return false;
         }
     }
-    if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
-                                  BLADERF_CHANNEL_TX(0), 0)) {
+    if (unmute && !rfic_command_write_immed(BLADERF_RFIC_COMMAND_TXMUTE,
+                                           BLADERF_CHANNEL_TX(0), 0)) {
         return false;
     }
 #elif defined(BOARD_BLADERF_MICRO)
@@ -671,11 +832,258 @@ static bool legion_hop_lo(uint32_t freq_khz)
             /* Оба LO уже новые; полоса неизвестна — TX не открываем. */
             return false;
         }
-        control_reg_write(cr);
+        if (unmute) {
+            control_reg_write(cr);
+        }
     }
 #endif
     legion_air_freq_khz = freq_khz;
     return true;
+}
+
+static bool legion_hop_lo(uint32_t freq_khz)
+{
+    return legion_hop_lo_ex(freq_khz, true);
+}
+
+static void legion_scan_mark_look(void);
+
+static bool legion_fft_on(void)
+{
+    return (legion_fft_ctrl & LEGION_FFT_CTRL_EN) != 0;
+}
+
+static uint32_t legion_clip_to_look(uint32_t khz)
+{
+    uint32_t const look_khz = legion_look_hz() / 1000u;
+    uint32_t const half = look_khz / 2u;
+    uint32_t lo;
+    uint32_t hi;
+
+    if (legion_look_center_khz == 0 || look_khz == 0) {
+        return khz;
+    }
+    lo = (legion_look_center_khz > half) ? legion_look_center_khz - half : 0;
+    hi = legion_look_center_khz + half;
+    if (khz < lo) {
+        return lo;
+    }
+    if (khz > hi) {
+        return hi;
+    }
+    return khz;
+}
+
+static uint32_t legion_peak_from_word(uint32_t w)
+{
+    int32_t const off = legion_bin_to_khz(w & 0xffu);
+    int64_t pk = (int64_t)legion_look_center_khz + (int64_t)off;
+
+    if (pk < 0) {
+        pk = 0;
+    } else if (pk > 0xffffffffLL) {
+        pk = 0xffffffffLL;
+    }
+    return legion_clip_to_look((uint32_t)pk);
+}
+
+static bool legion_fft_enter_search(uint32_t center_khz)
+{
+    if (center_khz == 0) {
+        return false;
+    }
+    if (!legion_apply_bw(legion_search_bw())) {
+        return false;
+    }
+    if (!legion_hop_lo_ex(center_khz, false)) {
+        return false;
+    }
+    legion_look_center_khz = center_khz;
+    legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
+    legion_quiet_t0 = legion_settle_t0;
+    legion_fft_st = LEGION_FFT_ST_SETTLE;
+    legion_scan_look_set = true;
+    legion_hold_armed = false;
+    legion_hold_t0 = 0;
+    legion_snap_frame = 0;
+    return true;
+}
+
+static void legion_fft_try_next(void)
+{
+    uint32_t const n = legion_scan_n();
+    uint32_t const old_idx = legion_scan_idx;
+    int const old_dir = legion_scan_dir;
+    bool const was_resense = legion_resense;
+
+    legion_resense = false;
+    if (n > 1u) {
+        legion_scan_advance();
+    }
+    if (legion_fft_enter_search(legion_scan_center_khz(legion_scan_idx))) {
+        return;
+    }
+    legion_scan_idx = old_idx;
+    legion_scan_dir = old_dir;
+    legion_resense = was_resense;
+}
+
+static void legion_fft_fire(uint32_t peak_khz, uint32_t mag)
+{
+    legion_peak_khz = peak_khz;
+    if (legion_resense && mag <= legion_fire_mag && legion_fire_khz != 0) {
+        (void)legion_apply_bw(legion_fire_bw());
+        (void)legion_hop_lo_ex(legion_fire_khz, true);
+        legion_fft_st = LEGION_FFT_ST_HOLD;
+        legion_resense = false;
+        legion_scan_mark_look();
+        legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
+        return;
+    }
+    legion_fire_khz = peak_khz;
+    legion_fire_mag = mag;
+    if (!legion_apply_bw(legion_fire_bw())) {
+        return;
+    }
+    if (!legion_hop_lo_ex(peak_khz, true)) {
+        return;
+    }
+    legion_fft_st = LEGION_FFT_ST_HOLD;
+    legion_resense = false;
+    legion_scan_mark_look();
+    legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
+}
+
+static void legion_fft_walk(void)
+{
+    uint32_t const n = legion_scan_n();
+    uint64_t now;
+    uint64_t quiet;
+    uint64_t dwell;
+    uint32_t dwell_us;
+    uint32_t settle;
+    bool det;
+    bool turn;
+
+    if (n == 0) {
+        return;
+    }
+
+    if (!legion_scan_look_set || legion_fft_st == LEGION_FFT_ST_SEARCH) {
+        if (legion_scan_idx >= n) {
+            legion_scan_idx = 0;
+        }
+        (void)legion_fft_enter_search(legion_scan_center_khz(legion_scan_idx));
+        return;
+    }
+
+    now = time_tamer_read(BLADERF_MODULE_RX);
+    quiet = ((uint64_t)legion_fs_hz() * LEGION_SCAN_QUIET_MS) / 1000u;
+    if (quiet == 0) {
+        quiet = 1;
+    }
+    dwell_us = legion_scan_dwell_us ? legion_scan_dwell_us : LEGION_SCAN_DWELL_DEFAULT_US;
+    dwell = ((uint64_t)legion_fs_hz() * (uint64_t)dwell_us) / 1000000u;
+    if (dwell == 0) {
+        dwell = 1;
+    }
+    settle = legion_settle_samples();
+    if (settle == 0) {
+        settle = 1;
+    }
+    det = (IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE) &
+           LEGION_STATUS_DET_ACTIVE) != 0;
+    turn = (legion_scan_ctrl & LEGION_SCAN_CTRL_TURN) != 0;
+
+    if (legion_fft_st == LEGION_FFT_ST_SETTLE) {
+        if (now - legion_settle_t0 < (uint64_t)settle) {
+            return;
+        }
+        legion_fft_st = LEGION_FFT_ST_FRAME;
+        legion_quiet_t0 = now;
+        legion_snap_frame = 0;
+        return;
+    }
+
+    if (legion_fft_st == LEGION_FFT_ST_FRAME) {
+        uint32_t w;
+        uint32_t frame;
+        uint32_t mag;
+        uint32_t peak;
+
+        if (!det) {
+            /* Энергия первая: шумовой max-bin не шагаем. */
+            if (n <= 1u) {
+                return;
+            }
+            if (now - legion_quiet_t0 < quiet) {
+                return;
+            }
+            legion_fft_try_next();
+            return;
+        }
+        w = legion_peak_word();
+        if ((w & 0x80000000u) == 0) {
+            return;
+        }
+        frame = (w >> 24) & 0x7fu;
+        if (legion_snap_frame == 0) {
+            legion_snap_frame = frame;
+            return;
+        }
+        if (frame == legion_snap_frame) {
+            return;
+        }
+        mag = (w >> 8) & 0xffffu;
+        peak = legion_peak_from_word(w);
+        if (peak == 0) {
+            return;
+        }
+        legion_fft_fire(peak, mag);
+        return;
+    }
+
+    if (legion_fft_st != LEGION_FFT_ST_HOLD) {
+        return;
+    }
+
+    if (det && !legion_hold_armed) {
+        legion_hold_armed = true;
+        legion_hold_t0 = now;
+    }
+    if (det) {
+        legion_quiet_t0 = now;
+    }
+
+    if (turn && legion_hold_armed) {
+        if (now - legion_hold_t0 >= dwell) {
+            legion_fft_try_next();
+        }
+        return;
+    }
+    if (det) {
+        /* PRIORITY: энергия держит FIRE. Раз в SETTLE_N — resense
+         * того же взгляда (mute), смена только если mag больше. */
+        if (now - legion_settle_t0 >= (uint64_t)settle) {
+            legion_resense = true;
+            if (!legion_fft_enter_search(legion_look_center_khz != 0
+                    ? legion_look_center_khz
+                    : legion_scan_center_khz(legion_scan_idx))) {
+                legion_resense = false;
+            }
+        }
+        return;
+    }
+    if (now - legion_quiet_t0 < quiet) {
+        return;
+    }
+    if (n <= 1u) {
+        (void)legion_fft_enter_search(legion_look_center_khz != 0
+            ? legion_look_center_khz
+            : legion_scan_center_khz(legion_scan_idx));
+        return;
+    }
+    legion_fft_try_next();
 }
 
 static void legion_scan_mark_look(void)
@@ -728,6 +1136,10 @@ static void legion_scan_walk(void)
     bool turn;
 
     if ((legion_scan_ctrl & LEGION_SCAN_CTRL_EN) == 0 || n == 0) {
+        return;
+    }
+    if (legion_fft_on()) {
+        legion_fft_walk();
         return;
     }
 
@@ -791,7 +1203,7 @@ static void legion_scan_walk(void)
 
 bool legion_reg_write(uint8_t addr, uint32_t data)
 {
-    if (addr > LEGION_REG_SCAN_DWELL_US) {
+    if (addr > LEGION_REG_MAX) {
         DBG("LEGION: bad addr 0x%x\n", addr);
         return false;
     }
@@ -830,6 +1242,54 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 
         case LEGION_REG_SCAN_DWELL_US:
             legion_scan_dwell_us = data;
+            return true;
+
+        case LEGION_REG_SEARCH_BW_HZ:
+            legion_search_bw_hz = data;
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_FIRE_BW_HZ:
+            legion_fire_bw_hz = data;
+            return true;
+
+        case LEGION_REG_PEAK_KHZ:
+            legion_peak_khz = data;
+            return true;
+
+        case LEGION_REG_PEAK_BIN:
+            return true;
+
+        case LEGION_REG_FFT_CTRL:
+            legion_fft_ctrl = data;
+            legion_scan_reset();
+            break;
+
+        case LEGION_REG_BAND_IDX:
+            legion_band_idx = (data < LEGION_BAND_MAX) ? data : (LEGION_BAND_MAX - 1u);
+            return true;
+
+        case LEGION_REG_BAND_F1_KHZ:
+            if (legion_band_idx < LEGION_BAND_MAX) {
+                legion_band_f1[legion_band_idx] = data;
+            }
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_BAND_F2_KHZ:
+            if (legion_band_idx < LEGION_BAND_MAX) {
+                legion_band_f2[legion_band_idx] = data;
+            }
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_BAND_COUNT:
+            legion_band_count = (data > LEGION_BAND_MAX) ? LEGION_BAND_MAX : data;
+            legion_scan_reset();
+            return true;
+
+        case LEGION_REG_SETTLE_N:
+            legion_settle_n = data;
             return true;
 
         case LEGION_REG_AIR_PREP:
@@ -916,6 +1376,48 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_SCAN_DWELL_US) {
         *data = legion_scan_dwell_us;
+        return true;
+    }
+    if (addr == LEGION_REG_SEARCH_BW_HZ) {
+        *data = legion_search_bw_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_FIRE_BW_HZ) {
+        *data = legion_fire_bw_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_PEAK_KHZ) {
+        *data = legion_peak_khz;
+        return true;
+    }
+    if (addr == LEGION_REG_PEAK_BIN) {
+        *data = legion_peak_word();
+        return true;
+    }
+    if (addr == LEGION_REG_FFT_CTRL) {
+        *data = legion_fft_ctrl;
+        return true;
+    }
+    if (addr == LEGION_REG_BAND_IDX) {
+        *data = legion_band_idx;
+        return true;
+    }
+    if (addr == LEGION_REG_BAND_F1_KHZ) {
+        *data = (legion_band_idx < LEGION_BAND_MAX)
+            ? legion_band_f1[legion_band_idx] : 0;
+        return true;
+    }
+    if (addr == LEGION_REG_BAND_F2_KHZ) {
+        *data = (legion_band_idx < LEGION_BAND_MAX)
+            ? legion_band_f2[legion_band_idx] : 0;
+        return true;
+    }
+    if (addr == LEGION_REG_BAND_COUNT) {
+        *data = legion_band_count;
+        return true;
+    }
+    if (addr == LEGION_REG_SETTLE_N) {
+        *data = legion_settle_n;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

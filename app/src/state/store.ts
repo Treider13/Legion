@@ -1237,6 +1237,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       lookMhz: lookRaw,
       turn: s.autoDispatch === "turn",
       dwellMs: dwellRaw,
+      fftEnable: true,
     });
     if (!plan.ok) {
       pushLog("sys", plan.reason);
@@ -1318,6 +1319,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanF2Mhz: f2,
           scanTurn: plan.turn,
           scanDwellMs: plan.dwellMs,
+          fftEnable: true,
+          fireBwMhz: plan.fireBwMhz,
+          settleN: plan.settleN,
+          scanBands: bands,
         }),
       );
       if (gFpgaAirGen !== airGen) {

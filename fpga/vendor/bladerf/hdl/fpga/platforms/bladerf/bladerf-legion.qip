@@ -45,6 +45,8 @@ set_global_assignment -name SDC_FILE  [file normalize [file join $here       con
 
 # LEGION revision modules (fpga/hdl мастера; копии в дереве)
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_pkg.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_fft_twiddle.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_fft_peak.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_detector.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_player.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_nco.vhd]]
