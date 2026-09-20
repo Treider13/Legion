@@ -26,7 +26,7 @@ architecture tb of legion_lb_xlat_tb is
     function mk_peak(bin : integer) return std_logic_vector is
         variable w : std_logic_vector(31 downto 0) := (others => '0');
     begin
-        w(31) <= '1';
+        w(31) := '1';
         w(7 downto 0) := std_logic_vector(to_unsigned(bin, 8));
         return w;
     end function;
@@ -55,6 +55,7 @@ architecture tb of legion_lb_xlat_tb is
             qq <= to_signed(sq, 16);
             v  <= '1';
             wait until rising_edge(c);
+            wait for 1 ns;
             if o_v = '1' then
                 so_i := to_integer(o_i);
                 so_q := to_integer(o_q);
@@ -94,7 +95,8 @@ begin
         in_q <= to_signed(-4321, 16);
         in_v <= '1';
         wait until rising_edge(clk);
-        assert o_v = '1' and o_i = 1234 and o_q = -4321
+        wait for 1 ns;
+        assert o_v = '1' and to_integer(o_i) = 1234 and to_integer(o_q) = -4321
             report "FAIL: bypass" severity failure;
         in_v <= '0';
         wait until rising_edge(clk);
@@ -106,7 +108,8 @@ begin
         in_q <= to_signed(20000, 16);
         in_v <= '1';
         wait until rising_edge(clk);
-        assert o_v = '1' and o_i = 0 and o_q = 0
+        wait for 1 ns;
+        assert o_v = '1' and to_integer(o_i) = 0 and to_integer(o_q) = 0
             report "FAIL: zeros without peak valid" severity failure;
         in_v <= '0';
         wait until rising_edge(clk);
