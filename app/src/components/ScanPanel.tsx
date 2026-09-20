@@ -190,9 +190,9 @@ export function ScanPanel() {
               />
             </label>
             <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
-              ГЛУХОЙ ПРОХОД мс
+              СКАНИРОВАНИЕ мс
               <input
-                aria-label="Период глухого прохода коридора"
+                aria-label="Период сканирования коридора"
                 type="number"
                 min={0.1}
                 max={60000}
@@ -276,8 +276,8 @@ export function ScanPanel() {
           : fpgaAir
           ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${FPGA_AI_OPTION_RU}. ${
               fpgaInnerDispatch(s.autoDispatch) === "turn"
-                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал, глухой проход каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
-                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс, глухой проход каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
+                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал, сканирование каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
+                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс, сканирование каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
             }`
           : auto
             ? s.autoDispatch === "priority"

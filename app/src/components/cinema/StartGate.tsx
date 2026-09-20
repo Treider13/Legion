@@ -201,7 +201,7 @@ export function StartGate({ mode, onClose }: Props) {
       }
       const period = parseLocaleNumber(surveyPeriodMs);
       if (!Number.isFinite(period) || period <= 0) {
-        setErr("Задайте период глухого прохода числом (например 5).");
+        setErr("Задайте период сканирования числом (например 5).");
         return;
       }
       const thr = parseFloat(detThr);
@@ -246,7 +246,7 @@ export function StartGate({ mode, onClose }: Props) {
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
               После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
-              на сигнал, период глухого прохода, Старт и Стоп. Плата сама видит
+              на сигнал, период сканирования, Старт и Стоп. Плата сама видит
               энергию (антенна на RX1 / RX SMA) и сама открывает TX1 / TX SMA на усилитель.
               ИИ снаружи всегда: глухой обзор → окно на всплеск → по истечении периода снова обзор.
               Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка).
@@ -264,7 +264,7 @@ export function StartGate({ mode, onClose }: Props) {
             </div>
             <div className="cinema-gate-row">
               <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
-                Глухой проход, мс
+                Сканирование, мс
                 <input value={surveyPeriodMs} onChange={(e) => setSurveyPeriodMs(e.target.value)} inputMode="decimal" />
               </label>
               <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
@@ -272,7 +272,7 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
               </label>
             </div>
-            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · глухой проход каждые {fpgaSurveyPeriodClamp(parseLocaleNumber(surveyPeriodMs))} мс.</p>
+            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · сканирование каждые {fpgaSurveyPeriodClamp(parseLocaleNumber(surveyPeriodMs))} мс.</p>
             <div className="cinema-paths" role="radiogroup" aria-label="Стратегия внутри окна">
               <button
                 type="button"

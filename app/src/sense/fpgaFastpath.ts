@@ -90,7 +90,7 @@ export function fpgaTurnDwellUs(ms: number): number {
   return Math.round(fpgaTurnDwellClamp(ms) * 1000);
 }
 
-/** Период глухого прохода коридора (Умная атака). 0 / мусор → 5 с. */
+/** Период сканирования коридора (Умная атака). 0 / мусор → 5 с. */
 export const FPGA_SURVEY_PERIOD_DEFAULT_MS = 5000;
 export const FPGA_SURVEY_PERIOD_MIN_MS = FPGA_TURN_DWELL_MIN_MS;
 export const FPGA_SURVEY_PERIOD_MAX_MS = FPGA_TURN_DWELL_MAX_MS;
@@ -324,7 +324,7 @@ export interface OnboardInterceptInput {
   lookMhz?: number;
   turn: boolean;
   dwellMs: number;
-  /** Период глухого прохода, мс. 0 / мусор → 5 с. */
+  /** Период сканирования, мс. 0 / мусор → 5 с. */
   surveyPeriodMs?: number;
   /** ICE9: один LO на середине коридора, без плитки взглядов.
    *  Умная атака (FFT): ИИ всегда — PARK+SURVEY, плитка не схлопывается. */
@@ -420,7 +420,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const hops = Math.max(0, centers.length - 1);
   const inner = i.turn ? "обычный" : "приоритет";
   const how = survey
-    ? `ИИ · обзор ${centers.length} взглядов по ${lookMhz} МГц · глухой проход каждые ${surveyPeriodMs} мс · взгляд на всплеск · ${inner} выдержка ${dwellMs} мс`
+    ? `ИИ · обзор ${centers.length} взглядов по ${lookMhz} МГц · сканирование каждые ${surveyPeriodMs} мс · взгляд на всплеск · ${inner} выдержка ${dwellMs} мс`
     : park
     ? `стоянка ${(centers[0] ?? 0).toFixed(1)} МГц · взгляд ${lookMhz} МГц (фильтр ≤${analog}) · хопы внутри окна — цифровой вырез на стоящем LO, PLL не гоняем`
     : hops === 0

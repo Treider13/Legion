@@ -1266,7 +1266,7 @@ async function main(): Promise<void> {
     Number.isNaN(parseLocaleNumber("нет")) && Number.isNaN(parseLocaleNumber("")));
   check("turn dwell: пол 0.1 мс, потолок 60000", FPGA_TURN_DWELL_MIN_MS === 0.1 && fpgaTurnDwellClamp(0.05) === 0.1 && fpgaTurnDwellClamp(999999) === 60_000);
   check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500 && fpgaTurnDwellClamp(40) === 40);
-  check("глухой проход: дефолт 5000", FPGA_SURVEY_PERIOD_DEFAULT_MS === 5000 && fpgaSurveyPeriodClamp(Number.NaN) === 5000 && fpgaSurveyPeriodUs(5) === 5000);
+  check("сканирование: дефолт периода 5000", FPGA_SURVEY_PERIOD_DEFAULT_MS === 5000 && fpgaSurveyPeriodClamp(Number.NaN) === 5000 && fpgaSurveyPeriodUs(5) === 5000);
   check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
   check("air полоса: кламп потолком платы", clampAirBwMhz(56, 28) === 28 && clampAirBwMhz(20, 56) === 20);
   check("air полоса: пол 0.2 МГц", clampAirBwMhz(0.1, 56) === 0.2);
@@ -1359,7 +1359,7 @@ async function main(): Promise<void> {
       fftEnable: true,
     });
     return p.ok && p.fftEnable && p.survey && p.park && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
-      && p.reason.includes("ИИ") && p.reason.includes("глухой проход") && !p.reason.includes("не шагает");
+      && p.reason.includes("ИИ") && p.reason.includes("сканирование") && !p.reason.includes("не шагает");
   })());
   check("онбордовый xA4: 2400–2487 @ 56 ИИ — SURVEY+PARK (два взгляда)", (() => {
     const p = planOnboardIntercept({
@@ -1368,7 +1368,7 @@ async function main(): Promise<void> {
       surveyPeriodMs: 5000, fftEnable: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
-      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("глухой проход");
+      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("сканирование");
   })());
   check("онбордовый xA4: 2440–2480 @ 56 ИИ — один взгляд плитки", (() => {
     const p = planOnboardIntercept({
@@ -1834,7 +1834,8 @@ async function main(): Promise<void> {
     storeSrc.includes("scan_event_seq") &&
     storeSrc.includes("захват") && storeSrc.includes("выдержка") &&
     storeSrc.includes("перескок") && storeSrc.includes("выдержка заново") &&
-    storeSrc.includes("глухой проход") && storeSrc.includes("pad(d.getMilliseconds()"));
+    storeSrc.includes("сканирование") && storeSrc.includes("повторное сканирование") &&
+    storeSrc.includes("pad(d.getMilliseconds()"));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
   // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
@@ -2032,7 +2033,7 @@ async function main(): Promise<void> {
     autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
   check("cinema auto: эмуляция не ждёт scanRunning",
     autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
-  check("cinema auto: канал, выдержка и период глухого прохода пишутся в стор",
+  check("cinema auto: канал, выдержка и период сканирования пишутся в стор",
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)")
     && runSrc.includes("setFpgaSurveyPeriodMs(opts.surveyPeriodMs)"));
   check("cinema air: ручной порог из мастера пишется в стор",

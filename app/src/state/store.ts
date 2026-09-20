@@ -334,7 +334,7 @@ interface LegionStore {
   fpgaDetShift: number;
   /** Выдержка на сигнал внутри окна, мс (строка UI). Обычный и приоритет. */
   fpgaTurnDwellMs: string;
-  /** Период глухого прохода коридора, мс (строка UI). */
+  /** Период сканирования коридора, мс (строка UI). */
   fpgaSurveyPeriodMs: string;
   /** Полоса канала подавления lb_* (fs = max(полоса, 520834 Гц)), МГц, строка UI. */
   fpgaAirBwMhz: string;
@@ -1244,7 +1244,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       return;
     }
     if (!Number.isFinite(periodRaw) || periodRaw <= 0) {
-      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте период глухого прохода числом (например 5)`);
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте период сканирования числом (например 5)`);
       return;
     }
     const plan = planOnboardIntercept({
@@ -3288,11 +3288,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         const hz = r.peak_mhz && r.peak_mhz > 0 ? r.peak_mhz : r.freq_mhz;
         const at = hz && hz > 0 ? ` ${hz.toFixed(3)} МГц` : "";
         const what =
-          code === 1 ? "глухой проход" :
+          code === 1 ? "сканирование" :
           code === 2 ? `окно ${FPGA_AI_LABEL_RU} на всплеск${at}` :
           code === 3 ? `захват${at} (выдержка)` :
           code === 4 ? `перескок${at} (выдержка заново)` :
-          code === 5 ? "новый глухой проход" :
+          code === 5 ? "повторное сканирование" :
           `событие ${code}${at}`;
         pushLog("sys", `${FPGA_AIR_MODE_RU} ${clock}: ${what}`);
       }
