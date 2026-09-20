@@ -1,0 +1,214 @@
+/* GRAPHITE / 13 — presentation layer. No data colors are filtered. */
+.legion-root.cinema.graphite {
+  --lg-bg: #080a0c;
+  --lg-bg-2: #111417;
+  --lg-ink: #080a0c;
+  --lg-text: #e0e4e7;
+  --lg-dim: #a0a7ae;
+  --lg-faint: #7f8891;
+  --lg-accent: #bbc4cb;
+  --lg-accent-hi: #f0f3f5;
+  --lg-accent-soft: rgb(209 218 224 / 8%);
+  --lg-glass: rgb(16 19 22 / 94%);
+  --lg-glass-2: rgb(37 42 47 / 82%);
+  --lg-border: rgb(184 197 206 / 23%);
+  --lg-border-hi: rgb(206 217 225 / 48%);
+  --lg-glow-accent: 0 0 16px rgb(209 218 224 / 9%);
+  --lg-radius: 5px;
+  --lg-radius-sm: 3px;
+  --lg-blur: blur(12px);
+  --graphite-line: rgb(195 207 214 / 30%);
+  --graphite-hairline: rgb(200 211 218 / 12%);
+  height: auto;
+  min-height: 100dvh;
+  overflow: clip;
+  background: #080a0c;
+  color: var(--lg-text);
+  isolation: isolate;
+}
+
+.graphite * { box-sizing: border-box; }
+.graphite [id] { scroll-margin-top: 16px; }
+.graphite :is(button, a, input, select):focus-visible {
+  outline: 2px solid #e0e7eb;
+  outline-offset: 4px;
+}
+.graphite :is(button, a) { -webkit-tap-highlight-color: transparent; }
+.graphite button { transition: color 160ms, border-color 160ms, background-color 160ms; }
+.graphite .hero {
+  flex: 0 0 auto !important;
+  height: clamp(290px, 33dvh, 450px) !important;
+  min-height: 290px !important;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 35%, #20262b 0, #0b0e10 38%, #07090a 76%);
+}
+.graphite .hero::before,
+.graphite .hero::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+}
+.graphite .hero::before {
+  inset: -25%;
+  background: conic-gradient(from 159deg at 45% -10%, transparent 0deg, rgb(223 231 237 / 9%) 2deg, transparent 5deg 21deg, rgb(228 234 238 / 4%) 24deg, transparent 28deg 360deg);
+  transform-origin: 45% 0;
+  animation: graphite-light 32s ease-in-out infinite alternate;
+}
+.graphite .hero::after {
+  inset: 0;
+  background: linear-gradient(0deg, #080a0c, transparent 12% 85%, rgb(3 5 7 / 35%)), linear-gradient(90deg, rgb(5 7 9 / 65%), transparent 27% 73%, rgb(5 7 9 / 65%));
+}
+@keyframes graphite-light { from { transform: rotate(-3deg); opacity: .55; } to { transform: rotate(3deg); opacity: 1; } }
+.graphite[data-motion="off"] .hero::before { animation: none; }
+.graphite .hero-canvas { inset: 4px 0 -18px; }
+.graphite-backdrop {
+  position: absolute;
+  inset: -3%;
+  background: url("../../assets/graphite-architecture.png") center 49% / cover no-repeat;
+  pointer-events: none;
+  animation: graphite-depth 42s ease-in-out infinite alternate;
+  opacity: .86;
+}
+@keyframes graphite-depth { from { transform: scale(1.01) translate3d(-.15%, 0, 0); } to { transform: scale(1.045) translate3d(.15%, .4%, 0); } }
+.graphite[data-motion="off"] .graphite-backdrop { animation: none; }
+.graphite[data-visible="false"] .graphite-backdrop,
+.graphite[data-visible="false"] .hero::before { animation-play-state: paused; }
+.legion-root.cinema.graphite .hero-overlay { z-index: 2; padding: 16px 28px; align-items: stretch; }
+.graphite .hero-header { display: flex; align-items: center; min-height: 44px; gap: 24px; }
+.legion-root.cinema.graphite .hero-logo {
+  opacity: 1;
+  color: #cdd4da;
+  font-size: 22px;
+  letter-spacing: .23em;
+  flex: 0 0 auto;
+  text-shadow: 0 1px 0 #fff2;
+}
+.graphite-nav { display: flex; align-items: stretch; align-self: stretch; gap: 4px; border-left: 1px solid var(--graphite-line); padding-left: 18px; }
+.graphite-nav a,
+.graphite-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  padding: 0 14px;
+  background: transparent;
+  color: #b5bdc4;
+  font: 12px var(--lg-font-mono);
+  text-decoration: none;
+  letter-spacing: .02em;
+  backdrop-filter: none;
+}
+.graphite-nav a:first-child { color: #f0f2f4; border-bottom-color: #c5cdd2; background: #ffffff04; }
+.graphite-nav :is(a,button):hover { background: #ffffff08; color: #fff; border-bottom-color: #b5bdc4; }
+.graphite-edition { margin-left: auto; display: flex; align-items: center; gap: 20px; white-space: nowrap; font-size: 10px; color: #a5aeb7; letter-spacing: .17em; }
+.graphite-edition button { border: 1px solid #9aa4ad66; padding: 6px 12px; font-size: 9px; letter-spacing: .13em; border-radius: 1px; background: #0a0d10aa; color: #bac3cb; }
+.graphite .hero-sub { position: absolute; right: 30px; top: 48%; color: #929da6; }
+.graphite .hero-sub::before { content: ""; display: block; width: 24px; height: 1px; margin-bottom: 17px; background: #86929b; }
+.graphite .graphite-hero-caption { position: absolute; left: 30px; top: 54%; font-size: 10px; line-height: 1.9; letter-spacing: .17em; color: #939fa8; }
+.graphite .graphite-hero-caption::after { content: ""; display: block; width: 20px; height: 1px; background: #86929b; margin-top: 16px; }
+.legion-root.cinema.graphite .hero-status { align-self: flex-end; margin-top: auto; max-width: min(620px, 65%); padding: 7px 12px; border-radius: 2px; font-size: 10px; letter-spacing: .06em; }
+
+.graphite-console {
+  position: relative;
+  z-index: 3;
+  margin: -2px 12px 0;
+  padding: 0 18px 18px;
+  border: 1px solid rgb(182 193 201 / 56%);
+  border-radius: 9px;
+  background: linear-gradient(118deg, #ffffff07, transparent 38%), linear-gradient(#13171a, #0b0e10 110px);
+  box-shadow: inset 0 1px 0 #fff2, inset 0 -1px 0 #fff1, 0 20px 70px #0008;
+}
+.graphite-console::before { content: ""; position: absolute; top: -1px; left: 18px; right: 18px; height: 1px; background: linear-gradient(90deg, transparent, #dbe4e990, transparent); pointer-events: none; }
+.graphite-console-heading { display: flex; align-items: center; gap: 26px; min-height: 57px; }
+.graphite-console-heading h1 { margin: 0; font-size: 25px; line-height: 1; letter-spacing: .27em; font-weight: 700; color: #edf1f3; text-shadow: 0 1px 8px #fff1; }
+.graphite-console-heading > span { font-size: 9px; color: #8f9ba4; letter-spacing: .14em; border-left: 1px solid #b0bec94d; padding-left: 24px; }
+.graphite-console-heading .graphite-console-source { margin-left: auto; border: 0; }
+.graphite-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 10px; }
+.graphite-stat { min-height: 63px; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: 1px solid var(--graphite-line); border-radius: 3px; background: linear-gradient(115deg, #ffffff05, transparent 58%), #0b0e10; box-shadow: inset 0 1px 0 #ffffff0b; min-width: 0; }
+.graphite-stat > svg { width: 25px; height: 25px; flex: 0 0 auto; color: #cbd4da; }
+.graphite-stat > div { min-width: 0; border-left: 1px solid var(--graphite-line); padding-left: 15px; }
+.graphite-stat-label { display: block; color: #adb7bf; font-size: 9px; letter-spacing: .05em; margin-bottom: 7px; }
+.graphite-stat-value { display: block; color: #dce3e8; font-size: clamp(9px, .83vw, 13px); line-height: 1.4; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.graphite-stat small { margin-left: auto; max-width: 82px; font-size: 8px; color: #7d8993; line-height: 1.5; }
+.graphite-spectrum .scope-wrap { margin: 0; border: 1px solid var(--graphite-line); border-radius: 3px; background: #0a0d0f; }
+.graphite-spectrum .scope-toolbar { min-height: 39px; padding: 6px 15px; color: #aab5bd; background: linear-gradient(#ffffff04, transparent); border-bottom: 1px solid var(--graphite-hairline); gap: 6px 17px; font-size: 10px; }
+.graphite-spectrum .scope-toolbar input { accent-color: #c9d2d8; width: 12px; height: 12px; }
+.graphite-spectrum .scope-toolbar .btn-ghost { margin-left: auto; padding: 4px 8px; min-height: 25px; border-radius: 2px; font-size: 9px; }
+.graphite-spectrum .scope-canvas { height: clamp(220px, 28dvh, 380px); }
+.graphite-spectrum .scope-meta { min-height: 30px; color: #9eabb4; background: #0b0e10; border-top: 1px solid #c3cfd710; padding: 7px 15px; font-size: 9px; letter-spacing: .025em; }
+.graphite-history { margin-top: 10px; padding: 0 12px 8px; border: 1px solid var(--graphite-line); border-radius: 3px; background: #0b0e10; }
+.graphite-history > header { display: flex; justify-content: space-between; align-items: center; min-height: 32px; color: #d1d9de; font-size: 10px; letter-spacing: .035em; }
+.graphite-history > header small { color: #86929d; font-size: 8px; }
+.graphite-history .cinema-field { height: auto; padding: 0; gap: 5px; }
+.graphite-history .cinema-field-canvas { height: 116px; border: 1px solid #a7b7c022; border-radius: 0; }
+.graphite-history .cinema-field-meta { color: #95a2ad; font-size: 9px; min-height: 15px; }
+.graphite-history .cinema-field-read { color: #a5b2bc; }
+.graphite .cinema-dock { padding: 16px 24px 20px; grid-template-columns: 1fr auto 1fr; }
+.graphite :is(.cinema-mode, .cinema-btn.ghost) { color: #bdc7ce; border-color: #adbcc53b; background: #101416; border-radius: 3px; }
+.graphite .cinema-mode.on { background: linear-gradient(#343b41, #151a1e); border-color: #aebac580; color: #edf2f4; box-shadow: inset 0 1px 0 #ffffff13; }
+.graphite .cinema-mode span { color: #8c9aa5; }
+.graphite button.cinema-go { background: linear-gradient(#e7edf1, #b8c3cb); border-color: #edf3f6; color: #0a0e11; border-radius: 3px; box-shadow: 0 2px 12px #b0c4d014, inset 0 1px 0 #fff; }
+.graphite button.cinema-go.stop { background: transparent; color: #ffb4a8; border-color: rgb(255 180 168 / 70%); box-shadow: none; }
+.graphite .cinema-whisper { color: #98a4af; }
+.graphite .cinema-accept,
+.graphite .cinema-warn { margin: 12px 24px 0; }
+.graphite .cinema-settings { background: radial-gradient(ellipse at 50% 0, #242b30, transparent 55%), #090c0e; }
+.graphite .cinema-settings-bar { background: #0e1215ee; border-bottom: 1px solid var(--graphite-line); min-height: 66px; }
+.graphite .cinema-settings-bar p { color: #bac5cc; }
+.graphite .console { max-width: 1420px; }
+.graphite .panel { border-radius: 5px; background: linear-gradient(135deg, #ffffff05, transparent 35%), #101518; box-shadow: inset 0 1px 0 #ffffff0f, 0 12px 35px #0003; }
+.graphite .panel::before { background: linear-gradient(90deg, transparent, #bacbd52b, transparent); }
+.graphite :is(input, select, .ws-tab, .cinema-path, .cinema-wave) { border-radius: 3px; }
+.graphite .ws-tab.active { background: #c6d2dc0e; border-color: #c6d2dc73; color: #e5edf2; }
+.graphite .cinema-gate { background: #05080be6; backdrop-filter: blur(10px); }
+.graphite .cinema-gate-card { border-radius: 6px; background: linear-gradient(140deg, #ffffff07, transparent 60%), #111619; border-color: #b4c4cf55; box-shadow: inset 0 1px 0 #fff2, 0 30px 100px #0009; }
+.graphite .boot-overlay { background: radial-gradient(ellipse at center, #1a2228, #050709 70%); }
+.graphite .boot-logo { text-shadow: 0 0 25px #b0c5d22e; color: #dfe7ec; }
+.graphite .boot-lines { color: #9baab5; }
+
+@media (min-width: 1900px) { .graphite-console { margin-left: 20px; margin-right: 20px; padding: 0 24px 22px; } }
+@media (max-width: 1100px) {
+  .graphite .hero-header { gap: 16px; flex-wrap: wrap; }
+  .graphite-edition { gap: 10px; }
+  .graphite-edition > span { display: none; }
+  .graphite-nav { gap: 0; padding-left: 10px; }
+  .graphite-nav :is(a,button) { padding: 0 10px; min-height: 40px; }
+  .graphite-stat small { display: none; }
+  .graphite-stat-value { font-size: 10px; }
+}
+@media (max-width: 760px) {
+  .legion-root.cinema.graphite .hero-overlay { padding: 12px 16px; }
+  .graphite .hero-header { gap: 10px; }
+  .legion-root.cinema.graphite .hero-logo { font-size: 19px; }
+  .graphite-nav { order: 3; width: 100%; border-left: 0; padding-left: 0; justify-content: space-between; background: #080b0d66; border-bottom: 1px solid #ffffff13; }
+  .graphite-edition { margin-left: auto; }
+  .graphite .graphite-hero-caption { left: 16px; font-size: 8px; letter-spacing: .08em; }
+  .graphite .hero-sub { top: 58%; right: 16px; font-size: 8px; max-width: 100px; text-align: right; }
+  .graphite .hero-sub::before { margin-left: auto; }
+  .legion-root.cinema.graphite .hero-status { max-width: 100%; font-size: 8px; }
+  .graphite-console { margin: 0 7px; padding: 0 10px 12px; border-radius: 6px; }
+  .graphite-console-heading { min-height: 51px; gap: 12px; }
+  .graphite-console-heading h1 { font-size: 19px; }
+  .graphite-console-heading > span { display: none; }
+  .graphite-console-heading .graphite-console-source { display: block; padding: 0; font-size: 8px; letter-spacing: 0; }
+  .graphite-stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .graphite-stat { padding: 9px; gap: 9px; min-height: 60px; }
+  .graphite-stat > div { padding-left: 9px; }
+  .graphite-stat > svg { width: 21px; }
+  .graphite-spectrum .scope-toolbar { padding: 9px; gap: 9px 12px; }
+  .graphite-spectrum .scope-canvas { height: 255px; }
+  .graphite-spectrum .scope-meta { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .graphite-history { padding: 0 7px 7px; }
+  .graphite-history > header small { display: none; }
+  .graphite-history .cinema-field-meta { font-size: 8px; gap: 8px; }
+  .graphite .cinema-dock { grid-template-columns: 1fr; gap: 12px; padding: 14px; }
+  .graphite .cinema-modes > button { flex: 1; }
+  .graphite .cinema-go { width: 100%; }
+  .graphite .cinema-dock-end { justify-content: space-between; }
+  .graphite .cinema-accept { margin: 10px 14px 0; flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .graphite .hero::before, .graphite-backdrop { animation: none; } .graphite :is(button, a) { transition: none; } }
+@media print { .graphite .hero { height: 180px !important; min-height: 180px !important; } .graphite .cinema-dock, .graphite-edition button { display: none; } }

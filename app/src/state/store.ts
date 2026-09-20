@@ -694,12 +694,9 @@ void gFpgaTurnLastMhz;
  *  (hero/панель), не только тики. */
 /** FPGA+сканер: handoff в полёте (один за раз — USB и LO общие). */
 let gFpgaHandoffBusy = false;
-/** Частота, на которой handoff упал, и когда — ретрай через паузу, не вплотную. */
-let gHandoffFailMhz: number | null = null;
+/** Время последней ошибки handoff. */
 let gHandoffFailAt = 0;
 void gHandoffFailAt;
-/** Страйки подряд на той же частоте: пауза 10→20→40 с, на 3-й — skip. */
-let gHandoffStrikes = 0;
 /** Автовозврат из ARM: det_count не растёт FPGA_AIR_GONE_MS = энергия пропала. */
 let gLastDetCount: number | null = null;
 let gDetStagnantSinceMs: number | null = null;
@@ -3222,8 +3219,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gLastDetCount = null;
       gDetStagnantSinceMs = null;
-      gHandoffFailMhz = null;
-      gHandoffStrikes = 0;
     },
 
     fpgaPollStatus: async () => {

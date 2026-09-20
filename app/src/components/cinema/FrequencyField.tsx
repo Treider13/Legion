@@ -53,6 +53,7 @@ export function FrequencyField() {
     const quiet = prefersReducedMotion();
     const history: Float32Array[] = Array.from({ length: WATERFALL_ROWS }, () => new Float32Array(WATERFALL_COLS));
     let composite: Float32Array | null = null;
+    let receivedSpectrum = false;
     let lastPush = 0;
     let lastKey = "";
     let lastLo = Number.NaN;
@@ -98,6 +99,7 @@ export function FrequencyField() {
         history.length = 0;
         for (let i = 0; i < WATERFALL_ROWS; i++) history.push(new Float32Array(WATERFALL_COLS));
         composite = null;
+        receivedSpectrum = false;
         lastKey = "";
         lastPush = 0;
         heatDirty = true;
@@ -136,8 +138,9 @@ export function FrequencyField() {
         heatDirty = true;
       }
 
+      if (st.scanBins.some(b => finiteDbm(b.powerDbm))) receivedSpectrum = true;
       const rows = history.length > 0 ? history : [];
-      if (rows.length > 0 && offCtx) {
+      if (receivedSpectrum && rows.length > 0 && offCtx) {
         if (off.height !== rows.length) {
           off.height = rows.length;
           heatDirty = true;
@@ -185,7 +188,7 @@ export function FrequencyField() {
       };
 
       const latest = rows.length > 0 ? rows[rows.length - 1] : null;
-      if (latest) {
+      if (latest && receivedSpectrum) {
         ctx.beginPath();
         for (let c = 0; c < latest.length; c++) {
           const mhz = lo + ((c + 0.5) / latest.length) * span;
@@ -196,18 +199,6 @@ export function FrequencyField() {
         }
         ctx.strokeStyle = "rgba(236, 230, 218, 0.7)";
         ctx.lineWidth = 1.2;
-        ctx.stroke();
-      } else if (!quiet) {
-        ctx.beginPath();
-        for (let i = 0; i <= 96; i++) {
-          const mhz = lo + (span * i) / 96;
-          const y = baseY - (6 + Math.sin(mhz * 0.11 + t * 0.0007) * 3);
-          const x = xOf(mhz);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = "rgba(232, 228, 220, 0.14)";
-        ctx.lineWidth = 1;
         ctx.stroke();
       }
       if (st.labShowPeak && st.labPsd.peakHold.length) {
@@ -270,6 +261,14 @@ export function FrequencyField() {
         ctx.moveTo(x, 6);
         ctx.lineTo(x, baseY);
         ctx.stroke();
+      }
+
+      if (!receivedSpectrum) {
+        ctx.fillStyle = "rgba(187, 201, 210, 0.7)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Ожидание данных", cssW / 2, Math.max(24, wfH / 2));
+        ctx.textAlign = "start";
       }
 
       raf = requestAnimationFrame(draw);
