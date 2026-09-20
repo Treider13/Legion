@@ -6,6 +6,10 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 import "./App.css";
 import "./components/cinema/cinema.css";
+import "./components/graphite/graphite.css";
+import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChrome";
+import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
+import { SpectrumScope } from "./components/SpectrumScope";
 
 import { BootSequence } from "./components/boot/BootSequence";
 import { CinemaDock } from "./components/cinema/CinemaDock";
@@ -27,6 +31,7 @@ const Scene = __LEGION_LITE__
     );
 
 function App() {
+  const { rootRef, motion, reduced, toggleMotion } = useGraphiteMotion();
   const [booted, setBooted] = useState(false);
   const [mount3d, setMount3d] = useState(false);
   const [gate, setGate] = useState(false);
@@ -135,20 +140,22 @@ function App() {
   }, []);
 
   return (
-    <div className="legion-root cinema">
+    <div ref={rootRef} className="legion-root cinema graphite" data-motion={motion ? "on" : "off"}>
       {!booted && <BootSequence onDone={() => setBooted(true)} />}
 
-      <section className="hero">
+      <section className="hero" id="graphite-overview">
+        <div className="graphite-backdrop" aria-hidden="true" />
         <div className="hero-canvas">
           {__LEGION_LITE__ ? (
             <LiteEye />
           ) : Scene ? (
-            <Suspense fallback={null}>{mount3d && <Scene tier={tier} />}</Suspense>
+            <Suspense fallback={null}>{mount3d && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
           ) : null}
         </div>
         <div className="hero-overlay">
           <header className="hero-header">
-            <span className="hero-logo">LEGION</span>
+            <span className="hero-logo">ЛЕГИОН</span>
+            <GraphiteNav onSettings={() => setSettings(true)} motion={motion} reduced={reduced} onMotion={toggleMotion} />
             <span className="hero-sub">
               {mode === "sdr"
                 ? sl22
@@ -159,6 +166,7 @@ function App() {
                   : "ESP32 · USB"}
             </span>
           </header>
+          <div className="graphite-hero-caption" aria-hidden="true">РАДИО<br/>ТЕХНОЛОГИИ<br/>НАБЛЮДЕНИЕ<br/>АНАЛИЗ</div>
           <div className={`hero-status st-${hero.kind}`} role="status" aria-live="polite">
             <span>{hero.text}</span>
             {hero.detail && <span className="hero-status-detail">{hero.detail}</span>}
@@ -166,7 +174,14 @@ function App() {
         </div>
       </section>
 
-      <FrequencyField />
+      <GraphiteConsole
+        source={mode === "sdr" ? (sl22 ? "SDR" : "SDR · Ethernet") : (sl22 ? "HTOOL SL22" : "ESP32 · USB")}
+        range={mode === "sdr" ? `${sdrF1}–${sdrF2} МГц` : "По настройкам режима"}
+        motion={motion}
+        lite={__LEGION_LITE__}
+        spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
+        history={<FrequencyField />}
+      />
 
       {cooling && (
         <div className="cinema-warn" role="alert">

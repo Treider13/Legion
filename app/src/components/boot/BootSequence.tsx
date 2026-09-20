@@ -9,14 +9,11 @@ import gsap from "gsap";
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
 
 const BOOT_LINES = [
-  "LEGION OS // ЯДРО 0.1.0",
-  "ПАМЯТЬ ...... 327680 КБ OK",
-  "ШИНА SPI .... ADF4351 СВЯЗЬ OK",
-  "ФАПЧ ........ FRACTIONAL-N OK",
-  "РЧ-КАСКАД ... ГОТОВ",
-  "КОРИДОР ..... 2400-2500 МГц ГОТОВ",
+  "ЛЕГИОН // ГРАФИТ 13",
+  "ВИЗУАЛЬНОЕ ОФОРМЛЕНИЕ",
+  "ОБЪЁМ · СВЕТ · МАТЕРИАЛЫ",
   "",
-  "ВСЕ СИСТЕМЫ В НОРМЕ",
+  "ОТКРЫТИЕ ИНТЕРФЕЙСА",
 ];
 
 interface Props {
@@ -70,6 +67,7 @@ export function BootSequence({ onDone }: Props) {
 
     // Растворение
     tl.to(rootRef.current, { opacity: 0, duration: 0.45, ease: "power2.in" }, t0 + 1.5);
+    return () => { tl.kill(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -83,7 +81,7 @@ export function BootSequence({ onDone }: Props) {
         ))}
       </div>
       <h1 ref={logoRef} className="boot-logo">
-        LEGION
+        ЛЕГИОН
       </h1>
       <div className="boot-bar-track">
         <div ref={barRef} className="boot-bar" />

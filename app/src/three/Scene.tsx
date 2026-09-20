@@ -8,10 +8,13 @@ import { Environment, Lightformer } from "@react-three/drei";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
 
+import { GraphiteArchitecture } from "./GraphiteArchitecture";
+
 import { CyborgEye } from "./CyborgEye";
 
 interface SceneProps {
   tier: "low" | "high";
+  graphite?: { motion: boolean };
 }
 
 /** Камера: лёгкий дрейф + параллакс от указателя (без React-стейта) */
@@ -36,7 +39,7 @@ function CameraRig() {
   return null;
 }
 
-export function Scene({ tier }: SceneProps) {
+export function Scene({ tier, graphite }: SceneProps) {
   const dpr = Math.min(2, window.devicePixelRatio || 1); // cap DPR ≤ 2 (SOTD-2026)
   return (
     <Canvas
@@ -57,6 +60,7 @@ export function Scene({ tier }: SceneProps) {
           <Lightformer form="rect" intensity={0.6} position={[0, -3, 1]} scale={[6, 2, 1]} color="#5a6a7a" />
         </Environment>
       </Suspense>
+      {graphite && <GraphiteArchitecture motion={graphite.motion} />}
       <CyborgEye tier={tier} />
       {tier === "high" && <FxWithGuard />}
     </Canvas>

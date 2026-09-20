@@ -1,0 +1,63 @@
+{
+  "checks": [
+    {
+      "name": "3D eye and both original canvases mounted",
+      "ok": true
+    },
+    {
+      "name": "No horizontal overflow desktop",
+      "ok": true
+    },
+    {
+      "name": "Background motion toggles off",
+      "ok": true
+    },
+    {
+      "name": "Background CSS animation stopped",
+      "ok": true
+    },
+    {
+      "name": "Appearance preference persists",
+      "ok": true
+    },
+    {
+      "name": "Original settings dialog opens",
+      "ok": true
+    },
+    {
+      "name": "Escape closes settings",
+      "ok": true
+    },
+    {
+      "name": "History anchor exists",
+      "ok": true
+    },
+    {
+      "name": "No horizontal overflow mobile",
+      "ok": true,
+      "detail": {
+        "width": 390,
+        "scroll": 390,
+        "cards": 4
+      }
+    },
+    {
+      "name": "System reduced-motion honored",
+      "ok": true
+    },
+    {
+      "name": "No horizontal overflow wide",
+      "ok": true
+    },
+    {
+      "name": "No browser exceptions",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "First-visit opening animation completes",
+      "ok": true
+    }
+  ],
+  "errors": []
+}

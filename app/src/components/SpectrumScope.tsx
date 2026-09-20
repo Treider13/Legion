@@ -62,10 +62,10 @@ export function SpectrumScope() {
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
 
-      const padL = 44;
-      const padR = 12;
-      const padT = 10;
-      const padB = 22;
+      const padL = 62;
+      const padR = 22;
+      const padT = 20;
+      const padB = 43;
       const plotW = Math.max(8, cssW - padL - padR);
       const plotH = Math.max(8, cssH - padT - padB);
       const xOf = (mhz: number) => padL + ((mhz - loF) / span) * plotW;
@@ -128,11 +128,6 @@ export function SpectrumScope() {
         }
       }
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(padL, padT, plotW, plotH);
-      ctx.clip();
-
       const gridDb = 10;
       const firstDb = Math.ceil(dbLo / gridDb) * gridDb;
       ctx.font = "10px ui-monospace, JetBrains Mono, monospace";
@@ -160,8 +155,36 @@ export function SpectrumScope() {
         ctx.stroke();
         ctx.fillStyle = "rgba(232,228,220,0.5)";
         ctx.textAlign = "center";
-        ctx.fillText(`${f >= 1000 ? (f / 1000).toFixed(f % 1000 === 0 ? 0 : 1) + "G" : f.toFixed(0)}`, x, cssH - 6);
+        ctx.fillText(f.toFixed(0), x, cssH - 24);
       }
+
+      // Fine subdivisions and axis titles are presentation only.
+      ctx.save();
+      ctx.strokeStyle = "rgba(190,204,214,0.10)";
+      ctx.setLineDash([1, 4]);
+      ctx.beginPath();
+      for (let i = 1; i < 50; i++) {
+        const x = padL + plotW * i / 50;
+        ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH);
+      }
+      for (let i = 1; i < 40; i++) {
+        const y = padT + plotH * i / 40;
+        ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = "rgba(198,210,219,0.75)";
+      ctx.textAlign = "center";
+      ctx.fillText("Частота (МГц)", padL + plotW / 2, cssH - 7);
+      ctx.save();
+      ctx.translate(13, padT + plotH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(st.labSubtractBaseline ? "Уровень относительно полки (дБ)" : "Уровень (дБм)", 0, 0);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, plotW, plotH);
+      ctx.clip();
 
       if (st.labShowAlloc) {
         const allocs = bandsInSpan(loF, hiF);
@@ -310,11 +333,11 @@ export function SpectrumScope() {
 
       if (!live.some((b) => finiteDbm(b.powerDbm))) {
         ctx.fillStyle = "rgba(232,228,220,0.62)";
-        ctx.font = "13px ui-monospace, JetBrains Mono, monospace";
+        ctx.font = "12px ui-monospace, JetBrains Mono, monospace";
         ctx.textAlign = "center";
         const msg = st.fpgaArmed
-          ? "USB у платы · host-FFT молчит · взгляд analog, не выдуманный спектр"
-          : "нет Welch — СКАНИРОВАТЬ (хост) или СТАРТ ПЕРЕХВАТА (FPGA)";
+          ? "Спектральные данные от источника не поступают"
+          : "Ожидание данных";
         ctx.fillText(msg, padL + plotW / 2, padT + plotH / 2);
       }
 
