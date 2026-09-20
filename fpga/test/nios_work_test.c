@@ -18,6 +18,7 @@
  *         первого det (turn, мкс); tamer стоит → hop нет; wd_fired важнее walker.
  *   FFT+TURN: FIRE без hop PLL (цифровой вырез, AIR=центр взгляда, PEAK=~2444);
  *             выдержка SCAN_DWELL_US, затем следующий взгляд 2484.
+ *   FFT+PARK: 2400–2487 → один центр 2443.5; dwell+энергия не гоняет PLL.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -713,6 +714,11 @@ int main(void)
     t_tamer += 10000000; /* >> SETTLE_N: старый resense глушил бы TX */
     legion_work();
     CHECK("FFT PRIORITY + энергия → LO не шагает", rfic_n == 0);
+    t_status = 0;
+    rfic_n = 0;
+    t_tamer += (uint64_t)56000000 * 6 / 1000;
+    legion_work();
+    CHECK("FFT n==1 тишина: не mute/SETTLE на том же LO", rfic_n == 0);
 
     /* xA4 края каталога: hop uint64 на 5.8 ГГц; clip RX 70–6000. */
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 5800000);
@@ -885,6 +891,50 @@ int main(void)
                    2484000ULL * 1000ULL) >= 0 &&
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0 &&
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+
+    /* FFT PARK: ICE9 — один LO на середине 2400–2487. Dwell не гоняет PLL. */
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2443500);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2487000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_PARK);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT PARK 2400-2487: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT PARK 2400-2487: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_n = 0;
+    legion_work(); /* SEARCH 2443.5 */
+    t_tamer += 8;
+    legion_work(); /* FRAME */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 0, 0x2000, 16);
+    legion_work();
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    rfic_n = 0;
+    legion_work(); /* FIRE */
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT PARK: AIR_FREQ = середина 2443.5", khz == 2443500);
+    }
+    rfic_n = 0;
+    legion_work();
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 8;
+    legion_work();
+    CHECK("FFT PARK: dwell+энергия → PLL не гоняем", rfic_n == 0);
+    t_status = 0;
+    t_tamer += (uint64_t)56000000 * 6 / 1000;
+    rfic_n = 0;
+    legion_work();
+    CHECK("FFT PARK: тишина → не mute/SETTLE на том же LO", rfic_n == 0);
 
     /* U5: FFT/BAND readback не STATUS */
     legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);

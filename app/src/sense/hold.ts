@@ -8,7 +8,7 @@ import { pickStrongest, sameBin } from "./orchestrator";
 
 export const RESENSE_MS = 1000;
 
-export type AutoDispatch = "priority" | "turn";
+export type AutoDispatch = "priority" | "turn" | "park";
 export type ResenseResult = "alive" | "gone" | "error" | "switch";
 
 /**
@@ -105,7 +105,7 @@ export function pickArmedAutoTarget(opts: {
   holdMasked?: boolean;
 }): Detection | null {
   void opts.archive;
-  if (opts.dispatch === "turn") {
+  if (opts.dispatch === "turn" || opts.dispatch === "park") {
     return pickTurnTarget(opts.liveWindow, opts.skipMhz, opts.heldMhz, opts.heldPowerDbm);
   }
   return pickPriorityTarget(

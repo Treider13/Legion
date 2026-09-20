@@ -197,6 +197,7 @@ export function ScanPanel() {
               onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
               disabled={busy}
             >
+              <option value="park">{autoDispatchOptionRu("park")}</option>
               <option value="turn">{autoDispatchOptionRu("turn")}</option>
               <option value="priority">{autoDispatchOptionRu("priority")}</option>
             </select>
@@ -244,14 +245,18 @@ export function ScanPanel() {
           ? "FPGA-задача с вкладки ТИП СИГНАЛА — не автоперехват и не хост-скан"
           : fpgaAir
           ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${
-              s.autoDispatch === "turn"
+              s.autoDispatch === "park"
+                ? "Стоянка: LO на середине коридора, хопы внутри взгляда — на усилитель без PLL"
+                : s.autoDispatch === "turn"
                 ? `По очереди: цели по кругу, выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на частоту`
                 : "Приоритет: сильнейшая, пока жива"
             }`
           : auto
             ? s.autoDispatch === "priority"
               ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
-              : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
+              : s.autoDispatch === "park"
+                ? "стоянка: один взгляд, хопы внутри цифрой"
+                : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
             : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
       {!fpgaAir && !taskLive && (

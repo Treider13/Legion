@@ -1159,6 +1159,17 @@ check("micro: FFT+TURN SEARCH_BW 56e6",
       gw_m.fpga._t.regs.get(lf.REG_SEARCH_BW_HZ) == 56_000_000)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2443.5, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2487,
+          "scan_park": True, "scan_dwell_us": 400,
+          "fft_enable": True, "fire_bw_mhz": 2})
+check("micro: ARM FFT+PARK 2400-2487 ok", r.get("ok") is True)
+check("micro: FFT+PARK SCAN_CTRL enable|park",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_PARK))
+check("micro: FFT+PARK SCAN_F2 = 2487e3",
+      gw_m.fpga._t.regs.get(lf.REG_SCAN_F2_KHZ) == 2_487_000)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 5400.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 5000, "scan_f2_mhz": 5800,
           "fft_enable": True, "fire_bw_mhz": 2,

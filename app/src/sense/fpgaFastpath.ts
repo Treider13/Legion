@@ -9,7 +9,7 @@
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
 import { catalogById } from "../sdr/catalog";
-import { planCenters } from "./scan";
+import { planCenters, planParkCenters } from "./scan";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
@@ -308,6 +308,8 @@ export interface OnboardInterceptInput {
   lookMhz?: number;
   turn: boolean;
   dwellMs: number;
+  /** ICE9: один LO на середине коридора, без плитки взглядов. */
+  park?: boolean;
   /** Точный Гц: FFT-пик на FPGA. Дефолт false — walker как раньше. */
   fftEnable?: boolean;
   fireBwMhz?: number;
@@ -326,6 +328,7 @@ export interface OnboardInterceptPlan {
   detShift: number;
   dwellMs: number;
   turn: boolean;
+  park: boolean;
   fftEnable: boolean;
   fireBwMhz: number;
   settleN: number;
@@ -338,7 +341,8 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const detShift = clampDetShift(i.detShift);
   const windowUs = detectorWindowUs(detShift, fsHz);
   const spanMhz = parkSpanMhz(i.bands);
-  const centers = planCenters(i.bands, lookMhz);
+  const park = !!i.park;
+  const centers = park ? planParkCenters(i.bands) : planCenters(i.bands, lookMhz);
   const dwellMs = fpgaTurnDwellClamp(i.dwellMs);
   const fftEnable = !!i.fftEnable;
   const fireBwMhz = fftEnable
@@ -358,6 +362,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detShift,
     dwellMs,
     turn: i.turn,
+    park,
     fftEnable,
     fireBwMhz,
     settleN,
@@ -384,7 +389,9 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     return fail(`Автоперехват: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
   }
   const hops = Math.max(0, centers.length - 1);
-  const survey = fftEnable
+  const survey = park
+    ? `стоянка ${(centers[0] ?? 0).toFixed(1)} МГц · взгляд ${lookMhz} МГц (фильтр ≤${analog}) · хопы внутри окна — цифровой вырез на стоящем LO, PLL не гоняем`
+    : fftEnable
     ? hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц в взгляде ${lookMhz} МГц — FFT пик, цифровой вырез на стоящем LO (точный Гц, не hop PLL)`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц · FFT пик → точный Гц на стоящем LO (не hop PLL) · шаг взгляда на плате, не USB`
@@ -404,6 +411,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detShift,
     dwellMs,
     turn: i.turn,
+    park,
     fftEnable,
     fireBwMhz,
     settleN,
@@ -476,6 +484,7 @@ export function fpgaArmCmd(
     scanF1Mhz?: number;
     scanF2Mhz?: number;
     scanTurn?: boolean;
+    scanPark?: boolean;
     scanDwellMs?: number;
     scanDwellUs?: number;
     fftEnable?: boolean;
@@ -513,6 +522,7 @@ export function fpgaArmCmd(
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
     if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;
     cmd.scan_turn = !!opts.scanTurn;
+    cmd.scan_park = !!opts.scanPark;
     if (opts.scanDwellUs !== undefined && Number.isFinite(opts.scanDwellUs)) {
       cmd.scan_dwell_us = Math.max(0, Math.round(opts.scanDwellUs));
     } else if (opts.scanDwellMs !== undefined) {

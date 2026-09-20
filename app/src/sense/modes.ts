@@ -23,7 +23,7 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
 export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop" | "fpga";
-export type AutoDispatch = "priority" | "turn";
+export type AutoDispatch = "priority" | "turn" | "park";
 
 export function isFpgaAirPattern(pattern: SdrWalkPattern): boolean {
   return pattern === "fpga";
@@ -80,13 +80,15 @@ export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
 }
 
 export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
-  return dispatch === "priority" ? "ПРИОРИТЕТ" : "ОБЫЧНЫЙ";
+  if (dispatch === "priority") return "ПРИОРИТЕТ";
+  if (dispatch === "park") return "СТОЯНКА";
+  return "ОБЫЧНЫЙ";
 }
 
 export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
-  return dispatch === "priority"
-    ? "ПРИОРИТЕТ (сильнее рядом — на неё)"
-    : "ОБЫЧНЫЙ (по очереди, выдержка)";
+  if (dispatch === "priority") return "ПРИОРИТЕТ (сильнее рядом — на неё)";
+  if (dispatch === "park") return "СТОЯНКА (один взгляд, хопы внутри цифрой)";
+  return "ОБЫЧНЫЙ (по очереди, выдержка)";
 }
 
 export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "turn"): {
@@ -102,14 +104,16 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       useFpgaAir: true,
       reason:
         "Автоматический перехват: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. " +
-        "Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге увидел→усилитель. Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение.",
+        "Гейт в текущем взгляде — микросекунды. Стоянка: LO на середине коридора, хопы внутри окна — на усилитель без PLL. По очереди — плитка взглядов и выдержка. USB не в круге увидел→усилитель. Ноутбук — коридор, Старт/Стоп и наблюдение.",
     };
   }
   if (pattern === "auto") {
     const how =
-      dispatch === "turn"
-        ? "обычный: живые по очереди, каждая выдержка на усилителе"
-        : "приоритет: держим; сильнее рядом — на неё, пропала — следующая";
+      dispatch === "priority"
+        ? "приоритет: держим; сильнее рядом — на неё, пропала — следующая"
+        : dispatch === "park"
+          ? "стоянка: один взгляд, хопы внутри цифрой"
+          : "обычный: живые по очереди, каждая выдержка на усилителе";
     return {
       useScanner: true,
       openLoopTx: false,

@@ -1243,6 +1243,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       detShift: s.fpgaDetShift,
       lookMhz: lookRaw,
       turn: s.autoDispatch === "turn",
+      park: s.autoDispatch === "park",
       dwellMs: dwellRaw,
       fftEnable: true,
     });
@@ -1325,6 +1326,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanF1Mhz: f1,
           scanF2Mhz: f2,
           scanTurn: plan.turn,
+          scanPark: plan.park,
           scanDwellMs: plan.dwellMs,
           fftEnable: true,
           fireBwMhz: plan.fireBwMhz,
@@ -1497,7 +1499,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
     scanPattern: "auto",
-    autoDispatch: "turn",
+    autoDispatch: "park",
     scanWindowMhz: "20",
     scanDwellMs: "40",
     scanCenterMhz: null,
@@ -3880,7 +3882,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           const heldNow = gGate.lastCuedMhz;
           const dispatch = after.autoDispatch;
           const target = pickArmedAutoTarget({
-            liveWindow: dispatch === "turn" ? raw : detections,
+            liveWindow: dispatch === "priority" ? detections : raw,
             archive: after.detections,
             heldMhz: heldNow,
             heldPowerDbm: after.lastForwardPowerDbm,
@@ -4002,9 +4004,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const raw = clipToAllowlist(detectFromBins(get().scanBins, get().scanThresholdDb), get().sdrBands);
       const dispatch = get().autoDispatch;
       const live =
-        dispatch === "turn"
-          ? raw
-          : withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
+        dispatch === "priority"
+          ? withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null))
+          : raw;
       const target = pickArmedAutoTarget({
         liveWindow: live,
         archive: get().detections,

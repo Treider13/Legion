@@ -456,6 +456,11 @@ static uint32_t legion_fs_hz(void)
 
 /* Сетка стоянок — та же формула, что planCenters в app/src/sense/scan.ts:
  * n = ceil(span/look), центр i = f1 + look/2 + i·look, клип к f2. */
+static bool legion_scan_park(void)
+{
+    return (legion_scan_ctrl & LEGION_SCAN_CTRL_PARK) != 0;
+}
+
 static uint32_t legion_looks_in(uint32_t f1_khz, uint32_t f2_khz)
 {
     uint32_t const look_khz = legion_look_hz() / 1000u;
@@ -463,6 +468,11 @@ static uint32_t legion_looks_in(uint32_t f1_khz, uint32_t f2_khz)
 
     if (f1_khz == 0 || f2_khz < f1_khz || look_khz == 0) {
         return 0;
+    }
+    /* ICE9 −a: один центр на коридор, analog всё равно ≤ look.
+     * Плитка 2428↔2484 на скачке гоняет PLL (мс) и бросает живое окно. */
+    if (legion_scan_park()) {
+        return 1;
     }
     span = f2_khz - f1_khz;
     if (span <= look_khz) {
@@ -946,11 +956,24 @@ static void legion_fft_try_next(void)
     uint32_t const n = legion_scan_n();
     uint32_t const old_idx = legion_scan_idx;
     int const old_dir = legion_scan_dir;
+    uint32_t next;
 
-    if (n > 1u) {
-        legion_scan_advance();
+    if (n <= 1u || legion_scan_park()) {
+        /* Тот же LO: mute+SETTLE запрещены. Следующий хоп — xlat. */
+        legion_hold_armed = false;
+        legion_hold_t0 = 0;
+        return;
     }
-    if (legion_fft_enter_search(legion_scan_center_khz(legion_scan_idx))) {
+    legion_scan_advance();
+    next = legion_scan_center_khz(legion_scan_idx);
+    if (next == 0 || next == legion_look_center_khz) {
+        legion_scan_idx = old_idx;
+        legion_scan_dir = old_dir;
+        legion_hold_armed = false;
+        legion_hold_t0 = 0;
+        return;
+    }
+    if (legion_fft_enter_search(next)) {
         return;
     }
     legion_scan_idx = old_idx;
@@ -1094,10 +1117,8 @@ static void legion_fft_walk(void)
     if (now - legion_quiet_t0 < quiet) {
         return;
     }
-    if (n <= 1u) {
-        (void)legion_fft_enter_search(legion_look_center_khz != 0
-            ? legion_look_center_khz
-            : legion_scan_center_khz(legion_scan_idx));
+    if (n <= 1u || legion_scan_park()) {
+        /* Стоянка: тишина не значит «перепарковать PLL». */
         return;
     }
     legion_fft_try_next();

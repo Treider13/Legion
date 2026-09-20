@@ -44,7 +44,7 @@ REG_AIR_BW_HZ = 0x0D  # analog BW эфира/solo, Гц; 0 = 2 МГц (NIOS)
 # Онбордовый обзор коридора — только NIOS (HDL не декодирует)
 REG_SCAN_F1_KHZ = 0x0E
 REG_SCAN_F2_KHZ = 0x0F
-REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn
+REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn, bit2 park
 REG_SCAN_DWELL_US = 0x11  # выдержка turn от первого детекта, мкс
 REG_SEARCH_BW_HZ = 0x12  # analog BW обзора, Гц; 0 = AIR_BW
 REG_FIRE_BW_HZ = 0x13  # leftover; вырез цифровой, analog не узжаем
@@ -59,6 +59,7 @@ REG_SETTLE_N = 0x1B  # сэмплы после hop; 0 = 4096
 
 SCAN_CTRL_EN = 1 << 0
 SCAN_CTRL_TURN = 1 << 1
+SCAN_CTRL_PARK = 1 << 2  # ICE9: один LO на середине коридора
 FFT_CTRL_EN = 1 << 0
 FFT_CTRL_DC_NOTCH = 1 << 1
 FIRE_BW_DEFAULT_HZ = 2_000_000
@@ -162,14 +163,18 @@ class LegionFpga:
         }
 
     def set_scan_corridor(self, f1_mhz: float, f2_mhz: float,
-                          enable: bool, turn: bool, dwell_us: int) -> bool:
+                          enable: bool, turn: bool, dwell_us: int,
+                          park: bool = False) -> bool:
         """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo).
-        dwell_us — выдержка TURN от первого det в взгляде (0 → дефолт NIOS 3 с)."""
+        dwell_us — выдержка TURN от первого det в взгляде (0 → дефолт NIOS 3 с).
+        park — ICE9: одна стоянка на середине, без плитки взглядов."""
         f1 = int(round(float(f1_mhz) * 1000.0))
         f2 = int(round(float(f2_mhz) * 1000.0))
         if f1 <= 0 or f2 < f1:
             return False
-        ctrl = (SCAN_CTRL_EN if enable else 0) | (SCAN_CTRL_TURN if turn else 0)
+        ctrl = ((SCAN_CTRL_EN if enable else 0) |
+                (SCAN_CTRL_TURN if turn else 0) |
+                (SCAN_CTRL_PARK if park else 0))
         dwell = max(0, int(dwell_us))
         return (self.write_reg(REG_SCAN_F1_KHZ, f1 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_F2_KHZ, f2 & 0xFFFFFFFF) and

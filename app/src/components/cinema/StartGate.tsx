@@ -17,9 +17,9 @@ interface Props {
  *  держит гейт открытым после смерти цели. Показываем в режимах с ретрансляцией. */
 const SELF_EXCITE_WARN =
   "Ретрансляция — одночастотный тракт: возможна утечка собственного сигнала с выхода " +
-  "на вход. В режиме приоритет сильная утечка держит гейт и плату на частоте после " +
-  "пропадания цели. По очереди плата уйдёт по выдержке даже если гейт ещё открыт. " +
-  "Разнесите антенны RX и TX. Кнопка «Стоп» и сторожевой таймер работают всегда.";
+  "на вход. Стоянка и приоритет: сильная утечка держит гейт на взгляде. По очереди " +
+  "плата уйдёт по выдержке даже если гейт ещё открыт. Разнесите антенны RX и TX. " +
+  "Кнопка «Стоп» и сторожевой таймер работают всегда.";
 
 export function StartGate({ mode, onClose }: Props) {
   const titleId = useId();
@@ -266,6 +266,17 @@ export function StartGate({ mode, onClose }: Props) {
               <button
                 type="button"
                 role="radio"
+                aria-checked={dispatch === "park"}
+                className={dispatch === "park" ? "cinema-path on" : "cinema-path"}
+                onClick={() => setDispatch("park")}
+                title="Один LO на середине коридора. Скачки внутри взгляда идут на усилитель цифрой, без перестройки PLL."
+              >
+                <strong>Стоянка</strong>
+                <span>{autoDispatchOptionRu("park")}.</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
                 aria-checked={dispatch === "priority"}
                 className={dispatch === "priority" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("priority")}
@@ -280,7 +291,7 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={dispatch === "turn"}
                 className={dispatch === "turn" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("turn")}
-                title="Каждая найденная частота: усилитель на выдержке, затем следующая в коридоре."
+                title="Каждая найденная частота: усилитель на выдержке, затем следующий взгляд плитки."
               >
                 <strong>По очереди</strong>
                 <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
