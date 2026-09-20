@@ -1520,10 +1520,8 @@ int main(void)
               pio_wrote_reg(LEGION_REG_FFT_CTRL,
                             LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
     }
-    t_peak_word = mk_peak(1, 2, 0x4000, 32);
-    legion_work();
-    t_peak_word = mk_peak(1, 3, 0x4000, 32);
     pio_n = 0;
+    t_peak_word = mk_peak(1, 2, 0x4000, 32);
     legion_work();
     {
         uint32_t khz = 0;
