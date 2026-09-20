@@ -33,6 +33,10 @@
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 #include "devices_rfic.h"
 #define LEGION_HAVE_RFIC 1
+/* Nuand bladerf2_rx_band_port_map: 70e6..6e9. Перехват ставит RX+TX
+ * на один LO — пересечение с TX (46.875e6) = 70–6000 МГц. */
+#define LEGION_RFIC_RX_MIN_KHZ 70000u
+#define LEGION_RFIC_RX_MAX_KHZ 6000000u
 #endif
 
 #if !defined(BOARD_BLADERF_MICRO)
@@ -871,6 +875,15 @@ static uint32_t legion_clip_to_look(uint32_t khz)
     if (khz > hi) {
         return hi;
     }
+#if defined(LEGION_HAVE_RFIC)
+    /* Взгляд 56 МГц у края 70/6000 даёт peak вне RX — FREQUENCY отказ, FIRE нет. */
+    if (khz < LEGION_RFIC_RX_MIN_KHZ) {
+        return LEGION_RFIC_RX_MIN_KHZ;
+    }
+    if (khz > LEGION_RFIC_RX_MAX_KHZ) {
+        return LEGION_RFIC_RX_MAX_KHZ;
+    }
+#endif
     return khz;
 }
 

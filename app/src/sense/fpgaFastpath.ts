@@ -8,6 +8,7 @@
 // AIR-регистры) и bladeRF 1 x40 (LMS6002D, CONTROL bit1/2 со шлюза).
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
+import { catalogById } from "../sdr/catalog";
 import { planCenters } from "./scan";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
@@ -377,6 +378,10 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   }
   if (centers.length === 0) {
     return fail("Автоперехват: задайте коридор F1…F2");
+  }
+  const rx = catalogById(i.sdrId)?.rxMhz;
+  if (rx && i.bands.some((b) => b.f1Mhz < rx[0] || b.f2Mhz > rx[1])) {
+    return fail(`Автоперехват: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
   }
   const hops = Math.max(0, centers.length - 1);
   const survey = fftEnable

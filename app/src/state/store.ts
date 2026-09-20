@@ -21,7 +21,7 @@ import {
   type LegionFlashAction,
 } from "../flash/legionCustom";
 import { defaultFlashName, planEthernet, sdrOpenArgs } from "../sdr/official";
-import { catalogById } from "../sdr/catalog";
+import { catalogById, parseSdrRxBand } from "../sdr/catalog";
 import { hostOpenAllowed, usableImagePath } from "../sdr/host";
 import {
   catalogCaps,
@@ -1105,14 +1105,21 @@ export const useLegion = create<LegionStore>((set, get) => {
   const bandsForFpgaAir = (): AllowBand[] => {
     const s = get();
     if (s.sdrBands.length > 0) return s.sdrBands;
-    const band = parseBand(s.sdrF1, s.sdrF2);
+    const band = parseSdrRxBand(s.sdrF1, s.sdrF2, s.sdrId);
     return band ? [band] : [];
   };
 
   const ensureSdrBand = (): boolean => {
     const s = get();
-    if (s.sdrBands.length > 0) return true;
-    const band = parseBand(s.sdrF1, s.sdrF2);
+    const rx = catalogById(s.sdrId)?.rxMhz;
+    if (s.sdrBands.length > 0) {
+      if (rx && s.sdrBands.some((b) => b.f1Mhz < rx[0] || b.f2Mhz > rx[1])) {
+        pushLog("sys", `SDR: полоса вне RX ${rx[0]}–${rx[1]} МГц`);
+        return false;
+      }
+      return true;
+    }
+    const band = parseSdrRxBand(s.sdrF1, s.sdrF2, s.sdrId);
     if (!band) {
       pushLog("sys", "SDR: задайте начало и конец полосы (F1…F2)");
       return false;
@@ -2211,9 +2218,12 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     addSdrBand: () => {
       const s = get();
-      const band = parseBand(s.sdrF1, s.sdrF2);
+      const band = parseSdrRxBand(s.sdrF1, s.sdrF2, s.sdrId);
       if (!band) {
-        pushLog("sys", "SDR allowlist: неверная полоса (34.375–4400 МГц, f1≤f2)");
+        const rx = catalogById(s.sdrId)?.rxMhz;
+        const lo = rx?.[0] ?? 34.375;
+        const hi = rx?.[1] ?? 4400;
+        pushLog("sys", `SDR allowlist: неверная полоса (${lo}–${hi} МГц, f1≤f2)`);
         return;
       }
       if (s.sdrBands.some((b) => b.f1Mhz === band.f1Mhz && b.f2Mhz === band.f2Mhz)) {
@@ -2656,7 +2666,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", board.reason);
         return false;
       }
-      // Solo: любой конечный F1…F2. parseBand — синтезатор ESP32 34.375–4400,
+      // Solo: любой конечный F1…F2. parseSdrRxBand — RX каталога (xA4 70–6000).
+      // parseBand — только синтезатор ESP32 34.375–4400,
       // его сюда не мешаем. Эфир+FPGA по-прежнему через allowlist.
       if (path === "air" && !ensureSdrBand()) return false;
       /* Поколение эфира — только после валидации. Бамп до parseBand/нагрузки

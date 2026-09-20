@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
-import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
+import { SDR_CATALOG, catalogById, parseSdrRxBand, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
 import { looksLikeEsp32Firmware, looksLikeSdrFirmware, refuseCrossFlash } from "../src/flash/guard";
@@ -314,6 +314,14 @@ async function main(): Promise<void> {
   check("CUE вне ISM запрещён", cueFreqAllowed(433, ism) === false);
   check("parseBand 2400-2500", parseBand("2400", "2500")?.f2Mhz === 2500);
   check("parseBand 5000 отклонён", parseBand("2400", "5000") === null);
+  check("parseSdrRxBand xA4 5000-5800 ок (каталог 70–6000, не ADF 4400)",
+    parseSdrRxBand("5000", "5800", "bladerf-micro-xa4")?.f2Mhz === 5800);
+  check("parseSdrRxBand xA4 70-126 ок",
+    parseSdrRxBand("70", "126", "bladerf-micro-xa4")?.f1Mhz === 70);
+  check("parseSdrRxBand xA4 20-80 отказ (RX min 70)",
+    parseSdrRxBand("20", "80", "bladerf-micro-xa4") === null);
+  check("parseSdrRxBand x40 5000-5800 отказ (RX max 3800)",
+    parseSdrRxBand("5000", "5800", "bladerf-x40") === null);
   check("ток 1500 ок", paCurrentInRange(1500));
   check("ток 1501 нет", paCurrentInRange(1501) === false);
 
@@ -1310,6 +1318,24 @@ async function main(): Promise<void> {
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2445, f2Mhz: 2455 }],
     loadOk: true, detThr: 5000, detShift: 4, lookMhz: 0.2, turn: false, dwellMs: 0.4,
   }).ok === true);
+  check("онбордовый xA4: коридор 5000-5800 (выше ADF 4400)", planOnboardIntercept({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5000, f2Mhz: 5800 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    fftEnable: true,
+  }).ok === true);
+  check("онбордовый xA4: 70-6000 @ 56 МГц — 106 взглядов", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 70, f2Mhz: 6000 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5978;
+  })());
+  check("онбордовый xA4: 20-80 отказ (ниже RX 70)", planOnboardIntercept({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 20, f2Mhz: 80 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    fftEnable: true,
+  }).ok === false);
   check("онбордовый FFT: точный Гц, не «LO не шагает»", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
@@ -1596,6 +1622,14 @@ async function main(): Promise<void> {
   const lowAirLog = useLegion.getState().log.at(-1)?.text ?? "";
   check("air 20–80 по-прежнему parseBand", lowAir === false && lowAirLog.includes("задайте начало и конец полосы"));
   check("air 20–80 не бампает air gen (не срывает FPGA+сканер)", peekFpgaAirGen() === airGenBeforeReject);
+
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  useLegion.getState().setSdrAllowField("sdrF1", "5000");
+  useLegion.getState().setSdrAllowField("sdrF2", "5800");
+  useLegion.getState().addSdrBand();
+  check("addSdrBand xA4 5000-5800 (выше ADF 4400)",
+    useLegion.getState().sdrBands.some((b) => b.f1Mhz === 5000 && b.f2Mhz === 5800));
 
   useLegion.getState().clearSdrBands();
   useLegion.getState().setSdrAllowField("sdrF1", "2400");
