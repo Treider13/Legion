@@ -40,11 +40,41 @@
  * шагает LO сама. USB в круге «энергия → TX» не участвует. */
 #define LEGION_REG_SCAN_F1_KHZ    0x0E  /* начало коридора, кГц */
 #define LEGION_REG_SCAN_F2_KHZ    0x0F  /* конец коридора, кГц */
-#define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn (иначе priority) */
-#define LEGION_REG_SCAN_DWELL_US  0x11  /* выдержка turn от первого детекта, мкс; 0 = 3e6 */
+#define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn, bit2=park, bit3=survey */
+#define LEGION_REG_SCAN_DWELL_US  0x11  /* выдержка на сигнал внутри окна, мкс; 0 = 3e6 */
+/* Точный Гц: FFT-пик на FPGA. 0x12–0x14/0x17–0x1B — статики NIOS.
+ * 0x15 — mux STATUS (IOWR AWS=0x15, IORD STATUS). 0x16 — HDL+NIOS. */
+#define LEGION_REG_SEARCH_BW_HZ   0x12  /* analog BW обзора, Гц; 0 = AIR_BW */
+#define LEGION_REG_FIRE_BW_HZ     0x13  /* leftover; вырез цифровой, analog не узжаем */
+#define LEGION_REG_PEAK_KHZ       0x14  /* найденная частота, кГц (считает NIOS) */
+#define LEGION_REG_PEAK_BIN       0x15  /* слово пика HDL: bin/mag/frame/valid */
+#define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch, bit2 lock */
+#define LEGION_REG_BAND_IDX       0x17  /* 0..7 — куда писать F1/F2 */
+#define LEGION_REG_BAND_F1_KHZ    0x18
+#define LEGION_REG_BAND_F2_KHZ    0x19
+#define LEGION_REG_BAND_COUNT     0x1A  /* 0 = один коридор SCAN_F1/F2 */
+#define LEGION_REG_SETTLE_N       0x1B  /* сэмплы после hop; 0 = 4096 */
+#define LEGION_REG_SCAN_SURVEY_US 0x1C  /* период глухого прохода, мкс; 0 = 5e6 */
+#define LEGION_REG_SCAN_EVENT     0x1D  /* [7:0] код, [31:8] seq — лог хоста */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
+#define LEGION_SCAN_CTRL_PARK     (1u << 2) /* ИИ: 56 МГц на всплеск */
+#define LEGION_SCAN_CTRL_SURVEY   (1u << 3) /* глухой обзор → окно → период → снова обзор */
+#define LEGION_FFT_CTRL_EN        (1u << 0)
+#define LEGION_FFT_CTRL_DC_NOTCH  (1u << 1)
+#define LEGION_FFT_CTRL_LOCK      (1u << 2) /* xlat не следует за live-пиком */
+#define LEGION_BAND_MAX           8u
+#define LEGION_SURVEY_LOOK_MAX    128u
+#define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
+#define LEGION_SETTLE_N_DEFAULT   4096u
+#define LEGION_SCAN_SURVEY_DEFAULT_US 5000000u
+#define LEGION_EVT_PASS           1u
+#define LEGION_EVT_STARE          2u
+#define LEGION_EVT_LOCK           3u
+#define LEGION_EVT_SWITCH         4u
+#define LEGION_EVT_RESURVEY       5u
+#define LEGION_REG_MAX            LEGION_REG_SCAN_EVENT
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -88,11 +118,22 @@ bool legion_air_down(void);
  * lms_rx/tx_enable в CONTROL (NIOS — хозяин PIO, devices_inline.h).
  * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз.
  * После deadman (если ARM жив и SCAN_CTRL.enable): шаг LO по коридору.
- * Взгляд = AIR_BW_HZ (аналоговый фильтр = шаг сетки). Гейт I²+Q² —
- * микросекунды в текущем окне. TURN: после первого det_active держим
- * LO выдержку (мкс, пример оператора 0.4 мс = 400), затем следующий
- * взгляд — даже если энергия ещё есть. Пустой взгляд — hop после тишины
- * ~5 мс. USB в круге «увидел → усилитель» нет. */
+ * FFT_CTRL=0 (дефолт): взгляд = AIR_BW, гейт I²+Q², hop на центр взгляда.
+ * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
+ * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
+ * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
+ * узжаем. HOLD: TURN = выдержка, затем следующий взгляд (плитка);
+ * PRIORITY: пока det — взгляд не шагаем;
+ * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
+ * хоп внутри взгляда = live FFT → xlat.
+ * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
+ * HDL DC-notch снят, SCAN_SURVEY_US от unmute — снова обзор.
+ * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой
+ * пик), иначе приоритет (сильнее — перескок и новая выдержка).
+ * F1/F2 не пишет. Отказ hop не переводит в stare (не unmute на старом LO).
+ * Отказ hop в обзоре/после периода: SEARCH + look_set=0 — повтор.
+ * n==1 / PARK в HOLD: не enter_search на тот же LO (mute+SETTLE ломает µs).
+ * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);
 
 #endif /* LEGION_CMDS_H_ */

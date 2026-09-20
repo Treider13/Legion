@@ -6,7 +6,7 @@ import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, Mock
 import { allocAtMhz, bandsInSpan, FREQ_EUROPE_XA4 } from "../src/sense/labAlloc";
 import { PersistentDisplay, RTS_CALIBRATE_MS } from "../src/sense/labPersist2d";
 import { SpurFilter } from "../src/sense/labSpur";
-import { catalogById } from "../src/sdr/catalog";
+import { catalogById, parseSdrRxBand } from "../src/sdr/catalog";
 import {
   LAB_BASELINE_DEFAULT_SEC,
   LAB_OCCUPANCY_MARGIN_DB,
@@ -73,6 +73,9 @@ async function main(): Promise<void> {
   check("каталог xA4 TX 47–6000", !!xa4 && xa4.txMhz?.[0] === 47 && xa4.txMhz[1] === 6000);
   check("каталог xA4 analog ≤56", !!xa4 && xa4.analogBwMhz === 56);
   check("константы журнала = каталог", XA4_RX_MHZ[0] === 70 && XA4_TX_MHZ[0] === 47 && XA4_ANALOG_MHZ === 56);
+  check("parseSdrRxBand 5000-5800 = каталог, не parseBand 4400",
+    parseSdrRxBand("5000", "5800", "bladerf-micro-xa4")?.f2Mhz === 5800
+    && parseSdrRxBand("20", "80", "bladerf-micro-xa4") === null);
   check("полка по умолчанию 120 с (poc), не 30–60", LAB_BASELINE_DEFAULT_SEC === 120);
   check("min_duration 0.1 с (rtl-sdr-analyzer)", LAB_MIN_DURATION_SEC === 0.1);
 

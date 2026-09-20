@@ -251,7 +251,7 @@ export function SignalPanel() {
         <span className="panel-title">FPGA (bladeRF micro / x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
         {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
           <p className="panel-note">
-            Сейчас жив автоматический перехват (ретрансляция эфира в FPGA). Эта вкладка задачу не
+            Сейчас жива умная атака (ретрансляция эфира в FPGA). Эта вкладка задачу не
             ставит и не притворяется генерацией. Стоп — кнопка ниже или вкладка СКАН.
           </p>
         ) : (

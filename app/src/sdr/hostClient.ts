@@ -267,6 +267,11 @@ export interface FpgaStatus {
   warn?: string;
   /** LO, кГц/1000 из NIOS AIR_FREQ — текущий взгляд платы. */
   freq_mhz?: number;
+  /** Найденная частота, кГц/1000 из NIOS PEAK_KHZ. */
+  peak_mhz?: number;
+  scan_event?: number;
+  scan_event_code?: number;
+  scan_event_seq?: number;
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.

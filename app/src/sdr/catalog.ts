@@ -2,6 +2,7 @@
 // LEGION — каталог SDR. Поля сверены с публичными спецификациями
 // (Nuand bladeRF 2.0 micro, Ettus N200/N210 KB, ADALM-Pluto, Lime, osmocom).
 // ============================================================================
+import { allowBandValid, parseBand, type AllowBand } from "../policy/allowlist";
 import type { SdrCatalogEntry } from "./types";
 
 export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
@@ -209,6 +210,18 @@ export const SDR_CATALOG: readonly SdrCatalogEntry[] = [
 
 export function catalogById(id: string): SdrCatalogEntry | undefined {
   return SDR_CATALOG.find((e) => e.id === id);
+}
+
+/** Коридор SDR: RX выбранной платы из каталога, не потолок ADF4351 (parseBand 4400).
+ *  Без строки каталога — прежний parseBand (синтезатор ESP32). */
+export function parseSdrRxBand(f1: string, f2: string, sdrId: string): AllowBand | null {
+  const rx = catalogById(sdrId)?.rxMhz;
+  if (!rx) return parseBand(f1, f2);
+  const a = parseFloat(f1);
+  const b = parseFloat(f2);
+  if (!allowBandValid(a, b)) return null;
+  if (a < rx[0] || b > rx[1]) return null;
+  return { f1Mhz: a, f2Mhz: b };
 }
 
 export function soapyRemoteArgs(host: string, port = 55132): string {

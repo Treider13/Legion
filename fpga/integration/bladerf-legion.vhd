@@ -313,6 +313,13 @@ architecture legion of bladerf is
     signal lg_lb_active_rx  : std_logic;
     signal lg_det_active_tx : std_logic;
     signal lg_det_count     : unsigned(15 downto 0);
+    signal lg_fft_en        : std_logic;
+    signal lg_fft_dc_notch  : std_logic;
+    signal lg_fft_lock      : std_logic;
+    signal lg_peak_word     : std_logic_vector(31 downto 0);
+    signal lg_xlat_i        : signed(15 downto 0);
+    signal lg_xlat_q        : signed(15 downto 0);
+    signal lg_xlat_v        : std_logic;
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1492,7 +1499,11 @@ begin
         rx_clock      => rx_clock,
         rx_reset      => rx_reset,
         rx_det_thr    => lg_det_thr_rx,
-        rx_det_shift  => lg_det_shift_rx
+        rx_det_shift  => lg_det_shift_rx,
+        rx_fft_en     => lg_fft_en,
+        rx_fft_dc_notch => lg_fft_dc_notch,
+        rx_fft_lock   => lg_fft_lock,
+        rx_peak_word  => lg_peak_word
       );
 
     -- arm/mode → rx_clock для гейтинга записи loopback FIFO
@@ -1518,6 +1529,35 @@ begin
         win_shift   => lg_det_shift_rx,
         det_active  => lg_det_active_rx,
         det_count   => lg_det_count
+      );
+
+    -- FFT-пик на том же тапе, что детектор (после RX iq_correction)
+    U_legion_fft_peak : entity work.legion_fft_peak
+      port map (
+        clock     => rx_clock,
+        reset     => rx_reset,
+        enable    => lg_fft_en,
+        dc_notch  => lg_fft_dc_notch,
+        in_i      => rx_sample_corrected_i,
+        in_q      => rx_sample_corrected_q,
+        in_valid  => rx_sample_corrected_valid,
+        peak_word => lg_peak_word
+      );
+
+    -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой RX.
+    U_legion_lb_xlat : entity work.legion_lb_xlat
+      port map (
+        clock     => rx_clock,
+        reset     => rx_reset,
+        enable    => lg_fft_en,
+        lock      => lg_fft_lock,
+        peak_word => lg_peak_word,
+        in_i      => rx_sample_corrected_i,
+        in_q      => rx_sample_corrected_q,
+        in_valid  => rx_sample_corrected_valid,
+        out_i     => lg_xlat_i,
+        out_q     => lg_xlat_q,
+        out_valid => lg_xlat_v
       );
 
     -- det_active → tx_clock (квазистатичный уровень)
@@ -1569,7 +1609,7 @@ begin
       port map (
         wr_clk   => rx_clock,
         wr_reset => rx_reset,
-        wr_data  => std_logic_vector(rx_sample_corrected_i) & std_logic_vector(rx_sample_corrected_q),
+        wr_data  => std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
         wr_en    => lg_lb_wr_en,
         wr_full  => lg_lb_full,
         rd_clk   => tx_clock,
@@ -1580,7 +1620,7 @@ begin
         rd_level => lg_lb_level
       );
     -- wr_en в домене rx_clock: агрегатный бит режима + ARM из синхронизаторов
-    lg_lb_wr_en <= rx_sample_corrected_valid
+    lg_lb_wr_en <= lg_xlat_v
                    when lg_lb_active_rx = '1' and lg_rx_arm = '1' and lg_lb_full = '0'
                    else '0';
 

@@ -2,9 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaSurveyPeriodClamp, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
-import { autoDispatchOptionRu, type AutoDispatch } from "../../sense/modes";
+import { autoDispatchOptionRu, FPGA_AI_OPTION_RU, FPGA_AIR_MODE_RU, fpgaInnerDispatch, type AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -17,9 +17,9 @@ interface Props {
  *  держит гейт открытым после смерти цели. Показываем в режимах с ретрансляцией. */
 const SELF_EXCITE_WARN =
   "Ретрансляция — одночастотный тракт: возможна утечка собственного сигнала с выхода " +
-  "на вход. В режиме приоритет сильная утечка держит гейт и плату на частоте после " +
-  "пропадания цели. По очереди плата уйдёт по выдержке даже если гейт ещё открыт. " +
-  "Разнесите антенны RX и TX. Кнопка «Стоп» и сторожевой таймер работают всегда.";
+  "на вход. Приоритет: сильная утечка держит гейт на взгляде. По очереди " +
+  "плата уйдёт по выдержке даже если гейт ещё открыт. Разнесите антенны RX и TX. " +
+  "Кнопка «Стоп» и сторожевой таймер работают всегда.";
 
 export function StartGate({ mode, onClose }: Props) {
   const titleId = useId();
@@ -39,6 +39,7 @@ export function StartGate({ mode, onClose }: Props) {
   const storedAirDwell = useLegion((s) => s.fpgaAirDwellMs);
   const storedAirPattern = useLegion((s) => s.fpgaAirWalkPattern);
   const storedTurnDwell = useLegion((s) => s.fpgaTurnDwellMs);
+  const storedSurveyPeriod = useLegion((s) => s.fpgaSurveyPeriodMs);
   const storedDispatch = useLegion((s) => s.autoDispatch);
   const storedDetThr = useLegion((s) => s.fpgaDetThr);
   const detShift = useLegion((s) => s.fpgaDetShift);
@@ -48,7 +49,7 @@ export function StartGate({ mode, onClose }: Props) {
   const [wave, setWave] = useState<WaveKind>(signalKind);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("auto");
-  const [dispatch, setDispatch] = useState<AutoDispatch>(storedDispatch);
+  const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
   const [windowMhz, setWindowMhz] = useState(
     path === "solo" ? storedWindow : storedAirBw,
@@ -56,6 +57,7 @@ export function StartGate({ mode, onClose }: Props) {
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
+  const [surveyPeriodMs, setSurveyPeriodMs] = useState(storedSurveyPeriod);
   const [pattern, setPattern] = useState<FpgaSoloPattern>(path === "air" ? storedAirPattern : storedPattern);
   const [detThr, setDetThr] = useState(String(storedDetThr));
   const [busy, setBusy] = useState(false);
@@ -131,6 +133,7 @@ export function StartGate({ mode, onClose }: Props) {
         path,
         windowMhz,
         dwellMs,
+        surveyPeriodMs,
         pattern,
         dispatch,
         detThr,
@@ -183,7 +186,7 @@ export function StartGate({ mode, onClose }: Props) {
     }
     if (path === "auto") {
       if (!fpgaAirSupported(sdrId)) {
-        setErr("Автоматический перехват: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).");
+        setErr(`${FPGA_AIR_MODE_RU}: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).`);
         return;
       }
       const ch = parseLocaleNumber(windowMhz);
@@ -192,8 +195,13 @@ export function StartGate({ mode, onClose }: Props) {
         return;
       }
       const dwell = parseLocaleNumber(dwellMs);
-      if (dispatch === "turn" && (!Number.isFinite(dwell) || dwell <= 0)) {
+      if (!Number.isFinite(dwell) || dwell <= 0) {
         setErr("Задайте выдержку числом (0,4 и 0.4 — 400 мкс).");
+        return;
+      }
+      const period = parseLocaleNumber(surveyPeriodMs);
+      if (!Number.isFinite(period) || period <= 0) {
+        setErr("Задайте период сканирования числом (например 5).");
         return;
       }
       const thr = parseFloat(detThr);
@@ -234,45 +242,48 @@ export function StartGate({ mode, onClose }: Props) {
       <div className="cinema-gate-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         {mode === "sdr" && step === "walk" && path === "auto" ? (
           <>
-            <p className="cinema-kicker">Умный · Автоматический перехват</p>
+            <p className="cinema-kicker">Умный · {FPGA_AIR_MODE_RU}</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
               После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
-              усилителя на найденной частоте, Старт и Стоп. Плата сама видит
+              на сигнал, период сканирования, Старт и Стоп. Плата сама видит
               энергию (антенна на RX1 / RX SMA) и сама открывает TX1 / TX SMA на усилитель.
-              Нашёл взгляд — держал выдержку (например 0.4 мс) — шагнул дальше.
-              Две частоты ближе ширины взгляда — одно TX-окно; уже взгляд —
-              2450 и 2465 МГц как разные стоянки. USB не в круге «увидел → усилитель».
+              ИИ снаружи всегда: глухой обзор → окно на всплеск → по истечении периода снова обзор.
+              Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка).
+              USB не в круге «увидел → усилитель».
             </p>
             <div className="cinema-gate-row">
               <label title="Ширина одного взгляда платы и шаг сетки LO (аналоговый фильтр). Уже — 2450 и 2465 как разные стоянки; шире потолка платы — урежется.">
                 Взгляд, МГц
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
-              {dispatch === "turn" && (
-                <label title="Сколько миллисекунд держать усилитель на найденной частоте, затем шаг к следующей (можно 0.4).">
-                  Выдержка, мс
-                  <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
-                </label>
-              )}
+              <label title="Сколько миллисекунд держать усилитель на найденном сигнале внутри окна. Обычный и приоритет.">
+                Выдержка, мс
+                <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
+              </label>
             </div>
             <div className="cinema-gate-row">
+              <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
+                Сканирование, мс
+                <input value={surveyPeriodMs} onChange={(e) => setSurveyPeriodMs(e.target.value)} inputMode="decimal" />
+              </label>
               <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
                 Порог чувствительности
                 <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
               </label>
             </div>
-            <div className="cinema-paths" role="radiogroup" aria-label="Стратегия перехвата">
+            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · сканирование каждые {fpgaSurveyPeriodClamp(parseLocaleNumber(surveyPeriodMs))} мс.</p>
+            <div className="cinema-paths" role="radiogroup" aria-label="Стратегия внутри окна">
               <button
                 type="button"
                 role="radio"
                 aria-checked={dispatch === "priority"}
                 className={dispatch === "priority" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("priority")}
-                title="Всегда выбирается самый сильный сигнал в коридоре. Появился более сильный рядом — переключение на него."
+                title="Сильнее в окне — перескок и новая выдержка. Слабее не сбивает."
               >
                 <strong>Приоритет</strong>
-                <span>{autoDispatchOptionRu("priority")}.</span>
+                <span>{autoDispatchOptionRu("priority")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
               </button>
               <button
                 type="button"
@@ -280,9 +291,9 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={dispatch === "turn"}
                 className={dispatch === "turn" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("turn")}
-                title="Каждая найденная частота: усилитель на выдержке, затем следующая в коридоре."
+                title="Найденный сигнал: усилитель на выдержке, затем текущий пик."
               >
-                <strong>По очереди</strong>
+                <strong>Обычный</strong>
                 <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
               </button>
             </div>
@@ -360,7 +371,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              Перехват: после Старта хозяин — плата (USB не в круге увидел→TX).
+              {FPGA_AIR_MODE_RU}: после Старта хозяин — плата (USB не в круге увидел→TX).
               Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
               либо Soapy ставит LO, либо агент держит FPGA.
             </p>
@@ -373,7 +384,7 @@ export function StartGate({ mode, onClose }: Props) {
                 onClick={() => setPath("auto")}
                 title="После Старта хозяин — SDR. Плата сама видит энергию и открывает TX. Ноутбук — рубильник."
               >
-                <strong>Автоматический перехват</strong>
+                <strong>{FPGA_AIR_MODE_RU}</strong>
                 <span>
                   Антенна на RX SMA. Плата смотрит эфир в аналоговом окне и сама
                   решает, что энергия есть. USB не в круге «увидел → усилитель».{" "}
@@ -422,7 +433,7 @@ export function StartGate({ mode, onClose }: Props) {
             <h2 id={titleId}>{mode === "sdr" ? "Коридор и тип сигнала" : "Коридор синтезатора"}</h2>
             <p className="cinema-gate-lead">
               {mode === "sdr"
-                ? "Дальше: автоматический перехват (плата смотрит эфир сама), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA."
+                ? `Дальше: ${FPGA_AIR_MODE_RU.toLowerCase()} (плата сама ищет всплеск и ставит окно), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA.`
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 

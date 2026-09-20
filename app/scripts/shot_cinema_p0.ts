@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   await click("Продолжить");
   await new Promise((r) => setTimeout(r, 500));
   await p.screenshot({ path: "/tmp/legion_shots/p0_gate_paths.png" });
-  await click("Автоматический перехват");
+  await click("Умная атака");
   await click("Продолжить");
   await new Promise((r) => setTimeout(r, 400));
   await p.screenshot({ path: "/tmp/legion_shots/p0_gate_auto.png" });

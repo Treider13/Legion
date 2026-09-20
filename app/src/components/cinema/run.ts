@@ -16,10 +16,11 @@ export async function runSmartStart(opts: {
   path: FpgaStartPath;
   windowMhz?: string;
   dwellMs?: string;
+  surveyPeriodMs?: string;
   pattern?: FpgaSoloPattern;
-  /** Автоматический перехват: приоритет сильнейшей или очередь с выдержкой. */
+  /** Умная атака: приоритет сильнейшей или очередь с выдержкой. */
   dispatch?: AutoDispatch;
-  /** Автоматический перехват: порог I²+Q² (полка USB-IQ в круге не меряется). */
+  /** Умная атака: порог I²+Q² (полка USB-IQ в круге не меряется). */
   detThr?: string;
 }): Promise<boolean> {
   const s = useLegion.getState();
@@ -31,9 +32,10 @@ export async function runSmartStart(opts: {
   if (opts.path === "auto") {
     // Онбордовый перехват: после Старта хозяин — SDR. Ноутбук — рубильник.
     s.setScanPattern("fpga");
-    if (opts.dispatch) s.setAutoDispatch(opts.dispatch);
+    if (opts.dispatch) s.setAutoDispatch(opts.dispatch === "priority" ? "priority" : "turn");
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
     if (opts.dwellMs !== undefined) s.setFpgaTurnDwellMs(opts.dwellMs);
+    if (opts.surveyPeriodMs !== undefined) s.setFpgaSurveyPeriodMs(opts.surveyPeriodMs);
     if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
     s.startScan();
     if (useLegion.getState().sdrEmulation) return true;

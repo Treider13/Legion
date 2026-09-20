@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
-import { SDR_CATALOG, catalogById, soapyRemoteArgs } from "../src/sdr/catalog";
+import { SDR_CATALOG, catalogById, parseSdrRxBand, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
 import { inspectSdrWrite, planSdrWrite } from "../src/flash/sdrWrite";
 import { looksLikeEsp32Firmware, looksLikeSdrFirmware, refuseCrossFlash } from "../src/flash/guard";
@@ -47,6 +47,9 @@ import {
   fpgaTurnDwellClamp,
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_TURN_DWELL_MIN_MS,
+  FPGA_SURVEY_PERIOD_DEFAULT_MS,
+  fpgaSurveyPeriodClamp,
+  fpgaSurveyPeriodUs,
   FPGA_OBSERVE_MS,
   FPGA_AIR_GONE_MS,
   detCountStagnant,
@@ -66,6 +69,7 @@ import {
   parkSpanMhz,
   planFpgaAir,
   planOnboardIntercept,
+  fpgaSettleN,
 } from "../src/sense/fpgaFastpath";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -113,6 +117,8 @@ import { sensitivityToThresholdDb, thresholdToSensitivity } from "../src/sense/s
 import {
   autoDispatchLabelRu,
   autoDispatchOptionRu,
+  FPGA_AI_LABEL_RU,
+  fpgaInnerDispatch,
   autoForwardAllowed,
   bandListFor,
   isFpgaAirLive,
@@ -148,6 +154,7 @@ import {
   hopCenterInBand,
   mulberry32,
   planCenters,
+  planParkCenters,
   scanHopMhz,
   scanTickMs,
   ScanWalker,
@@ -313,6 +320,14 @@ async function main(): Promise<void> {
   check("CUE вне ISM запрещён", cueFreqAllowed(433, ism) === false);
   check("parseBand 2400-2500", parseBand("2400", "2500")?.f2Mhz === 2500);
   check("parseBand 5000 отклонён", parseBand("2400", "5000") === null);
+  check("parseSdrRxBand xA4 5000-5800 ок (каталог 70–6000, не ADF 4400)",
+    parseSdrRxBand("5000", "5800", "bladerf-micro-xa4")?.f2Mhz === 5800);
+  check("parseSdrRxBand xA4 70-126 ок",
+    parseSdrRxBand("70", "126", "bladerf-micro-xa4")?.f1Mhz === 70);
+  check("parseSdrRxBand xA4 20-80 отказ (RX min 70)",
+    parseSdrRxBand("20", "80", "bladerf-micro-xa4") === null);
+  check("parseSdrRxBand x40 5000-5800 отказ (RX max 3800)",
+    parseSdrRxBand("5000", "5800", "bladerf-x40") === null);
   check("ток 1500 ок", paCurrentInRange(1500));
   check("ток 1501 нет", paCurrentInRange(1501) === false);
 
@@ -394,6 +409,8 @@ async function main(): Promise<void> {
 
   const hop56 = planCenters(ism, scanHopMhz(56));
   check("ISM 100 МГц / 56 МГц → 2 стойки, не 5", hop56.length === 2);
+  check("ICE9 park 2400-2487 → один центр 2443.5",
+    planParkCenters([{ f1Mhz: 2400, f2Mhz: 2487 }]).join(",") === "2443.5");
   check(
     "полоса ≤ BW → одна стойка (ice9 park)",
     planCenters([{ f1Mhz: 2440, f2Mhz: 2448 }], 56).length === 1,
@@ -485,7 +502,7 @@ async function main(): Promise<void> {
   check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
-  check("автоперехват имя", patternLabelRu("fpga") === "АВТОПЕРЕХВАТ");
+  check("умная атака имя", patternLabelRu("fpga") === "УМНАЯ АТАКА");
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
@@ -511,9 +528,16 @@ async function main(): Promise<void> {
   check("качание reason — Ethernet до стопа", planSdrWork("sweep").reason.includes("пока оператор не стопнет"));
   check("обычный АВТО по очереди", planSdrWork("auto", "turn").reason.includes("по очереди"));
   check("приоритет АВТО держим", planSdrWork("auto", "priority").reason.includes("держим"));
+  check("стоянка АВТО про цифровой вырез", planSdrWork("auto", "park").reason.includes("цифрой"));
   check("имя обычного АВТО", autoDispatchLabelRu("turn") === "ОБЫЧНЫЙ");
   check("имя приоритета", autoDispatchLabelRu("priority") === "ПРИОРИТЕТ");
+  check("имя стоянки", autoDispatchLabelRu("park") === "СТОЯНКА");
+  check("ИИ — окно на всплеск", FPGA_AI_LABEL_RU === "ИИ");
+  check("leftover стоянка → обычный внутри окна",
+    fpgaInnerDispatch("park") === "turn" && fpgaInnerDispatch("turn") === "turn"
+    && fpgaInnerDispatch("priority") === "priority");
   check("опция обычного про выдержку", autoDispatchOptionRu("turn").includes("очереди"));
+  check("опция стоянки про цифровой вырез", autoDispatchOptionRu("park").includes("цифрой"));
   const autoW = new ScanWalker({ bands: ism, pattern: "auto", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   const sweepEq = new ScanWalker({ bands: ism, pattern: "sweep", windowMhz: 20, analogBwMhz: 56, seed: 1 });
   check(
@@ -1242,6 +1266,7 @@ async function main(): Promise<void> {
     Number.isNaN(parseLocaleNumber("нет")) && Number.isNaN(parseLocaleNumber("")));
   check("turn dwell: пол 0.1 мс, потолок 60000", FPGA_TURN_DWELL_MIN_MS === 0.1 && fpgaTurnDwellClamp(0.05) === 0.1 && fpgaTurnDwellClamp(999999) === 60_000);
   check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500 && fpgaTurnDwellClamp(40) === 40);
+  check("сканирование: дефолт периода 5000", FPGA_SURVEY_PERIOD_DEFAULT_MS === 5000 && fpgaSurveyPeriodClamp(Number.NaN) === 5000 && fpgaSurveyPeriodUs(5) === 5000);
   check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
   check("air полоса: кламп потолком платы", clampAirBwMhz(56, 28) === 28 && clampAirBwMhz(20, 56) === 20);
   check("air полоса: пол 0.2 МГц", clampAirBwMhz(0.1, 56) === 0.2);
@@ -1309,6 +1334,114 @@ async function main(): Promise<void> {
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2445, f2Mhz: 2455 }],
     loadOk: true, detThr: 5000, detShift: 4, lookMhz: 0.2, turn: false, dwellMs: 0.4,
   }).ok === true);
+  check("онбордовый xA4: коридор 5000-5800 (выше ADF 4400)", planOnboardIntercept({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5000, f2Mhz: 5800 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    fftEnable: true,
+  }).ok === true);
+  check("онбордовый xA4: 70-6000 @ 56 МГц — 106 взглядов", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 70, f2Mhz: 6000 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5978;
+  })());
+  check("онбордовый xA4: 20-80 отказ (ниже RX 70)", planOnboardIntercept({
+    sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 20, f2Mhz: 80 }],
+    loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    fftEnable: true,
+  }).ok === false);
+  check("онбордовый FFT: ИИ+обзор, не «LO не шагает»", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.fftEnable && p.survey && p.park && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
+      && p.reason.includes("ИИ") && p.reason.includes("сканирование") && !p.reason.includes("не шагает");
+  })());
+  check("онбордовый xA4: 2400–2487 @ 56 ИИ — SURVEY+PARK (два взгляда)", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2487 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
+      surveyPeriodMs: 5000, fftEnable: true,
+    });
+    return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
+      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("сканирование");
+  })());
+  check("онбордовый xA4: 2440–2480 @ 56 ИИ — один взгляд плитки", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2440, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
+      fftEnable: true,
+    });
+    return p.ok && p.park && p.survey && p.centers.length === 1 && p.firstMhz === 2460
+      && p.reason.includes("ИИ");
+  })());
+  check("онбордовый xA4: 2000–3000 @ 56 ИИ — SURVEY 18 взглядов", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2000, f2Mhz: 3000 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.survey && p.park && p.centers.length === 18 && p.firstMhz === 2028
+      && p.centers[17] === 2980;
+  })());
+  check("онбордовый xA4: 2400–2500 @ 56 ИИ+обычный — 2 взгляда, выдержка 0.4", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: true, dwellMs: 0.4,
+      surveyPeriodMs: 5000, fftEnable: true,
+    });
+    return p.ok && p.fftEnable && p.turn && p.survey && p.park && p.dwellMs === 0.4
+      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2484
+      && p.reason.includes("обычный") && p.reason.includes("5000");
+  })());
+  check("ARM FFT+TURN несёт scan_turn и 400 мкс", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2428,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+      scanTurn: true, scanDwellMs: 0.4, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.fft_enable === true && c.scan_turn === true && c.scan_dwell_us === 400
+      && c.scan_f1_mhz === 2400 && c.scan_f2_mhz === 2500;
+  })());
+  check("ARM FFT+PARK несёт scan_park и центр 2460 (узкий коридор)", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2460,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2440, scanF2Mhz: 2480,
+      scanPark: true, scanDwellMs: 0.4, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.fft_enable === true && c.scan_park === true && c.scan_survey === false
+      && c.scan_turn === false && c.freq_mhz === 2460 && c.scan_f1_mhz === 2440;
+  })());
+  check("ARM FFT+SURVEY несёт scan_survey отдельно от park", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2028,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2000, scanF2Mhz: 3000,
+      scanSurvey: true, scanDwellMs: 3000, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.fft_enable === true && c.scan_survey === true && c.scan_park === false
+      && c.scan_f1_mhz === 2000 && c.scan_dwell_us === 3_000_000;
+  })());
+  check("ARM ИИ несёт park+survey+период", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2028,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2000, scanF2Mhz: 3000,
+      scanPark: true, scanSurvey: true, scanTurn: true,
+      scanDwellMs: 0.4, scanSurveyMs: 5000, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.scan_park === true && c.scan_survey === true && c.scan_turn === true
+      && c.scan_dwell_us === 400 && c.scan_survey_us === 5_000_000;
+  })());
+  check("онбордовый план без fftEnable — walker как раньше", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2436, f2Mhz: 2464 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+    });
+    return p.ok && p.fftEnable === false && p.reason.includes("не шагает");
+  })());
   check("ARM lb_gated с scan_enable несёт коридор", (() => {
     const c = fpgaArmCmd("lb_gated", {
       detThr: 5000, detShift: 4, token: "t", freqMhz: 2414,
@@ -1322,6 +1455,21 @@ async function main(): Promise<void> {
     detThr: 5000, detShift: 4, token: "t", scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
     scanTurn: true, scanDwellMs: 0.4,
   }).scan_dwell_us === 400);
+  check("ARM FFT несёт пик/FIRE/полосы, без fft_enable поле отсутствует", (() => {
+    const on = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2428,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2600,
+      fftEnable: true, fireBwMhz: 2, settleN: fpgaSettleN(56e6),
+      scanBands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
+    });
+    const off = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2500,
+    });
+    return on.fft_enable === true && on.fire_bw_mhz === 2 && on.fft_dc_notch === true
+      && on.settle_n === fpgaSettleN(56e6)
+      && Array.isArray(on.scan_bands) && (on.scan_bands as { f1_mhz: number }[])[0].f1_mhz === 2400
+      && off.fft_enable === undefined;
+  })());
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
     return t !== null && t.join(",") === "4000,8000,12000";
@@ -1566,6 +1714,14 @@ async function main(): Promise<void> {
   check("air 20–80 не бампает air gen (не срывает FPGA+сканер)", peekFpgaAirGen() === airGenBeforeReject);
 
   useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrId("bladerf-micro-xa4");
+  useLegion.getState().setSdrAllowField("sdrF1", "5000");
+  useLegion.getState().setSdrAllowField("sdrF2", "5800");
+  useLegion.getState().addSdrBand();
+  check("addSdrBand xA4 5000-5800 (выше ADF 4400)",
+    useLegion.getState().sdrBands.some((b) => b.f1Mhz === 5000 && b.f2Mhz === 5800));
+
+  useLegion.getState().clearSdrBands();
   useLegion.getState().setSdrAllowField("sdrF1", "2400");
   useLegion.getState().setSdrAllowField("sdrF2", "2500");
   const airGenBeforePing = peekFpgaAirGen();
@@ -1605,6 +1761,14 @@ async function main(): Promise<void> {
   const autoTurnSt = useLegion.getState();
   check("кино перехват: очередь + выдержка записаны",
     autoTurn === true && autoTurnSt.autoDispatch === "turn" && autoTurnSt.fpgaTurnDwellMs === "1500");
+  useLegion.getState().stopScan();
+  const autoPark = await runSmartStart({
+    f1: "2400", f2: "2487", wave: "awgn", loadOk: true, path: "auto",
+    windowMhz: "56", dwellMs: "0.4", surveyPeriodMs: "5000", dispatch: "park",
+  });
+  check("кино перехват: leftover стоянка → обычный + период",
+    autoPark === true && useLegion.getState().autoDispatch === "turn"
+    && useLegion.getState().fpgaSurveyPeriodMs === "5000");
   useLegion.getState().stopScan();
 
   // --- Кино: ручной порог чувствительности для автономного эфира ---
@@ -1656,6 +1820,22 @@ async function main(): Promise<void> {
   check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked"));
   check("онбордовый ARM несёт fs/bw взгляда",
     storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
+  check("онбордовый ARM включает FFT-пик (точный Гц)",
+    storeSrc.includes("fftEnable: true") && storeSrc.includes("fireBwMhz: plan.fireBwMhz"));
+  check("онбордовый ARM несёт TURN и выдержку оператора",
+    storeSrc.includes("scanTurn: plan.turn") && storeSrc.includes("scanDwellMs: plan.dwellMs")
+    && storeSrc.includes("fpgaInnerDispatch(s.autoDispatch)"));
+  check("онбордовый ARM несёт ИИ PARK+SURVEY и период",
+    storeSrc.includes("scanPark: plan.park") && storeSrc.includes("scanSurvey: plan.survey")
+      && storeSrc.includes("scanSurveyMs: plan.surveyPeriodMs")
+      && storeSrc.includes("park: true")
+    && storeSrc.includes('autoDispatch: "park"'));
+  check("наблюдение логирует обычный и приоритет по часам",
+    storeSrc.includes("scan_event_seq") &&
+    storeSrc.includes("захват") && storeSrc.includes("выдержка") &&
+    storeSrc.includes("перескок") && storeSrc.includes("выдержка заново") &&
+    storeSrc.includes("сканирование") && storeSrc.includes("повторное сканирование") &&
+    storeSrc.includes("pad(d.getMilliseconds()"));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —
   // UI показал бы «РЕТРАНСЛЯЦИЮ» без тракта). Ветка fake:true покрыта
@@ -1840,19 +2020,22 @@ async function main(): Promise<void> {
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
-  check("cinema: путь автоматического перехвата в мастере",
-    gateSrc.includes("Автоматический перехват") && gateSrc.includes('path === "auto"'));
+  check("cinema: путь умной атаки в мастере",
+    gateSrc.includes("FPGA_AIR_MODE_RU") && gateSrc.includes('path === "auto"'));
   check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
     gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
-  check("cinema перехват: стратегии приоритет/очередь на шаге walk",
-    gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")') && gateSrc.includes('setDispatch("priority")'));
+  check("cinema перехват: стратегии приоритет/обычный на шаге walk",
+    gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")')
+    && gateSrc.includes('setDispatch("priority")') && !gateSrc.includes('setDispatch("park")')
+    && (gateSrc.split("fpgaTurnDwellClamp").length - 1) >= 3);
   const autoBlock = runSrc.slice(runSrc.indexOf('opts.path === "auto"'), runSrc.indexOf("s.armTxWave"));
   check("cinema auto: startScan, не startFpgaPath",
     autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
   check("cinema auto: эмуляция не ждёт scanRunning",
     autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
-  check("cinema auto: канал и выдержка очереди пишутся в стор",
-    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
+  check("cinema auto: канал, выдержка и период сканирования пишутся в стор",
+    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)")
+    && runSrc.includes("setFpgaSurveyPeriodMs(opts.surveyPeriodMs)"));
   check("cinema air: ручной порог из мастера пишется в стор",
     gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
   // Регрессия: окно детектора в мастере — от реального канала (fs следует за
@@ -1871,10 +2054,12 @@ async function main(): Promise<void> {
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
     !scanSrc.includes("конвейер") && !scanSrc.includes("КОНВЕЙЕР"));
+  check("ScanPanel коридор xA4 — catalog RX, не parseBand 4400",
+    scanSrc.includes("parseSdrRxBand") && !scanSrc.includes("parseBand("));
   check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
   check("жаргон убран: пользовательские строки стора без «конвейер на SDR»/«det_thr=»",
     !storeSrc.includes("конвейер на SDR, ноутбук") && !storeSrc.includes("det_thr=${detThr}"));
-  check("док кино зовёт в перехват", dockSrc.includes("перехват"));
+  check("док кино зовёт в умную атаку", dockSrc.includes("умная атака"));
   const setupSrc = readFileSync(join(here, "../../setup.sh"), "utf8");
   check("setup.sh: модуль bladerf проверяется через --info (не --find без железа)",
     setupSrc.includes("SoapySDRUtil --info") && !setupSrc.includes("SoapySDRUtil --find"));

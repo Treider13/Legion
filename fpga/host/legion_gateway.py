@@ -9,7 +9,12 @@
   {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
    "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int,
    "scan_enable":bool, "scan_f1_mhz":float, "scan_f2_mhz":float,
-   "scan_turn":bool, "scan_dwell_us":int, "scan_dwell_ms":float}
+   "scan_turn":bool, "scan_park":bool, "scan_survey":bool,
+   "scan_dwell_us":int, "scan_dwell_ms":float,
+   "scan_survey_us":int, "scan_survey_ms":float,
+   "fft_enable":bool, "fft_dc_notch":bool, "fire_bw_mhz":float,
+   "search_bw_mhz":float, "settle_n":int,
+   "scan_bands":[{"f1_mhz":float,"f2_mhz":float}, ...]}
   {"op":"disarm"}
   {"op":"status"}                       → телеметрия регистров FPGA
   {"op":"kick"}                         — heartbeat watchdog
@@ -338,7 +343,11 @@ class FakeTransport:
                 return bytes(resp)
             if addr in (lf.REG_AIR_FREQ_KHZ, lf.REG_AIR_FS_HZ, lf.REG_AIR_BW_HZ,
                         lf.REG_SCAN_F1_KHZ, lf.REG_SCAN_F2_KHZ,
-                        lf.REG_SCAN_CTRL, lf.REG_SCAN_DWELL_US):
+                        lf.REG_SCAN_CTRL, lf.REG_SCAN_DWELL_US,
+                        lf.REG_SEARCH_BW_HZ, lf.REG_FIRE_BW_HZ, lf.REG_PEAK_KHZ,
+                        lf.REG_PEAK_BIN, lf.REG_FFT_CTRL, lf.REG_BAND_IDX,
+                        lf.REG_BAND_F1_KHZ, lf.REG_BAND_F2_KHZ,
+                        lf.REG_BAND_COUNT, lf.REG_SETTLE_N):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -561,6 +570,26 @@ class LegionGateway:
                 return None, "scan_dwell_ms: не число"
         return 0, ""
 
+    def _scan_survey_us(self, msg: dict) -> tuple[int | None, str]:
+        """Период глухого прохода, мкс. 0 → NIOS 5 с. Запятая и мусор — отказ."""
+        if msg.get("scan_survey_us") is not None:
+            raw = msg.get("scan_survey_us")
+            if isinstance(raw, str) and ("," in raw or not raw.strip()):
+                return None, "scan_survey_us: не число"
+            try:
+                return max(0, int(raw)), ""
+            except (TypeError, ValueError):
+                return None, "scan_survey_us: не число"
+        if msg.get("scan_survey_ms") is not None:
+            raw = msg.get("scan_survey_ms")
+            if isinstance(raw, str) and "," in raw:
+                return None, "scan_survey_ms: запятая не принимается (нужен 5)"
+            try:
+                return max(0, int(round(float(raw) * 1000.0))), ""
+            except (TypeError, ValueError):
+                return None, "scan_survey_ms: не число"
+        return 0, ""
+
     def _validate_scan(self, msg: dict) -> tuple[bool, str]:
         """Границы и выдержка до подъёма эфира (U1)."""
         if not bool(msg.get("scan_enable")):
@@ -570,14 +599,22 @@ class LegionGateway:
         dwell, why = self._scan_dwell_us(msg)
         if dwell is None:
             return False, why
+        period, why = self._scan_survey_us(msg)
+        if period is None:
+            return False, why
         return True, ""
 
     def _program_scan(self, msg: dict) -> tuple[bool, str]:
-        """SCAN_* всегда явно: иначе walker перехвата жил бы в solo/эфире."""
+        """SCAN_* всегда явно: иначе walker перехвата жил бы в solo/эфире.
+        Без fft_enable гасим leftover FFT_CTRL/BAND_COUNT (дефолт walker)."""
         enable = bool(msg.get("scan_enable"))
         if not enable:
             if not self.fpga.write_reg(lf.REG_SCAN_CTRL, 0):
                 return False, "запись SCAN_CTRL=0 не удалась"
+            if not self.fpga.write_reg(lf.REG_FFT_CTRL, 0):
+                return False, "запись FFT_CTRL=0 не удалась"
+            if not self.fpga.write_reg(lf.REG_BAND_COUNT, 0):
+                return False, "запись BAND_COUNT=0 не удалась"
             return True, ""
         ok, why = self._validate_scan(msg)
         if not ok:
@@ -587,9 +624,52 @@ class LegionGateway:
         dwell, why = self._scan_dwell_us(msg)
         if dwell is None:
             return False, why
+        period, why = self._scan_survey_us(msg)
+        if period is None:
+            return False, why
         if not self.fpga.set_scan_corridor(
-                float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell):
+                float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell,
+                bool(msg.get("scan_park")), bool(msg.get("scan_survey")),
+                period):
             return False, "запись SCAN_* не удалась"
+        if not bool(msg.get("fft_enable")):
+            if not self.fpga.write_reg(lf.REG_FFT_CTRL, 0):
+                return False, "запись FFT_CTRL=0 не удалась"
+            if not self.fpga.write_reg(lf.REG_BAND_COUNT, 0):
+                return False, "запись BAND_COUNT=0 не удалась"
+            return True, ""
+        search_hz = 0
+        if msg.get("search_bw_mhz") is not None:
+            search_hz = int(round(float(msg["search_bw_mhz"]) * 1e6))
+        elif msg.get("bw_mhz") is not None:
+            search_hz = int(round(float(msg["bw_mhz"]) * 1e6))
+        fire_hz = lf.FIRE_BW_DEFAULT_HZ
+        if msg.get("fire_bw_mhz") is not None:
+            fire_hz = int(round(float(msg["fire_bw_mhz"]) * 1e6))
+        if msg.get("settle_n") is not None:
+            settle = max(0, int(msg["settle_n"]))
+        else:
+            fs = int(msg["fs_hz"]) if msg.get("fs_hz") is not None else 2_000_000
+            settle = lf.settle_n_for_fs(fs)
+        if not self.fpga.set_fft(
+                True, dc_notch=bool(msg.get("fft_dc_notch", True)),
+                search_bw_hz=search_hz, fire_bw_hz=fire_hz, settle_n=settle):
+            return False, "запись FFT_* не удалась"
+        bands = msg.get("scan_bands")
+        if isinstance(bands, list) and len(bands) > 0:
+            pairs: list[tuple[float, float]] = []
+            for b in bands[:8]:
+                if not isinstance(b, dict):
+                    return False, "scan_bands: каждый элемент — {f1_mhz,f2_mhz}"
+                bf1 = b.get("f1_mhz", b.get("f1Mhz"))
+                bf2 = b.get("f2_mhz", b.get("f2Mhz"))
+                if bf1 is None or bf2 is None:
+                    return False, "scan_bands: нужны f1_mhz и f2_mhz"
+                pairs.append((float(bf1), float(bf2)))
+            if not self.fpga.set_band_table(pairs):
+                return False, "запись BAND_* не удалась"
+        elif not self.fpga.write_reg(lf.REG_BAND_COUNT, 0):
+            return False, "запись BAND_COUNT=0 не удалась"
         return True, ""
 
     def _detect_legion(self) -> None:
@@ -869,6 +949,14 @@ class LegionGateway:
                 okf, khz = self.fpga.read_reg(lf.REG_AIR_FREQ_KHZ)
                 if okf and khz:
                     st["freq_mhz"] = khz / 1000.0
+                okp, pk = self.fpga.read_reg(lf.REG_PEAK_KHZ)
+                if okp and pk:
+                    st["peak_mhz"] = pk / 1000.0
+                oke, ev = self.fpga.read_reg(lf.REG_SCAN_EVENT)
+                if oke:
+                    st["scan_event"] = ev
+                    st["scan_event_code"] = ev & 0xFF
+                    st["scan_event_seq"] = ev >> 8
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
@@ -942,6 +1030,11 @@ class LegionGateway:
                 "scan_f1_khz": lf.REG_SCAN_F1_KHZ, "scan_f2_khz": lf.REG_SCAN_F2_KHZ,
                 "scan_ctrl": lf.REG_SCAN_CTRL, "scan_dwell_us": lf.REG_SCAN_DWELL_US,
                 "scan_dwell_ms": lf.REG_SCAN_DWELL_US,
+                "search_bw_hz": lf.REG_SEARCH_BW_HZ, "fire_bw_hz": lf.REG_FIRE_BW_HZ,
+                "peak_khz": lf.REG_PEAK_KHZ, "fft_ctrl": lf.REG_FFT_CTRL,
+                "band_idx": lf.REG_BAND_IDX, "band_f1_khz": lf.REG_BAND_F1_KHZ,
+                "band_f2_khz": lf.REG_BAND_F2_KHZ, "band_count": lf.REG_BAND_COUNT,
+                "settle_n": lf.REG_SETTLE_N,
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}

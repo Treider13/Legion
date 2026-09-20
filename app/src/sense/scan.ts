@@ -180,6 +180,16 @@ export class AllowlistScanner {
   }
 }
 
+/** ICE9-стоянка: один центр на коридор (середина), без плитки взглядов. */
+export function planParkCenters(bands: readonly AllowBand[]): number[] {
+  const out: number[] = [];
+  for (const b of bands) {
+    if (b.f2Mhz < b.f1Mhz) continue;
+    out.push((b.f1Mhz + b.f2Mhz) / 2);
+  }
+  return out;
+}
+
 export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[] {
   const bw = bwMhz > 0 ? bwMhz : 20;
   const out: number[] = [];

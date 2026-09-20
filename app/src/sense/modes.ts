@@ -23,7 +23,7 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
 export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop" | "fpga";
-export type AutoDispatch = "priority" | "turn";
+export type AutoDispatch = "priority" | "turn" | "park";
 
 export function isFpgaAirPattern(pattern: SdrWalkPattern): boolean {
   return pattern === "fpga";
@@ -43,6 +43,11 @@ export function scannerParticipates(pattern: SdrWalkPattern): boolean {
   return pattern === "auto";
 }
 
+/** Имя онбордового режима для оператора. Wire id — scanPattern="fpga". */
+export const FPGA_AIR_MODE_RU = "Умная атака";
+export const FPGA_AIR_MODE_RU_CAPS = "УМНАЯ АТАКА";
+export const FPGA_AIR_MODE_START_RU = "СТАРТ УМНОЙ АТАКИ";
+
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
 export function patternLabelRu(pattern: SdrWalkPattern): string {
   switch (pattern) {
@@ -55,7 +60,7 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ";
     case "fpga":
-      return "АВТОПЕРЕХВАТ";
+      return FPGA_AIR_MODE_RU_CAPS;
   }
 }
 
@@ -70,7 +75,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (без сканера)";
     case "fpga":
-      return "Автоматический перехват (плата смотрит эфир → TX на усилитель, USB не в круге)";
+      return `${FPGA_AIR_MODE_RU} (плата сама: глухой обзор → ИИ окно на всплеск → выдержка внутри → снова обзор; USB не в круге)`;
   }
 }
 
@@ -80,13 +85,23 @@ export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
 }
 
 export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
-  return dispatch === "priority" ? "ПРИОРИТЕТ" : "ОБЫЧНЫЙ";
+  if (dispatch === "priority") return "ПРИОРИТЕТ";
+  if (dispatch === "park") return "СТОЯНКА";
+  return "ОБЫЧНЫЙ";
 }
 
 export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
-  return dispatch === "priority"
-    ? "ПРИОРИТЕТ (сильнее рядом — на неё)"
-    : "ОБЫЧНЫЙ (по очереди, выдержка)";
+  if (dispatch === "priority") return "ПРИОРИТЕТ (сильнее — перескок и новая выдержка)";
+  if (dispatch === "park") return "СТОЯНКА (узкий — один LO, хопы цифрой; шире взгляда — обзор и взгляд на всплеск)";
+  return "ОБЫЧНЫЙ (по очереди, выдержка)";
+}
+
+/** Умная атака: ИИ снаружи всегда. park leftover → обычный. */
+export const FPGA_AI_LABEL_RU = "ИИ";
+export const FPGA_AI_OPTION_RU = "ИИ (окно на всплеск, хопы цифрой)";
+
+export function fpgaInnerDispatch(dispatch: AutoDispatch): "turn" | "priority" {
+  return dispatch === "priority" ? "priority" : "turn";
 }
 
 export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "turn"): {
@@ -101,15 +116,17 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        "Автоматический перехват: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. " +
-        "Гейт в текущем взгляде — микросекунды. Нашёл частоту — усилитель на выдержке (например 0.4 мс), затем следующий взгляд. USB не в круге увидел→усилитель. Ноутбук — коридор, выдержка, Старт/Стоп и наблюдение.",
+        `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. ` +
+        "Гейт в текущем взгляде — микросекунды. ИИ: глухой обзор коридора, затем 56 МГц на всплеск. Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка). USB не в круге увидел→усилитель. Ноутбук — коридор, два времени, Старт/Стоп и наблюдение.",
     };
   }
   if (pattern === "auto") {
     const how =
-      dispatch === "turn"
-        ? "обычный: живые по очереди, каждая выдержка на усилителе"
-        : "приоритет: держим; сильнее рядом — на неё, пропала — следующая";
+      dispatch === "priority"
+        ? "приоритет: держим; сильнее рядом — на неё, пропала — следующая"
+        : dispatch === "park"
+          ? "стоянка: узкий коридор — один LO, хопы внутри цифрой; шире взгляда — глухой обзор и взгляд на всплеск"
+          : "обычный: живые по очереди, каждая выдержка на усилителе";
     return {
       useScanner: true,
       openLoopTx: false,
