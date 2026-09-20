@@ -38,7 +38,8 @@ architecture rtl of legion_fft_peak is
     signal q_a    : std_logic_vector(31 downto 0) := (others => '0');
     signal q_b    : std_logic_vector(31 downto 0) := (others => '0');
 
-    type state_t is (ST_COLLECT, ST_FFT_RD, ST_FFT_WR, ST_PEAK_RD, ST_PEAK_CMP, ST_PUBLISH);
+    type state_t is (ST_COLLECT, ST_FFT_RD, ST_FFT_WAIT, ST_FFT_WR,
+                    ST_PEAK_RD, ST_PEAK_WAIT, ST_PEAK_CMP, ST_PUBLISH);
     signal state : state_t := ST_COLLECT;
 
     signal collect_n : unsigned(8 downto 0) := (others => '0');
@@ -161,7 +162,11 @@ begin
                         ib_r   <= ib;
                         wr_r   <= LEGION_TWIDDLE_RE(to_integer(tw_idx));
                         wi_r   <= LEGION_TWIDDLE_IM(to_integer(tw_idx));
-                        state  <= ST_FFT_WR;
+                        -- RAM: q на следующем фронте после addr (как collect+idle).
+                        state  <= ST_FFT_WAIT;
+
+                    when ST_FFT_WAIT =>
+                        state <= ST_FFT_WR;
 
                     when ST_FFT_WR =>
                         a_i_r <= signed(q_a(31 downto 16));
@@ -203,7 +208,10 @@ begin
 
                     when ST_PEAK_RD =>
                         addr_a <= peak_i(7 downto 0);
-                        state  <= ST_PEAK_CMP;
+                        state  <= ST_PEAK_WAIT;
+
+                    when ST_PEAK_WAIT =>
+                        state <= ST_PEAK_CMP;
 
                     when ST_PEAK_CMP =>
                         ii := signed(q_a(31 downto 16));
