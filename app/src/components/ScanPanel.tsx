@@ -11,7 +11,7 @@ import {
 import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
-import { parseBand } from "../policy/allowlist";
+import { parseSdrRxBand } from "../sdr/catalog";
 import { waveMeta } from "../sdr/waveforms";
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
@@ -32,7 +32,7 @@ export function ScanPanel() {
   const fpgaBands = s.sdrBands.length
     ? s.sdrBands
     : (() => {
-        const b = parseBand(s.sdrF1, s.sdrF2);
+        const b = parseSdrRxBand(s.sdrF1, s.sdrF2, s.sdrId);
         return b ? [b] : [];
       })();
   const fpgaSpan = parkSpanMhz(fpgaBands);

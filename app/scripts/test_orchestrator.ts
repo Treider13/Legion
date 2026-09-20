@@ -1939,6 +1939,8 @@ async function main(): Promise<void> {
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
     !scanSrc.includes("конвейер") && !scanSrc.includes("КОНВЕЙЕР"));
+  check("ScanPanel коридор xA4 — catalog RX, не parseBand 4400",
+    scanSrc.includes("parseSdrRxBand") && !scanSrc.includes("parseBand("));
   check("жаргон убран: fpgaObserveLine без «конвейер»", !fastpathSrc.includes("конвейер"));
   check("жаргон убран: пользовательские строки стора без «конвейер на SDR»/«det_thr=»",
     !storeSrc.includes("конвейер на SDR, ноутбук") && !storeSrc.includes("det_thr=${detThr}"));
