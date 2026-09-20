@@ -225,6 +225,9 @@ architecture legion of bladerf is
     signal lg_fft_en        : std_logic;
     signal lg_fft_dc_notch  : std_logic;
     signal lg_peak_word     : std_logic_vector(31 downto 0);
+    signal lg_xlat_i        : signed(15 downto 0);
+    signal lg_xlat_q        : signed(15 downto 0);
+    signal lg_xlat_v        : std_logic;
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1160,6 +1163,21 @@ begin
         peak_word => lg_peak_word
       );
 
+    -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой ADC.
+    U_legion_lb_xlat : entity work.legion_lb_xlat
+      port map (
+        clock     => rx_clock,
+        reset     => rx_reset,
+        enable    => lg_fft_en,
+        peak_word => lg_peak_word,
+        in_i      => adc_streams(0).data_i,
+        in_q      => adc_streams(0).data_q,
+        in_valid  => adc_streams(0).data_v,
+        out_i     => lg_xlat_i,
+        out_q     => lg_xlat_q,
+        out_valid => lg_xlat_v
+      );
+
     U_legion_det_sync : entity work.synchronizer
       generic map ( RESET_LEVEL => '0' )
       port map ( reset => tx_reset, clock => tx_clock,
@@ -1210,7 +1228,7 @@ begin
       port map (
         wr_clk   => rx_clock,
         wr_reset => rx_reset,
-        wr_data  => std_logic_vector(adc_streams(0).data_i) & std_logic_vector(adc_streams(0).data_q),
+        wr_data  => std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
         wr_en    => lg_lb_wr_en,
         wr_full  => lg_lb_full,
         rd_clk   => tx_clock,
@@ -1220,7 +1238,7 @@ begin
         rd_empty => lg_lb_empty,
         rd_level => lg_lb_level
       );
-    lg_lb_wr_en <= adc_streams(0).data_v
+    lg_lb_wr_en <= lg_xlat_v
                    when lg_lb_active_rx = '1' and lg_rx_arm = '1' and lg_lb_full = '0'
                    else '0';
 

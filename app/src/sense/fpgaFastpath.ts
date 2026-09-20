@@ -386,8 +386,8 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const hops = Math.max(0, centers.length - 1);
   const survey = fftEnable
     ? hops === 0
-      ? `коридор ${spanMhz.toFixed(1)} МГц в взгляде ${lookMhz} МГц — FFT пик, hop LO на точный Гц, FIRE ${fireBwMhz} МГц`
-      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц · FFT пик → точный Гц (не весь взгляд) · FIRE ${fireBwMhz} МГц · шаг LO на плате, не USB`
+      ? `коридор ${spanMhz.toFixed(1)} МГц в взгляде ${lookMhz} МГц — FFT пик, цифровой вырез на стоящем LO (точный Гц, не hop PLL)`
+      : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц · FFT пик → точный Гц на стоящем LO (не hop PLL) · шаг взгляда на плате, не USB`
     : hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;

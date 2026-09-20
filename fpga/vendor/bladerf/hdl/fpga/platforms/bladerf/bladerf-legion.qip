@@ -50,6 +50,7 @@ set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legi
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_detector.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_player.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_nco.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_lb_xlat.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_dcfifo.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_watchdog.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_tx_mux.vhd]]

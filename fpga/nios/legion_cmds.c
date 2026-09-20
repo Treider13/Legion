@@ -876,7 +876,7 @@ static uint32_t legion_clip_to_look(uint32_t khz)
         return hi;
     }
 #if defined(LEGION_HAVE_RFIC)
-    /* Взгляд 56 МГц у края 70/6000 даёт peak вне RX — FREQUENCY отказ, FIRE нет. */
+    /* Взгляд у края 70/6000: PEAK_KHZ в каталоге RX. LO не прыгает на пик. */
     if (khz < LEGION_RFIC_RX_MIN_KHZ) {
         return LEGION_RFIC_RX_MIN_KHZ;
     }
@@ -900,6 +900,23 @@ static uint32_t legion_peak_from_word(uint32_t w)
     return legion_clip_to_look((uint32_t)pk);
 }
 
+/* HDL enable=0 сбрасывает peak.valid. Не legion_reg_write: тот scan_reset.
+ * Пульс при уже заглушённом TX — xlat на нули, не bypass в эфир. */
+static void legion_fft_invalidate_peak(void)
+{
+    uint32_t const c = legion_fft_ctrl;
+
+    if ((c & LEGION_FFT_CTRL_EN) == 0) {
+        return;
+    }
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, c & ~LEGION_FFT_CTRL_EN);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_FFT_CTRL);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, c);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_FFT_CTRL);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+}
+
 static bool legion_fft_enter_search(uint32_t center_khz)
 {
     if (center_khz == 0) {
@@ -911,6 +928,7 @@ static bool legion_fft_enter_search(uint32_t center_khz)
     if (!legion_hop_lo_ex(center_khz, false)) {
         return false;
     }
+    legion_fft_invalidate_peak();
     legion_look_center_khz = center_khz;
     legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
     legion_quiet_t0 = legion_settle_t0;
@@ -944,10 +962,10 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag)
     legion_peak_khz = peak_khz;
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
-    if (!legion_apply_bw(legion_fire_bw())) {
-        return;
-    }
-    if (!legion_hop_lo_ex(peak_khz, true)) {
+    /* LO на центре взгляда: вырез уже в HDL (FTW=bin≪24). Hop PLL —
+     * миллисекунды ADI SPI / LMS, это ломает µs-путь. Analog FIRE_BW
+     * не узжаем — изоляция цифровая, как xlating FIR. */
+    if (!legion_set_tx_mute(false)) {
         return;
     }
     legion_fft_st = LEGION_FFT_ST_HOLD;
@@ -997,6 +1015,10 @@ static void legion_fft_walk(void)
 
     if (legion_fft_st == LEGION_FFT_ST_SETTLE) {
         if (now - legion_settle_t0 < (uint64_t)settle) {
+            return;
+        }
+        /* Unmute после SETTLE: открытие в взгляде — только HDL (xlat+гейт). */
+        if (!legion_set_tx_mute(false)) {
             return;
         }
         legion_fft_st = LEGION_FFT_ST_FRAME;

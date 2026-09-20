@@ -16,8 +16,8 @@
  *       TXMUTE(0) после ENABLE TX.
  *   SCAN: walker при SCAN_CTRL.enable — hop по quiet (tamer) / dwell от
  *         первого det (turn, мкс); tamer стоит → hop нет; wd_fired важнее walker.
- *   FFT+TURN: после FIRE выдержка SCAN_DWELL_US (не «пока энергия — сидим»),
- *             затем следующий взгляд; 2400–2500 @ 56 МГц → пик ~2444, дальше 2484.
+ *   FFT+TURN: FIRE без hop PLL (цифровой вырез, AIR=центр взгляда, PEAK=~2444);
+ *             выдержка SCAN_DWELL_US, затем следующий взгляд 2484.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -677,7 +677,9 @@ int main(void)
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
                    2453500ULL * 1000ULL) < 0);
     t_tamer += 8;
-    legion_work(); /* SETTLE → FRAME */
+    legion_work(); /* SETTLE → FRAME + unmute */
+    CHECK("FFT n==1: SETTLE unmute (открытие — HDL)",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
     rfic_n = 0;
     t_peak_word = mk_peak(1, 3, 0x1000, 16);
     legion_work();
@@ -688,21 +690,21 @@ int main(void)
     CHECK("FFT: ждём новый кадр (в т.ч. после frame=0)", rfic_n == 0);
     t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
-    legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → 2453.5 */
-    CHECK("FFT n==1: hop LO на точный Гц (не весь взгляд)",
+    legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → PEAK 2453.5, LO 2450 */
+    CHECK("FFT n==1: FIRE без hop PLL на пик",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
-                   2453500ULL * 1000ULL) >= 0);
+                   2453500ULL * 1000ULL) < 0);
     CHECK("FFT n==1: FIRE unmute",
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
-    CHECK("FFT n==1: FIRE analog BW 2 МГц, fs не трогаем",
+    CHECK("FFT n==1: analog не узжаем, fs не трогаем",
           rfic_idx(BLADERF_RFIC_COMMAND_BANDWIDTH, BLADERF_CHANNEL_RX(0),
-                   2000000) >= 0 &&
+                   2000000) < 0 &&
           rfic_idx(BLADERF_RFIC_COMMAND_SAMPLERATE, BLADERF_CHANNEL_RX(0),
                    56000000) < 0);
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
-        CHECK("FFT n==1: AIR_FREQ = пик", khz == 2453500);
+        CHECK("FFT n==1: AIR_FREQ = центр взгляда", khz == 2450000);
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT n==1: PEAK_KHZ = пик", khz == 2453500);
     }
@@ -738,13 +740,15 @@ int main(void)
     t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
     legion_work();
-    CHECK("FFT 5.8G: hop uint64 5803.5 МГц",
+    CHECK("FFT 5.8G: FIRE без hop 5803.5",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
-                   5803500ULL * 1000ULL) >= 0);
+                   5803500ULL * 1000ULL) < 0);
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
-        CHECK("FFT 5.8G: AIR_FREQ = 5803500", khz == 5803500);
+        CHECK("FFT 5.8G: AIR_FREQ = центр 5800000", khz == 5800000);
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT 5.8G: PEAK_KHZ = 5803500", khz == 5803500);
     }
 
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 75000);
@@ -765,13 +769,15 @@ int main(void)
     t_peak_word = mk_peak(1, 3, 0x2000, 128);
     rfic_n = 0;
     legion_work();
-    CHECK("FFT clip70: peak 47 МГц → hop RX min 70",
+    CHECK("FFT clip70: FIRE без hop на 70",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
-                   70000ULL * 1000ULL) >= 0);
+                   70000ULL * 1000ULL) < 0);
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
-        CHECK("FFT clip70: AIR_FREQ = 70000", khz == 70000);
+        CHECK("FFT clip70: AIR_FREQ = центр 75000", khz == 75000);
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT clip70: PEAK_KHZ clip RX min 70", khz == 70000);
     }
 
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 98000);
@@ -854,16 +860,16 @@ int main(void)
     legion_work(); /* snap frame */
     t_peak_word = mk_peak(1, 1, 0x2000, 73);
     rfic_n = 0;
-    legion_work(); /* FIRE ~2444 */
-    CHECK("FFT TURN: FIRE ~2444 (не весь взгляд 2428)",
+    legion_work(); /* FIRE ~2444 цифрой, LO 2428 */
+    CHECK("FFT TURN: FIRE без hop PLL на ~2444",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
-                   2443969ULL * 1000ULL) >= 0);
+                   2443969ULL * 1000ULL) < 0);
     CHECK("FFT TURN: FIRE unmute",
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
-        CHECK("FFT TURN: AIR_FREQ = 2443969", khz == 2443969);
+        CHECK("FFT TURN: AIR_FREQ = центр 2428", khz == 2428000);
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT TURN: PEAK_KHZ = 2443969", khz == 2443969);
     }
@@ -1026,7 +1032,7 @@ int main(void)
         CHECK("U5 x40: SCAN_DWELL readback", v == 400);
     }
 
-    /* FFT x40: SEARCH глушит LMS TX (bit2), FIRE hop на пик и unmute. */
+    /* FFT x40: SEARCH глушит LMS TX (bit2), FIRE без hop — unmute, AIR=центр. */
     t_peak_word = 0;
     t_aws = 0;
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
@@ -1053,12 +1059,14 @@ int main(void)
     t_peak_word = mk_peak(1, 1, 0x2000, 16);
     lms_n = 0; band_n = 0;
     legion_work();
-    CHECK("FFT x40: FIRE hop LMS RX+TX", lms_n == 2 && band_n == 2);
+    CHECK("FFT x40: FIRE без LMS hop", lms_n == 0 && band_n == 0);
     CHECK("FFT x40: FIRE вернул TX enable", (t_control & 0x4u) != 0);
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
-        CHECK("FFT x40: AIR_FREQ = пик 2453.5", khz == 2453500);
+        CHECK("FFT x40: AIR_FREQ = центр 2450", khz == 2450000);
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT x40: PEAK_KHZ = 2453.5", khz == 2453500);
     }
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_FFT_CTRL, 0);

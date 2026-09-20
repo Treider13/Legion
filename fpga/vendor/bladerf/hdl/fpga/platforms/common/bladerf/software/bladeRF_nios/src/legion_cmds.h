@@ -45,7 +45,7 @@
 /* Точный Гц: FFT-пик на FPGA. 0x12–0x14/0x17–0x1B — статики NIOS.
  * 0x15 — mux STATUS (IOWR AWS=0x15, IORD STATUS). 0x16 — HDL+NIOS. */
 #define LEGION_REG_SEARCH_BW_HZ   0x12  /* analog BW обзора, Гц; 0 = AIR_BW */
-#define LEGION_REG_FIRE_BW_HZ     0x13  /* analog BW удержания, Гц; 0 = 2 МГц */
+#define LEGION_REG_FIRE_BW_HZ     0x13  /* leftover; вырез цифровой, analog не узжаем */
 #define LEGION_REG_PEAK_KHZ       0x14  /* найденная частота, кГц (считает NIOS) */
 #define LEGION_REG_PEAK_BIN       0x15  /* слово пика HDL: bin/mag/frame/valid */
 #define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch */
@@ -107,9 +107,12 @@ bool legion_air_down(void);
  * USB NIOS не отдаёт — он не хозяин линка; release делает шлюз.
  * После deadman (если ARM жив и SCAN_CTRL.enable): шаг LO по коридору.
  * FFT_CTRL=0 (дефолт): взгляд = AIR_BW, гейт I²+Q², hop на центр взгляда.
- * FFT_CTRL.enable: SEARCH (TX mute) → FFT-бин → hop на точный Гц, FIRE_BW
- * (fs не трогаем), HOLD по энергии (PRIORITY как walker: пока det — не шагаем).
- * n==1 при FFT — hop на пик, не «не шагает».
+ * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
+ * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
+ * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
+ * узжаем. HOLD: TURN = выдержка со Старта, затем следующий взгляд;
+ * PRIORITY как walker: пока det — взгляд не шагаем.
+ * n==1 при FFT — вырез пика, не «не шагает» и не hop PLL на пик.
  * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);
 

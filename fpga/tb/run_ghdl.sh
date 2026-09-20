@@ -18,6 +18,7 @@ ghdl -a $GHDL_STD --workdir=. "$HDL/legion_fft_peak.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_detector.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_player.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_nco.vhd"
+ghdl -a $GHDL_STD --workdir=. "$HDL/legion_lb_xlat.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_dcfifo.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_watchdog.vhd"
 ghdl -a $GHDL_STD --workdir=. "$HDL/legion_tx_mux.vhd"
@@ -25,7 +26,7 @@ ghdl -a $GHDL_STD --workdir=. "$HDL/legion_regs.vhd"
 
 echo "== Тестбенчи =="
 FAIL=0
-for tb in legion_detector_tb legion_player_tb legion_nco_tb legion_watchdog_tb legion_dcfifo_tb legion_tx_mux_tb legion_regs_tb legion_integration_tb legion_fft_peak_tb; do
+for tb in legion_detector_tb legion_player_tb legion_nco_tb legion_lb_xlat_tb legion_watchdog_tb legion_dcfifo_tb legion_tx_mux_tb legion_regs_tb legion_integration_tb legion_fft_peak_tb; do
     ghdl -a $GHDL_STD --workdir=. "$TB_DIR/$tb.vhd"
     ghdl -e $GHDL_STD --workdir=. "$tb"
     # --stop-time: страховка от зависания (зависший wait = FAIL, а не вечный цикл)

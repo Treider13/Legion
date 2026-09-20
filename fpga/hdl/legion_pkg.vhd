@@ -49,10 +49,10 @@ package legion_pkg is
     constant LEGION_REG_SCAN_F2_KHZ  : natural := 16#0F#; -- конец коридора, кГц
     constant LEGION_REG_SCAN_CTRL    : natural := 16#10#; -- bit0 enable, bit1 turn
     constant LEGION_REG_SCAN_DWELL_US : natural := 16#11#; -- выдержка turn от детекта, мкс
-    -- Точный Гц в взгляде: FFT-пик на FPGA, hop LO. 0x12–0x14/0x17–0x1B —
+    -- Точный Гц в взгляде: FFT-пик + цифровой вырез на стоящем LO. 0x12–0x14/0x17–0x1B —
     -- только NIOS (HDL when others => null), кроме FFT_CTRL и mux 0x15.
     constant LEGION_REG_SEARCH_BW_HZ : natural := 16#12#; -- analog BW обзора, Гц; 0 = AIR_BW
-    constant LEGION_REG_FIRE_BW_HZ   : natural := 16#13#; -- analog BW удержания, Гц; 0 = 2 МГц
+    constant LEGION_REG_FIRE_BW_HZ   : natural := 16#13#; -- leftover; вырез цифровой, analog не узжаем
     constant LEGION_REG_PEAK_KHZ     : natural := 16#14#; -- найденная частота, кГц (пишет NIOS)
     constant LEGION_REG_PEAK_BIN     : natural := 16#15#; -- STATUS mux: слово пика HDL
     constant LEGION_REG_FFT_CTRL     : natural := 16#16#; -- bit0 enable, bit1 dc_notch

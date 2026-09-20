@@ -47,7 +47,7 @@ REG_SCAN_F2_KHZ = 0x0F
 REG_SCAN_CTRL = 0x10  # bit0 enable, bit1 turn
 REG_SCAN_DWELL_US = 0x11  # выдержка turn от первого детекта, мкс
 REG_SEARCH_BW_HZ = 0x12  # analog BW обзора, Гц; 0 = AIR_BW
-REG_FIRE_BW_HZ = 0x13  # analog BW удержания, Гц; 0 = 2 МГц
+REG_FIRE_BW_HZ = 0x13  # leftover; вырез цифровой, analog не узжаем
 REG_PEAK_KHZ = 0x14  # найденная частота, кГц (считает NIOS)
 REG_PEAK_BIN = 0x15  # слово пика HDL: bin/mag/frame/valid
 REG_FFT_CTRL = 0x16  # bit0 enable, bit1 dc_notch
@@ -179,7 +179,8 @@ class LegionFpga:
     def set_fft(self, enable: bool, dc_notch: bool = False,
                 search_bw_hz: int = 0, fire_bw_hz: int = 0,
                 settle_n: int = 0) -> bool:
-        """FFT-пик на FPGA. enable=0 — walker как раньше (центр взгляда)."""
+        """FFT-пик на FPGA. enable=0 — walker как раньше (центр взгляда).
+        fire_bw_hz пишется в регистр (совместимость); NIOS analog не узжает."""
         ctrl = (FFT_CTRL_EN if enable else 0) | (FFT_CTRL_DC_NOTCH if dc_notch else 0)
         return (self.write_reg(REG_SEARCH_BW_HZ, int(search_bw_hz) & 0xFFFFFFFF) and
                 self.write_reg(REG_FIRE_BW_HZ, int(fire_bw_hz) & 0xFFFFFFFF) and
