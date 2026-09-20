@@ -24,13 +24,13 @@ export function GraphiteNav({ onSettings, motion, reduced, onMotion }: {
   </>;
 }
 
-export function GraphiteConsole({ source, range, motion, lite, spectrum, history }: {
-  source: string; range: string; motion: boolean; lite: boolean;
+export function GraphiteConsole({ source, range, rangeNote, motion, lite, spectrum, history }: {
+  source: string; range: string; rangeNote: string; motion: boolean; lite: boolean;
   spectrum?: ReactNode; history: ReactNode;
 }) {
   const cards = [
     { kind: "source" as const, label: "Интерфейс", value: source, note: "выбранный источник" },
-    { kind: "range" as const, label: "Диапазон", value: range, note: "заданные границы" },
+    { kind: "range" as const, label: "Диапазон", value: range, note: rangeNote },
     { kind: "display" as const, label: "Графика", value: lite ? "Canvas 2D" : "Three.js / WebGL", note: "отображение" },
     { kind: "clock" as const, label: "Движение фона", value: motion ? "SLOW MOTION" : "СТАТИЧНО", note: "оформление" },
   ];

@@ -8,12 +8,7 @@ import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
 import { dbmToUnit, heatRgb } from "../sense/waterfall";
 import { useLegion } from "../state/store";
-
-function corridor(s: { sdrBands: Array<{ f1Mhz: number; f2Mhz: number }>; sdrF1: string; sdrF2: string }) {
-  const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
-  const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
-  return { f1, f2 };
-}
+import { displayRange, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
 function yOf(dbm: number, lo: number, hi: number, top: number, h: number): number {
   const t = (dbm - lo) / Math.max(hi - lo, 1e-6);
@@ -46,8 +41,7 @@ export function SpectrumScope() {
     const draw = () => {
       if (!alive) return;
       const st = useLegion.getState();
-      const { f1: loF, f2: hiF } = corridor(st);
-      const span = Math.max(hiF - loF, 1e-6);
+      const range = displayRange(st);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
@@ -61,6 +55,22 @@ export function SpectrumScope() {
       ctx.clearRect(0, 0, cssW, cssH);
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
+
+      if (!range) {
+        if (lastAxisKey) rtsa.reset();
+        lastAxisKey = "";
+        lastRtsaSrc = null;
+        ctx.fillStyle = "rgba(232,228,220,0.62)";
+        ctx.font = "12px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Укажите корректные F1 и F2", cssW / 2, cssH / 2);
+        if (readoutRef.current !== "Коридор не задан") setReadout("Коридор не задан");
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const { f1: loF, f2: hiF } = range;
+      const span = hiF - loF;
+      if (readoutRef.current === "Коридор не задан") setReadout("наведите — частота и дБм");
 
       const padL = 62;
       const padR = 22;
@@ -144,9 +154,11 @@ export function SpectrumScope() {
         ctx.fillText(`${db.toFixed(0)}`, padL - 6, y + 3);
       }
 
-      const step = span > 2000 ? 1000 : span > 400 ? 100 : span > 80 ? 20 : 10;
-      const first = Math.ceil(loF / step) * step;
-      for (let f = first; f <= hiF + 1e-9; f += step) {
+      const leftLabel = formatFrequency(loF);
+      const rightLabel = formatFrequency(hiF);
+      const leftWidth = ctx.measureText(leftLabel).width;
+      const rightWidth = ctx.measureText(rightLabel).width;
+      for (const f of frequencyTicks(range, plotW)) {
         const x = xOf(f);
         ctx.strokeStyle = "rgba(232,228,220,0.10)";
         ctx.beginPath();
@@ -155,8 +167,17 @@ export function SpectrumScope() {
         ctx.stroke();
         ctx.fillStyle = "rgba(232,228,220,0.5)";
         ctx.textAlign = "center";
-        ctx.fillText(f.toFixed(0), x, cssH - 24);
+        const label = formatFrequency(f);
+        const halfWidth = ctx.measureText(label).width / 2;
+        if (x - halfWidth > padL + leftWidth + 10 && x + halfWidth < padL + plotW - rightWidth - 10) {
+          ctx.fillText(label, x, cssH - 24);
+        }
       }
+      ctx.fillStyle = "rgba(232,228,220,0.7)";
+      ctx.textAlign = "left";
+      ctx.fillText(leftLabel, padL, cssH - 24);
+      ctx.textAlign = "right";
+      ctx.fillText(rightLabel, padL + plotW, cssH - 24);
 
       // Fine subdivisions and axis titles are presentation only.
       ctx.save();
@@ -322,8 +343,8 @@ export function SpectrumScope() {
         const alloc = st.labShowAlloc ? allocAtMhz(mhz) : null;
         const text =
           dbm != null
-            ? `${mhz.toFixed(3)} МГц · ${dbm.toFixed(1)} дБм${alloc ? ` · ${alloc.name}` : ""}`
-            : `${mhz.toFixed(3)} МГц · нет бина${alloc ? ` · ${alloc.name}` : ""}`;
+            ? `${formatFrequency(mhz, span / plotW)} МГц · ${dbm.toFixed(1)} дБм${alloc ? ` · ${alloc.name}` : ""}`
+            : `${formatFrequency(mhz, span / plotW)} МГц · нет бина${alloc ? ` · ${alloc.name}` : ""}`;
         if (text !== readoutRef.current) setReadout(text);
       }
 
@@ -364,6 +385,7 @@ export function SpectrumScope() {
   }, []);
 
   const st = useLegion();
+  const range = displayRange(st);
   const live = st.scanRunning || st.fpgaArmed;
   const peak = strongestFinite(st.labSubtractBaseline ? subtractBaseline(st.labPsd.composite, st.labPsd.baseline) : st.labPsd.composite);
   const w3 = peak ? width3dbMhz(st.labPsd.composite, peak.freqMhz) : 0;
@@ -414,9 +436,9 @@ export function SpectrumScope() {
           СБРОС HOLD
         </button>
       </div>
-      <canvas ref={canvasRef} className="scope-canvas" role="img" aria-label="PSD коридора bladeRF xA4" />
+      <canvas ref={canvasRef} className="scope-canvas" role="img" aria-label={`PSD · ${formatDisplayRange(range)}`} />
       <div className="scope-meta">
-        <span>{readout}</span>
+        <span>{range ? readout : "Коридор не задан"}</span>
         <span>
           {peak
             ? `пик ${peak.freqMhz.toFixed(3)} · ${peak.powerDbm.toFixed(1)} дБм · 3дБ ${w3.toFixed(2)} МГц`

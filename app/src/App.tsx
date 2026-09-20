@@ -10,6 +10,7 @@ import "./components/graphite/graphite.css";
 import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChrome";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { SpectrumScope } from "./components/SpectrumScope";
+import { displayRange, formatDisplayRange } from "./components/displayRange";
 
 import { BootSequence } from "./components/boot/BootSequence";
 import { CinemaDock } from "./components/cinema/CinemaDock";
@@ -83,14 +84,16 @@ function App() {
   const scanCenterMhz = useLegion((s) => s.scanCenterMhz);
   const telemFreq = useLegion((s) => s.telemFreq);
   const freqMhz = useLegion((s) => s.freqMhz);
-  const sdrF1 = useLegion((s) => s.sdrF1);
-  const sdrF2 = useLegion((s) => s.sdrF2);
+  const rangeF1 = useLegion((s) => displayRange(s)?.f1 ?? null);
+  const rangeF2 = useLegion((s) => displayRange(s)?.f2 ?? null);
+  const rangeBandCount = useLegion((s) => modeOf(s.workspace) === "sdr" ? s.sdrBands.length : 0);
+  const range = rangeF1 != null && rangeF2 != null ? { f1: rangeF1, f2: rangeF2 } : null;
   // Idle-частота по контексту режима: в SDR — центр рабочего коридора,
   // в ESP32 — поле синтезатора. Иначе в SDR idle показывалась бы частота
   // чужого тракта (ADF4351), не имеющая отношения к плате bladeRF.
   const idleFreqMhz =
     mode === "sdr"
-      ? String(((parseFloat(sdrF1) || 2400) + (parseFloat(sdrF2) || 2500)) / 2)
+      ? range ? String(range.f1 + (range.f2 - range.f1) / 2) : ""
       : freqMhz;
   const hero = heroStatusLine({
     scanRunning,
@@ -176,7 +179,8 @@ function App() {
 
       <GraphiteConsole
         source={mode === "sdr" ? (sl22 ? "SDR" : "SDR · Ethernet") : (sl22 ? "HTOOL SL22" : "ESP32 · USB")}
-        range={mode === "sdr" ? `${sdrF1}–${sdrF2} МГц` : "По настройкам режима"}
+        range={formatDisplayRange(range)}
+        rangeNote={rangeBandCount ? `границы из списка (${rangeBandCount})` : "границы F1–F2"}
         motion={motion}
         lite={__LEGION_LITE__}
         spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}

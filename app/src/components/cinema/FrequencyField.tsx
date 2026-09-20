@@ -12,28 +12,12 @@ import {
   waterfallBandChanged,
 } from "../../sense/waterfall";
 import { useLegion } from "../../state/store";
-
-function bandEdges(s: {
-  sdrBands: Array<{ f1Mhz: number; f2Mhz: number }>;
-  sdrF1: string;
-  sdrF2: string;
-  corrF1: string;
-  corrF2: string;
-  workspace: string;
-}): { f1: number; f2: number } {
-  const sdr = s.workspace === "sdr" || s.workspace === "scan" || s.workspace === "signal" || s.workspace === "sdrFlash";
-  if (sdr) {
-    const f1 = s.sdrBands.length ? Math.min(...s.sdrBands.map((b) => b.f1Mhz)) : parseFloat(s.sdrF1) || 2400;
-    const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
-    return { f1, f2 };
-  }
-  return { f1: parseFloat(s.corrF1) || 2400, f2: parseFloat(s.corrF2) || 2500 };
-}
+import { displayRange, formatDisplayRange, formatFrequency, frequencyTicks } from "../displayRange";
 
 export function FrequencyField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const f1 = useLegion((s) => bandEdges(s).f1);
-  const f2 = useLegion((s) => bandEdges(s).f2);
+  const f1 = useLegion((s) => displayRange(s)?.f1 ?? null);
+  const f2 = useLegion((s) => displayRange(s)?.f2 ?? null);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
@@ -69,8 +53,7 @@ export function FrequencyField() {
     const draw = (t: number) => {
       if (!alive) return;
       const st = useLegion.getState();
-      const { f1: lo, f2: hi } = bandEdges(st);
-      const span = Math.max(hi - lo, 1e-6);
+      const range = displayRange(st);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
@@ -84,6 +67,19 @@ export function FrequencyField() {
       ctx.clearRect(0, 0, cssW, cssH);
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
+
+      if (!range) {
+        lastLo = Number.NaN;
+        lastHi = Number.NaN;
+        ctx.fillStyle = "rgba(187, 201, 210, 0.7)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Укажите корректные F1 и F2", cssW / 2, cssH / 2);
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      const { f1: lo, f2: hi } = range;
+      const span = hi - lo;
 
       const pad = 18;
       const plotW = cssW - pad * 2;
@@ -231,11 +227,9 @@ export function FrequencyField() {
       ctx.lineTo(pad + plotW, baseY);
       ctx.stroke();
 
-      const step = span > 400 ? 100 : span > 80 ? 20 : 10;
-      const first = Math.ceil(lo / step) * step;
       ctx.fillStyle = "rgba(232, 228, 220, 0.28)";
       ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
-      for (let f = first; f <= hi + 1e-9; f += step) {
+      for (const f of frequencyTicks(range, plotW)) {
         const x = xOf(f);
         ctx.strokeStyle = "rgba(232, 228, 220, 0.05)";
         ctx.beginPath();
@@ -298,9 +292,9 @@ export function FrequencyField() {
 
   return (
     <section className="cinema-field" aria-label="Водопад частот">
-      <canvas ref={canvasRef} className="cinema-field-canvas" />
+      <canvas ref={canvasRef} className="cinema-field-canvas" role="img" aria-label={`Водопад · ${formatDisplayRange(f1 != null && f2 != null ? { f1, f2 } : null)}`} />
       <div className="cinema-field-meta">
-        <span>{f1.toFixed(0)}</span>
+        <span>{formatFrequency(f1)}</span>
         <span className={live ? "cinema-field-read live" : "cinema-field-read"}>
           {read}
           {fpgaArmed && fpgaPath === "air" ? " · взгляд+гейт, не спектр" : ""}
@@ -310,7 +304,7 @@ export function FrequencyField() {
           {transmitArmed && !fpgaArmed ? " · на усилитель" : ""}
           {corridorRunning ? " · коридор" : ""}
         </span>
-        <span>{f2.toFixed(0)}</span>
+        <span>{formatFrequency(f2)}</span>
       </div>
     </section>
   );
