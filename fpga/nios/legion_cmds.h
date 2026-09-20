@@ -119,7 +119,8 @@ bool legion_air_down(void);
  * хоп внутри взгляда = live FFT → xlat.
  * SURVEY (bit3, FFT on, коридор шире взгляда): глухой проход 0…n−1
  * (enter_search mute, без unmute после SETTLE) → LO на clip(PEAK)
- * → работа SCAN_DWELL от unmute → снова обзор. F1/F2 не пишет.
+ * → HDL DC-notch снят (тон в bin 0), SCAN_DWELL от unmute → снова обзор.
+ * F1/F2 не пишет. Отказ hop не переводит в stare (не unmute на старом LO).
  * n==1 / PARK в HOLD: не enter_search на тот же LO (mute+SETTLE ломает µs).
  * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);

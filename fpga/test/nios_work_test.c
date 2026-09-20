@@ -1172,6 +1172,123 @@ int main(void)
         CHECK("FFT SURVEY 2300-2500: clip пика 2310 → LO 2328", khz == 2328000);
     }
 
+    /* Хост ARM шлёт FFT_CTRL enable|notch. Стоянка на 2434 = bin 0.
+     * HDL skip_dc спрятал бы тон — на стоянке notch должен уйти из HDL,
+     * тень NIOS (readback) остаётся как писал хост. */
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL,
+                     LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_DC_NOTCH);
+    CHECK("FFT SURVEY notch: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY notch: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 7) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 64);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 64);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            if (li == 17) {
+                pio_n = 0;
+            }
+            legion_work();
+        }
+    }
+    CHECK("FFT SURVEY notch: HDL stare без skip_dc",
+          pio_wrote_reg(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN));
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_FFT_CTRL, &v);
+        CHECK("FFT SURVEY notch: тень хоста enable|notch",
+              v == (LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_DC_NOTCH));
+    }
+    t_tamer += 8;
+    legion_work(); /* stare unmute */
+    pio_n = 0;
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    legion_work(); /* T → обзор, invalidate вернёт notch */
+    CHECK("FFT SURVEY notch: после T HDL снова enable|notch",
+          pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                        LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_DC_NOTCH));
+
+    /* Отказ hop на stare: не FIRE/unmute на последней клетке обзора. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2328000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY hopfail: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY hopfail: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_fail_tx_freq = false;
+    {
+        int li;
+        for (li = 0; li < 4; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 0) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 128);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 128);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            if (li == 3) {
+                rfic_fail_tx_freq = true;
+                rfic_n = 0;
+            }
+            legion_work();
+        }
+    }
+    CHECK("FFT SURVEY hopfail: unmute нет",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY hopfail: LO остался на последней клетке 2496",
+              khz == 2496000);
+    }
+    rfic_fail_tx_freq = false;
+    rfic_n = 0;
+    legion_work();
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY hopfail: повтор → clip LO 2328", khz == 2328000);
+    }
+
     /* U5: FFT/BAND readback не STATUS */
     legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
     legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);

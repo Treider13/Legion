@@ -947,6 +947,14 @@ static uint32_t legion_peak_from_word(uint32_t w)
 
 /* HDL enable=0 сбрасывает peak.valid. Не legion_reg_write: тот scan_reset.
  * Пульс при уже заглушённом TX — xlat на нули, не bypass в эфир. */
+/* HDL без legion_reg_write: тот scan_reset и сбрасывает SURVEY. */
+static void legion_fft_ctrl_hdl(uint32_t c)
+{
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, c);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_FFT_CTRL);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+}
+
 static void legion_fft_invalidate_peak(void)
 {
     uint32_t const c = legion_fft_ctrl;
@@ -954,12 +962,8 @@ static void legion_fft_invalidate_peak(void)
     if ((c & LEGION_FFT_CTRL_EN) == 0) {
         return;
     }
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, c & ~LEGION_FFT_CTRL_EN);
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_FFT_CTRL);
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, c);
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_FFT_CTRL);
-    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+    legion_fft_ctrl_hdl(c & ~LEGION_FFT_CTRL_EN);
+    legion_fft_ctrl_hdl(c);
 }
 
 static bool legion_fft_enter_search(uint32_t center_khz)
@@ -1341,16 +1345,24 @@ static void legion_survey_begin_stare(uint32_t picked, uint32_t n)
     uint32_t lo;
 
     (void)n;
-    legion_survey_last_i = picked;
     legion_survey_band_of(picked, &f1, &f2);
     lo = legion_survey_clip_lo(legion_survey_peak[picked], f1, f2);
     if (lo == 0) {
         return;
     }
+    /* Hop не удался: ph остаётся PASS, last_i не двигаем.
+     * Иначе FRAME прошлой клетки звал бы FIRE/unmute не на пике. */
+    if (!legion_fft_enter_search(lo)) {
+        return;
+    }
+    /* Хост шлёт DC-notch (гейт на утечку LO в обзоре). Стоянка = LO на
+     * пике → тон в bin 0. HDL skip_dc (legion_fft_peak) тогда отдаёт
+     * чужой бин, xlat режет нужный IF. Снимаем notch только в HDL. */
+    legion_fft_ctrl_hdl(legion_fft_ctrl & ~LEGION_FFT_CTRL_DC_NOTCH);
+    legion_survey_last_i = picked;
     legion_survey_ph = LEGION_SURVEY_PH_STARE;
     legion_stare_on = false;
     legion_stare_t0 = 0;
-    (void)legion_fft_enter_search(lo);
 }
 
 static void legion_survey_restart_pass(void)
