@@ -10,6 +10,7 @@ import "./components/graphite/graphite.css";
 import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChrome";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { SpectrumScope } from "./components/SpectrumScope";
+import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
 
 import { BootSequence } from "./components/boot/BootSequence";
@@ -152,7 +153,9 @@ function App() {
           {__LEGION_LITE__ ? (
             <LiteEye />
           ) : Scene ? (
-            <Suspense fallback={null}>{mount3d && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
+            <SceneBoundary>
+              <Suspense fallback={null}>{mount3d && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
+            </SceneBoundary>
           ) : null}
         </div>
         <div className="hero-overlay">

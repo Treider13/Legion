@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { displayRange, formatDisplayRange, formatFrequency, frequencyTicks } from "../src/components/displayRange";
+import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "../src/components/displayRange";
 
 const state = {
   workspace: "scan",
@@ -29,13 +29,26 @@ test("configured bands take precedence without borrowing another mode's settings
 });
 
 test("invalid or incomplete input never becomes a default corridor", () => {
-  for (const [sdrF1, sdrF2] of [["", "2100"], [" ", "2100"], ["2000", ""], ["2000MHz", "2100"], ["0x10", "2100"], ["NaN", "2100"], ["2000", "Infinity"], ["-1", "2100"], ["2100", "2000"], ["2000", "2000"]]) {
+  for (const [sdrF1, sdrF2] of [["", "2100"], [" ", "2100"], ["2000", ""], ["2000MHz", "2100"], ["0x10", "2100"], ["NaN", "2100"], ["2000", "Infinity"], ["-1", "2100"], ["2100", "2000"]]) {
     const range = displayRange({ ...state, sdrF1, sdrF2 });
     assert.equal(range, null, `${sdrF1} / ${sdrF2}`);
     assert.equal(formatDisplayRange(range), "Коридор не задан");
   }
   assert.equal(formatFrequency(null), "—");
   assert.equal(formatFrequency(NaN), "—");
+});
+
+test("a supported single-frequency entry does not invalidate other bands", () => {
+  const point = { f1Mhz: 2037.125, f2Mhz: 2037.125 };
+  const range = displayRange({ ...state, sdrBands: [point] });
+  assert.deepEqual(range, { f1: 2037.125, f2: 2037.125 });
+  assert.equal(formatDisplayRange(range), "2037.125 МГц");
+  assert.equal(displayRangeNotice(range), "Одна частота · 2037.125 МГц");
+  assert.deepEqual(frequencyTicks(range!, 800), []);
+  const mixed = displayRange({ ...state, sdrBands: [point, { f1Mhz: 2200, f2Mhz: 2400 }] });
+  assert.deepEqual(mixed, { f1: 2037.125, f2: 2400 });
+  assert.equal(displayRangeNotice(mixed), null);
+  assert.deepEqual(displayRange({ ...state, sdrF1: "2037.125", sdrF2: "2037.125" }), range);
 });
 
 test("fractional axis labels stay distinct at narrow and wide spans", () => {

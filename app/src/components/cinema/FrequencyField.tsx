@@ -12,7 +12,7 @@ import {
   waterfallBandChanged,
 } from "../../sense/waterfall";
 import { useLegion } from "../../state/store";
-import { displayRange, formatDisplayRange, formatFrequency, frequencyTicks } from "../displayRange";
+import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "../displayRange";
 
 export function FrequencyField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -68,13 +68,14 @@ export function FrequencyField() {
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
 
-      if (!range) {
+      const notice = displayRangeNotice(range);
+      if (!range || notice) {
         lastLo = Number.NaN;
         lastHi = Number.NaN;
         ctx.fillStyle = "rgba(187, 201, 210, 0.7)";
         ctx.font = "11px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText("Укажите корректные F1 и F2", cssW / 2, cssH / 2);
+        ctx.fillText(notice ?? "Укажите корректные F1 и F2", cssW / 2, cssH / 2);
         raf = requestAnimationFrame(draw);
         return;
       }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Проверка изоляции ошибки 3D</title>
+  <div id="root"></div>
+  <script type="module">
+    // Manual regression fixture: open /scripts/scene-boundary.html in Vite.
+    // The deliberate exception exercises the same boundary as the real Canvas.
+    import { createElement as h, StrictMode, useState } from "react";
+    import { createRoot } from "react-dom/client";
+    import { SceneBoundary } from "/src/components/SceneBoundary.tsx";
+
+    function SceneProbe() {
+      const [failed, fail] = useState(false);
+      if (failed) throw new Error("Intentional scene-boundary regression test");
+      return h("button", { onClick: () => fail(true) }, "Вызвать ошибку сцены");
+    }
+    function Fixture() {
+      const [count, setCount] = useState(0);
+      return h("main", null,
+        h("h1", null, "Проверка изоляции ошибки 3D"),
+        h("p", { role: "status" }, `Панель доступна: ${count}`),
+        h("button", { onClick: () => setCount(count + 1) }, "Проверить панель"),
+        h(SceneBoundary, null, h(SceneProbe)),
+      );
+    }
+    createRoot(document.getElementById("root")).render(h(StrictMode, null, h(Fixture)));
+  </script>
+</html>

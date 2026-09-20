@@ -8,7 +8,7 @@ import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
 import { dbmToUnit, heatRgb } from "../sense/waterfall";
 import { useLegion } from "../state/store";
-import { displayRange, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
+import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
 function yOf(dbm: number, lo: number, hi: number, top: number, h: number): number {
   const t = (dbm - lo) / Math.max(hi - lo, 1e-6);
@@ -56,14 +56,15 @@ export function SpectrumScope() {
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
 
-      if (!range) {
+      const notice = displayRangeNotice(range);
+      if (!range || notice) {
         if (lastAxisKey) rtsa.reset();
         lastAxisKey = "";
         lastRtsaSrc = null;
         ctx.fillStyle = "rgba(232,228,220,0.62)";
         ctx.font = "12px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText("Укажите корректные F1 и F2", cssW / 2, cssH / 2);
+        ctx.fillText(notice ?? "Укажите корректные F1 и F2", cssW / 2, cssH / 2);
         if (readoutRef.current !== "Коридор не задан") setReadout("Коридор не задан");
         raf = requestAnimationFrame(draw);
         return;
@@ -438,7 +439,7 @@ export function SpectrumScope() {
       </div>
       <canvas ref={canvasRef} className="scope-canvas" role="img" aria-label={`PSD · ${formatDisplayRange(range)}`} />
       <div className="scope-meta">
-        <span>{range ? readout : "Коридор не задан"}</span>
+        <span>{displayRangeNotice(range) ?? readout}</span>
         <span>
           {peak
             ? `пик ${peak.freqMhz.toFixed(3)} · ${peak.powerDbm.toFixed(1)} дБм · 3дБ ${w3.toFixed(2)} МГц`

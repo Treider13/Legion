@@ -16,7 +16,7 @@ function frequency(text: string): number {
 }
 
 function validRange(f1: number, f2: number): boolean {
-  return Number.isFinite(f1) && Number.isFinite(f2) && f1 >= 0 && f2 > f1 && Number.isFinite(f2 - f1);
+  return Number.isFinite(f1) && Number.isFinite(f2) && f1 >= 0 && f2 >= f1 && Number.isFinite(f2 - f1);
 }
 
 // Shared presentation rule from SpectrumScope: configured bands take precedence.
@@ -51,12 +51,20 @@ export function formatFrequency(mhz: number | null, resolution?: number): string
 }
 
 export function formatDisplayRange(range: DisplayRange | null): string {
-  return range ? `${formatFrequency(range.f1)}–${formatFrequency(range.f2)} МГц` : "Коридор не задан";
+  if (!range) return "Коридор не задан";
+  return range.f1 === range.f2
+    ? `${formatFrequency(range.f1)} МГц`
+    : `${formatFrequency(range.f1)}–${formatFrequency(range.f2)} МГц`;
+}
+
+export function displayRangeNotice(range: DisplayRange | null): string | null {
+  if (!range) return "Укажите корректные F1 и F2";
+  return range.f1 === range.f2 ? `Одна частота · ${formatDisplayRange(range)}` : null;
 }
 
 // Bounded, evenly spaced ticks for both canvases, including sub-MHz corridors.
 export function frequencyTicks({ f1, f2 }: DisplayRange, width: number): number[] {
-  if (!validRange(f1, f2)) return [];
+  if (!validRange(f1, f2) || f1 === f2) return [];
   const count = Math.max(2, Math.min(8, Math.floor(width / 88)));
   const rough = (f2 - f1) / count;
   const unit = 10 ** Math.floor(Math.log10(rough));
