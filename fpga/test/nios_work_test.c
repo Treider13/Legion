@@ -1528,6 +1528,52 @@ int main(void)
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT x40: PEAK_KHZ = 2453.5", khz == 2453500);
     }
+
+    /* SURVEY x40: отказ hop на stare не должен вернуть LMS TX (U4 walker). */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 28000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    t_control = 0x6;
+    CHECK("FFT SURVEY x40 hopfail: ARM",
+          legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    lms_fail_tx = false;
+    {
+        int li;
+        for (li = 0; li < 2; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 0) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 0);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 0);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)28000000 * 5 / 1000;
+            if (li == 1) {
+                lms_fail_tx = true;
+            }
+            legion_work();
+        }
+    }
+    CHECK("FFT SURVEY x40 hopfail: LMS TX остался снят",
+          (t_control & 0x4u) == 0);
+    lms_fail_tx = false;
     legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
     legion_reg_write(LEGION_REG_FFT_CTRL, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);

@@ -1362,6 +1362,9 @@ static void legion_survey_begin_stare(uint32_t picked, uint32_t n)
     /* Hop не удался: ph остаётся PASS, last_i не двигаем.
      * Иначе FRAME прошлой клетки звал бы FIRE/unmute не на пике. */
     if (!legion_fft_enter_search(lo)) {
+        /* x40 hop_lo_ex: откат пишет cr|TX enable даже при unmute=false
+         * (U4 walker так задуман). SEARCH/SURVEY должны остаться mute. */
+        (void)legion_set_tx_mute(true);
         return;
     }
     /* Хост шлёт DC-notch (гейт на утечку LO в обзоре). Стоянка = LO на
