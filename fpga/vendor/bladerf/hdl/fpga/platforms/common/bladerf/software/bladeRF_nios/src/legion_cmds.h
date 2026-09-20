@@ -108,7 +108,8 @@ bool legion_air_down(void);
  * После deadman (если ARM жив и SCAN_CTRL.enable): шаг LO по коридору.
  * FFT_CTRL=0 (дефолт): взгляд = AIR_BW, гейт I²+Q², hop на центр взгляда.
  * FFT_CTRL.enable: SEARCH (TX mute) → FFT-бин → hop на точный Гц, FIRE_BW
- * (fs не трогаем), HOLD по энергии. n==1 при FFT — hop на пик, не «не шагает».
+ * (fs не трогаем), HOLD по энергии (PRIORITY как walker: пока det — не шагаем).
+ * n==1 при FFT — hop на пик, не «не шагает».
  * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);
 

@@ -94,9 +94,9 @@ static uint32_t legion_look_center_khz;
 static uint32_t legion_fire_khz;
 static uint32_t legion_fire_mag;
 static uint32_t legion_snap_frame;
+static bool     legion_snap_have; /* frame 7 бит: 0 — валидный кадр, не «пусто» */
 static uint8_t  legion_fft_st;
 static uint64_t legion_settle_t0;
-static bool     legion_resense;
 
 #define LEGION_FFT_ST_SEARCH  0
 #define LEGION_FFT_ST_SETTLE  1
@@ -213,9 +213,9 @@ static void legion_scan_reset(void)
     legion_fire_khz = 0;
     legion_fire_mag = 0;
     legion_snap_frame = 0;
+    legion_snap_have = false;
     legion_fft_st = LEGION_FFT_ST_SEARCH;
     legion_settle_t0 = 0;
-    legion_resense = false;
 }
 
 bool legion_air_up(bool rx, bool tx)
@@ -906,6 +906,7 @@ static bool legion_fft_enter_search(uint32_t center_khz)
     legion_hold_armed = false;
     legion_hold_t0 = 0;
     legion_snap_frame = 0;
+    legion_snap_have = false;
     return true;
 }
 
@@ -914,9 +915,7 @@ static void legion_fft_try_next(void)
     uint32_t const n = legion_scan_n();
     uint32_t const old_idx = legion_scan_idx;
     int const old_dir = legion_scan_dir;
-    bool const was_resense = legion_resense;
 
-    legion_resense = false;
     if (n > 1u) {
         legion_scan_advance();
     }
@@ -925,21 +924,11 @@ static void legion_fft_try_next(void)
     }
     legion_scan_idx = old_idx;
     legion_scan_dir = old_dir;
-    legion_resense = was_resense;
 }
 
 static void legion_fft_fire(uint32_t peak_khz, uint32_t mag)
 {
     legion_peak_khz = peak_khz;
-    if (legion_resense && mag <= legion_fire_mag && legion_fire_khz != 0) {
-        (void)legion_apply_bw(legion_fire_bw());
-        (void)legion_hop_lo_ex(legion_fire_khz, true);
-        legion_fft_st = LEGION_FFT_ST_HOLD;
-        legion_resense = false;
-        legion_scan_mark_look();
-        legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
-        return;
-    }
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
     if (!legion_apply_bw(legion_fire_bw())) {
@@ -949,9 +938,7 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag)
         return;
     }
     legion_fft_st = LEGION_FFT_ST_HOLD;
-    legion_resense = false;
     legion_scan_mark_look();
-    legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
 }
 
 static void legion_fft_walk(void)
@@ -1001,6 +988,7 @@ static void legion_fft_walk(void)
         }
         legion_fft_st = LEGION_FFT_ST_FRAME;
         legion_quiet_t0 = now;
+        legion_snap_have = false;
         legion_snap_frame = 0;
         return;
     }
@@ -1027,7 +1015,9 @@ static void legion_fft_walk(void)
             return;
         }
         frame = (w >> 24) & 0x7fu;
-        if (legion_snap_frame == 0) {
+        /* 7-бит frame в HDL: 0 — обычный кадр (обёртка 127→0), не сентинел. */
+        if (!legion_snap_have) {
+            legion_snap_have = true;
             legion_snap_frame = frame;
             return;
         }
@@ -1062,16 +1052,8 @@ static void legion_fft_walk(void)
         return;
     }
     if (det) {
-        /* PRIORITY: энергия держит FIRE. Раз в SETTLE_N — resense
-         * того же взгляда (mute), смена только если mag больше. */
-        if (now - legion_settle_t0 >= (uint64_t)settle) {
-            legion_resense = true;
-            if (!legion_fft_enter_search(legion_look_center_khz != 0
-                    ? legion_look_center_khz
-                    : legion_scan_center_khz(legion_scan_idx))) {
-                legion_resense = false;
-            }
-        }
+        /* PRIORITY — как energy-walker: пока энергия, LO не шагаем.
+         * Resense каждые SETTLE_N (6 мс / 4096 сэмплов) глушил бы TX. */
         return;
     }
     if (now - legion_quiet_t0 < quiet) {

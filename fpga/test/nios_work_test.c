@@ -681,10 +681,10 @@ int main(void)
     legion_work();
     CHECK("FFT: без энергии шумовой bin не шагает", rfic_n == 0);
     t_status = LEGION_STATUS_DET_ACTIVE;
-    t_peak_word = mk_peak(1, 3, 0x2000, 16);
+    t_peak_word = mk_peak(1, 0, 0x2000, 16); /* frame=0 валиден (обёртка 7 бит) */
     legion_work(); /* запомнить кадр */
-    CHECK("FFT: ждём новый кадр", rfic_n == 0);
-    t_peak_word = mk_peak(1, 4, 0x2000, 16);
+    CHECK("FFT: ждём новый кадр (в т.ч. после frame=0)", rfic_n == 0);
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
     legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → 2453.5 */
     CHECK("FFT n==1: hop LO на точный Гц (не весь взгляд)",
@@ -704,6 +704,11 @@ int main(void)
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT n==1: PEAK_KHZ = пик", khz == 2453500);
     }
+    rfic_n = 0;
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_tamer += 10000000; /* >> SETTLE_N: старый resense глушил бы TX */
+    legion_work();
+    CHECK("FFT PRIORITY + энергия → LO не шагает", rfic_n == 0);
 
     /* n>1: тишина после SETTLE → следующий взгляд, mute */
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2414000);
@@ -902,9 +907,9 @@ int main(void)
     t_tamer += 8;
     legion_work(); /* FRAME */
     t_status = LEGION_STATUS_DET_ACTIVE;
-    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    t_peak_word = mk_peak(1, 0, 0x2000, 16);
     legion_work();
-    t_peak_word = mk_peak(1, 2, 0x2000, 16);
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
     lms_n = 0; band_n = 0;
     legion_work();
     CHECK("FFT x40: FIRE hop LMS RX+TX", lms_n == 2 && band_n == 2);
