@@ -192,7 +192,7 @@ export function StartGate({ mode, onClose }: Props) {
         return;
       }
       const dwell = parseLocaleNumber(dwellMs);
-      if (dispatch === "turn" && (!Number.isFinite(dwell) || dwell <= 0)) {
+      if ((dispatch === "turn" || dispatch === "park") && (!Number.isFinite(dwell) || dwell <= 0)) {
         setErr("Задайте выдержку числом (0,4 и 0.4 — 400 мкс).");
         return;
       }
@@ -249,8 +249,10 @@ export function StartGate({ mode, onClose }: Props) {
                 Взгляд, МГц
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
-              {dispatch === "turn" && (
-                <label title="Сколько миллисекунд держать усилитель на найденной частоте, затем шаг к следующей (можно 0.4).">
+              {(dispatch === "turn" || dispatch === "park") && (
+                <label title={dispatch === "park"
+                  ? "Сколько миллисекунд держать взгляд на всплеске после обзора, затем снова глухой проход."
+                  : "Сколько миллисекунд держать усилитель на найденной частоте, затем шаг к следующей (можно 0.4)."}>
                   Выдержка, мс
                   <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
                 </label>
@@ -269,7 +271,7 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={dispatch === "park"}
                 className={dispatch === "park" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setDispatch("park")}
-                title="Один LO на середине коридора. Скачки внутри взгляда идут на усилитель цифрой, без перестройки PLL."
+                title="Узкий коридор — один LO на середине. Шире взгляда — глухой обзор, затем взгляд на всплеск на выдержке, снова обзор."
               >
                 <strong>Стоянка</strong>
                 <span>{autoDispatchOptionRu("park")}.</span>

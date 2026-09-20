@@ -9,7 +9,7 @@
   {"op":"arm", "mode":"player"|"nco"|"lb_gated"|"lb_always", "wd":true,
    "det_thr":int, "det_shift":int, "freq_mhz":float, "gain_db":int,
    "scan_enable":bool, "scan_f1_mhz":float, "scan_f2_mhz":float,
-   "scan_turn":bool, "scan_park":bool, "scan_dwell_us":int, "scan_dwell_ms":float,
+   "scan_turn":bool, "scan_park":bool, "scan_survey":bool, "scan_dwell_us":int, "scan_dwell_ms":float,
    "fft_enable":bool, "fft_dc_notch":bool, "fire_bw_mhz":float,
    "search_bw_mhz":float, "settle_n":int,
    "scan_bands":[{"f1_mhz":float,"f2_mhz":float}, ...]}
@@ -601,7 +601,7 @@ class LegionGateway:
             return False, why
         if not self.fpga.set_scan_corridor(
                 float(f1), float(f2), True, bool(msg.get("scan_turn")), dwell,
-                bool(msg.get("scan_park"))):
+                bool(msg.get("scan_park")), bool(msg.get("scan_survey"))):
             return False, "запись SCAN_* не удалась"
         if not bool(msg.get("fft_enable")):
             if not self.fpga.write_reg(lf.REG_FFT_CTRL, 0):

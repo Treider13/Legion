@@ -47,8 +47,8 @@ package legion_pkg is
     -- шага LO. Хост пишет при ARM перехвата; USB в гейт RX→TX не входит.
     constant LEGION_REG_SCAN_F1_KHZ  : natural := 16#0E#; -- начало коридора, кГц
     constant LEGION_REG_SCAN_F2_KHZ  : natural := 16#0F#; -- конец коридора, кГц
-    constant LEGION_REG_SCAN_CTRL    : natural := 16#10#; -- bit0 enable, bit1 turn
-    constant LEGION_REG_SCAN_DWELL_US : natural := 16#11#; -- выдержка turn от детекта, мкс
+    constant LEGION_REG_SCAN_CTRL    : natural := 16#10#; -- bit0 en, bit1 turn, bit2 park, bit3 survey
+    constant LEGION_REG_SCAN_DWELL_US : natural := 16#11#; -- выдержка turn/survey-стоянки, мкс
     -- Точный Гц в взгляде: FFT-пик + цифровой вырез на стоящем LO. 0x12–0x14/0x17–0x1B —
     -- только NIOS (HDL when others => null), кроме FFT_CTRL и mux 0x15.
     constant LEGION_REG_SEARCH_BW_HZ : natural := 16#12#; -- analog BW обзора, Гц; 0 = AIR_BW

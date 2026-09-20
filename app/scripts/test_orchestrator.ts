@@ -1351,14 +1351,32 @@ async function main(): Promise<void> {
     return p.ok && p.fftEnable && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
       && p.reason.includes("точный Гц") && !p.reason.includes("не шагает");
   })());
-  check("онбордовый xA4: 2400–2487 @ 56 FFT+PARK — одна стоянка 2443.5", (() => {
+  check("онбордовый xA4: 2400–2487 @ 56 FFT+Стоянка — SURVEY (два взгляда)", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2487 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
       fftEnable: true,
     });
-    return p.ok && p.park && p.centers.length === 1 && p.firstMhz === 2443.5
+    return p.ok && p.survey && !p.park && p.centers.length === 2 && p.firstMhz === 2428
+      && p.centers[1] === 2484 && p.reason.includes("глухой проход");
+  })());
+  check("онбордовый xA4: 2440–2480 @ 56 FFT+PARK — одна стоянка", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2440, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
+      fftEnable: true,
+    });
+    return p.ok && p.park && !p.survey && p.centers.length === 1 && p.firstMhz === 2460
       && p.reason.includes("стоянка") && p.reason.includes("PLL не гоняем");
+  })());
+  check("онбордовый xA4: 2000–3000 @ 56 FFT+Стоянка — SURVEY 18 взглядов", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2000, f2Mhz: 3000 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.survey && !p.park && p.centers.length === 18 && p.firstMhz === 2028
+      && p.centers[17] === 2980;
   })());
   check("онбордовый xA4: 2400–2500 @ 56 FFT+TURN — 2 взгляда, выдержка 0.4", (() => {
     const p = planOnboardIntercept({
@@ -1379,14 +1397,23 @@ async function main(): Promise<void> {
     return c.fft_enable === true && c.scan_turn === true && c.scan_dwell_us === 400
       && c.scan_f1_mhz === 2400 && c.scan_f2_mhz === 2500;
   })());
-  check("ARM FFT+PARK несёт scan_park и центр 2443.5", (() => {
+  check("ARM FFT+PARK несёт scan_park и центр 2460 (узкий коридор)", (() => {
     const c = fpgaArmCmd("lb_gated", {
-      detThr: 5000, detShift: 4, token: "t", freqMhz: 2443.5,
-      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2487,
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2460,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2440, scanF2Mhz: 2480,
       scanPark: true, scanDwellMs: 0.4, fftEnable: true, fireBwMhz: 2,
     });
-    return c.fft_enable === true && c.scan_park === true && c.scan_turn === false
-      && c.freq_mhz === 2443.5 && c.scan_f1_mhz === 2400;
+    return c.fft_enable === true && c.scan_park === true && c.scan_survey === false
+      && c.scan_turn === false && c.freq_mhz === 2460 && c.scan_f1_mhz === 2440;
+  })());
+  check("ARM FFT+SURVEY несёт scan_survey, не park", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2028,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2000, scanF2Mhz: 3000,
+      scanSurvey: true, scanDwellMs: 3000, fftEnable: true, fireBwMhz: 2,
+    });
+    return c.fft_enable === true && c.scan_survey === true && c.scan_park === false
+      && c.scan_f1_mhz === 2000 && c.scan_dwell_us === 3_000_000;
   })());
   check("онбордовый план без fftEnable — walker как раньше", (() => {
     const p = planOnboardIntercept({
@@ -1778,7 +1805,8 @@ async function main(): Promise<void> {
     storeSrc.includes("scanTurn: plan.turn") && storeSrc.includes("scanDwellMs: plan.dwellMs")
     && storeSrc.includes('turn: s.autoDispatch === "turn"'));
   check("онбордовый ARM несёт PARK стоянки",
-    storeSrc.includes("scanPark: plan.park") && storeSrc.includes('park: s.autoDispatch === "park"')
+    storeSrc.includes("scanPark: plan.park") && storeSrc.includes("scanSurvey: plan.survey")
+      && storeSrc.includes('park: s.autoDispatch === "park"')
     && storeSrc.includes('autoDispatch: "park"'));
   // Аудит P1-3: handoff обязан спросить шлюз ДО парковки — FAKE/мёртвый шлюз
   // = честный отказ, ARM в эмулятор не уходит (раньше проверки не было —

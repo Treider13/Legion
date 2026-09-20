@@ -1327,6 +1327,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanF2Mhz: f2,
           scanTurn: plan.turn,
           scanPark: plan.park,
+          scanSurvey: plan.survey,
           scanDwellMs: plan.dwellMs,
           fftEnable: true,
           fireBwMhz: plan.fireBwMhz,

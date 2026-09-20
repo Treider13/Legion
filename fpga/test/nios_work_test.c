@@ -19,6 +19,7 @@
  *   FFT+TURN: FIRE без hop PLL (цифровой вырез, AIR=центр взгляда, PEAK=~2444);
  *             выдержка SCAN_DWELL_US, затем следующий взгляд 2484.
  *   FFT+PARK: 2400–2487 → один центр 2443.5; dwell+энергия не гоняет PLL.
+ *   FFT+SURVEY: 2000–3000 глухой 18 клеток; пик 2434 → LO 2434; T → снова 2028.
  * =========================================================================*/
 #include <stdio.h>
 #include <stdint.h>
@@ -935,6 +936,241 @@ int main(void)
     rfic_n = 0;
     legion_work();
     CHECK("FFT PARK: тишина → не mute/SETTLE на том же LO", rfic_n == 0);
+
+    /* FFT SURVEY: 2000–3000 @ 56. Глухой проход 0…17, TX mute.
+     * Клетка 7 = 2420, bin 64 → 2434. После прохода LO=2434, не 2500. */
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY 2000-3000: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY 2000-3000: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_n = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work(); /* SEARCH */
+            t_tamer += 8;
+            legion_work(); /* SETTLE → FRAME, mute */
+            if (li == 7) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 64);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 64);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work(); /* next / pick */
+        }
+    }
+    CHECK("FFT SURVEY: 18 клеток без unmute",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY: после прохода AIR = 2434, не 2500",
+              khz == 2434000);
+        legion_reg_read(LEGION_REG_SCAN_F1_KHZ, &khz);
+        CHECK("FFT SURVEY: F1 конверт 2000", khz == 2000000);
+        legion_reg_read(LEGION_REG_SCAN_F2_KHZ, &khz);
+        CHECK("FFT SURVEY: F2 конверт 3000", khz == 3000000);
+    }
+    t_tamer += 8;
+    rfic_n = 0;
+    legion_work(); /* STARE SETTLE unmute */
+    CHECK("FFT SURVEY: стоянка unmute после SETTLE",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
+    rfic_n = 0;
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    legion_work(); /* T → снова обзор, клетка 0 = 2028, mute */
+    CHECK("FFT SURVEY: после T hop на 2028, mute",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2028000ULL * 1000ULL) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_SCAN_F1_KHZ, &khz);
+        CHECK("FFT SURVEY: F1 после T не стёрт", khz == 2000000);
+        legion_reg_read(LEGION_REG_SCAN_F2_KHZ, &khz);
+        CHECK("FFT SURVEY: F2 после T не стёрт", khz == 3000000);
+    }
+
+    /* Два hit: 2084 mag меньше, 2812 больше. Первый круг — 2812; после T — 2084. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY 2hit: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY 2hit: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 1) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x1000, 0);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x1000, 0);
+                legion_work();
+            } else if (li == 14) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 0);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 0);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY 2hit: первый круг AIR = 2812", khz == 2812000);
+    }
+    t_tamer += 8;
+    legion_work(); /* stare unmute */
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    legion_work(); /* restart pass */
+    t_status = 0;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 1) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x1000, 0);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x1000, 0);
+                legion_work();
+            } else if (li == 14) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 0);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 0);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY 2hit: после T AIR = 2084 (следующий hit)", khz == 2084000);
+    }
+
+    /* Пустой 2000–3000: unmute нет, после прохода не 2500. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY empty: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY empty: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_n = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    CHECK("FFT SURVEY empty: unmute нет",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY empty: AIR ≠ 2500", khz != 2500000);
+    }
+
+    /* 2300–2500: 4 взгляда. Пик bin128 @ 2328 → ~2300, clip LO=2328. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2328000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY 2300-2500: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY 2300-2500: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 4; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 0) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 128);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 128);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY 2300-2500: clip пика 2310 → LO 2328", khz == 2328000);
+    }
 
     /* U5: FFT/BAND readback не STATUS */
     legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);

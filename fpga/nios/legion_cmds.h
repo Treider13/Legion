@@ -40,7 +40,7 @@
  * шагает LO сама. USB в круге «энергия → TX» не участвует. */
 #define LEGION_REG_SCAN_F1_KHZ    0x0E  /* начало коридора, кГц */
 #define LEGION_REG_SCAN_F2_KHZ    0x0F  /* конец коридора, кГц */
-#define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn, bit2=park */
+#define LEGION_REG_SCAN_CTRL      0x10  /* bit0=enable, bit1=turn, bit2=park, bit3=survey */
 #define LEGION_REG_SCAN_DWELL_US  0x11  /* выдержка turn от первого детекта, мкс; 0 = 3e6 */
 /* Точный Гц: FFT-пик на FPGA. 0x12–0x14/0x17–0x1B — статики NIOS.
  * 0x15 — mux STATUS (IOWR AWS=0x15, IORD STATUS). 0x16 — HDL+NIOS. */
@@ -58,9 +58,11 @@
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
 #define LEGION_SCAN_CTRL_PARK     (1u << 2) /* ICE9: один LO на середине коридора */
+#define LEGION_SCAN_CTRL_SURVEY   (1u << 3) /* глухой обзор → 56 МГц на всплеск → T */
 #define LEGION_FFT_CTRL_EN        (1u << 0)
 #define LEGION_FFT_CTRL_DC_NOTCH  (1u << 1)
 #define LEGION_BAND_MAX           8u
+#define LEGION_SURVEY_LOOK_MAX    128u
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
 #define LEGION_SETTLE_N_DEFAULT   4096u
 #define LEGION_REG_MAX            LEGION_REG_SETTLE_N
@@ -115,6 +117,9 @@ bool legion_air_down(void);
  * PRIORITY: пока det — взгляд не шагаем;
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
  * хоп внутри взгляда = live FFT → xlat.
+ * SURVEY (bit3, FFT on, коридор шире взгляда): глухой проход 0…n−1
+ * (enter_search mute, без unmute после SETTLE) → LO на clip(PEAK)
+ * → работа SCAN_DWELL от unmute → снова обзор. F1/F2 не пишет.
  * n==1 / PARK в HOLD: не enter_search на тот же LO (mute+SETTLE ломает µs).
  * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);

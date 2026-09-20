@@ -87,7 +87,7 @@ export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
 
 export function autoDispatchOptionRu(dispatch: AutoDispatch): string {
   if (dispatch === "priority") return "ПРИОРИТЕТ (сильнее рядом — на неё)";
-  if (dispatch === "park") return "СТОЯНКА (один взгляд, хопы внутри цифрой)";
+  if (dispatch === "park") return "СТОЯНКА (узкий — один LO, хопы цифрой; шире взгляда — обзор и взгляд на всплеск)";
   return "ОБЫЧНЫЙ (по очереди, выдержка)";
 }
 
@@ -112,7 +112,7 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       dispatch === "priority"
         ? "приоритет: держим; сильнее рядом — на неё, пропала — следующая"
         : dispatch === "park"
-          ? "стоянка: один взгляд, хопы внутри цифрой"
+          ? "стоянка: узкий коридор — один LO, хопы внутри цифрой; шире взгляда — глухой обзор и взгляд на всплеск"
           : "обычный: живые по очереди, каждая выдержка на усилителе";
     return {
       useScanner: true,
