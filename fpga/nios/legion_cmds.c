@@ -1323,19 +1323,28 @@ static void legion_survey_try_score(void)
     }
 }
 
-static void legion_survey_enter_look(uint32_t i, uint32_t n)
+static bool legion_survey_enter_look(uint32_t i, uint32_t n)
 {
     uint32_t c;
 
     if (n == 0) {
-        return;
+        return false;
     }
     if (i >= n) {
         i = 0;
     }
     legion_survey_i = i;
     c = legion_scan_center_khz(i);
-    (void)legion_fft_enter_search(c);
+    if (legion_fft_enter_search(c)) {
+        return true;
+    }
+    /* Hop/BW отказ: look_set и fft_st иначе остаются от прошлой фазы.
+     * После T это HOLD — PASS ждёт FRAME и обзор зависает.
+     * Mute: enter_search мог упасть на apply_bw до hop_lo_ex (TX ещё открыт). */
+    (void)legion_set_tx_mute(true);
+    legion_scan_look_set = false;
+    legion_fft_st = LEGION_FFT_ST_SEARCH;
+    return false;
 }
 
 static void legion_survey_begin_stare(uint32_t picked, uint32_t n)

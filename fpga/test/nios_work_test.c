@@ -1010,6 +1010,63 @@ int main(void)
         CHECK("FFT SURVEY: F2 после T не стёрт", khz == 3000000);
     }
 
+    /* После T hop на 2028 отказал: без сброса look_set/HOLD PASS молчит навсегда. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
+    legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT SURVEY Tretry: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT SURVEY Tretry: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    {
+        int li;
+        for (li = 0; li < 18; li++) {
+            legion_work();
+            t_tamer += 8;
+            legion_work();
+            if (li == 7) {
+                t_status = LEGION_STATUS_DET_ACTIVE;
+                t_peak_word = mk_peak(1, 0, 0x2000, 64);
+                legion_work();
+                t_peak_word = mk_peak(1, 1, 0x2000, 64);
+                legion_work();
+            } else {
+                t_status = 0;
+                t_peak_word = 0;
+            }
+            t_tamer += (uint64_t)56000000 * 5 / 1000;
+            legion_work();
+        }
+    }
+    t_tamer += 8;
+    legion_work(); /* stare unmute */
+    rfic_fail_tx_freq = true;
+    rfic_n = 0;
+    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    legion_work(); /* T → hop 2028 отказ */
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        CHECK("FFT SURVEY Tretry: отказ — AIR остался 2434", khz == 2434000);
+    }
+    CHECK("FFT SURVEY Tretry: отказ — mute, не unmute",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+    rfic_fail_tx_freq = false;
+    rfic_n = 0;
+    legion_work(); /* повтор enter_look(0) */
+    CHECK("FFT SURVEY Tretry: повтор hop 2028, mute",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2028000ULL * 1000ULL) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 1) >= 0 &&
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) < 0);
+
     /* Два hit: 2084 mag меньше, 2812 больше. Первый круг — 2812; после T — 2084. */
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2028000);
     legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);

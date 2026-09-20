@@ -121,6 +121,7 @@ bool legion_air_down(void);
  * (enter_search mute, без unmute после SETTLE) → LO на clip(PEAK)
  * → HDL DC-notch снят (тон в bin 0), SCAN_DWELL от unmute → снова обзор.
  * F1/F2 не пишет. Отказ hop не переводит в stare (не unmute на старом LO).
+ * Отказ hop в обзоре/после T: SEARCH + look_set=0 — повтор, не зависание HOLD.
  * n==1 / PARK в HOLD: не enter_search на тот же LO (mute+SETTLE ломает µs).
  * USB в круге «увидел → усилитель» нет. */
 void legion_work(void);
