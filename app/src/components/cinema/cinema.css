@@ -54,6 +54,7 @@
 }
 
 .legion-root.cinema .hero-status.st-search,
+.legion-root.cinema .hero-status.st-unknown,
 .legion-root.cinema .hero-status.st-relay-wait {
   color: #ffd479;
   border-color: rgba(255, 212, 121, 0.45);

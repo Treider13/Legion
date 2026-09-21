@@ -16,10 +16,18 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const signalTxActive = useLegion((s) => s.signalTxActive);
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const fpgaBusy = useLegion((s) => s.fpgaBusy);
+  const fpgaStopPending = useLegion((s) => s.fpgaStopPending);
+  const fpgaReleasing = useLegion((s) => s.fpgaStopPhase === "release");
+  const fpgaStopReason = useLegion((s) => s.fpgaStatus?.reason);
   const lastCue = useLegion((s) => s.lastCueReason);
   const lastLog = useLegion((s) => s.log[s.log.length - 1]?.text ?? "");
   const workspace = useLegion((s) => s.workspace);
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy });
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending });
+  const message = fpgaStopPending
+    ? fpgaReleasing
+      ? `Освобождаем соединение: ${fpgaStopReason ?? "ожидаем подтверждение шлюза"}`
+      : `Остановка FPGA не подтверждена: ${fpgaStopReason ?? "ожидаем ответ шлюза"}`
+    : lastCue || lastLog;
 
   return (
     <footer className="cinema-dock">
@@ -55,8 +63,8 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
       )}
 
       <div className="cinema-dock-end">
-        <p className="cinema-whisper" title={lastCue || lastLog}>
-          {lastCue || lastLog || "Запустить → коридор → умная атака, эфир+FPGA или только FPGA."}
+        <p className="cinema-whisper" title={message}>
+          {message || "Запустить → коридор → умная атака, эфир+FPGA или только FPGA."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

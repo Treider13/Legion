@@ -269,7 +269,7 @@ export function SignalPanel() {
               aria-label="Режим FPGA"
               value={s.fpgaMode === "lb_gated" ? "player" : s.fpgaMode}
               onChange={(e) => s.setFpgaMode(e.target.value as typeof s.fpgaMode)}
-              disabled={s.fpgaArmed || s.fpgaBusy}
+              disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
             >
               <option value="player">Генерация сигнала — волна из памяти FPGA</option>
               <option value="nco">Тон — DDS из FPGA</option>
@@ -283,7 +283,7 @@ export function SignalPanel() {
               type="password"
               value={s.fpgaToken}
               onChange={(e) => s.setFpgaToken(e.target.value)}
-              disabled={s.fpgaArmed || s.fpgaBusy}
+              disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
               spellCheck={false}
               placeholder="LEGION_FPGA_TOKEN"
             />
@@ -291,7 +291,7 @@ export function SignalPanel() {
           </div>
         )}
         <div className="power-row">
-          {s.fpgaArmed ? (
+          {s.fpgaArmed || s.fpgaStopPending ? (
             <button className="btn-danger" disabled={s.fpgaBusy} onClick={() => void s.fpgaDisarm()}>
               ОСТАНОВИТЬ FPGA
             </button>
@@ -311,7 +311,14 @@ export function SignalPanel() {
             СТАТУС
           </button>
         </div>
-        {s.fpgaStatus && (
+        {s.fpgaStopPending && (
+          <p role="status">
+            {s.fpgaStopPhase === "release"
+              ? `Освобождаем соединение: ${s.fpgaStatus?.reason ?? "ожидаем подтверждение шлюза"}`
+              : `Остановка FPGA не подтверждена: ${s.fpgaStatus?.reason ?? "ожидаем ответ шлюза"}`}
+          </p>
+        )}
+        {!s.fpgaStopPending && s.fpgaStatus && (
           <div className="sdr-facts">
             <div>
               {s.fpgaStatus.ok

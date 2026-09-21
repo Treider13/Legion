@@ -86,7 +86,7 @@ export async function runCinemaStop(): Promise<void> {
   // Ручной ARM панели тоже в полёте виден как fpgaBusy — Стоп обязан
   // отозвать и его, иначе кнопка видна, но ARM доезжает.
   s.abortFpgaArm();
-  if (s.fpgaArmed) await s.fpgaDisarm();
+  if (s.fpgaArmed || s.fpgaStopPending) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
   if (s.scanRunning) s.stopScan();
   if (s.corridorRunning) await s.corridorStop();
@@ -99,6 +99,7 @@ export function cinemaIsLive(s: {
   signalTxActive: boolean;
   fpgaArmed: boolean;
   fpgaBusy: boolean;
+  fpgaStopPending?: boolean;
 }): boolean {
-  return s.scanRunning || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy;
+  return s.scanRunning || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending === true;
 }

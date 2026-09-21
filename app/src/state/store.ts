@@ -359,6 +359,10 @@ interface LegionStore {
    *  ему одному положен автовозврат в скан (стагнация/watchdog/heartbeat). */
   fpgaAutoCycle: boolean;
   fpgaBusy: boolean;
+  /** СТОП ещё не завершён: ждём DISARM или освобождение USB. Блокирует запуск. */
+  fpgaStopPending: boolean;
+  /** Незавершённый этап: отключение и освобождение соединения подтверждаются отдельно. */
+  fpgaStopPhase: "disarm" | "release" | null;
   fpgaStatus: FpgaStatus | null;
   /** Шлюз распознал ревизию legion в FPGA. null — неизвестно (старый шлюз/USB у хоста). */
   fpgaLegion: boolean | null;
@@ -602,19 +606,15 @@ let gFpgaObserveInflight = false;
  *  продлевали бы доказательство вечно, хотя FPGA уже погасила TX.
  *  Часы — performance.now() (монотонные): скачок NTP по Date.now() не должен
  *  ни продлевать, ни подделывать доказательство.
- *  Тишина дольше FPGA_DEADMAN_PROOF_MS — железо погашено своими слоями
- *  (FPGA ~1 с независимо от ноутбука и шлюза; сторож шлюза 2.5 с), и
- *  зависший локальный fpgaArmed можно снять честно (см. fpgaDisarm). */
+ *  Давность kick — диагностическое значение, а не подтверждение DISARM:
+ *  без ответа шлюза приложение не может объявлять остановку состоявшейся. */
 let gLastKickOkMs: number | null = null;
-/** > FPGA watchdog (~1 с при любом fs — watchdog_limit_for_fs) + сторож шлюза
- *  (KICK_TIMEOUT_S, дефолт 2.5 с). */
-const FPGA_DEADMAN_PROOF_MS = 3000;
 
 export function peekLastKickOkMs(): number | null {
   return gLastKickOkMs;
 }
 
-/** Тесты: подделать давность последнего kick (deadman-доказательство). */
+/** Тесты: подделать давность последнего kick. */
 export function pokeLastKickOkMs(v: number | null): void {
   gLastKickOkMs = v;
 }
@@ -877,6 +877,15 @@ export const useLegion = create<LegionStore>((set, get) => {
   const pushLog = (dir: LogEntry["dir"], text: string) =>
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
 
+  // Один адрес и одна попытка на весь цикл остановки, включая ручные повторы.
+  let fpgaStopTarget: { gateway: string; token: string; phase: "disarm" | "release" } | null = null;
+  let fpgaDisarmFlight: Promise<void> | null = null;
+  let fpgaDisarmRetry: ReturnType<typeof setTimeout> | null = null;
+  const fpgaConnectionLocked = (): boolean => {
+    const s = get();
+    return s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending;
+  };
+
   const ingestHostLab = (bins: ScanBin[], now: number): void => {
     const s = get();
     const filtered = s.labSpurOn ? gLabSpur.filter(bins) : bins;
@@ -1015,6 +1024,7 @@ export const useLegion = create<LegionStore>((set, get) => {
   const beginFpgaKick = (): void => {
     stopFpgaKick();
     stopFpgaObserve();
+    set({ fpgaStatus: null });
     // ARM только что подтвердился ответом шлюза, а enable 0→1 сбросил
     // счётчик watchdog в железе — это точка отсчёта deadman-доказательства.
     gLastKickOkMs = performance.now();
@@ -1503,6 +1513,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, signalTxActive: false });
   };
 
+  const releaseCancelledFpgaUsb = async (target: { sdrGateway: string; fpgaToken: string }): Promise<void> => {
+    // ARM ещё не отправляли. Повторяем только освобождение, пока шлюз
+    // не подтвердит его; адрес остаётся адресом отменённого запуска.
+    fpgaStopTarget ??= { gateway: target.sdrGateway, token: target.fpgaToken, phase: "release" };
+    await get().fpgaDisarm();
+  };
+
   const parkFpgaLo = async (opts: {
     midMhz: number;
     analogMhz: number;
@@ -1556,7 +1573,7 @@ export const useLegion = create<LegionStore>((set, get) => {
    *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy. */
   const startOnboardIntercept = async (): Promise<void> => {
     const s = get();
-    if (s.fpgaArmed || s.fpgaBusy || gFpgaHandoffBusy) return;
+    if (s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending || gFpgaHandoffBusy) return;
     const blocked = modeConflict("sdr", s.corridorRunning, false);
     if (blocked) {
       pushLog("sys", blocked);
@@ -1668,7 +1685,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           bwMhz: plan.lookMhz,
           gw,
         });
-        if (gFpgaAirGen !== airGen) return;
+        if (gFpgaAirGen !== airGen) {
+          await releaseCancelledFpgaUsb(s);
+          return;
+        }
         if (!pk.ok) {
           pushLog("sys", `${FPGA_AIR_MODE_RU}: x40 — Soapy не поставил fs/BW/первый LO, ARM нет`);
           return;
@@ -1677,7 +1697,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       } else {
         await releaseSoapyForFpga();
         const acq = await gw({ op: "usb", action: "acquire" });
-        if (gFpgaAirGen !== airGen) return;
+        if (gFpgaAirGen !== airGen) {
+          await releaseCancelledFpgaUsb(s);
+          return;
+        }
         if (!acq.ok) {
           pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
           return;
@@ -1707,14 +1730,15 @@ export const useLegion = create<LegionStore>((set, get) => {
         }),
       );
       if (gFpgaAirGen !== airGen) {
-        if (r.ok) {
-          const d = await gw({ op: "disarm" });
-          if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
-        }
+        // ARM уже отправлен. Отрицательный ответ может означать потерю
+        // связи после записи: отмена требует подтверждённого DISARM.
+        if (!r.ok) pushLog("sys", `FPGA: ответ на отменённый ARM: ${r.reason ?? "отказ"} — требуется подтверждение отключения`);
+        await get().fpgaDisarm();
         return;
       }
       if (!r.ok) {
         pushLog("sys", `${FPGA_AIR_MODE_RU} ARM: ${r.reason ?? "отказ"}`);
+        await get().fpgaDisarm();
         return;
       }
       set({
@@ -1747,7 +1771,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       stopFpgaKick();
       stopFpgaObserve();
       stopAirWalk();
-      if (get().fpgaArmed) {
+      if (get().fpgaArmed || get().fpgaStopPending) {
         // На micro NIOS сам уводит RFIC в standby по CTRL=0 (legion_cmds.c).
         const d = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
         // Отказ не прячем: состояние снимаем всё равно (цикл обязан жить),
@@ -1930,6 +1954,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaArmed: false,
     fpgaAutoCycle: false,
     fpgaBusy: false,
+    fpgaStopPending: false,
+    fpgaStopPhase: null,
     fpgaStatus: null,
     fpgaLegion: null,
     fpgaToken: "",
@@ -1972,7 +1998,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     setSdrAllowField: (field, v) => set({ [field]: v }),
     setPaMa: (ma) => set({ paMa: ma }),
     setAutoCue: (v) => set({ autoCue: v }),
-    setSdrId: (id) =>
+    setSdrId: (id) => {
+      if (id !== get().sdrId && fpgaConnectionLocked()) {
+        pushLog("sys", "Смена устройства заблокирована до подтверждённой остановки FPGA");
+        return;
+      }
       set({
         sdrId: id,
         sdrFlashName: defaultFlashName(id) || get().sdrFlashName,
@@ -1980,8 +2010,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         // подсказка-IP видна в placeholder поля. Иначе молча уезжаем в remote.
         sdrGateway: get().sdrGateway,
         sdrFlashConfirm: false,
-      }),
-    setSdrGateway: (v) => set({ sdrGateway: v }),
+      });
+    },
+    setSdrGateway: (v) => {
+      if (v === get().sdrGateway) return;
+      if (fpgaConnectionLocked()) {
+        pushLog("sys", "Смена шлюза заблокирована до подтверждённой остановки FPGA");
+        return;
+      }
+      stopFpgaObserve();
+      set({ sdrGateway: v, fpgaStatus: null, fpgaLegion: null });
+    },
     setSdrFlashName: (v) =>
       set({
         sdrFlashName: v,
@@ -1998,19 +2037,24 @@ export const useLegion = create<LegionStore>((set, get) => {
       }),
     setEsp32FlashConfirm: (v) => set({ esp32FlashConfirm: v }),
     setSdrEmulation: (v) => {
+      if (get().fpgaBusy || get().fpgaStopPending) {
+        pushLog("sys", "Смена бэкенда заблокирована до завершения операции FPGA — сначала СТОП");
+        return;
+      }
       // Смена бэкенда = новая эпоха. DISARM дожидаемся: иначе Soapy/мок
       // переключаются, а FPGA ещё держит TX до watchdog.
       void (async () => {
         gTxGen += 1;
         stopTxWatch();
         stopTxWalk();
-        if (get().fpgaArmed) await get().fpgaDisarm();
+        if (get().fpgaArmed || get().fpgaStopPending) await get().fpgaDisarm();
         else {
           stopFpgaKick();
           stopFpgaObserve();
           stopAirWalk();
           set({ fpgaArmed: false });
         }
+        if (get().fpgaStopPending) return;
         get().stopScan();
         gGate.reset();
         if (gLive) {
@@ -2493,7 +2537,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setFrequency: async () => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2514,7 +2558,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setPower: async (dbm) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2526,7 +2570,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setAtt: async (db) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2538,7 +2582,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     setRf: async (on) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || (on && get().fpgaStopPending));
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2586,7 +2630,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     corridorStart: async () => {
       if (!gClient) return;
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2721,7 +2765,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         else gSdr.txOff();
         // stopFpgaAir = disarm + USB хосту: после интерлока система в чистом
         // состоянии хоста (fpgaDisarm один оставлял бы USB у агента).
-        if (get().fpgaArmed) void get().stopFpgaAir();
+        if (get().fpgaArmed || get().fpgaStopPending) void get().stopFpgaAir();
         set({
           lastForwardMhz: null,
           lastForwardPowerDbm: null,
@@ -2739,7 +2783,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     applyPaCurrent: async () => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2753,7 +2797,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setPaEnabled: async (on) => {
       if (on) {
-        const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+        const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
         if (blocked) {
           pushLog("sys", blocked);
           return;
@@ -2771,7 +2815,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     cueTo: async (mhz) => {
-      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed);
+      const blocked = modeConflict("esp32", false, get().transmitArmed, get().fpgaArmed || get().fpgaStopPending);
       if (blocked) {
         pushLog("sys", blocked);
         return;
@@ -2839,7 +2883,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "ЗАШИТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
         return;
       }
-      if (s.fpgaArmed) {
+      if (s.fpgaArmed || s.fpgaStopPending) {
         pushLog("sys", "ЗАШИТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
         return;
       }
@@ -2919,7 +2963,15 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     setFpgaMode: (m) => set({ fpgaMode: m }),
 
-    setFpgaToken: (v) => set({ fpgaToken: v }),
+    setFpgaToken: (v) => {
+      if (v === get().fpgaToken) return;
+      if (fpgaConnectionLocked()) {
+        pushLog("sys", "Смена токена заблокирована до подтверждённой остановки FPGA");
+        return;
+      }
+      stopFpgaObserve();
+      set({ fpgaToken: v, fpgaStatus: null });
+    },
 
     setFpgaDetThr: (v) => set({ fpgaDetThr: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 }),
 
@@ -2936,7 +2988,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     fpgaArm: async () => {
       const s = get();
-      if (s.fpgaBusy) return;
+      if (s.fpgaBusy || s.fpgaStopPending) return;
       if (s.fpgaArmed) {
         pushLog("sys", "FPGA ARM: уже играет — сначала ОСТАНОВИТЬ FPGA");
         return;
@@ -3040,6 +3092,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           gw,
         });
         if (armRevoked()) {
+          await releaseCancelledFpgaUsb(s);
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
           return;
         }
@@ -3058,12 +3111,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (armRevoked()) {
-          // ARM уже прошёл на железе — снимаем, в UI не коммитим.
-          if (r.ok) {
-            const dAbort = await gw({ op: "disarm" });
-            if (!dAbort.ok) pushLog("sys", `FPGA DISARM: ${dAbort.reason ?? "отказ"}`);
-          }
+          // После отправки ARM потерянный ответ не доказывает отказ железа.
+          await get().fpgaDisarm();
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
+          return;
+        }
+        if (!r.ok) {
+          await get().fpgaDisarm();
           return;
         }
         if (r.ok) {
@@ -3097,7 +3151,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     startFpgaPath: async (path) => {
       const s0 = get();
-      if (s0.fpgaBusy) return false;
+      if (s0.fpgaBusy || s0.fpgaStopPending) return false;
       // Как у ручного fpgaArm: поверх живого ARM кино-старт не идёт —
       // иначе park/ARM кино перекрыл бы тракт под током.
       if (s0.fpgaArmed) {
@@ -3144,95 +3198,108 @@ export const useLegion = create<LegionStore>((set, get) => {
         airGen = gFpgaAirGen;
       }
 
-      get().stopScan();
-      if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
-      if (soloRevoked()) {
-        pushLog("sys", "FPGA solo: отменён оператором в полёте");
-        return false;
-      }
-      if (airRevoked()) {
-        pushLog("sys", "FPGA эфир: отменён оператором в полёте");
-        return false;
-      }
-
-      const bands = get().sdrBands;
-      const f1 =
-        path === "solo"
-          ? parseFloat(get().sdrF1)
-          : bands.length
-            ? Math.min(...bands.map((b) => b.f1Mhz))
-            : parseFloat(get().sdrF1);
-      const f2 =
-        path === "solo"
-          ? parseFloat(get().sdrF2)
-          : bands.length
-            ? Math.max(...bands.map((b) => b.f2Mhz))
-            : parseFloat(get().sdrF2);
-      const mid = (f1 + f2) / 2;
-      const analog = catalogCaps(get().sdrId).analogBwMhz;
-      const span = Math.max(f2 - f1, 0);
-      // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
-      // коридор шире канала либо ходится по стоянкам (micro), либо честно
-      // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
-
-      const gw = (cmd: Record<string, unknown>) =>
-        hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+      // Блокировка охватывает всю подготовку, включая первый ping.
+      // Иначе поздний ответ продолжит запуск уже после смены подключения.
+      let usbTouched = false;
       let usbOut = false;
-      const abortSoloIfRevoked = async (justArmed = false): Promise<boolean> => {
-        if (!soloRevoked()) return false;
-        pushLog("sys", "FPGA solo: отменён оператором в полёте");
-        stopSoloWalk();
-        // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
-        // иначе осиротевший опрос статуса тикал бы до следующей сессии.
-        stopFpgaKick();
-        stopFpgaObserve();
-        if (justArmed || get().fpgaArmed) {
-          const d = await gw({ op: "disarm" });
-          if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
-          set({ fpgaArmed: false, lastForwardMhz: null });
-        }
-        if (usbOut) {
-          await releaseSoapyForFpga();
-          const acq = await gw({ op: "usb", action: "acquire" });
-          if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
-          usbOut = false;
-        }
-        set({ fpgaPath: null });
-        return true;
-      };
-      const abortAirIfRevoked = async (justArmed = false): Promise<boolean> => {
-        if (!airRevoked()) return false;
-        pushLog("sys", "FPGA эфир: отменён оператором в полёте");
-        // Kick и observe неразрывны (см. abortSoloIfRevoked).
-        stopFpgaKick();
-        stopFpgaObserve();
-        stopAirWalk();
-        if (justArmed || get().fpgaArmed) {
-          const d = await gw({ op: "disarm" });
-          if (!d.ok) pushLog("sys", `FPGA DISARM: ${d.reason ?? "отказ"}`);
-          set({ fpgaArmed: false, lastForwardMhz: null });
-        }
-        set({ fpgaPath: null });
-        return true;
-      };
-
-      const ping = await gw({ op: "ping" });
-      if (await abortSoloIfRevoked()) return false;
-      if (await abortAirIfRevoked()) return false;
-      if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
-      const pingNo = fpgaGatewayRefused(ping);
-      if (pingNo) {
-        pushLog("sys", pingNo);
-        return false;
-      }
-      const noLegionPath = fpgaLegionMissing(ping);
-      if (noLegionPath) {
-        pushLog("sys", noLegionPath);
-        return false;
-      }
-
-      set({ fpgaBusy: true, fpgaPath: path, fpgaStatus: null });
+      set({ fpgaBusy: true, fpgaStatus: null });
       try {
+        get().stopScan();
+        if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
+        if (soloRevoked()) {
+          pushLog("sys", "FPGA solo: отменён оператором в полёте");
+          return false;
+        }
+        if (airRevoked()) {
+          pushLog("sys", "FPGA эфир: отменён оператором в полёте");
+          return false;
+        }
+
+        const bands = get().sdrBands;
+        const f1 =
+          path === "solo"
+            ? parseFloat(get().sdrF1)
+            : bands.length
+              ? Math.min(...bands.map((b) => b.f1Mhz))
+              : parseFloat(get().sdrF1);
+        const f2 =
+          path === "solo"
+            ? parseFloat(get().sdrF2)
+            : bands.length
+              ? Math.max(...bands.map((b) => b.f2Mhz))
+              : parseFloat(get().sdrF2);
+        const mid = (f1 + f2) / 2;
+        const analog = catalogCaps(get().sdrId).analogBwMhz;
+        const span = Math.max(f2 - f1, 0);
+        // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
+        // коридор шире канала либо ходится по стоянкам (micro), либо честно
+        // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
+
+        const gw = (cmd: Record<string, unknown>) => {
+          if (cmd.op === "usb") usbTouched = true;
+          return hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+        };
+        const abortSoloIfRevoked = async (armAttempted = false): Promise<boolean> => {
+          if (!soloRevoked()) return false;
+          pushLog("sys", "FPGA solo: отменён оператором в полёте");
+          stopSoloWalk();
+          // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
+          // иначе осиротевший опрос статуса тикал бы до следующей сессии.
+          stopFpgaKick();
+          stopFpgaObserve();
+          if (armAttempted || get().fpgaArmed) {
+            await get().fpgaDisarm();
+            usbTouched = false; // DISARM-путь сам завершает или повторяет release.
+            usbOut = false;
+            if (get().fpgaStopPending) return true;
+          }
+          if (usbOut) {
+            await releaseSoapyForFpga();
+            usbOut = false;
+          }
+          if (usbTouched) {
+            await releaseCancelledFpgaUsb(s0);
+            usbTouched = false;
+          }
+          set({ fpgaPath: null });
+          return true;
+        };
+        const abortAirIfRevoked = async (armAttempted = false): Promise<boolean> => {
+          if (!airRevoked()) return false;
+          pushLog("sys", "FPGA эфир: отменён оператором в полёте");
+          // Kick и observe неразрывны (см. abortSoloIfRevoked).
+          stopFpgaKick();
+          stopFpgaObserve();
+          stopAirWalk();
+          if (armAttempted || get().fpgaArmed) {
+            await get().fpgaDisarm();
+            usbTouched = false;
+            if (get().fpgaStopPending) return true;
+          }
+          if (usbTouched) {
+            await releaseCancelledFpgaUsb(s0);
+            usbTouched = false;
+          }
+          set({ fpgaPath: null });
+          return true;
+        };
+
+        const ping = await gw({ op: "ping" });
+        if (await abortSoloIfRevoked()) return false;
+        if (await abortAirIfRevoked()) return false;
+        if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
+        const pingNo = fpgaGatewayRefused(ping);
+        if (pingNo) {
+          pushLog("sys", pingNo);
+          return false;
+        }
+        const noLegionPath = fpgaLegionMissing(ping);
+        if (noLegionPath) {
+          pushLog("sys", noLegionPath);
+          return false;
+        }
+
+        set({ fpgaPath: path });
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });
           const tract = airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift);
@@ -3305,8 +3372,10 @@ export const useLegion = create<LegionStore>((set, get) => {
               bw_mhz: tract.bwMhz,
             });
             pushLog("sys", `FPGA ARM (ретрансляция): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-            if (await abortAirIfRevoked(!!r.ok)) return false;
+            if (await abortAirIfRevoked(true)) return false;
             if (!r.ok) {
+              await get().fpgaDisarm();
+              usbTouched = false;
               set({ fpgaPath: null });
               return false;
             }
@@ -3412,8 +3481,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           const r = await gw(armCmd);
           pushLog("sys", `FPGA ARM (ретрансляция): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-          if (await abortAirIfRevoked(!!r.ok)) return false;
+          if (await abortAirIfRevoked(true)) return false;
           if (!r.ok) {
+            await get().fpgaDisarm();
+            usbTouched = false;
             set({ fpgaPath: null });
             return false;
           }
@@ -3488,8 +3559,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           });
           const r = await gw(cmd);
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-          if (await abortSoloIfRevoked(!!r.ok)) return false;
+          if (await abortSoloIfRevoked(true)) return false;
           if (!r.ok) {
+            await get().fpgaDisarm();
+            usbTouched = false;
             stopSoloWalk();
             set({ fpgaPath: null });
             return false;
@@ -3602,8 +3675,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           }),
         );
         pushLog("sys", `FPGA ARM (player): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-        if (await abortSoloIfRevoked(!!r.ok)) return false;
+        if (await abortSoloIfRevoked(true)) return false;
         if (!r.ok) {
+          await get().fpgaDisarm();
+          usbTouched = false;
           stopSoloWalk();
           set({ fpgaPath: null });
           return false;
@@ -3619,6 +3694,12 @@ export const useLegion = create<LegionStore>((set, get) => {
         beginSoloWalk(walker, walk, gw);
         return true;
       } finally {
+        // Отмена может завершить подготовку через ранний return (например,
+        // calibWhy), не дойдя до abort-хелпера. Ресурс всё равно освобождаем.
+        if ((soloRevoked() || airRevoked()) && usbTouched && !get().fpgaStopPending) {
+          if (usbOut) await releaseSoapyForFpga();
+          await releaseCancelledFpgaUsb(s0);
+        }
         set({ fpgaBusy: false });
         if (!get().fpgaArmed && get().fpgaPath) set({ fpgaPath: null });
       }
@@ -3641,6 +3722,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     fpgaDisarm: async () => {
+      if (fpgaDisarmFlight) return fpgaDisarmFlight;
+      if (fpgaDisarmRetry !== null) {
+        clearTimeout(fpgaDisarmRetry);
+        fpgaDisarmRetry = null;
+      }
+      const target = fpgaStopTarget ?? { gateway: get().sdrGateway, token: get().fpgaToken, phase: "disarm" as const };
+      fpgaStopTarget = target;
       // DISARM сильнее любого ARM в полёте: кино-solo, кино-эфир и ручной
       // ARM сверяют поколения после await и не коммитят.
       gFpgaSoloGen += 1;
@@ -3653,35 +3741,41 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Операторский/эпохальный стоп: очередь ОБЫЧНОГО начинается заново.
       // Автовозврат (fpgaReturnToScan) сюда не приходит — порядок держится.
       gFpgaTurnLastMhz = null;
-      set({ fpgaBusy: true, fpgaAutoCycle: false });
-      try {
-        const r = await hostFpga({ op: "disarm", token: get().fpgaToken }, get().sdrGateway);
-        pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-        if (r.ok) {
-          set({ fpgaArmed: false, fpgaPath: null });
-          // closeSdr/stopFpgaAir: disarm один оставлял USB у агента —
-          // следующий openSdr/скан ловит занятое устройство.
-          const rel = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
-          if (!rel.ok) pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
-        } else if (
-          gLastKickOkMs != null &&
-          performance.now() - gLastKickOkMs > FPGA_DEADMAN_PROOF_MS
-        ) {
-          // Шлюз молчит дольше всех слоёв deadman: TX погашен железом сам
-          // (FPGA watchdog не зависит от ноутбука и шлюза). Держать fpgaArmed
-          // дальше — вечный клинч UI (openSdr/ESP32/ПЕРЕДАТЬ блокируются, а
-          // ретраев нет — таймеры выше уже остановлены). Снимаем локально и
-          // честно логируем. Инвариант: приложение никогда не ARM'ит с
-          // wd=false (fpgaArmCmd — всегда wd:true), иначе доказательства нет.
-          pushLog(
-            "sys",
-            "FPGA DISARM: шлюз мёртв — локальный ARM снят; TX уже погасил собственный watchdog железа",
-          );
-          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
+      set({ fpgaBusy: true, fpgaStopPending: true, fpgaStopPhase: target.phase, fpgaAutoCycle: false, fpgaStatus: null });
+      fpgaDisarmFlight = (async () => {
+        if (target.phase === "disarm") {
+          const r = await hostFpga({ op: "disarm", token: target.token }, target.gateway);
+          pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+          if (!r.ok) {
+            // Ни старый STATUS, ни прошедшее время не доказывают отключение.
+            set({ fpgaStatus: { ok: false, reason: r.reason ?? "нет подтверждения DISARM" } });
+            return;
+          }
+          target.phase = "release";
+          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null, fpgaStopPhase: "release", fpgaStatus: null });
         }
-      } finally {
+        const rel = await hostFpga({ op: "usb", action: "release", token: target.token }, target.gateway);
+        if (!rel.ok) {
+          const reason = `FPGA USB release: ${rel.reason ?? "отказ"}`;
+          pushLog("sys", reason);
+          set({ fpgaStatus: { ok: false, reason } });
+          return;
+        }
+        fpgaStopTarget = null;
+        set({ fpgaStopPending: false, fpgaStopPhase: null, fpgaStatus: null, lastCueReason: "FPGA: остановка завершена, соединение освобождено" });
+      })().finally(() => {
+        fpgaDisarmFlight = null;
         set({ fpgaBusy: false });
-      }
+        if (get().fpgaStopPending) {
+          // Повторяем только неподтверждённый этап: DISARM либо release.
+          // Не возобновляем kick, tune, ARM или авто-цикл.
+          fpgaDisarmRetry = setTimeout(() => {
+            fpgaDisarmRetry = null;
+            void get().fpgaDisarm();
+          }, 1000);
+        }
+      });
+      return fpgaDisarmFlight;
     },
 
     stopFpgaAir: async () => {
@@ -3692,10 +3786,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Только ARM-фаза: disarm/release/reopen. Handoff в полёте (fpgaBusy
       // без armed) дожимать не надо — уборка за его abortIfRevoked, а reopen
       // под ним открыл бы второй Soapy-device на занятом USB.
-      if (get().fpgaArmed) {
+      if (get().fpgaArmed || get().fpgaStopPending) {
         await get().fpgaDisarm();
-        const relStop = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
-        if (!relStop.ok) pushLog("sys", `FPGA USB release: ${relStop.reason ?? "отказ"}`);
+        if (get().fpgaStopPending) return;
         set({ lastForwardMhz: null });
         if (!get().sdrOpened && !get().sdrEmulation) await get().openSdr();
       }
@@ -3704,6 +3797,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     fpgaPollStatus: async () => {
+      if (get().fpgaStopPending) return;
       if (gFpgaObserveInflight) return;
       gFpgaObserveInflight = true;
       const obsGen = gFpgaObserveGen;
@@ -3824,7 +3918,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     openSdr: async (opts) => {
       const s = get();
-      if (s.fpgaArmed) {
+      if (s.fpgaArmed || s.fpgaStopPending) {
         pushLog("sys", "ОТКРЫТЬ SDR: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
         return;
       }
@@ -3886,17 +3980,16 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Новая эпоха ДО awaits: in-flight handoff/re-sense по старому устройству
       // после await не коммитятся и не восстанавливают TX.
       gTxGen += 1;
+      get().abortFpgaSolo();
+      get().abortFpgaAir();
+      get().abortFpgaArm();
       stopTxWatch();
       stopTxWalk();
       stopFpgaKick();
       stopFpgaObserve();
       stopAirWalk();
-      if (get().fpgaArmed) {
+      if (get().fpgaArmed || get().fpgaStopPending) {
         await get().fpgaDisarm();
-        // USB остаётся у агента после disarm — отдаём хосту, иначе следующий
-        // openSdr словит занятое устройство.
-        const relClose = await hostFpga({ op: "usb", action: "release", token: get().fpgaToken }, get().sdrGateway);
-        if (!relClose.ok) pushLog("sys", `FPGA USB release: ${relClose.reason ?? "отказ"}`);
       }
       get().stopScan();
       gGate.reset();
@@ -3934,7 +4027,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "прошивка уже идёт — ждите");
         return;
       }
-      if (get().fpgaArmed) {
+      if (get().fpgaArmed || get().fpgaStopPending) {
         pushLog("sys", "прошивка SDR: сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB");
         return;
       }
@@ -4077,7 +4170,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "прошивка уже идёт — ждите");
         return;
       }
-      if (get().fpgaArmed) {
+      if (get().fpgaArmed || get().fpgaStopPending) {
         pushLog("sys", "прошивка legion: сначала ОСТАНОВИТЬ FPGA — CLI и шлюз не делят USB");
         return;
       }
@@ -4257,7 +4350,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", "СКАНИРОВАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
           return;
         }
-        if (s.fpgaArmed) {
+        if (s.fpgaArmed || s.fpgaStopPending) {
           pushLog("sys", "СКАНИРОВАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Хост-скан = мс, не µs");
           return;
         }
@@ -4527,7 +4620,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "ПЕРЕДАТЬ: сначала RF OFF / PA OFF на ESP32 — тракты не вместе");
         return;
       }
-      if (s.fpgaArmed) {
+      if (s.fpgaArmed || s.fpgaStopPending) {
         pushLog("sys", "ПЕРЕДАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Это хост-путь (мс), не µs");
         return;
       }
@@ -4627,7 +4720,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSkipMhz = null;
       set({ transmitArmed: false, signalTxActive: false, attackTxUntil: null });
       gGate.reset();
-      if (get().fpgaArmed) await get().fpgaDisarm();
+      if (get().fpgaArmed || get().fpgaStopPending) await get().fpgaDisarm();
       if (gLive) await hostTxOff();
       gSdr.txOff();
       set({

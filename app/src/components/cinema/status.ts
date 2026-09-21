@@ -1,12 +1,10 @@
 // ============================================================================
-// LEGION — строка статуса главного кадра. Шесть видов состояния (HeroKind),
-// пять текстов для оператора: ОЖИДАНИЕ / ПОИСК / РЕТРАНСЛЯЦИЯ (relay-wait —
-// та же ретрансляция с закрытым гейтом) / ПЕРЕДАЧА (tx покрывает также
-// ГЕНЕРАЦИЮ и КОРИДОР) / ОШИБКА.
+// LEGION — строка статуса главного кадра, включая неизвестную телеметрию
+// и незавершённую остановку. relay-wait — подтверждённо закрытый гейт.
 // Чистая функция — тестируется без DOM (scripts/test_orchestrator.ts).
 // ============================================================================
 
-export type HeroKind = "idle" | "search" | "relay" | "relay-wait" | "tx" | "error";
+export type HeroKind = "idle" | "search" | "relay" | "relay-wait" | "tx" | "error" | "unknown";
 
 export interface HeroState {
   scanRunning: boolean;
@@ -15,6 +13,8 @@ export interface HeroState {
   signalTxActive: boolean;
   fpgaArmed: boolean;
   fpgaBusy: boolean;
+  fpgaStopPending?: boolean;
+  fpgaStopPhase?: "disarm" | "release" | null;
   fpgaMode: string;
   fpgaStatus: { ok?: boolean; det_active?: boolean; wd_fired?: boolean; reason?: string; warn?: string } | null;
   lastForwardMhz: number | null;
@@ -31,6 +31,24 @@ export interface HeroLine {
 }
 
 export function heroStatusLine(s: HeroState): HeroLine {
+  if (s.fpgaStopPending) {
+    if (s.fpgaStopPhase === "release") {
+      return {
+        kind: s.fpgaStatus?.ok === false ? "error" : "unknown",
+        text: "ЗАВЕРШЕНИЕ ОСТАНОВКИ",
+        detail: s.fpgaStatus?.ok === false
+          ? `${s.fpgaStatus.reason ?? "освобождение не подтверждено"} · повторяем освобождение соединения`
+          : "освобождаем соединение — запуск заблокирован до подтверждения",
+      };
+    }
+    return {
+      kind: "error",
+      text: "ОСТАНОВКА НЕ ПОДТВЕРЖДЕНА",
+      detail: s.fpgaStatus?.reason
+        ? `${s.fpgaStatus.reason} · повторяем команду отключения`
+        : "ожидаем подтверждение отключения от шлюза",
+    };
+  }
   const freq =
     s.lastForwardMhz ?? s.lastInterceptMhz ?? s.scanCenterMhz ?? s.telemFreq ?? parseFloat(s.freqMhz);
   const freqTxt = freq != null && Number.isFinite(freq) ? `${freq.toFixed(3)} МГц` : "";
@@ -60,6 +78,13 @@ export function heroStatusLine(s: HeroState): HeroLine {
     };
   }
   if (s.fpgaArmed && s.fpgaMode === "lb_gated") {
+    if (s.fpgaStatus?.ok !== true || typeof s.fpgaStatus.det_active !== "boolean") {
+      return {
+        kind: "unknown",
+        text: "НЕТ ТЕЛЕМЕТРИИ",
+        detail: "состояние гейта неизвестно — ожидаем данные шлюза",
+      };
+    }
     // Ретрансляция: гейт открыт = эфир идёт на усилитель; закрыт = ждём сигнал.
     const warn = s.fpgaStatus?.warn ? ` · ${s.fpgaStatus.warn}` : "";
     return s.fpgaStatus?.det_active === true

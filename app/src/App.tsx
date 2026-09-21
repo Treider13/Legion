@@ -78,6 +78,8 @@ function App() {
   const signalTxActive = useLegion((s) => s.signalTxActive);
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const fpgaBusy = useLegion((s) => s.fpgaBusy);
+  const fpgaStopPending = useLegion((s) => s.fpgaStopPending);
+  const fpgaStopPhase = useLegion((s) => s.fpgaStopPhase);
   const fpgaMode = useLegion((s) => s.fpgaMode);
   const fpgaStatus = useLegion((s) => s.fpgaStatus);
   const lastForwardMhz = useLegion((s) => s.lastForwardMhz);
@@ -103,6 +105,8 @@ function App() {
     signalTxActive,
     fpgaArmed,
     fpgaBusy,
+    fpgaStopPending,
+    fpgaStopPhase,
     fpgaMode,
     fpgaStatus,
     lastForwardMhz,
