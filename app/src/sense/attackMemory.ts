@@ -35,7 +35,10 @@ export interface AttackMemStats {
 const HOP_KEEP = 512;
 const SCENE_KEEP = 96;
 const RES_KEEP = 24;
+/** Столько последних взглядов хранится на каждый след, а не на все окна скана. */
 const POWER_KEEP = 48;
+/** Остывшие id, которых уже нет в снимке трекера. Живые следы сюда не попадают. */
+const POWER_GHOST_IDS = 32;
 const SCENE_MIN_MS = 400;
 
 export class AttackSessionMemory {
@@ -122,8 +125,46 @@ export class AttackSessionMemory {
         measured,
       });
     }
+    if (rows.length === 0) return;
     this.powers.push({ ts, rows });
-    if (this.powers.length > POWER_KEEP) this.powers = this.powers.slice(-POWER_KEEP);
+    this.retainPerTrack(new Set(tracks.map((t) => t.id)));
+  }
+
+  /**
+   * Чужое окно и пустой обход своего TX не затирают замеры другой частоты.
+   * Кольцо общее на все окна оставляло у полки 1.2 и 5.8 ГГц по три точки
+   * вместо хода, и ретранслятор не назывался.
+   */
+  private retainPerTrack(liveIds: ReadonlySet<number>): void {
+    const kept = new Map<number, number>();
+    for (let i = this.powers.length - 1; i >= 0; i--) {
+      const snap = this.powers[i]!;
+      const rows: AttackInfoSnap["rows"] = [];
+      for (const row of snap.rows) {
+        const n = kept.get(row.id) ?? 0;
+        if (n >= POWER_KEEP) continue;
+        kept.set(row.id, n + 1);
+        rows.push(row);
+      }
+      snap.rows = rows;
+    }
+    this.powers = this.powers.filter((s) => s.rows.length > 0);
+    const ghostNewest = new Map<number, number>();
+    for (const snap of this.powers) {
+      for (const row of snap.rows) {
+        if (liveIds.has(row.id)) continue;
+        ghostNewest.set(row.id, snap.ts);
+      }
+    }
+    if (ghostNewest.size <= POWER_GHOST_IDS) return;
+    const dropIds = new Set(
+      [...ghostNewest.entries()]
+        .sort((a, b) => a[1] - b[1])
+        .slice(0, ghostNewest.size - POWER_GHOST_IDS)
+        .map(([id]) => id),
+    );
+    for (const snap of this.powers) snap.rows = snap.rows.filter((r) => !dropIds.has(r.id));
+    this.powers = this.powers.filter((s) => s.rows.length > 0);
   }
 
   noteScene(ts: number, tracks: readonly AttackTrack[]): void {

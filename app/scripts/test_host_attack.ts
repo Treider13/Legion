@@ -529,6 +529,59 @@ async function main(): Promise<void> {
   );
   const txInfo = readAttackInfo({ tracks: [roomAt(6), handAt(6)], snaps: txMem.powerSnaps() });
   check("вырезанный свой TX — не тень", !txInfo.line.includes("тень"), txInfo.line);
+  const slow = [-30, -32, -34, -36, -38, -40];
+  const walkMem = new AttackSessionMemory();
+  let walkSweep = 0;
+  for (let i = 0; i < slow.length; i++) {
+    for (let gap = 0; gap < 20; gap++) {
+      walkSweep += 1;
+      walkMem.notePowers(
+        walkSweep,
+        [track({ id: 9, freqMhz: 2440, widthMhz: 0.4, duty: 0.2, powerDbm: -50, lastSweep: walkSweep, firstSweep: 1 })],
+        walkSweep,
+        2440,
+        56,
+      );
+    }
+    walkSweep += 1;
+    walkMem.notePowers(
+      walkSweep,
+      [track({ id: 6, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: slow[i]!, lastSweep: walkSweep, firstSweep: 1 })],
+      walkSweep,
+      5800,
+      56,
+    );
+    walkSweep += 1;
+    walkMem.notePowers(
+      walkSweep,
+      [track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: slow[i]! + 18, lastSweep: walkSweep, firstSweep: 1 })],
+      walkSweep,
+      1280,
+      56,
+    );
+  }
+  const walkedRepeater = readAttackInfo({
+    tracks: [
+      track({ id: 6, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -40 }),
+      track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: -22 }),
+    ],
+    snaps: walkMem.powerSnaps(),
+  });
+  const keptHigh = walkMem.powerSnaps().reduce((n, s) => n + s.rows.filter((r) => r.id === 6).length, 0);
+  check(
+    "чужие окна не стирают ход двух полок",
+    keptHigh === slow.length && walkedRepeater.line.includes("ретранслятор"),
+    `high=${keptHigh} ${walkedRepeater.line}`,
+  );
+  const holdMem = new AttackSessionMemory();
+  for (let sweep = 1; sweep <= 4; sweep++) {
+    holdMem.notePowers(sweep, [shelfAt(sweep)], sweep, 5800, 56);
+  }
+  for (let sweep = 5; sweep <= 64; sweep++) {
+    holdMem.notePowers(sweep, [shelfAt(4)], sweep, 5800, 40, (mhz) => mhz >= 5790 && mhz <= 5810);
+  }
+  const keptShelf = holdMem.powerSnaps().reduce((n, s) => n + s.rows.filter((r) => r.id === 4 && r.measured !== false).length, 0);
+  check("выдержка своего TX не стирает прежние замеры полки", keptShelf === 4, `kept=${keptShelf}`);
 
   const breathe = [-40, -34, -42, -30, -38, -28];
   const lowCopy = track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: -22, streak: 8 });
