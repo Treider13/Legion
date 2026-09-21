@@ -1994,7 +1994,7 @@ async function main(): Promise<void> {
   check("air gen после ensureSdrBand, не до валидации",
     startFn.indexOf('if (path === "air" && !ensureSdrBand())') < startFn.indexOf("gFpgaAirGen += 1")
     && startFn.indexOf("gFpgaAirGen += 1") < startFn.indexOf("get().stopScan()"));
-  check("отзыв после ARM снимает TX до set(fpgaArmed)", storeSrc.includes("abortAirIfRevoked(!!r.ok)") && storeSrc.includes("abortSoloIfRevoked(!!r.ok)"));
+  check("отзыв после попытки ARM требует DISARM даже при потерянном ответе", storeSrc.includes("abortAirIfRevoked(true)") && storeSrc.includes("abortSoloIfRevoked(true)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));

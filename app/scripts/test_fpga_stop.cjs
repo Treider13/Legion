@@ -375,6 +375,171 @@ test('control: normal STOP sends DISARM and clears ARM without a timer', async (
     assert.equal(r.clock.pending().length, 0);
     assert.equal(r.calls.slice(from).filter(c => c.op === 'disarm').length, 1);
 });
+test('cancelled ARM with a lost reply still requires confirmed DISARM', async () => {
+    const r = makeRuntime();
+    let failArm;
+    r.setHandler(q => {
+        if (q.cmd?.op === 'arm') return new Promise((_, reject) => failArm = reject);
+        if (q.cmd?.op === 'disarm') return { ok: false, reason: 'disconnect not confirmed' };
+        return normal(q);
+    });
+    r.get().setSdrGateway('gateway-A');
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(failArm, 'the ARM request must actually be in flight');
+    await r.run.runCinemaStop();
+    failArm(Error('gateway response timeout after sending ARM'));
+    await r.clock.flush();
+    assert.equal(r.calls.filter(c => c.op === 'disarm').length, 1);
+    pending(r);
+    assert(r.get().log.some(l => /gateway response timeout after sending ARM/.test(l.text)));
+    assert(!r.calls.some(c => c.op === 'kick'));
+    await r.clock.tick(1000);
+    assert.equal(r.calls.filter(c => c.op === 'disarm').length, 2);
+    await clean(r);
+});
+test('closing SDR revokes an ARM that is still awaiting its reply', async () => {
+    const r = makeRuntime();
+    let finishArm;
+    r.setHandler(q => q.cmd?.op === 'arm'
+        ? new Promise(resolve => finishArm = resolve) : normal(q));
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(finishArm);
+    await r.get().closeSdr();
+    finishArm({ ok: true });
+    await r.clock.flush();
+    assert.equal(r.get().fpgaArmed, false);
+    assert.equal(r.get().fpgaStopPending, false);
+    assert.equal(r.calls.filter(c => c.op === 'disarm').length, 1);
+    assert(!r.calls.some(c => c.op === 'kick' || c.op === 'status'));
+    assert.equal(r.clock.pending().length, 0);
+});
+test('backend switching is refused while FPGA preparation is in flight', async () => {
+    const r = makeRuntime();
+    let finishArm;
+    r.setHandler(q => q.cmd?.op === 'arm'
+        ? new Promise(resolve => finishArm = resolve) : normal(q));
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(finishArm);
+    r.get().setSdrEmulation(true);
+    await r.clock.flush();
+    assert.equal(r.get().sdrEmulation, false);
+    assert(r.get().log.some(l => /Смена бэкенда заблокирована/.test(l.text)));
+    Object.assign(r.store.useLegion.getInitialState(), r.get());
+    const panel = r.load('app/src/components/SdrPanel.tsx').SdrPanel;
+    const html = pkgRequire('react-dom/server').renderToStaticMarkup(pkgRequire('react').createElement(panel));
+    assert.match(html, /<input[^>]*type="checkbox"[^>]*disabled/);
+    await r.run.runCinemaStop();
+    finishArm({ ok: true });
+    await r.clock.flush();
+    assert(!r.get().fpgaArmed && !r.get().fpgaStopPending);
+});
+for (const entry of ['manual', 'solo', 'air']) {
+    test(`${entry}: cancellation after a lost ARM reply requires DISARM`, async () => {
+        const r = makeRuntime();
+        let failArm;
+        r.setHandler(q => {
+            // Only the external hardware boundary is simulated, including preparation.
+            if (q.op === 'probe') return { ok: true, soapy: true };
+            if (q.op === 'open' || q.op === 'park') return { ok: true, fake: false };
+            if (q.cmd?.op === 'arm') return new Promise((_, reject) => failArm = reject);
+            if (q.cmd?.op === 'disarm') return { ok: false, reason: 'no shutdown acknowledgement' };
+            return normal(q);
+        });
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        // A single window keeps this shutdown test independent of calibration fixtures.
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        const starting = entry === 'manual' ? r.get().fpgaArm() : r.get().startFpgaPath(entry);
+        await r.clock.flush();
+        assert(failArm, 'must reach an actual ARM request through the original store');
+        await r.run.runCinemaStop();
+        failArm(Error('lost ARM response'));
+        await r.clock.flush();
+        await starting;
+        assert.equal(r.calls.filter(c => c.op === 'disarm').length, 1);
+        pending(r);
+        assert(!r.calls.some(c => c.op === 'kick'));
+        await clean(r);
+    });
+}
+test('closing during ping cancels preparation without creating an unconfirmed ARM', async () => {
+    const r = makeRuntime();
+    let finishPing;
+    r.setHandler(q => q.cmd?.op === 'ping'
+        ? new Promise(resolve => finishPing = resolve) : normal(q));
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(finishPing);
+    await r.get().closeSdr();
+    finishPing({ ok: true, legion: true, fake: false });
+    await r.clock.flush();
+    assert(!r.get().fpgaArmed && !r.get().fpgaStopPending && !r.get().fpgaBusy);
+    assert(!r.calls.some(c => c.op === 'arm' || c.op === 'disarm' || c.op === 'kick'));
+    assert.equal(r.clock.pending().length, 0);
+});
+test('backend switching still works when idle and after confirmed shutdown', async () => {
+    const r = await start(makeRuntime());
+    r.get().setSdrEmulation(true);
+    await r.clock.flush();
+    assert.equal(r.get().sdrEmulation, true);
+    assert(!r.get().fpgaArmed && !r.get().fpgaStopPending);
+    assert.equal(r.clock.pending().length, 0);
+    assert(r.calls.some(c => c.op === 'disarm'));
+    r.get().setSdrEmulation(false);
+    await r.clock.flush();
+    assert.equal(r.get().sdrEmulation, false);
+});
+for (const action of ['stop', 'close']) {
+    test(`${action} during USB acquisition releases the late acquired connection`, async () => {
+        const r = makeRuntime();
+        let finishAcquire, owned = false;
+        r.setHandler(q => {
+            if (q.cmd?.op === 'usb' && q.cmd.action === 'acquire') {
+                return new Promise(resolve => finishAcquire = () => { owned = true; resolve({ ok: true }); });
+            }
+            if (q.cmd?.op === 'usb' && q.cmd.action === 'release') {
+                owned = false;
+                return { ok: true };
+            }
+            return normal(q);
+        });
+        await r.run.runSmartStart(opts(r));
+        await r.clock.flush();
+        assert(finishAcquire);
+        if (action === 'stop') await r.run.runCinemaStop();
+        else await r.get().closeSdr();
+        finishAcquire();
+        await r.clock.flush();
+        assert.equal(owned, false);
+        assert(!r.calls.some(c => c.op === 'arm' || c.op === 'kick'));
+        assert(!r.get().fpgaArmed && !r.get().fpgaBusy && !r.get().fpgaStopPending);
+    });
+}
+test('x40 cancellation during preparation releases the reacquired connection', async () => {
+    const r = makeRuntime();
+    let finishPark, owned = false;
+    r.get().setSdrId('bladerf-x40');
+    r.setHandler(q => {
+        if (q.op === 'probe') return { ok: true, soapy: true };
+        if (q.op === 'open') return { ok: true, fake: false };
+        if (q.op === 'park') return new Promise(resolve => finishPark = resolve);
+        if (q.cmd?.op === 'usb') owned = q.cmd.action === 'acquire';
+        return normal(q);
+    });
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(finishPark);
+    await r.run.runCinemaStop();
+    finishPark({ ok: true, fake: false });
+    await r.clock.flush();
+    assert.equal(owned, false);
+    assert(!r.calls.some(c => c.op === 'arm' || c.op === 'kick'));
+    assert(!r.get().fpgaBusy && !r.get().fpgaArmed && !r.get().fpgaStopPending);
+});
 (async () => {
     let failures = 0;
     for (const { name, run } of tests) {

@@ -75,6 +75,7 @@ export function SdrPanel() {
         <input
           type="checkbox"
           checked={s.sdrEmulation}
+          disabled={s.fpgaBusy || s.fpgaStopPending}
           onChange={(e) => s.setSdrEmulation(e.target.checked)}
         />
         Эмуляция SDR (IQ/TX — модель хоста, не кабель). Снимите, если есть Soapy/CLI.
