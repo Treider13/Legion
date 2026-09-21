@@ -104,8 +104,10 @@ function groupRuns(
     }
     let width = Math.max(fHigh - fLow, binStepMhz(bins));
     if (width < ATTACK_MIN_BW_MHZ) {
-      i = j + 1;
-      continue;
+      const half = ATTACK_MIN_BW_MHZ / 2;
+      fLow = peak.freqMhz - half;
+      fHigh = peak.freqMhz + half;
+      width = ATTACK_MIN_BW_MHZ;
     }
     if (width > ATTACK_MAX_BW_MHZ) {
       const half = ATTACK_MAX_BW_MHZ / 2;

@@ -1150,8 +1150,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `ПЕРЕДАТЬ: пауза ${ATTACK_COOLDOWN_MS} мс после прошлой заливки`);
       return false;
     }
-    const kind = get().txWaveKind;
-    const params = kind ? attackWaveParams(kind, clipped, get().txWaveParams) : {};
+    const waveKind = get().txWaveKind;
+    const params = waveKind ? attackWaveParams(waveKind, clipped, get().txWaveParams) : {};
     const fsHz = paintTxFsHz(clipped);
     const mhz = paintCenterMhz(clipped);
     const hold = clampAttackHoldMs(get().attackHoldMs);
@@ -1177,11 +1177,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     gGate.reserve(plan.freqMhz);
     try {
       const tx = gLive
-        ? kind
-          ? await hostTxWave(plan.freqMhz, kind, params, fsHz)
+        ? waveKind
+          ? await hostTxWave(plan.freqMhz, waveKind, params, fsHz)
           : await hostTx(plan.freqMhz)
-        : kind
-          ? gSdr.txWave(plan.freqMhz, kind)
+        : waveKind
+          ? gSdr.txWave(plan.freqMhz, waveKind)
           : gSdr.txCue(plan.freqMhz);
       pushLog("sys", tx.reason);
       if (!tx.ok) {
@@ -1197,10 +1197,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       gSkipMhz = null;
       executeHandoff(plan, tx.latencyUs, 0);
       gAttackTracker.markHeld(plan.freqMhz);
-      const wave = kind ?? "cw";
+      const wave = waveKind ?? "cw";
       set({
         attackTracks: gAttackTracker.snapshot(),
-        lastCueReason: `атака рамка ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц · ${wave} · ${hold} мс · fs ${(fsHz / 1e6).toFixed(2)} МГц · ${paintWaveHint(kind, clipped, params)}`,
+        lastCueReason: `атака рамка ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц · ${wave} · ${hold} мс · fs ${(fsHz / 1e6).toFixed(2)} МГц · ${paintWaveHint(waveKind, clipped, params)}`,
       });
       armAttackHoldTimer(hold);
       return true;

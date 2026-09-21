@@ -85,7 +85,7 @@ async function main(): Promise<void> {
   const bins = toneBins(2442, 20, 256, 2442, -30);
   const hits = detectAttackHits(bins, 12);
   check("атака ловит несущую", hits.some((h) => Math.abs(h.freqMhz - 2442) < 0.5));
-  check("мин. ширина не нулевая", hits.every((h) => h.widthMhz >= ATTACK_MIN_BW_MHZ - 1e-9));
+  check("мин. ширина не нулевая", hits.length > 0 && hits.every((h) => h.widthMhz >= ATTACK_MIN_BW_MHZ - 1e-9));
 
   const two = [
     ...toneBins(2440, 10, 128, 2437, -28),
