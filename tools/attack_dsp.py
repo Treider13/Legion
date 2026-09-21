@@ -249,13 +249,16 @@ def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
     """Компактный FAM (PySDR) по уже переданному буферу.
 
     Вызов стоит после channelize_look: fs — частота канала, не 61.44.
-    Np=32/64, L=Np/4, P≤64. α=(k−l)/Np·fs плюс мелкая сетка второго FFT.
-    α≈0 выкинут. Имя протокола отсюда не выходит — только alphaHz и coh.
+    Np=32/64, L=Np/4. Длина второго FFT такая, чтобы шаг α был около 2 кГц:
+    на 20 МГц канала жёсткие 4096 отсчётов оставляли 2 периода и сливали
+    10/16/28 кГц в один бин. α≈0 выкинут. Имя протокола не выходит.
     """
     raw = np.asarray(x, dtype=np.complex128).ravel()
-    n = min(int(raw.size), 4096)
-    if n < 64 or fs <= 0:
+    if int(raw.size) < 64 or fs <= 0:
         return {"alphaHz": 0.0, "coh": 0.0}
+    # Около 2 мс канала, потолок 16384: на 2 МГц это прежние 4096,
+    # на 20 МГц хватает окон, чтобы 10 кГц не сел в соседний бин 20 кГц.
+    n = min(int(raw.size), max(4096, min(16384, int(fs * 0.002))))
     block_in = raw[-n:]
     if n < 512:
         return _scf_grid(block_in, fs)
@@ -264,8 +267,10 @@ def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
     max_w = (n - Np) // L + 1
     if max_w < 8:
         return _scf_grid(block_in, fs)
-    P = 1 << int(math.floor(math.log2(max_w)))
-    P = max(8, min(P, 64))
+    avail = 1 << int(math.floor(math.log2(max_w)))
+    want = max(8.0, float(fs) / (float(L) * 2_000.0))
+    want_p = 1 << int(math.ceil(math.log2(want)))
+    P = max(8, min(avail, want_p))
     need = (P - 1) * L + Np
     while need > n and P >= 16:
         P //= 2

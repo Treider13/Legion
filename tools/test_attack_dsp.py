@@ -109,6 +109,25 @@ def main() -> int:
         abs(float(ten_look["famAlphaHz"]) - 10_000) < 2500 and float(ten_look["famCoh"]) > float(nlook_c["famCoh"]) + 0.08,
         f"a={ten_look['famAlphaHz']:.0f} coh={ten_look['famCoh']:.3f}",
     )
+    fs_wide = 20.48e6
+    n_wide = 16384
+
+    def wide_gate(alpha_hz: float, seed: int) -> np.ndarray:
+        rng_w = np.random.default_rng(seed)
+        period_w = max(2, int(round(fs_wide / alpha_hz)))
+        idx_w = np.arange(n_wide)
+        gate_w = ((idx_w % period_w) < (period_w // 2)).astype(np.float64)
+        return ((rng_w.normal(0, 0.2, n_wide) + 1j * rng_w.normal(0, 0.2, n_wide)) * gate_w).astype(np.complex64)
+
+    wide10 = d.point_fam(wide_gate(10_000, 9), fs_wide)
+    wide28 = d.point_fam(wide_gate(28_000, 9), fs_wide)
+    check(
+        "на 20 МГц канала 10 и 28 кГц не один бин",
+        abs(float(wide10["alphaHz"]) - 10_000) < 5000
+        and abs(float(wide28["alphaHz"]) - 28_000) < 5000
+        and abs(float(wide10["alphaHz"]) - float(wide28["alphaHz"])) > 5000,
+        f"10={wide10} 28={wide28}",
+    )
     fs_in = 61.44e6
     n_ch = d.ATTACK_THINK_N
     period_ch = int(round(fs_in / 15625))

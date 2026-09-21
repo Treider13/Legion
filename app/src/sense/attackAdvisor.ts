@@ -87,6 +87,26 @@ function familyFocusMhz(tracks: readonly AttackTrack[], fam: AttackHopFamily): n
   return best ? best.freqMhz : (fam.fLowMhz + fam.fHighMhz) / 2;
 }
 
+function inCorridor(mhz: number, bands: readonly AllowBand[]): boolean {
+  if (bands.length === 0) return true;
+  return bands.some((b) => mhz >= b.f1Mhz && mhz <= b.f2Mhz);
+}
+
+/** Самая сильная живая вспышка, которую коридор вообще пускает в рамку. */
+function paintableFocusMhz(
+  tracks: readonly AttackTrack[],
+  fam: AttackHopFamily,
+  bands: readonly AllowBand[],
+): number | null {
+  let best: AttackTrack | null = null;
+  for (const t of tracks) {
+    if (t.state === "cooled" || !fam.members.includes(t.id)) continue;
+    if (!inCorridor(t.freqMhz, bands)) continue;
+    if (!best || t.powerDbm > best.powerDbm) best = t;
+  }
+  return best ? best.freqMhz : null;
+}
+
 /** Огибающая семьи. Шире 40 МГц — кусок вокруг живой вспышки, не нижний край и не следующий канал. */
 function proposeFamilyPaint(
   fam: AttackHopFamily,
@@ -96,18 +116,28 @@ function proposeFamilyPaint(
 ): { clipped: AttackPaint | null; text: string; why: string } {
   const span = familySpanWithPad(fam);
   const seen = paintSpanMhz(span);
-  const focus = familyFocusMhz(tracks, fam);
-  const chunk = seen > ATTACK_TX_MAX_MHZ ? chunkInsideEnvelope(span, focus, ATTACK_TX_MAX_MHZ) : span;
-  const raw = clampPaintToCaps(chunk);
-  const clipped = allowedPaint(raw, bands);
   const neighbors = memoryHopsMhz.filter((f) => bandBucket(f) === fam.band).length >= 2;
   const where = neighbors ? "по соседним окнам" : "в кадре";
   const why = fam.gridMhz > 0 ? `шаг ≈ ${fam.gridMhz.toFixed(2)} МГц` : "несколько вспышек в одной корзине";
-  if (!clipped) {
+  const outside = ` Огибающая ${where} ≈ ${seen.toFixed(0)} МГц. Канал не угадываем.`;
+  const focus = paintableFocusMhz(tracks, fam, bands);
+  if (focus == null) {
+    const seenAt = familyFocusMhz(tracks, fam);
     return {
       clipped: null,
       why,
-      text: `Семья hop ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+      text: `Живая вспышка ${seenAt.toFixed(2)} МГц вне коридора — этот мазок её не накроет.${outside}`,
+    };
+  }
+  const chunk = seen > ATTACK_TX_MAX_MHZ ? chunkInsideEnvelope(span, focus, ATTACK_TX_MAX_MHZ) : span;
+  const raw = clampPaintToCaps(chunk);
+  const clipped = allowedPaint(raw, bands);
+  const covers = clipped != null && focus >= clipped.f1Mhz - 1e-6 && focus <= clipped.f2Mhz + 1e-6;
+  if (!clipped || !covers) {
+    return {
+      clipped: null,
+      why,
+      text: `Живая вспышка ${focus.toFixed(2)} МГц вне коридора — этот мазок её не накроет.${outside}`,
     };
   }
   if (seen > ATTACK_TX_MAX_MHZ) {

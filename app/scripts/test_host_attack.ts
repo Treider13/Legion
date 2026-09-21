@@ -445,6 +445,75 @@ async function main(): Promise<void> {
     "взять не передаёт",
     wideAdvice.scene.includes("не передаёт") && wideAdvice.hints.length <= 3,
   );
+  const outsideLive = hopAt(1, 2415, -20);
+  const insideQuiet = hopAt(2, 2440, -40);
+  const corridorFams = stitchHopFamilies([outsideLive, insideQuiet], memHops);
+  const corridorAdvice = buildAttackAdvice({
+    tracks: [outsideLive, insideQuiet],
+    families: corridorFams,
+    widths: new Map([
+      [1, { width3Mhz: 0.6, width26Mhz: 0.9, occ99Mhz: 0.8 }],
+      [2, { width3Mhz: 0.6, width26Mhz: 0.9, occ99Mhz: 0.8 }],
+    ]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2430, f2Mhz: 2450 }],
+    residual: null,
+    memory: {
+      hopRemembered: memHops.length,
+      scenes: 4,
+      residuals: 0,
+      workerSamples: 0,
+      workerCap: 0,
+      workerMs: 0,
+    },
+    memoryHopsMhz: memHops,
+    transmitArmed: false,
+  });
+  const corridorPaint = corridorAdvice.hints.find((h) => h.kind === "paint");
+  check(
+    "мазок коридора накрывает вспышку внутри, не громкую снаружи",
+    corridorPaint?.paint != null &&
+      corridorPaint.paint.f1Mhz <= 2440 &&
+      corridorPaint.paint.f2Mhz >= 2440 &&
+      corridorPaint.text.includes("2440.00") &&
+      !corridorPaint.text.includes("2415.00"),
+    corridorPaint?.text ?? "",
+  );
+  const onlyOutside = buildAttackAdvice({
+    tracks: [outsideLive],
+    families: stitchHopFamilies([outsideLive], memHops),
+    widths: new Map([[1, { width3Mhz: 0.6, width26Mhz: 0.9, occ99Mhz: 0.8 }]]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2430, f2Mhz: 2450 }],
+    residual: null,
+    memory: {
+      hopRemembered: memHops.length,
+      scenes: 4,
+      residuals: 0,
+      workerSamples: 0,
+      workerCap: 0,
+      workerMs: 0,
+    },
+    memoryHopsMhz: memHops,
+    transmitArmed: false,
+  });
+  const outsideHint = onlyOutside.hints.find((h) => h.kind === "paint");
+  check(
+    "вспышка вне коридора не выдаётся за центр мазка",
+    outsideHint?.paint == null &&
+      outsideHint?.applyLabel == null &&
+      (outsideHint?.text ?? "").includes("вне коридора") &&
+      !(outsideHint?.text ?? "").includes("вокруг живой"),
+    outsideHint?.text ?? "",
+  );
   const adviceOut = buildAttackAdvice({
     tracks: sticky,
     families: [],
