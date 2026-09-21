@@ -2,8 +2,8 @@
 // LEGION — советник Атаки. Только текст и предложение. Не пишет в TX.
 // Классы волны — факт waveOccupiesPaintMhz: заливка / чирп / узкая / часть.
 // ============================================================================
-import { atlasForTracks, classifyAttackFamily } from "./attackAtlas";
-import { familySpanWithPad, type AttackHopFamily } from "./attackFamily";
+import { atlasForTracks, bandBucket, classifyAttackFamily } from "./attackAtlas";
+import { chunkInsideEnvelope, familySpanWithPad, type AttackHopFamily } from "./attackFamily";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
 import { residualLineRu, type AttackMemStats, type AttackResidual } from "./attackMemory";
@@ -78,6 +78,55 @@ function allowedPaint(raw: AttackPaint, bands: readonly AllowBand[]): AttackPain
   return clipPaintToAllowlist(raw, bands);
 }
 
+function familyFocusMhz(tracks: readonly AttackTrack[], fam: AttackHopFamily): number {
+  let best: AttackTrack | null = null;
+  for (const t of tracks) {
+    if (t.state === "cooled" || !fam.members.includes(t.id)) continue;
+    if (!best || t.powerDbm > best.powerDbm) best = t;
+  }
+  return best ? best.freqMhz : (fam.fLowMhz + fam.fHighMhz) / 2;
+}
+
+/** Огибающая семьи. Шире 40 МГц — кусок вокруг живой вспышки, не нижний край и не следующий канал. */
+function proposeFamilyPaint(
+  fam: AttackHopFamily,
+  tracks: readonly AttackTrack[],
+  bands: readonly AllowBand[],
+  memoryHopsMhz: readonly number[],
+): { clipped: AttackPaint | null; text: string; why: string } {
+  const span = familySpanWithPad(fam);
+  const seen = paintSpanMhz(span);
+  const focus = familyFocusMhz(tracks, fam);
+  const chunk = seen > ATTACK_TX_MAX_MHZ ? chunkInsideEnvelope(span, focus, ATTACK_TX_MAX_MHZ) : span;
+  const raw = clampPaintToCaps(chunk);
+  const clipped = allowedPaint(raw, bands);
+  const neighbors = memoryHopsMhz.filter((f) => bandBucket(f) === fam.band).length >= 2;
+  const where = neighbors ? "по соседним окнам" : "в кадре";
+  const why = fam.gridMhz > 0 ? `шаг ≈ ${fam.gridMhz.toFixed(2)} МГц` : "несколько вспышек в одной корзине";
+  if (!clipped) {
+    return {
+      clipped: null,
+      why,
+      text: `Семья hop ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+    };
+  }
+  if (seen > ATTACK_TX_MAX_MHZ) {
+    return {
+      clipped,
+      why,
+      text:
+        `Огибающая ${where} ≈ ${seen.toFixed(0)} МГц. Этим мазком ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц` +
+        ` (не шире ${ATTACK_TX_MAX_MHZ}, вокруг живой вспышки ${focus.toFixed(2)} МГц).` +
+        ` Остальное — следующим мазком, канал не угадываем.`,
+    };
+  }
+  return {
+    clipped,
+    why,
+    text: `Обведите семью hop ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц, не одну вспышку. Зона влезает в ${ATTACK_TX_MAX_MHZ} МГц.`,
+  };
+}
+
 export function buildAttackAdvice(input: {
   tracks: readonly AttackTrack[];
   families: readonly AttackHopFamily[];
@@ -90,6 +139,7 @@ export function buildAttackAdvice(input: {
   bands: readonly AllowBand[];
   residual: AttackResidual | null;
   memory: AttackMemStats;
+  memoryHopsMhz?: readonly number[];
   transmitArmed: boolean;
 }): AttackAdvice {
   const live = input.tracks.filter((t) => t.state !== "cooled");
@@ -122,11 +172,14 @@ export function buildAttackAdvice(input: {
   const fam = input.families[0] ?? null;
   const floors = twoFloor(live, input.windowMhz);
   const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
+  const topAtlas = top ? atlasForTracks(live, input.windowMhz).find((t) => t.id === top.id)?.atlas ?? atlas : null;
   const w = top ? input.widths.get(top.id) : undefined;
   const honest = top && w ? honestWidthMhz(w, top.widthMhz) : top?.widthMhz ?? 0;
-  const windowFill = atlas?.id === "window-fill" || (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
+  const windowFill = topAtlas?.id === "window-fill" || atlas?.id === "window-fill" || (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
+  const memoryHops = input.memoryHopsMhz ?? [];
 
   let scene = `${live.length} след(ов) в кадре.`;
+  if (topAtlas) scene += ` Класс энергии: ${topAtlas.label}. ${topAtlas.hint}.`;
   if (floors) scene += " Два этажа: широкое липкое и hop рядом — это не один сигнал.";
   if (fam) {
     scene += ` Семья hop: ${fam.fLowMhz.toFixed(2)}…${fam.fHighMhz.toFixed(2)} МГц`;
@@ -139,6 +192,9 @@ export function buildAttackAdvice(input: {
   if (input.memory.hopRemembered > 4) {
     scene += ` Память видела уже ${input.memory.hopRemembered} hop-вспышек за сессию.`;
   }
+  scene += " Слушатель не читает имена бортов и текст модема: MAVLink — байты внутри пакета, не форма спектра.";
+  scene += " Предложение не команда: ширину и тип волны можно указать другими, затем ПЕРЕДАТЬ. «Взять» не передаёт.";
+  if (input.transmitArmed) scene += " Идёт передача: кнопки «Взять» выключены.";
 
   if (floors && top) {
     const video = live.filter((t) => t.duty >= 0.7 && t.widthMhz >= 6);
@@ -163,48 +219,29 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     } else if (hop[0] && fam) {
-      const span = familySpanWithPad(fam);
-      const raw = clampPaintToCaps(span);
-      const clipped = allowedPaint(raw, input.bands);
-      suggestPaint = clipped;
+      const proposed = proposeFamilyPaint(fam, live, input.bands, memoryHops);
+      suggestPaint = proposed.clipped;
       hints.push({
         kind: "paint",
         title: "Рамка",
-        text: clipped
-          ? `Hop-семья ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Не одна вспышка.`
-          : `Hop-семья ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
-        why: "огибающая уже виденных вспышек",
-        applyLabel: clipped ? "Взять рамку семьи" : null,
-        paint: clipped,
+        text: proposed.text,
+        why: proposed.why,
+        applyLabel: proposed.clipped ? "Взять рамку семьи" : null,
+        paint: proposed.clipped,
         wave: null,
         holdMs: null,
       });
     }
   } else if (fam) {
-    const span = familySpanWithPad(fam);
-    let raw = clampPaintToCaps(span);
-    const want = paintSpanMhz(span);
-    if (want > ATTACK_TX_MAX_MHZ) {
-      raw = clampPaintToCaps({
-        f1Mhz: fam.fLowMhz,
-        f2Mhz: fam.fLowMhz + ATTACK_TX_MAX_MHZ,
-      });
-    }
-    const clipped = allowedPaint(raw, input.bands);
-    suggestPaint = clipped;
-    const extra =
-      want > ATTACK_TX_MAX_MHZ
-        ? ` Сетка шире руки: видно ≈ ${want.toFixed(1)} МГц, залить можно ${ATTACK_TX_MAX_MHZ}.`
-        : "";
+    const proposed = proposeFamilyPaint(fam, live, input.bands, memoryHops);
+    suggestPaint = proposed.clipped;
     hints.push({
       kind: "paint",
       title: "Рамка",
-      text: clipped
-        ? `Обведите семью hop ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц, не одну вспышку.${extra}`
-        : `Семья hop ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
-      why: fam.gridMhz > 0 ? `шаг ≈ ${fam.gridMhz.toFixed(2)} МГц` : "несколько вспышек в одной корзине",
-      applyLabel: clipped ? "Взять рамку семьи" : null,
-      paint: clipped,
+      text: proposed.text,
+      why: proposed.why,
+      applyLabel: proposed.clipped ? "Взять рамку семьи" : null,
+      paint: proposed.clipped,
       wave: null,
       holdMs: null,
     });
@@ -238,19 +275,24 @@ export function buildAttackAdvice(input: {
   })();
   const haveClass = waveClassOf(input.wave);
   const wavePick: WaveKind | null = wantClass === "fill" ? "awgn" : wantClass === "chirp" ? "chirp" : wantClass === "narrow" ? "sine" : null;
+  const occ = input.paint ? waveOccupiesPaintMhz(input.wave, input.paint, {}) : 0;
+  const span = input.paint ? paintSpanMhz(input.paint) : 0;
   let waveText = `По картине ближе класс «${waveClassRu(wantClass)}».`;
   if (haveClass !== wantClass) {
-    const occ = input.paint ? waveOccupiesPaintMhz(input.wave, input.paint, {}) : 0;
-    const span = input.paint ? paintSpanMhz(input.paint) : 0;
     if (haveClass === "narrow" && wantClass === "fill" && span > 1) {
       waveText += ` Сейчас выбран тон — он займёт около 0.05 МГц из ${span.toFixed(1)}, края останутся живыми.`;
     } else if (haveClass === "fill" && wantClass === "narrow") {
       waveText += " Сейчас выбрана широкая заливка на узкую вспышку: накроете клетку и соседей, не всю сетку.";
-    } else if (haveClass === "part" && input.paint && occ + 0.2 < span) {
-      waveText += ` Выбранная волна займёт ≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц.`;
+    } else if (input.paint && occ + 0.35 < span) {
+      waveText += ` Выбранная волна не зальёт края: ≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц.`;
     }
   } else {
     waveText += " Выбранный тип этому классу не противоречит.";
+    if (input.paint && haveClass === "fill") {
+      waveText += ` Края рамки эта волна зальёт (≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц).`;
+    } else if (input.paint && occ + 0.35 < span) {
+      waveText += ` Края рамки она не зальёт: ≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц.`;
+    }
   }
   hints.push({
     kind: "wave",
@@ -271,7 +313,9 @@ export function buildAttackAdvice(input: {
     kind: "hold",
     title: "Время",
     text: hopish
-      ? `Между вспышками тишина. Короткая выдержка может попасть в паузу. Лучше не короче ${holdWant} мс — больше шанс задеть несколько пакетов в нарисованной полосе. Канал не угадываем.`
+      ? input.holdMs < holdWant
+        ? `Выдержка ${input.holdMs} мс коротковата для hop: между вспышками тишина. Лучше не короче ${holdWant} мс, чтобы задеть несколько пакетов в нарисованной полосе. Канал не угадываем.`
+        : `Выдержки ${input.holdMs} мс для hop хватает, чтобы задеть несколько пакетов в нарисованной полосе. Канал не угадываем.`
       : `Сигнал держится. Выдержки ${input.holdMs} мс обычно хватает, чтобы увидеть остаток после передачи.`,
     why: hopish ? "низкий duty" : "липкий след",
     applyLabel: hopish && input.holdMs < holdWant ? `Поставить ${holdWant} мс` : null,

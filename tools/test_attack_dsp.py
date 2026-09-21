@@ -82,6 +82,23 @@ def main() -> int:
     leftover_ch, lfs = d.channelize_look(e, fs, 2442.0, 2442.0, 2.0)
     llook = d.analyze_iq(leftover_ch, lfs)
     check("остаток после вычета не тон", llook["kind"] != "tone", str(llook))
+
+    n_cyc = 4096
+    fs_cyc = 2e6
+    rng_c = np.random.default_rng(11)
+    period = 128
+    idx = np.arange(n_cyc)
+    gate = ((idx % period) < (period // 2)).astype(np.float64)
+    pulsed = ((rng_c.normal(0, 0.25, n_cyc) + 1j * rng_c.normal(0, 0.25, n_cyc)) * gate).astype(np.complex64)
+    noise_c = d.synth_look_iq("noise", n_cyc, fs_cyc)
+    clook = d.analyze_iq(pulsed, fs_cyc)
+    nlook_c = d.analyze_iq(noise_c, fs_cyc)
+    check(
+        "цикл FAM острее шума",
+        float(clook["famCoh"]) > float(nlook_c["famCoh"]) + 0.08,
+        f"cyc={clook['famCoh']:.3f} noise={nlook_c['famCoh']:.3f} kind={clook['kind']} a={clook['famAlphaHz']:.0f}",
+    )
+    check("шум после FAM не тон", nlook_c["kind"] != "tone", str(nlook_c))
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

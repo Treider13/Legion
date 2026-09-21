@@ -53,14 +53,14 @@ export function classifyAttackFamily(
     return {
       id: "rc-900",
       label: "узкий 900-класс",
-      hint: "ELRS/Crossfire/LRS по спектру не разделяются",
+      hint: "узкий 900: ELRS, Crossfire и LRS в одном классе — по спектру не разделить",
     };
   }
   if (hopLike && t.widthMhz <= 2 && band === "s24") {
     return {
       id: "rc-24",
       label: "узкий пакетный RC 2.4",
-      hint: "вспышка ~0.8 МГц, сетка шагом ~1 МГц — не имя протокола",
+      hint: "узкий hop 2.4: ELRS, mLRS и Tracer в одном классе — по спектру не разделить",
     };
   }
   if (hopLike && t.widthMhz >= 9 && t.widthMhz <= 22 && DIGITAL_BANDS.includes(band)) {
@@ -102,7 +102,7 @@ export function classifyAttackFamily(
     return {
       id: "analog-video",
       label: "похоже на аналоговое видео",
-      hint: "6–16 МГц, высокий duty — не 10/20 цифра",
+      hint: "6–16 МГц, высокий duty — похоже на аналоговое видео, имя борта не даём",
     };
   }
   if (sticky && t.widthMhz >= ATTACK_VIDEO_BW_MHZ) {
@@ -129,7 +129,7 @@ export function classifyAttackFamily(
 const TWO_FLOOR: AttackAtlasRow = {
   id: "two-floor",
   label: "два этажа: видео + hop рядом",
-  hint: "липкая широкая палка и узкие вспышки в одной корзине — не один протокол",
+  hint: "похоже на FPV: широкое видео и отдельный RC. Имя борта спектр не доказывает",
 };
 
 function hopPeer(t: Pick<AttackTrack, "widthMhz" | "duty" | "streak">): boolean {

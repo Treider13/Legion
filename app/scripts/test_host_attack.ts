@@ -187,9 +187,23 @@ async function main(): Promise<void> {
   check("корзина 5.8", bandBucket(5805) === "c58");
   check("корзина 169", bandBucket(169) === "vhf");
   check("корзина 470", bandBucket(470) === "uhf");
-  check("2.4 hop ≤2 — rc-24", classifyAttackFamily({
+  const rc24 = classifyAttackFamily({
     freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1,
-  }).id === "rc-24");
+  });
+  check("2.4 hop ≤2 — rc-24", rc24.id === "rc-24");
+  check(
+    "2.4 класс: ELRS, mLRS и не разделить",
+    rc24.hint.includes("ELRS") && rc24.hint.includes("mLRS") && rc24.hint.includes("не разделить"),
+    rc24.hint,
+  );
+  const rc900 = classifyAttackFamily({
+    freqMhz: 915, widthMhz: 0.5, duty: 0.2, streak: 1,
+  });
+  check(
+    "900 класс не разделить",
+    rc900.hint.includes("Crossfire") && rc900.hint.includes("не разделить"),
+    rc900.hint,
+  );
   check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
   }).id === "digital-burst");
@@ -206,6 +220,11 @@ async function main(): Promise<void> {
     },
   ]);
   check("два этажа в одной корзине", floors.every((t) => t.atlas.id === "two-floor"));
+  check(
+    "два этажа — FPV без имени борта",
+    floors[0]?.atlas.hint.includes("FPV") === true && !/лелека|шарк|fp-2/i.test(floors[0]?.atlas.hint ?? ""),
+    floors[0]?.atlas.hint ?? "",
+  );
 
   const listen = attackListenPlan({ analogMhz: 56, paintOwnsTx: false, paint: null });
   check("слух xA4 fs 61.44", listen.fsHz === ATTACK_LISTEN_FS_HZ);
@@ -316,6 +335,100 @@ async function main(): Promise<void> {
   });
   check("тон против 20 МГц — спор", advice.hints.some((h) => h.kind === "wave" && h.wave === "awgn"));
   check("рамка предлагается, не ставится", advice.suggestPaint != null && advice.hints.some((h) => h.kind === "paint" && h.paint != null));
+  check("предложение не команда", advice.scene.includes("не команда"));
+  check("MAVLink не форма спектра", advice.scene.includes("MAVLink"));
+
+  function hopAt(id: number, mhz: number, dbm: number) {
+    return {
+      id,
+      freqMhz: mhz,
+      fLowMhz: mhz - 0.4,
+      fHighMhz: mhz + 0.4,
+      widthMhz: 0.8,
+      powerDbm: dbm,
+      noiseDbm: -90,
+      snrDb: dbm + 90,
+      hits: 3,
+      streak: 1,
+      maxStreak: 2,
+      firstSweep: 1,
+      lastSweep: 4,
+      gap: 0,
+      duty: 0.2,
+      state: "confirmed" as const,
+      lastSeenTs: 1,
+    };
+  }
+  const memHops: number[] = [];
+  for (let f = 2408; f <= 2492; f += 8) memHops.push(f);
+  const liveHop = hopAt(1, 2472, -20);
+  const wideFams = stitchHopFamilies([liveHop], memHops);
+  check(
+    "огибающая соседних окон шире 40",
+    (wideFams[0] ? wideFams[0].fHighMhz - wideFams[0].fLowMhz : 0) > 40,
+    wideFams[0] ? `${wideFams[0].fLowMhz}…${wideFams[0].fHighMhz}` : "нет семьи",
+  );
+  const wideAdvice = buildAttackAdvice({
+    tracks: [liveHop],
+    families: wideFams,
+    widths: new Map([[1, { width3Mhz: 0.6, width26Mhz: 0.9, occ99Mhz: 0.8 }]]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: { f1Mhz: 2468, f2Mhz: 2476 },
+    wave: "sine",
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: {
+      hopRemembered: memHops.length,
+      scenes: 4,
+      residuals: 0,
+      workerSamples: 0,
+      workerCap: 0,
+      workerMs: 0,
+    },
+    memoryHopsMhz: memHops,
+    transmitArmed: false,
+  });
+  const paintHint = wideAdvice.hints.find((h) => h.kind === "paint");
+  const proposed = paintHint?.paint ?? wideAdvice.suggestPaint;
+  check(
+    "кусок не шире 40",
+    proposed != null && paintSpanMhz(proposed) <= ATTACK_TX_MAX_MHZ + 1e-6,
+    proposed ? `${paintSpanMhz(proposed)}` : "нет",
+  );
+  check(
+    "кусок накрывает живую вспышку, не нижний край",
+    proposed != null && proposed.f1Mhz <= 2472 && proposed.f2Mhz >= 2472 && proposed.f1Mhz > 2420,
+    proposed ? `${proposed.f1Mhz}…${proposed.f2Mhz}` : "нет",
+  );
+  check("следующим мазком", (paintHint?.text ?? "").includes("следующим мазком"), paintHint?.text ?? "");
+  check(
+    "канал не угадываем",
+    wideAdvice.hints.some((h) => h.text.includes("канал не угадываем")),
+  );
+  check(
+    "класс ELRS в сцене",
+    wideAdvice.scene.includes("ELRS") && wideAdvice.scene.includes("не разделить"),
+    wideAdvice.scene,
+  );
+  check("борта не названы", !/лелека|шарк|хорнет|fp-2/i.test(wideAdvice.scene + (paintHint?.text ?? "")));
+  const waveHint = wideAdvice.hints.find((h) => h.kind === "wave");
+  check(
+    "синус не зальёт края",
+    (waveHint?.text ?? "").includes("не зальёт") || (waveHint?.text ?? "").includes("края"),
+    waveHint?.text ?? "",
+  );
+  const holdHint = wideAdvice.hints.find((h) => h.kind === "hold");
+  check(
+    "выдержка коротковата для hop",
+    (holdHint?.text ?? "").includes("коротковата") && holdHint?.holdMs === 5000,
+    holdHint?.text ?? "",
+  );
+  check(
+    "взять не передаёт",
+    wideAdvice.scene.includes("не передаёт") && wideAdvice.hints.length <= 3,
+  );
   const adviceOut = buildAttackAdvice({
     tracks: sticky,
     families: [],

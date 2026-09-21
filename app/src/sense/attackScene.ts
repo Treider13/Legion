@@ -82,6 +82,7 @@ export function buildAttackScene(input: {
     bands: input.bands,
     residual: input.memory.lastResidual(),
     memory: input.memory.stats(),
+    memoryHopsMhz: input.memory.hopMhz(),
     transmitArmed: input.transmitArmed,
   });
   return {

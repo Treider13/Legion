@@ -11,7 +11,9 @@ scan() / FPGA / ESP32 сюда не ходят.
     сумма линейной мощности = 100%, с краёв по β/2 = 0.5%.
   −3 дБ — rtl-sdr-analyzer / labPsd.width3dbMhz; −26 дБ — SM.443 x-dB.
   Spectral flatness — MPEG-7 / Wiener: геом. / арифм. среднее линейной PSD.
-  FAM точка — PySDR SCF: X(f+α/2)·conj(X(f−α/2)), когерентность.
+  FAM — компактный PySDR FAM уже на канале (не сетка из 16 α на 61.44):
+    окна Ханна, первый FFT, сдвиг фазы, второй FFT произведения.
+    α=0 выкинут. Острота = пик/медиана профиля, в когерентность 0…1.
   Вычет — корреляция на полном круге (как corr_est), масштаб,
     затем LMS GNU Radio: y = w·u, w += μ e conj(u).
     Опора — baseband TX (как Adaptive_SIC / gr-fullduplex), те же часы что RX.
@@ -211,8 +213,8 @@ def cepstrum_peak(dbm: np.ndarray) -> float:
     return max(0.0, min(1.0, (peak / mean - 1.0) / 8.0))
 
 
-def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
-    """Точечный SCF как PySDR: X(f+α/2)·conj(X(f−α/2)), когерентность. Не полный FAM-карта."""
+def _scf_grid(x: np.ndarray, fs: float) -> dict[str, float]:
+    """Короткая сетка SCF, если отсчётов мало для FAM. Те же 16 α, не карта."""
     n = int(len(x))
     if n < 64 or fs <= 0:
         return {"alphaHz": 0.0, "coh": 0.0}
@@ -234,6 +236,78 @@ def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
             best_c = coh
             best_a = alpha
     return {"alphaHz": float(best_a), "coh": float(best_c)}
+
+
+def _fam_coh(sharp: float) -> float:
+    """Острота пик/медиана → 0…1. Порог семьи 0.22 = явно выше пола шума.
+    Пол ~2.4: у белого шума максимум по сотням α почти такой. Цикл уходит вверх."""
+    excess = max(0.0, float(sharp) - 2.4)
+    return max(0.0, min(1.0, excess / (excess + 3.0)))
+
+
+def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
+    """Компактный FAM (PySDR) по уже переданному буферу.
+
+    Вызов стоит после channelize_look: fs — частота канала, не 61.44.
+    Np=32/64, L=Np/4, P≤64. α=(k−l)/Np·fs плюс мелкая сетка второго FFT.
+    α≈0 выкинут. Имя протокола отсюда не выходит — только alphaHz и coh.
+    """
+    raw = np.asarray(x, dtype=np.complex128).ravel()
+    n = min(int(raw.size), 4096)
+    if n < 64 or fs <= 0:
+        return {"alphaHz": 0.0, "coh": 0.0}
+    block_in = raw[-n:]
+    if n < 512:
+        return _scf_grid(block_in, fs)
+    Np = 64 if n >= 1536 else 32
+    L = max(1, Np // 4)
+    max_w = (n - Np) // L + 1
+    if max_w < 8:
+        return _scf_grid(block_in, fs)
+    P = 1 << int(math.floor(math.log2(max_w)))
+    P = max(8, min(P, 64))
+    need = (P - 1) * L + Np
+    while need > n and P >= 16:
+        P //= 2
+        need = (P - 1) * L + Np
+    if need > n or P < 8:
+        return _scf_grid(block_in, fs)
+    block = block_in[-need:]
+    idx = (np.arange(P) * L)[:, None] + np.arange(Np)[None, :]
+    hann = 0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(Np) / max(Np - 1, 1))
+    XF1 = np.fft.fftshift(np.fft.fft(block[idx] * hann, axis=1), axes=1)
+    f_cyc = (np.arange(Np) - (Np / 2.0)) / float(Np)
+    t_samp = (np.arange(P) * float(L))
+    XD = XF1 * np.exp(-2j * np.pi * t_samp[:, None] * f_cyc[None, :])
+    fine = (np.arange(P) - (P / 2.0)) * (fs / (float(P) * float(L)))
+    mags: list[np.ndarray] = []
+    alphas: list[np.ndarray] = []
+    for d in range(1, Np // 2 + 1):
+        left = XD[:, d:]
+        right = XD[:, : Np - d]
+        prod = left * np.conj(right)
+        spec = np.abs(np.fft.fftshift(np.fft.fft(prod, axis=0), axes=0))
+        prof = np.mean(spec, axis=1)
+        pk = float(np.mean(np.abs(left) ** 2))
+        pl = float(np.mean(np.abs(right) ** 2))
+        den = math.sqrt(max(pk, 0.0) * max(pl, 0.0)) * float(P) + 1e-20
+        coarse = (d / float(Np)) * fs
+        mags.append(prof / den)
+        alphas.append(coarse + fine)
+    mag = np.concatenate(mags)
+    alpha = np.concatenate(alphas)
+    step = fs / float(Np)
+    ok = (np.abs(alpha) >= max(2_000.0, step * 0.35)) & (np.abs(alpha) <= fs * 0.45)
+    mag = mag[ok]
+    alpha = alpha[ok]
+    if mag.size < 8 or not np.any(np.isfinite(mag)):
+        return {"alphaHz": 0.0, "coh": 0.0}
+    med = float(np.median(mag)) + 1e-20
+    i = int(np.argmax(mag))
+    sharp = float(mag[i] / med)
+    if not math.isfinite(sharp):
+        return {"alphaHz": 0.0, "coh": 0.0}
+    return {"alphaHz": float(abs(alpha[i])), "coh": float(_fam_coh(sharp))}
 
 
 def cumulants(x: np.ndarray) -> dict[str, float]:
