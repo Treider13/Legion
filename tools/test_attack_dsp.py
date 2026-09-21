@@ -82,6 +82,66 @@ def main() -> int:
     leftover_ch, lfs = d.channelize_look(e, fs, 2442.0, 2442.0, 2.0)
     llook = d.analyze_iq(leftover_ch, lfs)
     check("остаток после вычета не тон", llook["kind"] != "tone", str(llook))
+
+    n_cyc = 4096
+    fs_cyc = 2e6
+    rng_c = np.random.default_rng(11)
+    period = 128
+    idx = np.arange(n_cyc)
+    gate = ((idx % period) < (period // 2)).astype(np.float64)
+    pulsed = ((rng_c.normal(0, 0.25, n_cyc) + 1j * rng_c.normal(0, 0.25, n_cyc)) * gate).astype(np.complex64)
+    noise_c = d.synth_look_iq("noise", n_cyc, fs_cyc)
+    clook = d.analyze_iq(pulsed, fs_cyc)
+    nlook_c = d.analyze_iq(noise_c, fs_cyc)
+    check(
+        "цикл FAM острее шума",
+        float(clook["famCoh"]) > float(nlook_c["famCoh"]) + 0.08,
+        f"cyc={clook['famCoh']:.3f} noise={nlook_c['famCoh']:.3f} kind={clook['kind']} a={clook['famAlphaHz']:.0f}",
+    )
+    check("шум после FAM не тон", nlook_c["kind"] != "tone", str(nlook_c))
+    ten_rng = np.random.default_rng(11)
+    ten_idx = np.arange(n_cyc)
+    ten_gate = ((ten_idx % 200) < 100).astype(np.float64)
+    ten = ((ten_rng.normal(0, 0.25, n_cyc) + 1j * ten_rng.normal(0, 0.25, n_cyc)) * ten_gate).astype(np.complex64)
+    ten_look = d.analyze_iq(ten, fs_cyc)
+    check(
+        "FAM видит цикл 10 кГц, не только узлы крупной сетки",
+        abs(float(ten_look["famAlphaHz"]) - 10_000) < 2500 and float(ten_look["famCoh"]) > float(nlook_c["famCoh"]) + 0.08,
+        f"a={ten_look['famAlphaHz']:.0f} coh={ten_look['famCoh']:.3f}",
+    )
+    fs_wide = 20.48e6
+    n_wide = 16384
+
+    def wide_gate(alpha_hz: float, seed: int) -> np.ndarray:
+        rng_w = np.random.default_rng(seed)
+        period_w = max(2, int(round(fs_wide / alpha_hz)))
+        idx_w = np.arange(n_wide)
+        gate_w = ((idx_w % period_w) < (period_w // 2)).astype(np.float64)
+        return ((rng_w.normal(0, 0.2, n_wide) + 1j * rng_w.normal(0, 0.2, n_wide)) * gate_w).astype(np.complex64)
+
+    wide10 = d.point_fam(wide_gate(10_000, 9), fs_wide)
+    wide28 = d.point_fam(wide_gate(28_000, 9), fs_wide)
+    check(
+        "на 20 МГц канала 10 и 28 кГц не один бин",
+        abs(float(wide10["alphaHz"]) - 10_000) < 5000
+        and abs(float(wide28["alphaHz"]) - 28_000) < 5000
+        and abs(float(wide10["alphaHz"]) - float(wide28["alphaHz"])) > 5000,
+        f"10={wide10} 28={wide28}",
+    )
+    fs_in = 61.44e6
+    n_ch = d.ATTACK_THINK_N
+    period_ch = int(round(fs_in / 15625))
+    ch_rng = np.random.default_rng(5)
+    ch_idx = np.arange(n_ch)
+    ch_gate = ((ch_idx % period_ch) < (period_ch // 2)).astype(np.float64)
+    ch_noise = ((ch_rng.normal(0, 0.15, n_ch) + 1j * ch_rng.normal(0, 0.15, n_ch)) * ch_gate).astype(np.complex64)
+    ch_iq, ch_fs = d.channelize_look(ch_noise, fs_in, 2442.0, 2442.0, 2.0)
+    ch_look = d.analyze_iq(ch_iq, ch_fs)
+    check(
+        "FAM после канализатора видит 15.6 кГц",
+        abs(float(ch_look["famAlphaHz"]) - 15625) < 5000 and float(ch_look["famCoh"]) >= 0.22,
+        f"fs={ch_fs:.0f} a={ch_look['famAlphaHz']:.0f} coh={ch_look['famCoh']:.3f}",
+    )
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 
