@@ -3,11 +3,12 @@
 // Запуск: npx tsx scripts/test_host_attack.ts
 // ============================================================================
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
-import { AttackTracker, ATTACK_MIN_HITS } from "../src/sense/attackTracks";
+import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
 import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
+import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
 import {
@@ -291,8 +292,12 @@ async function main(): Promise<void> {
     leftover: null,
     source: "iq",
   });
+  hopMem.noteScene(1, hopTracks);
+  hopMem.noteScene(2, hopTracks);
+  check("ряд мощности копится чаще строки сцены", hopMem.powerSnaps().length === 2 && hopMem.scenes.length === 1);
   hopMem.forgetLooks();
   check("старт скана забывает разбор старых id", hopMem.looks.size === 0);
+  check("старт скана забывает ряд мощности", hopMem.powerSnaps().length === 0);
   check("старт скана не трёт hop-память", hopMem.hops.length === hopTracks.length + 1);
 
   const sticky = [{
@@ -334,6 +339,380 @@ async function main(): Promise<void> {
     "рамка вне коридора не предлагается взять",
     !adviceOut.hints.some((h) => h.kind === "paint" && h.paint != null && h.applyLabel != null),
   );
+  check("одна полка — информация, не досье", advice.scene.includes("Информация") && advice.scene.includes("борт") && !advice.scene.includes("досье"));
+  check("помощник не пишет советник", !advice.scene.includes("советник"));
+
+  function track(part: Partial<AttackTrack> & Pick<AttackTrack, "id" | "freqMhz">): AttackTrack {
+    return {
+      fLowMhz: part.freqMhz - (part.widthMhz ?? 0.8) / 2,
+      fHighMhz: part.freqMhz + (part.widthMhz ?? 0.8) / 2,
+      widthMhz: 0.8,
+      powerDbm: -40,
+      noiseDbm: -90,
+      snrDb: 50,
+      hits: 6,
+      streak: 2,
+      maxStreak: 4,
+      firstSweep: 1,
+      lastSweep: 8,
+      gap: 0,
+      duty: 0.3,
+      state: "confirmed",
+      lastSeenTs: 1,
+      ...part,
+    };
+  }
+  function powerSnaps(
+    series: Array<Array<{ id: number; freqMhz: number; powerDbm: number; widthMhz: number; duty: number; firstSweep?: number }>>,
+  ): AttackInfoSnap[] {
+    return series.map((rows, i) => ({
+      ts: i + 1,
+      rows: rows.map((r) => ({
+        firstSweep: r.firstSweep ?? 1,
+        state: "confirmed" as const,
+        ...r,
+      })),
+    }));
+  }
+  function mid(p: { f1Mhz: number; f2Mhz: number } | null): number {
+    return p ? (p.f1Mhz + p.f2Mhz) / 2 : Number.NaN;
+  }
+  const wideBands = [
+    { f1Mhz: 800, f2Mhz: 1000 },
+    { f1Mhz: 1100, f2Mhz: 1400 },
+    { f1Mhz: 2400, f2Mhz: 2500 },
+    { f1Mhz: 5600, f2Mhz: 5900 },
+  ];
+  const room = track({ id: 1, freqMhz: 2412, widthMhz: 0.4, duty: 0.95, powerDbm: -20, streak: 8, firstSweep: 1 });
+  const board = track({ id: 2, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -48, streak: 6, firstSweep: 8 });
+  const roomSnaps = powerSnaps([
+    [{ id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }],
+    [{ id: 1, freqMhz: 2412, powerDbm: -20.2, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }],
+    [{ id: 1, freqMhz: 2412, powerDbm: -19.8, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }],
+    [{ id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }],
+    [{ id: 1, freqMhz: 2412, powerDbm: -20.1, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }],
+    [{ id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 }, { id: 2, freqMhz: 5800, powerDbm: -48, widthMhz: 12, duty: 0.9, firstSweep: 8 }],
+  ]);
+  const roomAdvice = buildAttackAdvice({
+    tracks: [room, board],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: roomSnaps,
+  });
+  check(
+    "фон не забирает рамку у борта",
+    roomAdvice.suggestPaint != null && Math.abs(mid(roomAdvice.suggestPaint) - 5800) < 2,
+    `mid=${mid(roomAdvice.suggestPaint).toFixed(2)}`,
+  );
+  check("фон назван информацией", roomAdvice.scene.includes("фон") && roomAdvice.scene.includes("Информация"));
+
+  const hand = track({ id: 3, freqMhz: 915, widthMhz: 0.5, duty: 0.2, powerDbm: -55, streak: 1, firstSweep: 2 });
+  const shadowSnaps = powerSnaps([
+    [
+      { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9, firstSweep: 1 },
+      { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+    [
+      { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9, firstSweep: 1 },
+      { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+    [
+      { id: 4, freqMhz: 5800, powerDbm: -31, widthMhz: 20, duty: 0.9, firstSweep: 1 },
+      { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+    [
+      { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9, firstSweep: 1 },
+      { id: 3, freqMhz: 915, powerDbm: -54, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+    [
+      { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+    [
+      { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
+      { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
+    ],
+  ]);
+  const shadowAdvice = buildAttackAdvice({
+    tracks: [room, hand],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: shadowSnaps,
+  });
+  check(
+    "тень держит живой узкий голос, не фон",
+    shadowAdvice.suggestPaint != null && Math.abs(mid(shadowAdvice.suggestPaint) - 915) < 2,
+    `mid=${mid(shadowAdvice.suggestPaint).toFixed(2)}`,
+  );
+  check("тень в информации", shadowAdvice.scene.includes("тень") && shadowAdvice.scene.includes("Информация"));
+  check(
+    "тень не растягивает рамку на весь эфир",
+    shadowAdvice.suggestPaint != null && paintSpanMhz(shadowAdvice.suggestPaint) < 20,
+  );
+
+  const lowCopy = track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: -22, streak: 8 });
+  const highShelf = track({ id: 6, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -40, streak: 8 });
+  const repeaterAdvice = buildAttackAdvice({
+    tracks: [lowCopy, highShelf],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "ретранслятор: рамка на громкой полке сейчас",
+    repeaterAdvice.suggestPaint != null &&
+      Math.abs(mid(repeaterAdvice.suggestPaint) - 1280) < 2 &&
+      paintSpanMhz(repeaterAdvice.suggestPaint) < 40,
+    `mid=${mid(repeaterAdvice.suggestPaint).toFixed(2)} span=${repeaterAdvice.suggestPaint ? paintSpanMhz(repeaterAdvice.suggestPaint).toFixed(1) : "нет"}`,
+  );
+  check(
+    "ретранслятор в информации, обе частоты текущие",
+    repeaterAdvice.scene.includes("ретранслятор") &&
+      repeaterAdvice.scene.includes("1280.00") &&
+      repeaterAdvice.scene.includes("5800.00") &&
+      repeaterAdvice.scene.includes("сейчас"),
+  );
+
+  const geminiAdvice = buildAttackAdvice({
+    tracks: [
+      track({ id: 7, freqMhz: 915, widthMhz: 0.5, duty: 0.2, powerDbm: -30, streak: 1 }),
+      track({ id: 8, freqMhz: 2440, widthMhz: 0.5, duty: 0.2, powerDbm: -46, streak: 1 }),
+    ],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "две узкие частоты — одна рамка, не мост 900–2400",
+    geminiAdvice.suggestPaint != null &&
+      geminiAdvice.suggestPaint.f1Mhz > 800 &&
+      geminiAdvice.suggestPaint.f2Mhz < 1100,
+  );
+  check("одна радиосвязь в информации", geminiAdvice.scene.includes("одна радиосвязь"));
+
+  const stepWide = track({ id: 9, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -35, streak: 8 });
+  const stepHand = track({ id: 10, freqMhz: 2440, widthMhz: 0.6, duty: 0.2, powerDbm: -30, streak: 1 });
+  const stepSnaps = powerSnaps(
+    [-40, -40, -40, -30, -30, -30].map((p, i) => [
+      { id: 9, freqMhz: 5800, powerDbm: -35, widthMhz: 12, duty: 0.9 },
+      { id: 10, freqMhz: 2440, powerDbm: p, widthMhz: 0.6, duty: 0.2, firstSweep: i < 3 ? 1 : 1 },
+    ]),
+  );
+  const stepAdvice = buildAttackAdvice({
+    tracks: [stepWide, stepHand],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: stepSnaps,
+  });
+  check(
+    "шаг пульта не становится новой целью",
+    stepAdvice.suggestPaint != null && Math.abs(mid(stepAdvice.suggestPaint) - 5800) < 2,
+    `mid=${mid(stepAdvice.suggestPaint).toFixed(2)}`,
+  );
+  check("шаг описан как информация", stepAdvice.scene.includes("шаг мощности"));
+
+  const flutterBoard = track({ id: 11, freqMhz: 5800, widthMhz: 14, duty: 0.9, powerDbm: -38, streak: 8 });
+  const flutterNeighbor = track({ id: 12, freqMhz: 5760, widthMhz: 1, duty: 0.9, powerDbm: -32, streak: 8 });
+  const flutterSnaps = powerSnaps(
+    [-30, -38, -30, -38, -30, -38].map((p) => [
+      { id: 11, freqMhz: 5800, powerDbm: p, widthMhz: 14, duty: 0.9 },
+      { id: 12, freqMhz: 5760, powerDbm: -32, widthMhz: 1, duty: 0.9 },
+    ]),
+  );
+  const flutterAdvice = buildAttackAdvice({
+    tracks: [flutterBoard, flutterNeighbor],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: flutterSnaps,
+  });
+  check(
+    "дрожание нуля не отдаёт рамку соседу",
+    flutterAdvice.suggestPaint != null && Math.abs(mid(flutterAdvice.suggestPaint) - 5800) < 2,
+    `mid=${mid(flutterAdvice.suggestPaint).toFixed(2)}`,
+  );
+  check("дрожание в информации", flutterAdvice.scene.includes("дрожание"));
+
+  const fadeVideo = track({ id: 13, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -50, streak: 6 });
+  const fadeHand = track({ id: 14, freqMhz: 915, widthMhz: 0.5, duty: 0.2, powerDbm: -60, streak: 1 });
+  const fadeRoom = track({ id: 15, freqMhz: 2412, widthMhz: 0.4, duty: 0.95, powerDbm: -25, streak: 8 });
+  const fadeSnaps = powerSnaps(
+    [0, 1, 2, 3, 4, 5].map((i) => [
+      { id: 13, freqMhz: 5800, powerDbm: i < 3 ? -30 : -50, widthMhz: 12, duty: 0.9 },
+      { id: 14, freqMhz: 915, powerDbm: i < 3 ? -40 : -60, widthMhz: 0.5, duty: 0.2 },
+      { id: 15, freqMhz: 2412, powerDbm: -25, widthMhz: 0.4, duty: 0.95 },
+    ]),
+  );
+  const fadeAdvice = buildAttackAdvice({
+    tracks: [fadeVideo, fadeHand, fadeRoom],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: fadeSnaps,
+  });
+  check(
+    "совместная посадка не отдаёт рамку фону",
+    fadeAdvice.suggestPaint != null && Math.abs(mid(fadeAdvice.suggestPaint) - 5800) < 2,
+    `mid=${mid(fadeAdvice.suggestPaint).toFixed(2)}`,
+  );
+  check("посадка в информации", fadeAdvice.scene.includes("обе сели"));
+
+  const plateBody = track({ id: 16, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -30, streak: 8 });
+  const plateSnaps = powerSnaps(
+    [1, 2, 3, 4, 5, 6].map(() => [{ id: 16, freqMhz: 5800, powerDbm: -30, widthMhz: 12, duty: 0.9 }]),
+  );
+  const plateAdvice = buildAttackAdvice({
+    tracks: [plateBody],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: plateSnaps,
+    plate: { claimsMotion: true },
+  });
+  check(
+    "ложная табличка не предлагает рамку",
+    plateAdvice.suggestPaint == null &&
+      !plateAdvice.hints.some((h) => h.kind === "paint" && h.applyLabel != null),
+  );
+  check("ложная табличка названа в информации", plateAdvice.scene.includes("ложная табличка"));
+  const quietPlate = readAttackInfo({ tracks: [plateBody], snaps: plateSnaps, plate: null });
+  check("без таблички проверка молчит", !quietPlate.line.includes("табличка") && !quietPlate.suppressPaint);
+
+  const hopAdvice = buildAttackAdvice({
+    tracks: hopTracks,
+    families: fams,
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 1000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "hop-рамка по-прежнему семья уже виденных",
+    hopAdvice.suggestPaint != null && paintSpanMhz(hopAdvice.suggestPaint) > 2,
+  );
+  check("сетка hop не называется одной радиосвязью", !hopAdvice.scene.includes("одна радиосвязь"));
+  check("hop в информации — пульт", hopAdvice.scene.includes("Информация") && hopAdvice.scene.includes("пульт"));
+
+  const louderHand = track({ id: 17, freqMhz: 2440, widthMhz: 0.6, duty: 0.2, powerDbm: -18, streak: 1 });
+  const quieterBoard = track({ id: 18, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -42, streak: 8 });
+  const wideFirst = buildAttackAdvice({
+    tracks: [louderHand, quieterBoard],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "широкая полка важнее громкого пульта",
+    wideFirst.suggestPaint != null && Math.abs(mid(wideFirst.suggestPaint) - 5800) < 2,
+    `mid=${mid(wideFirst.suggestPaint).toFixed(2)}`,
+  );
+
+  const floorAdvice = buildAttackAdvice({
+    tracks: [
+      track({ id: 19, freqMhz: 5800, widthMhz: 30, duty: 0.9, powerDbm: -30, streak: 8, fLowMhz: 5785, fHighMhz: 5815 }),
+      track({ id: 20, freqMhz: 5760, widthMhz: 0.8, duty: 0.2, powerDbm: -15, streak: 1, fLowMhz: 5759.6, fHighMhz: 5760.4 }),
+    ],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 5600, f2Mhz: 5900 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "два этажа в одной корзине по-прежнему с широкого",
+    floorAdvice.hints.some((h) => h.kind === "paint" && h.text.includes("Сначала широкое")),
+  );
   check("пустая волна = узкий класс", waveClassOf(null) === "narrow");
   const scene = buildAttackScene({
     tracks: sticky,
@@ -348,6 +727,8 @@ async function main(): Promise<void> {
   });
   check("сцена не пишет TX", scene.advice.hints.every((h) => h.kind !== "wave" || h.wave == null || h.applyLabel != null));
   check("память пишет по-русски", scene.memoryLine.includes("помнит") || scene.memoryLine.includes("пуста") || scene.memoryLine.includes("IQ"));
+  check("сцена показывает информацию борта", scene.rows[0]?.infoRu === "борт");
+  check("сцена помощника без таблички", !scene.advice.scene.includes("табличка"));
 
   const analog30 = detectAttackHits(brickBins(5800, 56, 512, 5785, 5815, -25), 12, 56);
   check(

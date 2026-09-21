@@ -5,6 +5,7 @@
 // ============================================================================
 import { bandBucket } from "./attackAtlas";
 import type { AttackHopFamily } from "./attackFamily";
+import type { AttackInfoSnap } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { ATTACK_ASSOC_MHZ, type AttackTrack } from "./attackTracks";
 
@@ -34,6 +35,7 @@ export interface AttackMemStats {
 const HOP_KEEP = 512;
 const SCENE_KEEP = 96;
 const RES_KEEP = 24;
+const POWER_KEEP = 48;
 const SCENE_MIN_MS = 400;
 
 export class AttackSessionMemory {
@@ -41,6 +43,8 @@ export class AttackSessionMemory {
   scenes: Array<{ ts: number; n: number; bands: string }> = [];
   residuals: AttackResidual[] = [];
   looks = new Map<number, AttackLook>();
+  /** Мощность по id трекера. Только Атака. Старт скана обнуляет id — ряд тоже. */
+  powers: AttackInfoSnap[] = [];
   workerSamples = 0;
   workerCap = 0;
   workerMs = 0;
@@ -51,6 +55,7 @@ export class AttackSessionMemory {
     this.scenes = [];
     this.residuals = [];
     this.looks.clear();
+    this.powers = [];
     this.lastHopById.clear();
     this.workerSamples = 0;
     this.workerCap = 0;
@@ -81,6 +86,19 @@ export class AttackSessionMemory {
   }
 
   noteScene(ts: number, tracks: readonly AttackTrack[]): void {
+    this.powers.push({
+      ts,
+      rows: tracks.map((t) => ({
+        id: t.id,
+        freqMhz: t.freqMhz,
+        powerDbm: t.powerDbm,
+        widthMhz: t.widthMhz,
+        duty: t.duty,
+        firstSweep: t.firstSweep,
+        state: t.state,
+      })),
+    });
+    if (this.powers.length > POWER_KEEP) this.powers = this.powers.slice(-POWER_KEEP);
     if (this.scenes.length && ts - this.scenes[this.scenes.length - 1]!.ts < SCENE_MIN_MS) return;
     const live = tracks.filter((t) => t.state !== "cooled");
     const bands = [...new Set(live.map((t) => bandBucket(t.freqMhz)))].join(",");
@@ -92,9 +110,14 @@ export class AttackSessionMemory {
     this.looks.set(id, look);
   }
 
-  /** Старт скана обнуляет id трекера — старый разбор к новым следам не липнет. Hop не трогаем. */
+  /** Старт скана обнуляет id трекера — старый разбор и ряд мощности к новым id не липнут. Hop не трогаем. */
   forgetLooks(): void {
     this.looks.clear();
+    this.powers = [];
+  }
+
+  powerSnaps(): readonly AttackInfoSnap[] {
+    return this.powers;
   }
 
   noteResidual(row: AttackResidual): void {

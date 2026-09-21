@@ -1,9 +1,11 @@
 // ============================================================================
-// LEGION — советник Атаки. Только текст и предложение. Не пишет в TX.
+// LEGION — помощник Атаки. Только текст и предложение. Не пишет в TX.
 // Классы волны — факт waveOccupiesPaintMhz: заливка / чирп / узкая / часть.
+// Информация (роли и тень) только выбирает уже видимую рамку.
 // ============================================================================
 import { atlasForTracks, classifyAttackFamily } from "./attackAtlas";
 import { familySpanWithPad, type AttackHopFamily } from "./attackFamily";
+import { readAttackInfo, type AttackInfo, type AttackInfoSnap, type AttackPlate } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
 import type { AttackMemStats, AttackResidual } from "./attackMemory";
@@ -91,6 +93,9 @@ export function buildAttackAdvice(input: {
   residual: AttackResidual | null;
   memory: AttackMemStats;
   transmitArmed: boolean;
+  snaps?: readonly AttackInfoSnap[];
+  plate?: AttackPlate | null;
+  info?: AttackInfo;
 }): AttackAdvice {
   const live = input.tracks.filter((t) => t.state !== "cooled");
   const hints: AttackHint[] = [];
@@ -118,12 +123,12 @@ export function buildAttackAdvice(input: {
     };
   }
 
-  const top = strongest(live);
-  const fam = input.families[0] ?? null;
+  let top = strongest(live);
+  let fam: AttackHopFamily | null = input.families[0] ?? null;
   const floors = twoFloor(live, input.windowMhz);
   const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
   const w = top ? input.widths.get(top.id) : undefined;
-  const honest = top && w ? honestWidthMhz(w, top.widthMhz) : top?.widthMhz ?? 0;
+  let honest = top && w ? honestWidthMhz(w, top.widthMhz) : top?.widthMhz ?? 0;
   const windowFill = atlas?.id === "window-fill" || (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
 
   let scene = `${live.length} след(ов) в кадре.`;
@@ -139,8 +144,105 @@ export function buildAttackAdvice(input: {
   if (input.memory.hopRemembered > 4) {
     scene += ` Память видела уже ${input.memory.hopRemembered} hop-вспышек за сессию.`;
   }
+  const info =
+    input.info ??
+    readAttackInfo({
+      tracks: input.tracks,
+      snaps: input.snaps,
+      plate: input.plate ?? null,
+    });
+  if (info.line) scene += ` ${info.line}`;
 
-  if (floors && top) {
+  const veto = info.redirectId != null ? live.find((t) => t.id === info.redirectId) ?? null : null;
+  const prefer =
+    veto == null && !floors && info.preferWideId != null
+      ? live.find((t) => t.id === info.preferWideId) ?? null
+      : null;
+  const framed = veto ?? prefer;
+  if (framed) {
+    top = framed;
+    fam =
+      framed.duty >= 0.7 && framed.widthMhz >= 6
+        ? null
+        : input.families.find((f) => f.members.includes(framed.id)) ?? null;
+    const fw = input.widths.get(top.id);
+    honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
+  }
+
+  if (info.suppressPaint) {
+    hints.push({
+      kind: "paint",
+      title: "Рамка",
+      text: "Рамку не предлагаем: табличка о движении не сходится с телом.",
+      why: "информация: ложная табличка",
+      applyLabel: null,
+      paint: null,
+      wave: null,
+      holdMs: null,
+    });
+  } else if (framed && top) {
+    const wide = top.duty >= 0.7 && top.widthMhz >= 6;
+    if (wide) {
+      const vw = input.widths.get(top.id);
+      const span = vw ? honestWidthMhz(vw, top.widthMhz) : top.widthMhz;
+      const raw = clampPaintToCaps({ f1Mhz: top.freqMhz - span / 2, f2Mhz: top.freqMhz + span / 2 });
+      const clipped = allowedPaint(raw, input.bands);
+      suggestPaint = clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: clipped
+          ? `Широкая полка сейчас: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц.`
+          : `Широкая полка ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+        why: "информация: широкая полка",
+        applyLabel: clipped ? "Взять широкую рамку" : null,
+        paint: clipped,
+        wave: null,
+        holdMs: null,
+      });
+    } else if (fam) {
+      const span = familySpanWithPad(fam);
+      let raw = clampPaintToCaps(span);
+      const want = paintSpanMhz(span);
+      if (want > ATTACK_TX_MAX_MHZ) {
+        raw = clampPaintToCaps({
+          f1Mhz: fam.fLowMhz,
+          f2Mhz: fam.fLowMhz + ATTACK_TX_MAX_MHZ,
+        });
+      }
+      const clipped = allowedPaint(raw, input.bands);
+      suggestPaint = clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: clipped
+          ? `Узкие пакеты, уже виденные: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Канал не угадываем.`
+          : `Узкие пакеты ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+        why: "информация: уже виденные вспышки",
+        applyLabel: clipped ? "Взять рамку семьи" : null,
+        paint: clipped,
+        wave: null,
+        holdMs: null,
+      });
+    } else {
+      const span = Math.min(Math.max(honest, 0.2), ATTACK_TX_MAX_MHZ);
+      const raw = clampPaintToCaps({ f1Mhz: top.freqMhz - span / 2, f2Mhz: top.freqMhz + span / 2 });
+      const clipped = allowedPaint(raw, input.bands);
+      suggestPaint = clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: clipped
+          ? `Текущая частота: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц.`
+          : `Полоса ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+        why: "информация: текущая частота",
+        applyLabel: clipped ? "Взять эту рамку" : null,
+        paint: clipped,
+        wave: null,
+        holdMs: null,
+      });
+    }
+  } else if (floors && top) {
     const video = live.filter((t) => t.duty >= 0.7 && t.widthMhz >= 6);
     const hop = live.filter((t) => t.duty < 0.45 && t.widthMhz <= 2);
     const v = video[0];
