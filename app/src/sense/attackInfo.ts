@@ -213,8 +213,11 @@ function sharedHits(a: Seen, b: Seen): number {
 
 function dropDb(powers: readonly number[]): number | null {
   if (powers.length < 4) return null;
-  const early = mean(powers.slice(0, 3));
-  const late = mean(powers.slice(-3));
+  // Первые и последние точки не пересекаются. Иначе ряд из четырёх
+  // −30,−30,−30,−50 даёт падение 6.7 дБ вместо реальных 20 и тень молчит.
+  const n = Math.min(3, Math.floor(powers.length / 2));
+  const early = mean(powers.slice(0, n));
+  const late = mean(powers.slice(-n));
   return early - late;
 }
 

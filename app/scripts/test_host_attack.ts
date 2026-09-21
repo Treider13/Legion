@@ -560,6 +560,31 @@ async function main(): Promise<void> {
   ]);
   const walked = readAttackInfo({ tracks: [room, hand], snaps: walkedAway });
   check("уход окна с полки — не тень", !walked.line.includes("тень"));
+  const shortDrop = readAttackInfo({
+    tracks: [
+      track({ id: 4, freqMhz: 5800, widthMhz: 20, duty: 0.9, powerDbm: -50, streak: 6 }),
+      hand,
+    ],
+    snaps: powerSnaps([
+      [
+        { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 },
+        { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 },
+      ],
+      [
+        { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 },
+        { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 },
+      ],
+      [
+        { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 },
+        { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 },
+      ],
+      [
+        { id: 4, freqMhz: 5800, powerDbm: -50, widthMhz: 20, duty: 0.9 },
+        { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 },
+      ],
+    ]),
+  });
+  check("посадка полки на 20 дБ за четыре взгляда — тень", shortDrop.line.includes("тень"), shortDrop.line);
 
   const txMem = new AttackSessionMemory();
   const shelfAt = (lastSweep: number) =>
