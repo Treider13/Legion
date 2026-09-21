@@ -20,6 +20,7 @@ import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
+import { lookRu } from "../sense/attackLook";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
   ATTACK_HOLD_MAX_MS,
@@ -74,7 +75,7 @@ export function ScanPanel() {
             ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
-              : `${HOST_ATTACK_MODE_RU_CAPS}: слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц (FFT на ПК), рамка мышкой до ${ATTACK_TX_MAX_MHZ} МГц (USB FD), тип волны, выдержка, затем ПЕРЕДАТЬ — заливка только этой полосы. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
+              : `${HOST_ATTACK_MODE_RU_CAPS}: слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Мозг помнит IQ на плате и hop-вспышки сессии, пишет разбор и подсказки по-русски. Рамка мышкой до ${ATTACK_TX_MAX_MHZ} МГц, тип волны и выдержка — кнопка «взять» ставит только то, что вы нажали; в эфир само не уходит. ПЕРЕДАТЬ заливает нарисованное. Пунктир на спектре — предложение, не рамка. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -329,11 +330,13 @@ export function ScanPanel() {
                 : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс, сканирование каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
             }`
           : auto
-            ? s.autoDispatch === "priority"
-              ? "приоритет: сильнее рядом — сразу на неё; слабее не сбивает; пропала — следующая"
+            ? s.attackPaint
+              ? "Атака: рамка ваша. Подсказки ниже — совет, не кнопка. ПЕРЕДАТЬ жмёте вы."
+              : s.autoDispatch === "priority"
+              ? "рамки нет: без обвода ПЕРЕДАТЬ возьмёт живую засечку. Приоритет — сильнее рядом."
               : s.autoDispatch === "park"
-                ? "стоянка: узкий коридор — один LO; шире взгляда — обзор и взгляд на всплеск"
-                : "обычный: частота на выдержку, затем следующая из эфира (хост ≥ 1 мс)"
+                ? "рамки нет: стоянка в узком коридоре. Широкий линк обведите мышкой сами."
+                : "рамки нет: очередь засечек. Широкий линк обведите мышкой сами."
             : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
       </p>
       {!fpgaAir && !taskLive && (
@@ -527,23 +530,28 @@ export function ScanPanel() {
             <thead>
               <tr>
                 <th>МГц</th>
-                <th>ШИР</th>
-                <th>d</th>
-                <th>АТЛАС</th>
-                <th>ТРЕК</th>
+                <th title="ширина по уровню −3 дБ от пика">−3 дБ</th>
+                <th title="ширина по уровню −26 дБ, как в ITU SM.443">−26 дБ</th>
+                <th title="полоса, где сидит 99% энергии">99%</th>
+                <th title="какая доля кадров след был жив">доля</th>
+                <th>СЕМЬЯ</th>
+                <th>РАЗБОР</th>
+                <th>СЛЕД</th>
               </tr>
             </thead>
             <tbody>
               {s.attackTracks.length === 0 && (
                 <tr>
-                  <td colSpan={5}>{ATTACK_SILENT_HINT}</td>
+                  <td colSpan={8}>{ATTACK_SILENT_HINT}</td>
                 </tr>
               )}
-              {atlasForTracks(s.attackTracks, analogBw)
+              {(s.attackRows.length ? s.attackRows : atlasForTracks(s.attackTracks, analogBw))
                 .slice()
                 .sort((a, b) => b.powerDbm - a.powerDbm)
                 .slice(0, 10)
-                .map((t) => (
+                .map((t) => {
+                  const row = "look" in t ? t : null;
+                  return (
                   <tr
                     key={t.id}
                     className={
@@ -558,9 +566,12 @@ export function ScanPanel() {
                     title={t.atlas.hint}
                   >
                     <td>{t.freqMhz.toFixed(3)}</td>
-                    <td>{t.widthMhz.toFixed(2)}</td>
+                    <td>{row ? row.width3Mhz.toFixed(2) : t.widthMhz.toFixed(2)}</td>
+                    <td>{row ? row.width26Mhz.toFixed(2) : "—"}</td>
+                    <td>{row ? row.occ99Mhz.toFixed(2) : "—"}</td>
                     <td>{t.duty.toFixed(2)}</td>
                     <td className="attack-atlas">{t.atlas.label}</td>
+                    <td className="attack-atlas">{row?.look ? lookRu(row.look) : t.atlas.hint}</td>
                     <td>
                       {t.state === "held"
                         ? "ДЕРЖИМ"
@@ -571,9 +582,32 @@ export function ScanPanel() {
                             : "НОВЫЙ"}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
             </tbody>
           </table>
+          <div className="attack-advice">
+            <p className="attack-advice-title">Что видит Атака</p>
+            <p>{s.attackAdvice.scene || "Сцена ещё копится — нужен живой взгляд."}</p>
+            <p className="sens-hint">{s.attackMemoryLine || "Память сессии пуста, пока не было вспышек."}</p>
+            {s.attackAdvice.hints.map((h) => (
+              <div key={h.kind} className="attack-hint">
+                <strong>{h.title}.</strong> {h.text}
+                <span className="sens-hint"> {h.why}</span>
+                {h.applyLabel && (
+                  <button
+                    type="button"
+                    className="btn-mini"
+                    disabled={s.transmitArmed}
+                    onClick={() => s.applyAttackHint(h.kind)}
+                  >
+                    {h.applyLabel}
+                  </button>
+                )}
+              </div>
+            ))}
+            <p><strong>После передачи.</strong> {s.attackAdvice.after}</p>
+          </div>
           <table className="det-table">
             <thead>
               <tr>

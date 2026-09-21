@@ -573,6 +573,29 @@
   letter-spacing: 0.02em;
 }
 
+.attack-advice {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--lg-border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.attack-advice-title {
+  margin: 0 0 6px;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  color: var(--lg-accent-hi);
+}
+
+.attack-hint {
+  margin: 8px 0;
+}
+
+.attack-hint .btn-mini {
+  margin-left: 8px;
+}
+
 .scope-canvas.attack-brush {
   cursor: crosshair;
 }

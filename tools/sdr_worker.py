@@ -211,6 +211,19 @@ TRANSFER_SAMPLES = 4096
 USB_RX_BUFFERS = 32
 RING_CAP = 1 << 18
 RX_GAIN_DB = 30
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+from attack_dsp import (  # noqa: E402
+    ATTACK_MEM_CAP,
+    analyze_iq,
+    cancel_own,
+    leftover_ratio,
+    crop_iq,
+    multitaper_dbm,
+    spectral_flatness,
+    synth_look_iq,
+)
 
 
 def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
@@ -351,6 +364,26 @@ class IqRing:
             n = min(n, have)
             self._r += n
             return n
+
+    def latest(self, n: int):
+        """Копия последних n отсчётов. Не двигает читателя — память Атаки не съедается."""
+        n = int(n)
+        if n <= 0:
+            return None
+        with self._lock:
+            have = int(self._w - self._r)
+            if have < n:
+                return None
+            out = np.empty(n, dtype=np.complex64)
+            start = (self._w - n) & self.mask
+            end = start + n
+            if end <= self.cap:
+                out[:] = self.buf[start:end]
+            else:
+                first = self.cap - start
+                out[:first] = self.buf[start:]
+                out[first:] = self.buf[: n - first]
+            return out
 
 
 def cw_lo_hz(rf_hz: float, fs: float = TX_FS) -> float:
@@ -919,6 +952,8 @@ class Radio:
         self._rx_pause = threading.Event()
         self._rx_cap_thr: threading.Thread | None = None
         self._ring: IqRing | None = None
+        self._attack_mem: IqRing | None = None
+        self._attack_mem_live = False
         self._discard_left = 0
         self._rx_gen = 0
         self._tune_until = 0.0
@@ -1160,13 +1195,19 @@ class Radio:
                 if left > 0:
                     take = min(left, ret)
                     self._discard_left = left - take
-                    if take < ret and self._ring is not None:
-                        self._ring.push_block(chunk[take:])
+                    if take < ret:
+                        rest = chunk[take:]
+                        if self._ring is not None:
+                            self._ring.push_block(rest)
+                        if self._attack_mem is not None and self._attack_mem_live:
+                            self._attack_mem.push_block(rest)
                     if self._discard_left <= 0:
                         self._rx_gen += 1
                     continue
                 if self._ring is not None:
                     self._ring.push_block(chunk)
+                if self._attack_mem is not None and self._attack_mem_live:
+                    self._attack_mem.push_block(chunk)
 
     def _apply_rx_clock(self, fs: float, bw: float) -> float:
         """setSampleRate + setBandwidth. Фактический rate — из Soapy."""
@@ -1233,6 +1274,8 @@ class Radio:
                 if retuned:
                     if self._ring is not None:
                         self._ring.reset()
+                    if self._attack_mem is not None:
+                        self._attack_mem.reset()
                     self._discard_left = settle_samples(fs)
                     self._tune_until = time.monotonic() + TUNE_DELAY_S
                     pending = self._rx_gen + 1
@@ -1272,6 +1315,8 @@ class Radio:
     def scan(self, center_mhz: float, bw_mhz: float, bins: int) -> dict[str, Any]:
         n = max(8, min(int(bins), 4096))
         extra = self._scan_extra()
+        # Чужой путь (sweep/band/hop): не писать 40 MSPS в кольцо Атаки и не смешивать IQ.
+        self._pause_attack_mem()
         if not self.full_duplex and self.tx_mhz is not None:
             # GSG HackRF — half-duplex. RX+TX сразу ломает тракт (каталог fullDuplex: false).
             return {
@@ -1323,12 +1368,17 @@ class Radio:
         crop = float(crop_factor) if crop_factor is not None else attack_crop_factor(fs, filt_mhz * 1e6)
         hint = max(ATTACK_FFT_N, min(int(bins or ATTACK_FFT_N), ATTACK_FFT_N_FULL))
         extra = {**extra, "attack": True, "fsHz": fs, "filterMhz": filt_mhz, "cropFactor": crop}
+        self._ensure_attack_mem()
+        extra.update(self._attack_memory_fields(fs))
         if self.fake:
             n = ATTACK_FFT_N_FULL if hint >= ATTACK_FFT_N_FULL else ATTACK_FFT_N
             raw = _fake_bins(center_mhz, fs / 1e6, n)
+            cropped = crop_psd_bins(raw, crop)
+            db = np.array([b["powerDbm"] for b in cropped], dtype=np.float64)
+            extra["flatness"] = float(spectral_flatness(db)) if NUMPY and len(db) else 0.0
             return {
                 "ok": True,
-                "bins": crop_psd_bins(raw, crop),
+                "bins": cropped,
                 "centerMhz": center_mhz,
                 "fftN": n,
                 **extra,
@@ -1339,12 +1389,137 @@ class Radio:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6, filt_mhz * 1e6)
-            # hint, не available(): после LO hop кольцо сброшено, 8192 Welch ≈ 0.6 мс @ 61.44.
+            # hint, не available(): после LO hop кольцо сброшено, 8192 ≈ 0.6 мс @ 61.44.
             fft_n = attack_pick_fft_n(hint)
-            spec = self._wait_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop, fft_n)
+            spec = self._wait_attack_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop)
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
+        extra.update(self._attack_memory_fields(self._rx_fs or fs))
+        if spec:
+            db = np.array([b["powerDbm"] for b in spec], dtype=np.float64)
+            extra["flatness"] = float(spectral_flatness(db))
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, "fftN": fft_n, **extra}
+
+    def _pause_attack_mem(self) -> None:
+        """scan() гасит запись в память Атаки. Кольцо scan() не трогаем."""
+        self._attack_mem_live = False
+        if self._attack_mem is not None:
+            self._attack_mem.reset()
+
+    def _ensure_attack_mem(self) -> None:
+        if not NUMPY:
+            return
+        if self._attack_mem is None:
+            self._attack_mem = IqRing(ATTACK_MEM_CAP)
+        self._attack_mem_live = True
+
+    def _attack_memory_fields(self, fs: float) -> dict[str, Any]:
+        have = int(self._attack_mem.available()) if self._attack_mem is not None else 0
+        rate = float(fs) if fs and fs > 0 else float(ATTACK_LISTEN_FS_HZ)
+        return {
+            "memorySamples": have,
+            "memoryCap": ATTACK_MEM_CAP,
+            "memoryMs": (have / rate) * 1e3 if rate > 0 else 0.0,
+        }
+
+    def _wait_attack_psd(
+        self,
+        gen: int,
+        fft_n: int,
+        fs: float,
+        center_mhz: float,
+        crop: float,
+    ) -> list[dict[str, float]]:
+        """Multitaper с копии памяти. Не pop — мозг Атаки не теряет IQ."""
+        size = int(fft_n)
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            if self._tune_until and time.monotonic() < self._tune_until:
+                time.sleep(0.0005)
+                continue
+            src = self._attack_mem if self._attack_mem is not None else self._ring
+            ready = (
+                self._rx_gen >= gen
+                and src is not None
+                and src.available() >= size
+            )
+            if ready:
+                block = src.latest(size)
+                if block is None:
+                    time.sleep(0.0005)
+                    continue
+                return _psd_from_iq(block, fs, center_mhz, crop, size)
+            time.sleep(0.0005)
+        raise RuntimeError("RX: нет полного кадра FFT после настройки LO (шлюз/кабель/прошивка?)")
+
+    def attack_think(
+        self,
+        center_mhz: float,
+        fs_hz: float,
+        looks: list[dict[str, Any]],
+        residual: bool,
+    ) -> dict[str, Any]:
+        """Разбор вырезов из памяти IQ. Не TX и не scan()."""
+        fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(self._rx_fs or ATTACK_LISTEN_FS_HZ)
+        extra = {"attack": True, **self._attack_memory_fields(fs)}
+        if not NUMPY:
+            return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
+        iq = None
+        if self.fake:
+            n = 4096
+            look_fs = min(fs, 2e6) if fs > 0 else 2e6
+            if residual and self._tone is not None:
+                ref = np.asarray(self._tone, dtype=np.complex64)
+                if len(ref) < 1:
+                    iq = synth_look_iq("tone", n, look_fs)
+                else:
+                    if len(ref) < n:
+                        ref = np.tile(ref, int(math.ceil(n / len(ref))))[:n]
+                    else:
+                        ref = ref[:n]
+                    layer = synth_look_iq("ofdm", n, look_fs)
+                    iq = (0.7 * ref + 0.18 * layer).astype(np.complex64)
+            else:
+                iq = synth_look_iq("tone", n, look_fs)
+        else:
+            src = self._attack_mem if self._attack_mem is not None else self._ring
+            if src is not None:
+                want = min(max(src.available(), 0), 32768)
+                iq = src.latest(want) if want >= 256 else None
+        if iq is None or len(iq) < 64:
+            return {"ok": False, "reason": "память IQ ещё копится", "looks": [], **extra}
+        out_looks = []
+        for row in looks[:4]:
+            freq = float(row.get("freqMhz") or center_mhz)
+            bw = float(row.get("bwMhz") or 2.0)
+            crop = crop_iq(iq, fs, freq, center_mhz, bw)
+            leftover_row = None
+            clip = False
+            if residual and self._tone is not None:
+                before = crop
+                crop, clip = cancel_own(crop, np.asarray(self._tone))
+                leftover_row = leftover_ratio(before, crop)
+            parsed = analyze_iq(crop, fs)
+            parsed["freqMhz"] = freq
+            parsed["clip"] = bool(parsed.get("clip") or clip)
+            if leftover_row is not None:
+                parsed["leftover"] = leftover_row
+            out_looks.append(parsed)
+        leftover = None
+        clip_all = any(bool(x.get("clip")) for x in out_looks)
+        if residual and self._tone is not None:
+            src_iq = iq[-min(len(iq), 8192) :]
+            whole, clip_whole = cancel_own(src_iq, np.asarray(self._tone))
+            leftover = leftover_ratio(src_iq, whole)
+            clip_all = bool(clip_all or clip_whole)
+        return {
+            "ok": True,
+            "looks": out_looks,
+            "leftover": leftover,
+            "clip": clip_all,
+            "centerMhz": center_mhz,
+            **extra,
+        }
 
     def _soapy_get_hz(self, direction: int) -> float | None:
         try:
@@ -1733,7 +1908,7 @@ class Radio:
         if self.fake:
             if NUMPY:
                 try:
-                    make_waveform(wave, tx_fs, WAVE_N, params)
+                    self._tone = make_waveform(wave, tx_fs, WAVE_N, params)
                 except Exception as e:
                     return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
             self.tx_mhz = freq_mhz
@@ -2022,6 +2197,27 @@ def _psd_from_ring(
     return crop_psd_bins(raw, crop)
 
 
+def _psd_from_iq(
+    block: Any,
+    fs: float,
+    center_mhz: float,
+    crop: float,
+    fft_n: int,
+) -> list[dict[str, float]]:
+    """Thomson multitaper на копии IQ. Не pop кольца scan()."""
+    size = int(fft_n)
+    x = np.asarray(block, dtype=np.complex64)
+    if len(x) < size:
+        raise RuntimeError("кольцо Атаки: мало IQ для FFT")
+    if len(x) > size:
+        x = x[-size:]
+    db = multitaper_dbm(x)
+    span = fs / 1e6
+    freqs = (center_mhz - span / 2.0) + np.arange(size, dtype=np.float64) * (span / size)
+    raw = [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
+    return crop_psd_bins(raw, crop)
+
+
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
 
 
@@ -2111,6 +2307,15 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
                 float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
                 float(msg.get("bwMhz") or (ATTACK_LISTEN_BW_HZ / 1e6)) * 1e6,
             ),
+        )
+    if op == "attack_think":
+        raw_looks = msg.get("looks")
+        looks = raw_looks if isinstance(raw_looks, list) else []
+        return radio.attack_think(
+            float(msg.get("centerMhz") or 0),
+            float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
+            [x for x in looks if isinstance(x, dict)],
+            bool(msg.get("residual")),
         )
     if op == "park":
         return radio.park(

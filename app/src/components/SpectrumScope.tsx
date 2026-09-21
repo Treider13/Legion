@@ -346,6 +346,16 @@ export function SpectrumScope() {
           ctx.fillRect(x0, padT, Math.max(x1 - x0, 2), plotH);
         }
         const paint = st.attackPaintDraft ?? st.attackPaint;
+        const suggest = !st.attackPaintDraft && !st.attackPaint ? st.attackSuggestPaint : null;
+        if (suggest) {
+          const x0 = Math.max(padL, xOf(suggest.f1Mhz));
+          const x1 = Math.min(padL + plotW, xOf(suggest.f2Mhz));
+          ctx.strokeStyle = "rgba(245,193,108,0.7)";
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(x0 + 0.5, padT + 0.5, Math.max(x1 - x0, 3) - 1, plotH - 1);
+          ctx.setLineDash([]);
+        }
         if (paint) {
           const x0 = Math.max(padL, xOf(paint.f1Mhz));
           const x1 = Math.min(padL + plotW, xOf(paint.f2Mhz));

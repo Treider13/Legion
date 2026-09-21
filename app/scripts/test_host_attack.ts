@@ -5,6 +5,11 @@
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS } from "../src/sense/attackTracks";
 import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import { stitchHopFamilies } from "../src/sense/attackFamily";
+import { occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
+import { buildAttackAdvice, waveClassOf } from "../src/sense/attackAdvisor";
+import { AttackSessionMemory } from "../src/sense/attackMemory";
+import { buildAttackScene } from "../src/sense/attackScene";
 import {
   ATTACK_FD_FS_HZ,
   ATTACK_FFT_N_FULL,
@@ -87,6 +92,14 @@ async function main(): Promise<void> {
   check(
     "тик скана сверяет gScanGen после await",
     storeSrc.includes("let gScanGen = 0") && storeSrc.includes("scanGen !== gScanGen"),
+  );
+  check(
+    "слух Атаки — Thomson, чужой путь — Welch",
+    storeSrc.includes("Thomson DPSS×3") && storeSrc.includes("Hann+Welch-8 overlap 0.5"),
+  );
+  check(
+    "вычет после ПЕРЕДАТЬ не теряется если мозг занят",
+    storeSrc.includes("gAttackThinkResidual") && storeSrc.includes("pend.centerMhz"),
   );
   check(
     "pickArmed архив по-прежнему пуст",
@@ -203,6 +216,80 @@ async function main(): Promise<void> {
     }
     return out;
   }
+  const brick20 = brickBins(2442, 40, 400, 2432, 2452, -20);
+  check("−3 дБ на кирпиче ~20", Math.abs(width3dbMhzAttack(brick20, 2442) - 20) < 1.5);
+  check("−26 дБ не уже −3", width26dbMhz(brick20, 2442) + 1e-9 >= width3dbMhzAttack(brick20, 2442) - 0.2);
+  check("99% на кирпиче живая", occupied99Mhz(brick20, 2442) > 10);
+
+  const hopTracks = [2440, 2441, 2442].map((mhz, i) => ({
+    id: i + 1,
+    freqMhz: mhz,
+    fLowMhz: mhz - 0.4,
+    fHighMhz: mhz + 0.4,
+    widthMhz: 0.8,
+    powerDbm: -35,
+    noiseDbm: -90,
+    snrDb: 55,
+    hits: 3,
+    streak: 1,
+    maxStreak: 2,
+    firstSweep: 1,
+    lastSweep: 4,
+    gap: 0,
+    duty: 0.2,
+    state: "confirmed" as const,
+    lastSeenTs: 1,
+  }));
+  const fams = stitchHopFamilies(hopTracks, [2439, 2443]);
+  check("семья hop склеивает сетку 1 МГц", fams.length >= 1 && Math.abs((fams[0]?.gridMhz ?? 0) - 1) < 0.3);
+  check("семья шире одной вспышки", (fams[0]?.fHighMhz ?? 0) - (fams[0]?.fLowMhz ?? 0) > 2);
+  const hopMem = new AttackSessionMemory();
+  hopMem.noteHops(hopTracks, 1);
+  hopMem.noteHops(hopTracks, 2);
+  hopMem.noteHops(hopTracks, 3);
+  check("память hop не дублирует каждый тик", hopMem.hops.length === hopTracks.length);
+  hopMem.noteHops(
+    [{ ...hopTracks[0]!, freqMhz: 2444, fLowMhz: 2443.6, fHighMhz: 2444.4 }],
+    4,
+  );
+  check("память hop пишет новый канал того же следа", hopMem.hops.length === hopTracks.length + 1);
+
+  const sticky = [{
+    id: 1, freqMhz: 2442, fLowMhz: 2432, fHighMhz: 2452, widthMhz: 20,
+    powerDbm: -18, noiseDbm: -90, snrDb: 72, hits: 10, streak: 10, maxStreak: 10,
+    firstSweep: 1, lastSweep: 10, gap: 0, duty: 0.9, state: "confirmed" as const, lastSeenTs: 1,
+  }];
+  const advice = buildAttackAdvice({
+    tracks: sticky,
+    families: [],
+    widths: new Map([[1, { width3Mhz: 19.5, width26Mhz: 20.2, occ99Mhz: 20.0 }]]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check("тон против 20 МГц — спор", advice.hints.some((h) => h.kind === "wave" && h.wave === "awgn"));
+  check("рамка предлагается, не ставится", advice.suggestPaint != null && advice.hints.some((h) => h.kind === "paint" && h.paint != null));
+  check("пустая волна = узкий класс", waveClassOf(null) === "narrow");
+  const scene = buildAttackScene({
+    tracks: sticky,
+    bins: brick20,
+    windowMhz: 56,
+    memory: new AttackSessionMemory(),
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    transmitArmed: false,
+  });
+  check("сцена не пишет TX", scene.advice.hints.every((h) => h.kind !== "wave" || h.wave == null || h.applyLabel != null));
+  check("память пишет по-русски", scene.memoryLine.includes("помнит") || scene.memoryLine.includes("пуста") || scene.memoryLine.includes("IQ"));
+
   const analog30 = detectAttackHits(brickBins(5800, 56, 512, 5785, 5815, -25), 12, 56);
   check(
     "слух 56 видит analog ~30, не 22",
@@ -248,6 +335,26 @@ async function main(): Promise<void> {
   L().armTxWave("awgn");
   L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
   check("рамка легла в стор", L().attackPaint != null && Math.abs(paintCenterMhz(L().attackPaint!) - 2440) < 0.05);
+  useLegion.setState({
+    attackAdvice: {
+      scene: "тест",
+      after: "",
+      hints: [{
+        kind: "paint",
+        title: "Рамка",
+        text: "тест",
+        why: "тест",
+        applyLabel: "Взять",
+        paint: { f1Mhz: 2410, f2Mhz: 2430 },
+        wave: null,
+        holdMs: null,
+      }],
+      suggestPaint: { f1Mhz: 2410, f2Mhz: 2430 },
+    },
+  });
+  L().applyAttackHint("paint");
+  check("взять рамку — только клик оператора", L().attackPaint != null && Math.abs(L().attackPaint.f1Mhz - 2410) < 0.05);
+  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
 
   L().setScanPattern("fpga");
   check("уход с Атаки чистит рамку", L().attackPaint == null && L().attackTracks.length === 0);

@@ -21,6 +21,36 @@ export interface HostScanResult {
   reason?: string;
   txLive?: boolean;
   txError?: string;
+  memorySamples?: number;
+  memoryCap?: number;
+  memoryMs?: number;
+  flatness?: number;
+}
+
+export interface HostAttackLook {
+  freqMhz: number;
+  kind?: string;
+  label?: string;
+  conf?: number;
+  flatness?: number;
+  cepstrum?: number;
+  famCoh?: number;
+  famAlphaHz?: number;
+  c20?: number;
+  kurt?: number;
+  clip?: boolean;
+  leftover?: number | null;
+}
+
+export interface HostAttackThinkResult {
+  ok: boolean;
+  reason?: string;
+  looks: HostAttackLook[];
+  leftover?: number | null;
+  clip?: boolean;
+  memorySamples?: number;
+  memoryCap?: number;
+  memoryMs?: number;
 }
 
 async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -134,6 +164,36 @@ export async function hostAttackScan(
     reason: r.reason,
     txLive: r.txLive,
     txError: r.txError,
+    memorySamples: r.memorySamples,
+    memoryCap: r.memoryCap,
+    memoryMs: r.memoryMs,
+    flatness: r.flatness,
+  };
+}
+
+/** Только Атака. Разбор вырезов из памяти IQ. Не scan() и не TX. */
+export async function hostAttackThink(
+  centerMhz: number,
+  fsHz: number,
+  looks: Array<{ freqMhz: number; bwMhz: number }>,
+  residual: boolean,
+): Promise<HostAttackThinkResult> {
+  const r = await hostRpc<HostAttackThinkResult>({
+    op: "attack_think",
+    centerMhz,
+    fsHz,
+    looks,
+    residual,
+  });
+  return {
+    ok: !!r.ok,
+    reason: r.reason,
+    looks: r.looks ?? [],
+    leftover: r.leftover,
+    clip: r.clip,
+    memorySamples: r.memorySamples,
+    memoryCap: r.memoryCap,
+    memoryMs: r.memoryMs,
   };
 }
 

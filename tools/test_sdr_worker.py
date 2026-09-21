@@ -318,11 +318,41 @@ def main() -> int:
     check("attack_scan не 512 soapy", len(atk.get("bins") or []) > 2000)
     atk_span = atk["bins"][-1]["freqMhz"] - atk["bins"][0]["freqMhz"]
     check("attack_scan окно ≈56", abs(atk_span - 56) < 1.5)
+    check("attack_scan память объявлена", int(atk.get("memoryCap") or 0) == w.ATTACK_MEM_CAP)
+    check("attack_scan не scan-кольцо", int(atk.get("memoryCap") or 0) > w.RING_CAP)
+    think = rpc(
+        proc,
+        {
+            "op": "attack_think",
+            "centerMhz": 2442,
+            "fsHz": 2e6,
+            "looks": [{"freqMhz": 2442, "bwMhz": 2}],
+            "residual": False,
+        },
+    )
+    check("attack_think fake ок", think.get("ok") is True and think.get("looks"))
+    check("attack_think не заглушка kind", think["looks"][0].get("kind") in ("tone", "ofdm", "cycle", "noise", "unknown"))
+    check(
+        "handle знает только attack_think рядом с attack_scan",
+        'if op == "attack_think":' in open(WORKER).read(),
+    )
     scan2 = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
     check(
         "scan() изоляция: снова 20 МГц crop",
         scan2.get("ok") is True and abs(scan2["bins"][-1]["freqMhz"] - scan2["bins"][0]["freqMhz"] - 20) < 1.5,
     )
+    src = open(WORKER).read()
+    check("scan() гасит кольцо Атаки", "self._pause_attack_mem()" in src and "self._attack_mem_live" in src)
+    if w.NUMPY:
+        import numpy as np_atk
+        radio = w.Radio()
+        radio._ensure_attack_mem()
+        radio._attack_mem.push_block(np_atk.ones(1024, dtype=np_atk.complex64))
+        check("память Атаки живая", radio._attack_mem_live is True and radio._attack_mem.available() == 1024)
+        radio._pause_attack_mem()
+        check("пауза обнуляет IQ Атаки", radio._attack_mem_live is False and radio._attack_mem.available() == 0)
+        radio.scan(2442, 20, 32)
+        check("scan() оставляет флаг выключенным", radio._attack_mem_live is False)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())
