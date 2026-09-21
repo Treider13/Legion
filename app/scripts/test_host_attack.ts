@@ -2,9 +2,17 @@
 // LEGION — тесты хост-Атаки. Не трогают FPGA / ESP32 / detectFromBins.
 // Запуск: npx tsx scripts/test_host_attack.ts
 // ============================================================================
-import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ } from "../src/sense/attackDetect";
+import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS } from "../src/sense/attackTracks";
-import { classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import {
+  ATTACK_FD_FS_HZ,
+  ATTACK_FFT_N_FULL,
+  ATTACK_LISTEN_ANALOG_MHZ,
+  ATTACK_LISTEN_FS_HZ,
+  attackCropFactor,
+  attackListenPlan,
+} from "../src/sense/attackListen";
 import {
   ATTACK_COOLDOWN_MS,
   ATTACK_HOLD_MIN_MS,
@@ -21,7 +29,7 @@ import {
   paintWaveHint,
   waveOccupiesPaintMhz,
 } from "../src/sense/attackPaint";
-import { detectFromBins, estimateNoiseFloor, hostPaintSpanMhz } from "../src/sdr/backend";
+import { detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
 
@@ -64,6 +72,8 @@ async function main(): Promise<void> {
     { freqMhz: 5, powerDbm: -10 },
   ]) === -88);
   check("crop/paint хоста 20 МГц как был", hostPaintSpanMhz(56) === 20);
+  check("хост FFT span чужих режимов 40", hostScanSpanMhz(56) === 40);
+  check("soapy crop чужих режимов 0.5", SOAPY_CROP_FACTOR === 0.5);
   check("RESENSE_MS 1 с как был", RESENSE_MS === 1000);
   check(
     "pickArmed архив по-прежнему пуст",
@@ -112,10 +122,80 @@ async function main(): Promise<void> {
   check("5.8 8 МГц sticky — аналог", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 8, duty: 0.9, streak: 10,
   }).id === "analog-video");
+  check("5.8 12 МГц sticky — цифра, не аналог", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 12, duty: 0.9, streak: 10,
+  }).id === "digital-video");
+  check("5.8 30 МГц sticky — широко", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 30, duty: 0.9, streak: 10,
+  }).id === "digital-wide");
+  check("5.8 40 МГц sticky — широко", classifyAttackFamily({
+    freqMhz: 5794.5, widthMhz: 40, duty: 0.92, streak: 12,
+  }).id === "digital-wide");
+  check("5.1 20 МГц — цифра в c51", classifyAttackFamily({
+    freqMhz: 5180, widthMhz: 20, duty: 0.88, streak: 9,
+  }).id === "digital-video" && bandBucket(5180) === "c51");
+  check("заполнил окно 56", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 54, duty: 0.95, streak: 12,
+  }, 56).id === "window-fill");
   check("915 узкий — 900-класс", classifyAttackFamily({
     freqMhz: 915, widthMhz: 0.5, duty: 0.2, streak: 1,
   }).id === "rc-900");
   check("корзина 5.8", bandBucket(5805) === "c58");
+  check("корзина 169", bandBucket(169) === "vhf");
+  check("корзина 470", bandBucket(470) === "uhf");
+  check("2.4 hop ≤2 — rc-24", classifyAttackFamily({
+    freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1,
+  }).id === "rc-24");
+  check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
+  }).id === "digital-burst");
+  const floors = atlasForTracks([
+    {
+      id: 1, freqMhz: 5800, fLowMhz: 5785, fHighMhz: 5815, widthMhz: 30,
+      powerDbm: -20, noiseDbm: -90, snrDb: 70, hits: 8, streak: 8, maxStreak: 8,
+      firstSweep: 1, lastSweep: 8, gap: 0, duty: 0.9, state: "confirmed", lastSeenTs: 1,
+    },
+    {
+      id: 2, freqMhz: 5760, fLowMhz: 5759.6, fHighMhz: 5760.4, widthMhz: 0.8,
+      powerDbm: -40, noiseDbm: -90, snrDb: 50, hits: 3, streak: 1, maxStreak: 2,
+      firstSweep: 6, lastSweep: 8, gap: 0, duty: 0.2, state: "confirmed", lastSeenTs: 1,
+    },
+  ]);
+  check("два этажа в одной корзине", floors.every((t) => t.atlas.id === "two-floor"));
+
+  const listen = attackListenPlan({ analogMhz: 56, paintOwnsTx: false, paint: null });
+  check("слух xA4 fs 61.44", listen.fsHz === ATTACK_LISTEN_FS_HZ);
+  check("слух фильтр 56", listen.filterMhz === ATTACK_LISTEN_ANALOG_MHZ);
+  check("слух окно 56", Math.abs(listen.spanMhz - 56) < 0.05);
+  check("слух FFT 8192", listen.fftN === ATTACK_FFT_N_FULL);
+  check(
+    "crop 61.44/56 = неиспользуемый Nyquist",
+    Math.abs(attackCropFactor(ATTACK_LISTEN_FS_HZ, 56) - (1 - 56 / 61.44)) < 1e-6,
+  );
+  const fd = attackListenPlan({
+    analogMhz: 56,
+    paintOwnsTx: true,
+    paint: { f1Mhz: 2430, f2Mhz: 2450 },
+  });
+  check("ПЕРЕДАТЬ 20 МГц не раздувает USB до 61.44", fd.fsHz === 20e6 && fd.fsHz <= ATTACK_FD_FS_HZ);
+  const x40 = attackListenPlan({ analogMhz: 28, paintOwnsTx: false, paint: null });
+  check("x40 слух не 61.44", x40.fsHz === 28e6 && x40.filterMhz === 28);
+  check("потолок хита не 22", ATTACK_MAX_BW_MHZ === 56);
+
+  function brickBins(center: number, span: number, n: number, lo: number, hi: number, dbm: number) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const f = center - span / 2 + (span * i) / (n - 1);
+      out.push({ freqMhz: f, powerDbm: f >= lo && f <= hi ? dbm : -92 });
+    }
+    return out;
+  }
+  const analog30 = detectAttackHits(brickBins(5800, 56, 512, 5785, 5815, -25), 12, 56);
+  check(
+    "слух 56 видит analog ~30, не 22",
+    analog30.some((h) => h.widthMhz >= 28 && h.widthMhz <= 32),
+    analog30.map((h) => h.widthMhz.toFixed(2)).join(","),
+  );
 
   const fat = clampPaintToCaps({ f1Mhz: 2400, f2Mhz: 2500 });
   check("рамка шире 40 обрезана", paintSpanMhz(fat) <= ATTACK_TX_MAX_MHZ + 1e-9);
@@ -199,6 +279,19 @@ async function main(): Promise<void> {
   );
   await L().stopTransmit();
   L().stopScan();
+
+  L().setScanPattern("sweep");
+  L().startScan();
+  check("скан sweep пошёл", await waitFor("sweep", () => L().scanRunning));
+  check("sweep bins есть", await waitFor("sweep bins", () => L().scanBins.length > 8));
+  const sweepSpan =
+    L().scanBins.length > 1
+      ? L().scanBins[L().scanBins.length - 1]!.freqMhz - L().scanBins[0]!.freqMhz
+      : 0;
+  check("sweep окно всё ещё ~20 (crop 0.5)", Math.abs(sweepSpan - 20) < 2, `span=${sweepSpan.toFixed(2)}`);
+  check("sweep не FFT Атаки", L().scanBins.length <= 520);
+  L().stopScan();
+  L().setScanPattern("auto");
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

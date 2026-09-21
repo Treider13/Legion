@@ -200,6 +200,13 @@ FFT_OVERLAP = 0.5
 CROP_FACTOR = 0.5
 DIO_SAMPLE_RATE_HZ = 40_000_000
 DIO_BANDWIDTH_HZ = 40_000_000
+# Слух Атаки: analog 56 / ADC 61.44 (Nuand). Не трогает scan() DIO-40.
+ATTACK_LISTEN_FS_HZ = 61_440_000
+ATTACK_LISTEN_BW_HZ = 56_000_000
+ATTACK_FD_FS_HZ = 40_000_000
+ATTACK_FFT_N = 4096
+ATTACK_FFT_N_FULL = 8192
+ATTACK_EDGE_CROP = 0.05
 TRANSFER_SAMPLES = 4096
 USB_RX_BUFFERS = 32
 RING_CAP = 1 << 18
@@ -210,6 +217,26 @@ def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
     """DIO-sys capture.hpp SAMPLE_RATE_HZ = 40e6.
     analog BW платы (x40: 28 МГц) — это фильтр, не частота дискретизации."""
     return float(DIO_SAMPLE_RATE_HZ)
+
+
+def attack_crop_factor(fs_hz: float, filter_hz: float) -> float:
+    """Край фильтра. 61.44/56 → неиспользуемый Nyquist; fs=filter → 5%."""
+    span = float(fs_hz)
+    filt = float(filter_hz)
+    if span <= 0:
+        return ATTACK_EDGE_CROP
+    if filt + 5e4 >= span:
+        return ATTACK_EDGE_CROP
+    return min(0.49, max(0.0, 1.0 - filt / span))
+
+
+def attack_pick_fft_n(hint: int, available: int) -> int:
+    """4096 сразу; 8192 если в кольце хватает на Welch-8 (GQRX default)."""
+    want = int(hint) if hint else ATTACK_FFT_N
+    need_full = welch_need_samples(ATTACK_FFT_N_FULL)
+    if want >= ATTACK_FFT_N_FULL and int(available) >= need_full:
+        return ATTACK_FFT_N_FULL
+    return ATTACK_FFT_N
 
 
 def rx_is_parked(
@@ -1139,13 +1166,13 @@ class Radio:
                 if self._ring is not None:
                     self._ring.push_block(chunk)
 
-    def _apply_dio_rx_clock(self, fs: float) -> float:
-        """DIO-sys configure_device: 40 MSPS + 40 МГц. Фактический rate — из Soapy."""
+    def _apply_rx_clock(self, fs: float, bw: float) -> float:
+        """setSampleRate + setBandwidth. Фактический rate — из Soapy."""
         assert self.dev is not None
         self.dev.setSampleRate(SOAPY_SDR_RX, 0, fs)
         try:
-            self.dev.setBandwidth(SOAPY_SDR_RX, 0, float(DIO_BANDWIDTH_HZ))
-            self._rx_bw = float(DIO_BANDWIDTH_HZ)
+            self.dev.setBandwidth(SOAPY_SDR_RX, 0, float(bw))
+            self._rx_bw = float(bw)
         except Exception:
             self.dev.setBandwidth(SOAPY_SDR_RX, 0, fs)
             self._rx_bw = fs
@@ -1157,22 +1184,29 @@ class Radio:
             pass
         return fs
 
-    def _ensure_rx(self, fs: float, center_hz: float) -> int:
+    def _apply_dio_rx_clock(self, fs: float) -> float:
+        """DIO-sys configure_device: 40 MSPS + 40 МГц. Фактический rate — из Soapy."""
+        return self._apply_rx_clock(fs, float(DIO_BANDWIDTH_HZ))
+
+    def _ensure_rx(self, fs: float, center_hz: float, bw: float | None = None) -> int:
         """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий.
 
         setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
         Rate — только при смене, через deactivate→перестройка→activate.
         LO (setFrequency) на живом потоке безопасен.
+        bw=None — DIO 40 МГц (scan). Атака передаёт фильтр 56 или FD.
         """
         assert self.dev is not None
+        want_bw = float(bw) if bw and bw > 0 else float(DIO_BANDWIDTH_HZ)
         alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
-        if rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive):
+        parked = rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive)
+        if parked and self._rx_bw == want_bw:
             return self._rx_gen
-        retuned = self._rx_hz != center_hz or self._rx_fs != fs or not self._rx_on
+        retuned = self._rx_hz != center_hz or self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
         self._rx_pause.set()
         try:
             with self._rx_io, self._lock:
-                rate_changed = self._rx_fs != fs or not self._rx_on
+                rate_changed = self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
                 if rate_changed and self.rx is not None and self._rx_on:
                     try:
                         self.dev.deactivateStream(self.rx)
@@ -1180,7 +1214,7 @@ class Radio:
                         pass
                     self._rx_on = False
                 if rate_changed:
-                    fs = self._apply_dio_rx_clock(fs)
+                    fs = self._apply_rx_clock(fs, want_bw)
                 if self._rx_hz != center_hz:
                     self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
                 if self.rx is None:
@@ -1208,9 +1242,17 @@ class Radio:
         finally:
             self._rx_pause.clear()
 
-    def _wait_psd(self, gen: int, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-        fft_n = _pick_fft_size(n)
-        need = welch_need_samples(fft_n)
+    def _wait_psd(
+        self,
+        gen: int,
+        n: int,
+        fs: float,
+        center_mhz: float,
+        crop_factor: float | None = None,
+        fft_n: int | None = None,
+    ) -> list[dict[str, float]]:
+        size = int(fft_n) if fft_n and fft_n > 0 else _pick_fft_size(n)
+        need = welch_need_samples(size)
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
             if self._tune_until and time.monotonic() < self._tune_until:
@@ -1221,7 +1263,7 @@ class Radio:
                 and self._ring is not None
                 and self._ring.available() >= need
             ):
-                return _psd_from_ring(self._ring, n, fs, center_mhz)
+                return _psd_from_ring(self._ring, n, fs, center_mhz, crop_factor, size)
             time.sleep(0.0005)
         raise RuntimeError("RX: нет полного кадра FFT после настройки LO (шлюз/кабель/прошивка?)")
 
@@ -1247,13 +1289,60 @@ class Radio:
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
         # DIO-sys capture.hpp: 40 MSPS / 40 МГц, не окно walker и не analog-фильтр.
-        fs = self._rx_fs if self._rx_fs else dio_rx_rate()
+        # Всегда 40 — слух Атаки (61.44) не должен протекать в sweep/band.
+        fs = dio_rx_rate()
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6)
             spec = self._wait_psd(gen, n, self._rx_fs or fs, center_mhz)
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
+
+    def attack_scan(
+        self,
+        center_mhz: float,
+        fs_hz: float,
+        bw_mhz: float,
+        bins: int,
+        crop_factor: float,
+    ) -> dict[str, Any]:
+        """Слух Атаки. Не scan(): свой fs/фильтр/crop/FFT 4096|8192."""
+        extra = self._scan_extra()
+        if not self.full_duplex and self.tx_mhz is not None:
+            return {
+                "ok": True,
+                "bins": [],
+                "centerMhz": center_mhz,
+                "reason": "half-duplex: RX пауза, пока TX на RF out",
+                **extra,
+            }
+        fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(ATTACK_LISTEN_FS_HZ)
+        filt_mhz = float(bw_mhz) if bw_mhz and bw_mhz > 0 else ATTACK_LISTEN_BW_HZ / 1e6
+        crop = float(crop_factor) if crop_factor is not None else attack_crop_factor(fs, filt_mhz * 1e6)
+        hint = max(ATTACK_FFT_N, min(int(bins or ATTACK_FFT_N), ATTACK_FFT_N_FULL))
+        extra = {**extra, "attack": True, "fsHz": fs, "filterMhz": filt_mhz, "cropFactor": crop}
+        if self.fake:
+            n = ATTACK_FFT_N_FULL if hint >= ATTACK_FFT_N_FULL else ATTACK_FFT_N
+            raw = _fake_bins(center_mhz, fs / 1e6, n)
+            return {
+                "ok": True,
+                "bins": crop_psd_bins(raw, crop),
+                "centerMhz": center_mhz,
+                "fftN": n,
+                **extra,
+            }
+        if self.dev is None:
+            return {"ok": False, "reason": "SDR не открыт", "bins": [], **extra}
+        if not NUMPY:
+            return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
+        try:
+            gen = self._ensure_rx(fs, center_mhz * 1e6, filt_mhz * 1e6)
+            avail = self._ring.available() if self._ring is not None else 0
+            fft_n = attack_pick_fft_n(hint, avail)
+            spec = self._wait_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop, fft_n)
+        except Exception as e:
+            return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
+        return {"ok": True, "bins": spec, "centerMhz": center_mhz, "fftN": fft_n, **extra}
 
     def _soapy_get_hz(self, direction: int) -> float | None:
         try:
@@ -1898,29 +1987,37 @@ def _pool_bins(freqs: Any, db: Any, n: int) -> list[dict[str, float]]:
     return out
 
 
-def _psd_from_ring(ring: IqRing, n: int, fs: float, center_mhz: float) -> list[dict[str, float]]:
-    """Hann + Welch-8 + overlap 0.5 + crop soapy. Ось display.cpp, потом обрезка краёв."""
+def _psd_from_ring(
+    ring: IqRing,
+    n: int,
+    fs: float,
+    center_mhz: float,
+    crop_factor: float | None = None,
+    fft_n: int | None = None,
+) -> list[dict[str, float]]:
+    """Hann + Welch-8 + overlap 0.5. crop по умолчанию soapy 0.5; Атака передаёт свой."""
     if not NUMPY:
         raise RuntimeError("нужен numpy для FFT эфира (pip install numpy)")
-    fft_n = _pick_fft_size(n)
-    hop = welch_hop_samples(fft_n)
-    need = welch_need_samples(fft_n)
+    size = int(fft_n) if fft_n and fft_n > 0 else _pick_fft_size(n)
+    crop = CROP_FACTOR if crop_factor is None else float(crop_factor)
+    hop = welch_hop_samples(size)
+    need = welch_need_samples(size)
     extra = ring.available() - need
     if extra > 0:
         ring.drop_oldest(extra)
     block = ring.pop_batch(need)
     if block is None:
         raise RuntimeError("кольцо RX: нет полного кадра FFT")
-    frames = np.zeros((WELCH_FRAMES, fft_n), dtype=np.complex64)
+    frames = np.zeros((WELCH_FRAMES, size), dtype=np.complex64)
     for i in range(WELCH_FRAMES):
         a = i * hop
-        frames[i] = block[a : a + fft_n]
+        frames[i] = block[a : a + size]
     db = welch_dbm(frames)
     # display.cpp: freq[k] = (center − fs/2) + k * (fs / N). Crop — после оси.
     span = fs / 1e6
-    freqs = (center_mhz - span / 2.0) + np.arange(fft_n, dtype=np.float64) * (span / fft_n)
+    freqs = (center_mhz - span / 2.0) + np.arange(size, dtype=np.float64) * (span / size)
     raw = [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
-    return crop_psd_bins(raw, CROP_FACTOR)
+    return crop_psd_bins(raw, crop)
 
 
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))
@@ -2002,6 +2099,17 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         )
     if op == "scan":
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
+    if op == "attack_scan":
+        return radio.attack_scan(
+            float(msg["centerMhz"]),
+            float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
+            float(msg.get("bwMhz") or (ATTACK_LISTEN_BW_HZ / 1e6)),
+            int(msg.get("bins") or ATTACK_FFT_N),
+            float(msg["cropFactor"]) if msg.get("cropFactor") is not None else attack_crop_factor(
+                float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
+                float(msg.get("bwMhz") or (ATTACK_LISTEN_BW_HZ / 1e6)) * 1e6,
+            ),
+        )
     if op == "park":
         return radio.park(
             float(msg["centerMhz"]),

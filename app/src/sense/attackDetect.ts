@@ -10,7 +10,8 @@ export const ATTACK_CFAR_TRAIN = 16;
 export const ATTACK_CFAR_GUARD = 4;
 export const ATTACK_CFAR_PFA = 1e-3;
 export const ATTACK_MIN_BW_MHZ = 0.2;
-export const ATTACK_MAX_BW_MHZ = 22;
+/** Потолок хита = окно слуха (xA4 analog 56), не устаревшие 22. */
+export const ATTACK_MAX_BW_MHZ = 56;
 export const ATTACK_VIDEO_BW_MHZ = 6;
 
 export interface AttackHit {
@@ -80,6 +81,7 @@ function groupRuns(
   bins: readonly ScanBin[],
   mask: readonly boolean[],
   noiseDbm: readonly number[],
+  maxWidthMhz: number,
 ): AttackHit[] {
   const out: AttackHit[] = [];
   let i = 0;
@@ -109,11 +111,12 @@ function groupRuns(
       fHigh = peak.freqMhz + half;
       width = ATTACK_MIN_BW_MHZ;
     }
-    if (width > ATTACK_MAX_BW_MHZ) {
-      const half = ATTACK_MAX_BW_MHZ / 2;
+    const cap = Number.isFinite(maxWidthMhz) && maxWidthMhz > 0 ? maxWidthMhz : ATTACK_MAX_BW_MHZ;
+    if (width > cap) {
+      const half = cap / 2;
       fLow = peak.freqMhz - half;
       fHigh = peak.freqMhz + half;
-      width = ATTACK_MAX_BW_MHZ;
+      width = cap;
     }
     const noise = noiseDbm[peakI] ?? globalFloorDbm(bins);
     out.push({
@@ -131,7 +134,11 @@ function groupRuns(
 }
 
 /** Порог Атаки: CFAR если окно достаточно длинное, иначе глобальный пол + thresholdDb. */
-export function detectAttackHits(bins: readonly ScanBin[], thresholdDb: number): AttackHit[] {
+export function detectAttackHits(
+  bins: readonly ScanBin[],
+  thresholdDb: number,
+  maxWidthMhz = ATTACK_MAX_BW_MHZ,
+): AttackHit[] {
   if (bins.length === 0) return [];
   const floor = globalFloorDbm(bins);
   const lin = bins.map((b) => dbmToLin(b.powerDbm));
@@ -141,17 +148,19 @@ export function detectAttackHits(bins: readonly ScanBin[], thresholdDb: number):
   if (bins.length >= 2 * half + 1) {
     const { det, thr } = caCfar1d(lin);
     for (let i = 0; i < bins.length; i++) {
-      const localFloor = Number.isFinite(thr[i]) ? linToDbm(thr[i]) : floor;
-      noiseAt[i] = localFloor;
-      const snr = bins[i].powerDbm - localFloor;
-      mask[i] = det[i] || snr >= thresholdDb;
+      const cfarFloor = Number.isFinite(thr[i]) ? linToDbm(thr[i]) : floor;
+      // CA-CFAR самомаскирует цель шире train+guard: порог ≈ сигнал.
+      // Глобальный пол (тот же 60%) ловит analog~30 / цифру 40 в окне 56.
+      const wide = bins[i].powerDbm - floor >= thresholdDb;
+      mask[i] = det[i] || wide;
+      noiseAt[i] = det[i] ? cfarFloor : floor;
     }
   } else {
     for (let i = 0; i < bins.length; i++) {
       mask[i] = bins[i].powerDbm - floor >= thresholdDb;
     }
   }
-  return groupRuns(bins, mask, noiseAt);
+  return groupRuns(bins, mask, noiseAt, maxWidthMhz);
 }
 
 export function attackHitsToDetections(hits: readonly AttackHit[], ts: number): Detection[] {

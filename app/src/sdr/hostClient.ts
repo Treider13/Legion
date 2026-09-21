@@ -115,6 +115,28 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
   };
 }
 
+/** Только Атака. Не op=scan (DIO 40 + crop 0.5). */
+export async function hostAttackScan(
+  centerMhz: number,
+  plan: { fsHz: number; filterMhz: number; cropFactor: number; fftN: number },
+): Promise<HostScanResult> {
+  const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
+    op: "attack_scan",
+    centerMhz,
+    fsHz: plan.fsHz,
+    bwMhz: plan.filterMhz,
+    bins: plan.fftN,
+    cropFactor: plan.cropFactor,
+  });
+  return {
+    ok: !!r.ok,
+    bins: r.bins ?? [],
+    reason: r.reason,
+    txLive: r.txLive,
+    txError: r.txError,
+  };
+}
+
 /** requireHw под плату: x40 → bladerf1 (LMS6002D), micro → bladerf2 (AD9361).
  *  Подмены нет: каждая плата паркуется как сама себя. */
 export function requireHwForSdr(sdrId: string): string {

@@ -290,6 +290,33 @@ def main() -> int:
     mid = len(scan["bins"]) // 2
     check("scan freqs", abs(scan["bins"][mid]["freqMhz"] - 2442) < 2)
     check("fake paint = 20 МГц (40 ADC × crop 0.5)", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 20) < 1.5)
+    check("attack crop 61.44/56", abs(w.attack_crop_factor(61.44e6, 56e6) - (1 - 56 / 61.44)) < 1e-6)
+    check("attack crop 40/40 край", abs(w.attack_crop_factor(40e6, 40e6) - w.ATTACK_EDGE_CROP) < 1e-9)
+    check("attack FFT мало сэмплов → 4096", w.attack_pick_fft_n(8192, 100) == 4096)
+    check(
+        "attack FFT хватает → 8192",
+        w.attack_pick_fft_n(8192, w.welch_need_samples(8192)) == 8192,
+    )
+    atk = rpc(
+        proc,
+        {
+            "op": "attack_scan",
+            "centerMhz": 5800,
+            "fsHz": 61.44e6,
+            "bwMhz": 56,
+            "bins": 8192,
+            "cropFactor": 1 - 56 / 61.44,
+        },
+    )
+    check("attack_scan fake ок", atk.get("ok") is True and atk.get("attack") is True)
+    check("attack_scan не 512 soapy", len(atk.get("bins") or []) > 2000)
+    atk_span = atk["bins"][-1]["freqMhz"] - atk["bins"][0]["freqMhz"]
+    check("attack_scan окно ≈56", abs(atk_span - 56) < 1.5)
+    scan2 = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
+    check(
+        "scan() изоляция: снова 20 МГц crop",
+        scan2.get("ok") is True and abs(scan2["bins"][-1]["freqMhz"] - scan2["bins"][0]["freqMhz"] - 20) < 1.5,
+    )
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

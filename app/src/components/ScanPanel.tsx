@@ -19,7 +19,8 @@ import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
-import { atlasForTracks } from "../sense/attackAtlas";
+import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
+import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
   ATTACK_HOLD_MAX_MS,
   ATTACK_HOLD_MIN_MS,
@@ -73,7 +74,7 @@ export function ScanPanel() {
             ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
-              : `${HOST_ATTACK_MODE_RU_CAPS}: подтверждённый трек на карточке, рамка мышкой на спектре (до ${ATTACK_TX_MAX_MHZ} МГц, USB FD xA4), тип волны, выдержка, затем ПЕРЕДАТЬ — заливка только этой полосы. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
+              : `${HOST_ATTACK_MODE_RU_CAPS}: слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц (FFT на ПК), рамка мышкой до ${ATTACK_TX_MAX_MHZ} МГц (USB FD), тип волны, выдержка, затем ПЕРЕДАТЬ — заливка только этой полосы. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -535,10 +536,10 @@ export function ScanPanel() {
             <tbody>
               {s.attackTracks.length === 0 && (
                 <tr>
-                  <td colSpan={5}>нет треков — СКАНИРОВАТЬ: CFAR + два кадра на подтверждение</td>
+                  <td colSpan={5}>{ATTACK_SILENT_HINT}</td>
                 </tr>
               )}
-              {atlasForTracks(s.attackTracks)
+              {atlasForTracks(s.attackTracks, analogBw)
                 .slice()
                 .sort((a, b) => b.powerDbm - a.powerDbm)
                 .slice(0, 10)

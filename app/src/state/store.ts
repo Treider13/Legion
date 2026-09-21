@@ -37,6 +37,7 @@ import {
   hostPark,
   hostIperf3,
   hostScan,
+  hostAttackScan,
   hostTx,
   hostTxOff,
   hostTxWave,
@@ -54,6 +55,7 @@ import { cropPsdBins, detectFromBins, hostPaintSpanMhz, hostScanSpanMhz } from "
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { detectAttackHits } from "../sense/attackDetect";
+import { attackListenPlan } from "../sense/attackListen";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
 import {
   ATTACK_COOLDOWN_MS,
@@ -4024,7 +4026,15 @@ export const useLegion = create<LegionStore>((set, get) => {
         const caps = catalogCaps(st.sdrId);
         const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
         const userWin = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
-        const windowMhz = Math.min(userWin, hostPaintSpanMhz(analog));
+        const attackLive = st.scanPattern === "auto";
+        const listen0 = attackLive
+          ? attackListenPlan({
+              analogMhz: analog,
+              paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
+              paint: st.attackPaint,
+            })
+          : null;
+        const windowMhz = listen0 ? listen0.spanMhz : Math.min(userWin, hostPaintSpanMhz(analog));
         const walker = new ScanWalker({
           bands: st.sdrBands,
           pattern: "sweep",
@@ -4034,7 +4044,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           seed: Date.now() & 0xffffffff,
         });
         gWalker = walker;
-        const nBins = 1024;
+        const nBins = listen0 ? listen0.fftN : 1024;
         gLabSpur.recalibrate();
         if (st.scanPattern === "auto" && !(st.transmitArmed && st.attackPaint)) {
           gAttackTracker.reset();
@@ -4044,7 +4054,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         pushLog(
           "sys",
-          `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
+          attackLive && listen0
+            ? `${gLive ? "АТАКА слух" : "АТАКА эмуляция"}: Hann+Welch-8 overlap 0.5 · FFT ${listen0.fftN} · fs ${(listen0.fsHz / 1e6).toFixed(2)} · фильтр ${listen0.filterMhz.toFixed(1)} · crop ${listen0.cropFactor.toFixed(3)} · окно ${listen0.spanMhz.toFixed(1)} МГц`
+            : `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
         );
         let inflight = false;
         let lastResenseAt = 0;
@@ -4063,9 +4075,19 @@ export const useLegion = create<LegionStore>((set, get) => {
             if (!step?.centerMhz) return;
             centerMhz = step.centerMhz;
           }
-          const spanMhz = hostScanSpanMhz(analog);
+          const listen =
+            get().scanPattern === "auto"
+              ? attackListenPlan({
+                  analogMhz: analog,
+                  paintOwnsTx: attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed),
+                  paint: get().attackPaint,
+                })
+              : null;
+          const spanMhz = listen ? listen.spanMhz : hostScanSpanMhz(analog);
           if (gLive) {
-            const win = await hostScan(centerMhz, spanMhz, nBins);
+            const win = listen
+              ? await hostAttackScan(centerMhz, listen)
+              : await hostScan(centerMhz, spanMhz, nBins);
             if (!get().scanRunning || get().flashBusy) return;
             if (win.txError) {
               pushLog("sys", win.txError);
@@ -4076,6 +4098,11 @@ export const useLegion = create<LegionStore>((set, get) => {
               return;
             }
             bins = win.bins;
+          } else if (listen) {
+            bins = cropPsdBins(
+              gSdr.scanWindow(centerMhz, listen.fsHz / 1e6, Math.min(listen.fftN, 4096)),
+              listen.cropFactor,
+            );
           } else {
             bins = cropPsdBins(gSdr.scanWindow(centerMhz, spanMhz, nBins));
           }
@@ -4107,7 +4134,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
           if (cur.scanPattern === "auto" && bins.length > 0) {
-            const hits = detectAttackHits(bins, cur.scanThresholdDb).filter((h) =>
+            const hits = detectAttackHits(bins, cur.scanThresholdDb, listen?.spanMhz).filter((h) =>
               cur.sdrBands.length === 0 ? true : cueFreqAllowed(h.freqMhz, cur.sdrBands),
             );
             const paint = cur.attackPaint;
