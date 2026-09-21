@@ -14,6 +14,7 @@ export interface HeroState {
   fpgaArmed: boolean;
   fpgaBusy: boolean;
   fpgaStopPending?: boolean;
+  fpgaStopPhase?: "disarm" | "release" | null;
   fpgaMode: string;
   fpgaStatus: { ok?: boolean; det_active?: boolean; wd_fired?: boolean; reason?: string; warn?: string } | null;
   lastForwardMhz: number | null;
@@ -31,11 +32,13 @@ export interface HeroLine {
 
 export function heroStatusLine(s: HeroState): HeroLine {
   if (s.fpgaStopPending) {
-    if (s.fpgaStatus?.ok === true) {
+    if (s.fpgaStopPhase === "release") {
       return {
-        kind: "unknown",
+        kind: s.fpgaStatus?.ok === false ? "error" : "unknown",
         text: "ЗАВЕРШЕНИЕ ОСТАНОВКИ",
-        detail: "отключение подтверждено шлюзом — освобождаем соединение",
+        detail: s.fpgaStatus?.ok === false
+          ? `${s.fpgaStatus.reason ?? "освобождение не подтверждено"} · повторяем освобождение соединения`
+          : "освобождаем соединение — запуск заблокирован до подтверждения",
       };
     }
     return {

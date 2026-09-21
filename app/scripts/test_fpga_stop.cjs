@@ -269,9 +269,10 @@ test('USB release finishes against the original connection before unlock', async
     assert.equal(r.get().sdrGateway, 'gateway-A');
     reply({ ok: false, reason: 'release refused' });
     await stop;
-    assert(!r.get().fpgaStopPending);
+    assert(r.get().fpgaStopPending, 'failed release must keep cleanup pending');
     assert(r.get().log.some(l => /release refused/.test(l.text)));
-    assert.equal(r.clock.pending().length, 0);
+    assert.equal(r.clock.pending().length, 1);
+    await clean(r);
 });
 test('STOP during pending ARM keeps failed cancellation visible and blocks a new start', async () => {
     const r = makeRuntime();
@@ -540,6 +541,184 @@ test('x40 cancellation during preparation releases the reacquired connection', a
     assert(!r.calls.some(c => c.op === 'arm' || c.op === 'kick'));
     assert(!r.get().fpgaBusy && !r.get().fpgaArmed && !r.get().fpgaStopPending);
 });
+
+for (const entry of ['smart', 'manual', 'solo', 'air']) {
+    test(`${entry}: a lost ARM response without a Stop click still fails closed`, async () => {
+        const r = makeRuntime();
+        let failArm, hardwareArmed = false;
+        r.setHandler(q => {
+            if (q.op === 'probe') return { ok: true, soapy: true };
+            if (q.op === 'open' || q.op === 'park') return { ok: true, fake: false };
+            if (q.cmd?.op === 'arm') {
+                hardwareArmed = true;
+                return new Promise((_, reject) => failArm = reject);
+            }
+            if (q.cmd?.op === 'disarm') return { ok: false, reason: 'shutdown link unavailable' };
+            return normal(q);
+        });
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        const starting = entry === 'smart' ? r.run.runSmartStart(opts(r))
+            : entry === 'manual' ? r.get().fpgaArm() : r.get().startFpgaPath(entry);
+        await r.clock.flush();
+        assert(failArm && hardwareArmed);
+        failArm(Error('reply lost after applying ARM'));
+        await r.clock.flush();
+        await starting;
+        assert.equal(r.calls.filter(c => c.op === 'disarm').length, 1, 'ambiguous ARM must trigger shutdown');
+        pending(r);
+        assert(!r.calls.some(c => c.op === 'kick'));
+        assert(r.get().log.some(l => /reply lost after applying ARM/.test(l.text)));
+        await clean(r);
+    });
+}
+test('failed USB release retains ownership lock and retries only release at original target', async () => {
+    const r = await start(makeRuntime());
+    let owned = true;
+    r.setHandler(q => q.cmd?.op === 'usb' && q.cmd.action === 'release'
+        ? { ok: false, reason: 'transport still owned' } : normal(q));
+    const from = r.calls.length;
+    await r.run.runCinemaStop();
+    assert(owned && r.get().fpgaStopPending, 'cannot report idle with unconfirmed release');
+    assert(!r.get().fpgaArmed, 'confirmed DISARM remains confirmed');
+    assert.equal(hero(r).kind, 'error');
+    assert.match(hero(r).detail, /transport still owned/);
+    assert.doesNotMatch(hero(r).detail, /повторяем команду отключения/);
+    Object.assign(r.store.useLegion.getInitialState(), r.get());
+    const dock = r.load('app/src/components/cinema/CinemaDock.tsx').CinemaDock;
+    const html = pkgRequire('react-dom/server').renderToStaticMarkup(pkgRequire('react').createElement(dock, {
+        mode: 'sdr', onMode() {}, onStart() {}, onSettings() {},
+    }));
+    assert.match(html, /Освобождаем соединение/);
+    assert.match(html, /transport still owned/);
+    const beforeRestart = r.calls.length;
+    await r.get().fpgaArm();
+    assert.equal(await r.get().startFpgaPath('solo'), false);
+    r.get().startScan();
+    await r.clock.flush();
+    assert.equal(r.calls.length, beforeRestart, 'release failure blocks new sessions');
+    r.get().setSdrGateway('gateway-B');
+    r.get().setFpgaToken('token-B');
+    assert.equal(r.get().sdrGateway, 'gateway-A');
+    assert.equal(r.get().fpgaToken, 'test-token-A');
+    await r.clock.tick(3000);
+    const calls = r.calls.slice(from);
+    assert.equal(calls.filter(c => c.op === 'disarm').length, 1);
+    assert.equal(calls.filter(c => c.op === 'usb' && c.action === 'release').length, 4);
+    assert(calls.every(c => c.gateway === 'gateway-A' && c.token === 'test-token-A'));
+    r.setHandler(q => { if (q.cmd?.op === 'usb' && q.cmd.action === 'release') owned = false; return normal(q); });
+    await r.clock.tick(1000);
+    assert(!owned && !r.get().fpgaStopPending);
+    assert.equal(hero(r).kind, 'idle');
+    assert.equal(r.clock.pending().length, 0);
+});
+test('cancelled acquisition keeps retrying a failed cleanup without ARM or DISARM', async () => {
+    const r = makeRuntime();
+    let acquire, owned = false;
+    r.setHandler(q => {
+        if (q.cmd?.op === 'usb' && q.cmd.action === 'acquire')
+            return new Promise(resolve => acquire = () => { owned = true; resolve({ ok: true }); });
+        if (q.cmd?.op === 'usb' && q.cmd.action === 'release') return { ok: false, reason: 'release lost' };
+        return normal(q);
+    });
+    await r.run.runSmartStart(opts(r));
+    await r.clock.flush();
+    assert(acquire);
+    await r.run.runCinemaStop();
+    acquire();
+    await r.clock.flush();
+    assert(owned && r.get().fpgaStopPending);
+    assert.equal(hero(r).kind, 'error');
+    await r.clock.tick(2000);
+    assert(!r.calls.some(c => c.op === 'arm' || c.op === 'disarm' || c.op === 'kick'));
+    assert.equal(r.calls.filter(c => c.op === 'usb' && c.action === 'release').length, 3);
+    r.setHandler(q => { if (q.cmd?.op === 'usb' && q.cmd.action === 'release') owned = false; return normal(q); });
+    await r.clock.tick(1000);
+    assert(!owned && !r.get().fpgaStopPending);
+    assert.equal(r.clock.pending().length, 0);
+});
+
+for (const entry of ['manual', 'solo', 'air']) {
+    test(`${entry}: cancel before ARM releases a late USB acquisition`, async () => {
+        const r = makeRuntime();
+        let acquire, owned = false;
+        r.setHandler(q => {
+            if (q.op === 'probe') return { ok: true, soapy: true };
+            if (q.op === 'open' || q.op === 'park') return { ok: true, fake: false };
+            if (q.cmd?.op === 'usb' && q.cmd.action === 'acquire')
+                return new Promise(resolve => acquire = () => { owned = true; resolve({ ok: true }); });
+            if (q.cmd?.op === 'usb' && q.cmd.action === 'release') owned = false;
+            return normal(q);
+        });
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        const starting = entry === 'manual' ? r.get().fpgaArm() : r.get().startFpgaPath(entry);
+        await r.clock.flush();
+        assert(acquire);
+        await r.run.runCinemaStop();
+        acquire();
+        await r.clock.flush();
+        await starting;
+        assert.equal(owned, false, 'cancelled preparation must not retain USB');
+        assert(!r.calls.some(c => c.op === 'arm' || c.op === 'disarm' || c.op === 'kick'));
+        assert(!r.get().fpgaBusy && !r.get().fpgaArmed && !r.get().fpgaStopPending);
+    });
+}
+
+for (const entry of ['smart', 'manual', 'solo', 'air']) {
+    test(`${entry}: failed ARM with successful shutdown releases USB exactly once`, async () => {
+        const r = makeRuntime();
+        let hardwareArmed = false, owned = false;
+        r.setHandler(q => {
+            if (q.op === 'probe') return { ok: true, soapy: true };
+            if (q.op === 'open' || q.op === 'park') return { ok: true, fake: false };
+            if (q.cmd?.op === 'arm') { hardwareArmed = true; throw Error('ARM acknowledgement lost'); }
+            if (q.cmd?.op === 'disarm') hardwareArmed = false;
+            if (q.cmd?.op === 'usb') owned = q.cmd.action === 'acquire';
+            return normal(q);
+        });
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        if (entry === 'smart') await r.run.runSmartStart(opts(r));
+        else if (entry === 'manual') await r.get().fpgaArm();
+        else assert.equal(await r.get().startFpgaPath(entry), false);
+        await r.clock.flush();
+        assert(!hardwareArmed && !owned);
+        const armAt = r.calls.findIndex(c => c.op === 'arm');
+        assert(armAt >= 0);
+        assert.deepEqual(r.calls.slice(armAt + 1).map(c => [c.op, c.action]), [
+            ['disarm', undefined], ['usb', 'release'],
+        ]);
+        assert(!r.get().fpgaArmed && !r.get().fpgaStopPending && !r.get().fpgaBusy);
+        assert.equal(r.clock.pending().length, 0);
+    });
+}
+test('manual cleanup and automatic release retry share one request', async () => {
+    const r = await start(makeRuntime());
+    r.setHandler(q => q.cmd?.op === 'usb' ? { ok: false, reason: 'release transport timeout' } : normal(q));
+    await r.run.runCinemaStop();
+    let release;
+    r.setHandler(q => q.cmd?.op === 'usb' && q.cmd.action === 'release'
+        ? new Promise(resolve => release = resolve) : normal(q));
+    const from = r.calls.length;
+    await r.clock.tick(1000);
+    const manual = r.run.runCinemaStop();
+    const another = r.get().closeSdr();
+    await r.clock.flush();
+    assert.equal(r.calls.length - from, 1);
+    assert.equal(r.calls[from].action, 'release');
+    release({ ok: true });
+    await Promise.all([manual, another]);
+    assert(!r.get().fpgaStopPending && !r.get().fpgaBusy);
+    assert.equal(r.clock.pending().length, 0);
+});
+
 (async () => {
     let failures = 0;
     for (const { name, run } of tests) {

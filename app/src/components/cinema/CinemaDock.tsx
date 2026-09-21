@@ -17,15 +17,15 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const fpgaArmed = useLegion((s) => s.fpgaArmed);
   const fpgaBusy = useLegion((s) => s.fpgaBusy);
   const fpgaStopPending = useLegion((s) => s.fpgaStopPending);
-  const fpgaStopConfirmed = useLegion((s) => s.fpgaStopPending && s.fpgaStatus?.ok === true);
+  const fpgaReleasing = useLegion((s) => s.fpgaStopPhase === "release");
   const fpgaStopReason = useLegion((s) => s.fpgaStatus?.reason);
   const lastCue = useLegion((s) => s.lastCueReason);
   const lastLog = useLegion((s) => s.log[s.log.length - 1]?.text ?? "");
   const workspace = useLegion((s) => s.workspace);
   const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending });
   const message = fpgaStopPending
-    ? fpgaStopConfirmed
-      ? "FPGA отключена — освобождаем соединение"
+    ? fpgaReleasing
+      ? `Освобождаем соединение: ${fpgaStopReason ?? "ожидаем подтверждение шлюза"}`
       : `Остановка FPGA не подтверждена: ${fpgaStopReason ?? "ожидаем ответ шлюза"}`
     : lastCue || lastLog;
 

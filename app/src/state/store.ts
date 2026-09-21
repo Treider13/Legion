@@ -361,6 +361,8 @@ interface LegionStore {
   fpgaBusy: boolean;
   /** СТОП ещё не завершён: ждём DISARM или освобождение USB. Блокирует запуск. */
   fpgaStopPending: boolean;
+  /** Незавершённый этап: отключение и освобождение соединения подтверждаются отдельно. */
+  fpgaStopPhase: "disarm" | "release" | null;
   fpgaStatus: FpgaStatus | null;
   /** Шлюз распознал ревизию legion в FPGA. null — неизвестно (старый шлюз/USB у хоста). */
   fpgaLegion: boolean | null;
@@ -876,7 +878,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     set((s) => ({ log: [...s.log.slice(-MAX_LOG + 1), { ts: Date.now(), dir, text }] }));
 
   // Один адрес и одна попытка на весь цикл остановки, включая ручные повторы.
-  let fpgaStopTarget: { gateway: string; token: string } | null = null;
+  let fpgaStopTarget: { gateway: string; token: string; phase: "disarm" | "release" } | null = null;
   let fpgaDisarmFlight: Promise<void> | null = null;
   let fpgaDisarmRetry: ReturnType<typeof setTimeout> | null = null;
   const fpgaConnectionLocked = (): boolean => {
@@ -1511,6 +1513,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     set({ sdrOpened: null, sdrRemote: "", transmitArmed: false, signalTxActive: false });
   };
 
+  const releaseCancelledFpgaUsb = async (target: { sdrGateway: string; fpgaToken: string }): Promise<void> => {
+    // ARM ещё не отправляли. Повторяем только освобождение, пока шлюз
+    // не подтвердит его; адрес остаётся адресом отменённого запуска.
+    fpgaStopTarget ??= { gateway: target.sdrGateway, token: target.fpgaToken, phase: "release" };
+    await get().fpgaDisarm();
+  };
+
   const parkFpgaLo = async (opts: {
     midMhz: number;
     analogMhz: number;
@@ -1641,10 +1650,6 @@ export const useLegion = create<LegionStore>((set, get) => {
     const airGen = gFpgaAirGen;
     const gw = (cmd: Record<string, unknown>) =>
       hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
-    const releaseCancelledUsb = async (): Promise<void> => {
-      const rel = await gw({ op: "usb", action: "release" });
-      if (!rel.ok) pushLog("sys", `FPGA USB release после отмены: ${rel.reason ?? "отказ"}`);
-    };
     try {
       // Хост-FFT и Soapy держат USB эксклюзивно (FX3). Пока тик скана жив —
       // шлюз не займёт кабель, плата не станет хозяином. Soapy закрываем
@@ -1681,7 +1686,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           gw,
         });
         if (gFpgaAirGen !== airGen) {
-          await releaseCancelledUsb();
+          await releaseCancelledFpgaUsb(s);
           return;
         }
         if (!pk.ok) {
@@ -1693,7 +1698,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         await releaseSoapyForFpga();
         const acq = await gw({ op: "usb", action: "acquire" });
         if (gFpgaAirGen !== airGen) {
-          await releaseCancelledUsb();
+          await releaseCancelledFpgaUsb(s);
           return;
         }
         if (!acq.ok) {
@@ -1733,6 +1738,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       if (!r.ok) {
         pushLog("sys", `${FPGA_AIR_MODE_RU} ARM: ${r.reason ?? "отказ"}`);
+        await get().fpgaDisarm();
         return;
       }
       set({
@@ -1949,6 +1955,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaAutoCycle: false,
     fpgaBusy: false,
     fpgaStopPending: false,
+    fpgaStopPhase: null,
     fpgaStatus: null,
     fpgaLegion: null,
     fpgaToken: "",
@@ -3085,6 +3092,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           gw,
         });
         if (armRevoked()) {
+          await releaseCancelledFpgaUsb(s);
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
           return;
         }
@@ -3106,6 +3114,10 @@ export const useLegion = create<LegionStore>((set, get) => {
           // После отправки ARM потерянный ответ не доказывает отказ железа.
           await get().fpgaDisarm();
           pushLog("sys", "FPGA ARM: отменён оператором в полёте");
+          return;
+        }
+        if (!r.ok) {
+          await get().fpgaDisarm();
           return;
         }
         if (r.ok) {
@@ -3217,8 +3229,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       // коридор шире канала либо ходится по стоянкам (micro), либо честно
       // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
 
-      const gw = (cmd: Record<string, unknown>) =>
-        hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+      let usbTouched = false;
+      const gw = (cmd: Record<string, unknown>) => {
+        if (cmd.op === "usb") usbTouched = true;
+        return hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+      };
       let usbOut = false;
       const abortSoloIfRevoked = async (armAttempted = false): Promise<boolean> => {
         if (!soloRevoked()) return false;
@@ -3230,13 +3245,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         stopFpgaObserve();
         if (armAttempted || get().fpgaArmed) {
           await get().fpgaDisarm();
+          usbTouched = false; // DISARM-путь сам завершает или повторяет release.
+          usbOut = false;
           if (get().fpgaStopPending) return true;
         }
         if (usbOut) {
           await releaseSoapyForFpga();
-          const acq = await gw({ op: "usb", action: "acquire" });
-          if (!acq.ok) pushLog("sys", `FPGA USB acquire: ${acq.reason ?? "отказ"}`);
           usbOut = false;
+        }
+        if (usbTouched) {
+          await releaseCancelledFpgaUsb(s0);
+          usbTouched = false;
         }
         set({ fpgaPath: null });
         return true;
@@ -3250,7 +3269,12 @@ export const useLegion = create<LegionStore>((set, get) => {
         stopAirWalk();
         if (armAttempted || get().fpgaArmed) {
           await get().fpgaDisarm();
+          usbTouched = false;
           if (get().fpgaStopPending) return true;
+        }
+        if (usbTouched) {
+          await releaseCancelledFpgaUsb(s0);
+          usbTouched = false;
         }
         set({ fpgaPath: null });
         return true;
@@ -3347,6 +3371,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             pushLog("sys", `FPGA ARM (ретрансляция): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
             if (await abortAirIfRevoked(true)) return false;
             if (!r.ok) {
+              await get().fpgaDisarm();
+              usbTouched = false;
               set({ fpgaPath: null });
               return false;
             }
@@ -3454,6 +3480,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", `FPGA ARM (ретрансляция): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (await abortAirIfRevoked(true)) return false;
           if (!r.ok) {
+            await get().fpgaDisarm();
+            usbTouched = false;
             set({ fpgaPath: null });
             return false;
           }
@@ -3530,6 +3558,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (await abortSoloIfRevoked(true)) return false;
           if (!r.ok) {
+            await get().fpgaDisarm();
+            usbTouched = false;
             stopSoloWalk();
             set({ fpgaPath: null });
             return false;
@@ -3644,6 +3674,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", `FPGA ARM (player): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (await abortSoloIfRevoked(true)) return false;
         if (!r.ok) {
+          await get().fpgaDisarm();
+          usbTouched = false;
           stopSoloWalk();
           set({ fpgaPath: null });
           return false;
@@ -3659,6 +3691,12 @@ export const useLegion = create<LegionStore>((set, get) => {
         beginSoloWalk(walker, walk, gw);
         return true;
       } finally {
+        // Отмена может завершить подготовку через ранний return (например,
+        // calibWhy), не дойдя до abort-хелпера. Ресурс всё равно освобождаем.
+        if ((soloRevoked() || airRevoked()) && usbTouched && !get().fpgaStopPending) {
+          if (usbOut) await releaseSoapyForFpga();
+          await releaseCancelledFpgaUsb(s0);
+        }
         set({ fpgaBusy: false });
         if (!get().fpgaArmed && get().fpgaPath) set({ fpgaPath: null });
       }
@@ -3686,7 +3724,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         clearTimeout(fpgaDisarmRetry);
         fpgaDisarmRetry = null;
       }
-      const target = fpgaStopTarget ?? { gateway: get().sdrGateway, token: get().fpgaToken };
+      const target = fpgaStopTarget ?? { gateway: get().sdrGateway, token: get().fpgaToken, phase: "disarm" as const };
       fpgaStopTarget = target;
       // DISARM сильнее любого ARM в полёте: кино-solo, кино-эфир и ручной
       // ARM сверяют поколения после await и не коммитят.
@@ -3700,27 +3738,34 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Операторский/эпохальный стоп: очередь ОБЫЧНОГО начинается заново.
       // Автовозврат (fpgaReturnToScan) сюда не приходит — порядок держится.
       gFpgaTurnLastMhz = null;
-      set({ fpgaBusy: true, fpgaStopPending: true, fpgaAutoCycle: false, fpgaStatus: null });
+      set({ fpgaBusy: true, fpgaStopPending: true, fpgaStopPhase: target.phase, fpgaAutoCycle: false, fpgaStatus: null });
       fpgaDisarmFlight = (async () => {
-        const r = await hostFpga({ op: "disarm", token: target.token }, target.gateway);
-        pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
-        if (r.ok) {
-          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null, fpgaStatus: r });
-          // closeSdr/stopFpgaAir: disarm один оставлял USB у агента —
-          // следующий openSdr/скан ловит занятое устройство.
-          const rel = await hostFpga({ op: "usb", action: "release", token: target.token }, target.gateway);
-          if (!rel.ok) pushLog("sys", `FPGA USB release: ${rel.reason ?? "отказ"}`);
-          fpgaStopTarget = null;
-          set({ fpgaStopPending: false, fpgaStatus: null, lastCueReason: "FPGA: остановка подтверждена шлюзом" });
-        } else {
-          // Ни старый STATUS, ни прошедшее время не доказывают отключение.
-          set({ fpgaStatus: { ok: false, reason: r.reason ?? "нет подтверждения DISARM" } });
+        if (target.phase === "disarm") {
+          const r = await hostFpga({ op: "disarm", token: target.token }, target.gateway);
+          pushLog("sys", `FPGA DISARM: ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
+          if (!r.ok) {
+            // Ни старый STATUS, ни прошедшее время не доказывают отключение.
+            set({ fpgaStatus: { ok: false, reason: r.reason ?? "нет подтверждения DISARM" } });
+            return;
+          }
+          target.phase = "release";
+          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null, fpgaStopPhase: "release", fpgaStatus: null });
         }
+        const rel = await hostFpga({ op: "usb", action: "release", token: target.token }, target.gateway);
+        if (!rel.ok) {
+          const reason = `FPGA USB release: ${rel.reason ?? "отказ"}`;
+          pushLog("sys", reason);
+          set({ fpgaStatus: { ok: false, reason } });
+          return;
+        }
+        fpgaStopTarget = null;
+        set({ fpgaStopPending: false, fpgaStopPhase: null, fpgaStatus: null, lastCueReason: "FPGA: остановка завершена, соединение освобождено" });
       })().finally(() => {
         fpgaDisarmFlight = null;
         set({ fpgaBusy: false });
         if (get().fpgaStopPending) {
-          // Только DISARM. Не возобновляем kick, tune, ARM или авто-цикл.
+          // Повторяем только неподтверждённый этап: DISARM либо release.
+          // Не возобновляем kick, tune, ARM или авто-цикл.
           fpgaDisarmRetry = setTimeout(() => {
             fpgaDisarmRetry = null;
             void get().fpgaDisarm();

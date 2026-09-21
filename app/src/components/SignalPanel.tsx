@@ -313,8 +313,8 @@ export function SignalPanel() {
         </div>
         {s.fpgaStopPending && (
           <p role="status">
-            {s.fpgaStatus?.ok === true
-              ? "FPGA отключена — освобождаем соединение"
+            {s.fpgaStopPhase === "release"
+              ? `Освобождаем соединение: ${s.fpgaStatus?.reason ?? "ожидаем подтверждение шлюза"}`
               : `Остановка FPGA не подтверждена: ${s.fpgaStatus?.reason ?? "ожидаем ответ шлюза"}`}
           </p>
         )}
