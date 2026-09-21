@@ -51,6 +51,37 @@ def main() -> int:
     e2, clip2 = d.cancel_own(delayed + 0.05 * ofdm, tone)
     check("вычет ловит отрицательный лаг", clip2 is False and d.leftover_ratio(delayed + 0.05 * ofdm, e2) < 0.5)
     check("память 2^24", d.ATTACK_MEM_CAP == 1 << 24)
+    check("think хвост 2^16", d.ATTACK_THINK_N == 1 << 16)
+
+    fs = 61.44e6
+    n = d.ATTACK_THINK_N
+    t = np.arange(n, dtype=np.float64) / fs
+    rng = np.random.default_rng(3)
+    brick = np.zeros(n, dtype=np.complex128)
+    for k in range(-16, 17):
+        if k == 0:
+            continue
+        brick += np.exp(1j * (2.0 * np.pi * k * (2e6 / 32.0) * t + float(rng.uniform(0, 2 * np.pi))))
+    brick = (0.04 * brick).astype(np.complex64)
+    cropped = d.crop_iq(brick, fs, 2442.0, 2442.0, 2.0)
+    old = d.analyze_iq(cropped, fs)
+    check("корни: crop@61.44 врёт тон", old["kind"] == "tone", str(old))
+    ch, fs_out = d.channelize_look(brick, fs, 2442.0, 2442.0, 2.0)
+    look = d.analyze_iq(ch, fs_out)
+    check("канализатор не тон на OFDM-кирпиче", look["kind"] != "tone", str(look))
+    if float(look["cepstrum"]) >= 0.22:
+        check("канализатор OFDM-кирпич = ofdm", look["kind"] == "ofdm", str(look))
+    check("канализатор fs_out в канале", 2e6 <= fs_out <= 8e6, str(fs_out))
+    tone = (0.4 * np.exp(1j * 2.0 * np.pi * 0.1e6 * t)).astype(np.complex64)
+    tch, tfs = d.channelize_look(tone, fs, 2442.1, 2442.0, 2.0)
+    tlook = d.analyze_iq(tch, tfs)
+    check("канализатор тон остаётся тоном", tlook["kind"] in ("tone", "cycle"), str(tlook))
+    mixed = (tone + 0.12 * brick).astype(np.complex64)
+    e, clip_e = d.cancel_own(mixed, tone)
+    check("вычет до канала", clip_e is False and d.leftover_ratio(mixed, e) < 0.5)
+    leftover_ch, lfs = d.channelize_look(e, fs, 2442.0, 2442.0, 2.0)
+    llook = d.analyze_iq(leftover_ch, lfs)
+    check("остаток после вычета не тон", llook["kind"] != "tone", str(llook))
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

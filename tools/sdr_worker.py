@@ -216,10 +216,11 @@ if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 from attack_dsp import (  # noqa: E402
     ATTACK_MEM_CAP,
+    ATTACK_THINK_N,
     analyze_iq,
     cancel_own,
     leftover_ratio,
-    crop_iq,
+    channelize_look,
     multitaper_dbm,
     spectral_flatness,
     synth_look_iq,
@@ -230,6 +231,13 @@ def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
     """DIO-sys capture.hpp SAMPLE_RATE_HZ = 40e6.
     analog BW платы (x40: 28 МГц) — это фильтр, не частота дискретизации."""
     return float(DIO_SAMPLE_RATE_HZ)
+
+
+def _same_attack_clock(tx_fs: float, rx_fs: float) -> bool:
+    """Вычет только при тех же часах. 61.44 vs 40 — не ресемплируем, не врём leftover."""
+    if tx_fs <= 0 or rx_fs <= 0:
+        return False
+    return abs(float(tx_fs) - float(rx_fs)) / max(float(rx_fs), float(tx_fs)) < 0.02
 
 
 def attack_crop_factor(fs_hz: float, filter_hz: float) -> float:
@@ -959,6 +967,7 @@ class Radio:
         self._tune_until = 0.0
         self._rx_io = threading.Lock()
         self._tone = None
+        self._tone_bb = None
         self._tx_fs = float(TX_FS)
         self.tx_error: str | None = None
         self.tx_fail = 0
@@ -1459,59 +1468,70 @@ class Radio:
         looks: list[dict[str, Any]],
         residual: bool,
     ) -> dict[str, Any]:
-        """Разбор вырезов из памяти IQ. Не TX и не scan()."""
-        fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(self._rx_fs or ATTACK_LISTEN_FS_HZ)
-        extra = {"attack": True, **self._attack_memory_fields(fs)}
+        """Разбор вырезов из памяти IQ. Не TX и не scan().
+
+        Часы — фактический RX (_rx_fs), не устаревший fs хоста: сразу после
+        ПЕРЕДАТЬ кольцо ещё на 61.44, а хост уже шлёт fs рамки.
+        Вычет — только если TX baseband и RX на тех же часах (Adaptive_SIC /
+        gr-fullduplex: реплика и ADC в одной сетке). Опора — _tone_bb
+        (до +fs/8): RX LO = RF, в baseband своя волна сидит на DC.
+        AMC — после channelize_look, не на нулях native FFT.
+        """
+        hinted = float(fs_hz) if fs_hz and fs_hz > 0 else 0.0
+        work_fs = float(self._rx_fs) if (self._rx_fs and self._rx_fs > 0 and not self.fake) else hinted
+        if work_fs <= 0:
+            work_fs = float(ATTACK_LISTEN_FS_HZ)
+        extra = {"attack": True, **self._attack_memory_fields(work_fs)}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
         iq = None
         if self.fake:
-            n = 4096
-            look_fs = min(fs, 2e6) if fs > 0 else 2e6
-            if residual and self._tone is not None:
-                ref = np.asarray(self._tone, dtype=np.complex64)
-                if len(ref) < 1:
-                    iq = synth_look_iq("tone", n, look_fs)
+            n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
+            if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
+                ref = np.asarray(self._tone_bb, dtype=np.complex64)
+                if len(ref) < n:
+                    ref = np.tile(ref, int(math.ceil(n / max(len(ref), 1))))[:n]
                 else:
-                    if len(ref) < n:
-                        ref = np.tile(ref, int(math.ceil(n / len(ref))))[:n]
-                    else:
-                        ref = ref[:n]
-                    layer = synth_look_iq("ofdm", n, look_fs)
-                    iq = (0.7 * ref + 0.18 * layer).astype(np.complex64)
+                    ref = ref[:n]
+                layer = synth_look_iq("ofdm", n, work_fs)
+                iq = (0.7 * ref + 0.18 * layer).astype(np.complex64)
             else:
-                iq = synth_look_iq("tone", n, look_fs)
+                iq = synth_look_iq("tone", n, work_fs)
         else:
             src = self._attack_mem if self._attack_mem is not None else self._ring
             if src is not None:
-                want = min(max(src.available(), 0), 32768)
+                want = min(max(src.available(), 0), ATTACK_THINK_N)
                 iq = src.latest(want) if want >= 256 else None
         if iq is None or len(iq) < 64:
             return {"ok": False, "reason": "память IQ ещё копится", "looks": [], **extra}
+        work = iq
+        leftover = None
+        clip_all = False
+        replica = self._tone_bb if self._tone_bb is not None else None
+        same_clock = (
+            residual
+            and replica is not None
+            and len(replica) >= 16
+            and _same_attack_clock(float(self._tx_fs or 0.0), work_fs)
+        )
+        if same_clock:
+            work, clip_all = cancel_own(iq, np.asarray(replica))
+            leftover = leftover_ratio(iq, work)
         out_looks = []
         for row in looks[:4]:
             freq = float(row.get("freqMhz") or center_mhz)
             bw = float(row.get("bwMhz") or 2.0)
-            crop = crop_iq(iq, fs, freq, center_mhz, bw)
-            leftover_row = None
-            clip = False
-            if residual and self._tone is not None:
-                before = crop
-                crop, clip = cancel_own(crop, np.asarray(self._tone))
-                leftover_row = leftover_ratio(before, crop)
-            parsed = analyze_iq(crop, fs)
+            ch, fs_out = channelize_look(work, work_fs, freq, center_mhz, bw)
+            leftover_row = leftover
+            parsed = analyze_iq(ch, fs_out if fs_out > 0 else work_fs)
             parsed["freqMhz"] = freq
-            parsed["clip"] = bool(parsed.get("clip") or clip)
+            parsed["clip"] = bool(parsed.get("clip") or clip_all)
             if leftover_row is not None:
                 parsed["leftover"] = leftover_row
             out_looks.append(parsed)
-        leftover = None
-        clip_all = any(bool(x.get("clip")) for x in out_looks)
-        if residual and self._tone is not None:
-            src_iq = iq[-min(len(iq), 8192) :]
-            whole, clip_whole = cancel_own(src_iq, np.asarray(self._tone))
-            leftover = leftover_ratio(src_iq, whole)
-            clip_all = bool(clip_all or clip_whole)
+        clip_all = bool(clip_all or any(bool(x.get("clip")) for x in out_looks))
+        extra["thinkFsHz"] = work_fs
+        extra["cancelClock"] = bool(same_clock)
         return {
             "ok": True,
             "looks": out_looks,
@@ -1905,12 +1925,16 @@ class Radio:
         if not self.can_tx:
             return {"ok": False, "reason": "нет TX — усилитель подключать некуда", "latencyUs": 0}
         t0 = time.perf_counter()
+        if not NUMPY:
+            return {"ok": False, "reason": "нет numpy — сигнал не синтезировать", "latencyUs": 0}
+        try:
+            bb = make_waveform(wave, tx_fs, WAVE_N, params)
+        except Exception as e:
+            return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
+        # Реплика для вычета — ось 0 Гц (RX LO = RF). В DAC уходит +fs/8.
+        self._tone_bb = np.asarray(bb, dtype=np.complex64)
         if self.fake:
-            if NUMPY:
-                try:
-                    self._tone = make_waveform(wave, tx_fs, WAVE_N, params)
-                except Exception as e:
-                    return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
+            self._tone = self._tone_bb
             self.tx_mhz = freq_mhz
             self._tx_fs = tx_fs
             self.tx_error = None
@@ -1924,22 +1948,19 @@ class Radio:
                 "fake": True,
             }
         if self.dev is None:
+            self._tone_bb = None
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
         if not SOAPY:
+            self._tone_bb = None
             return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
-        if not NUMPY:
-            return {"ok": False, "reason": "нет numpy — сигнал не синтезировать", "latencyUs": 0}
-        try:
-            buf = make_waveform(wave, tx_fs, WAVE_N, params)
-        except Exception as e:
-            return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
-        n = len(buf)
+        n = len(bb)
         t = np.arange(n, dtype=np.float64) / tx_fs
-        buf = (buf * np.exp(1j * 2.0 * np.pi * (tx_fs / 8.0) * t)).astype(np.complex64)
+        buf = (bb * np.exp(1j * 2.0 * np.pi * (tx_fs / 8.0) * t)).astype(np.complex64)
         rf_hz = freq_mhz * 1e6
         lo_hz = cw_lo_hz(rf_hz, tx_fs)
         err = self._tx_prime(buf, lo_hz, self.tx_mhz, tx_fs)
         if err is not None:
+            self._tone_bb = None
             return err
         return self._tx_commit(
             buf, freq_mhz, t0,

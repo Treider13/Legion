@@ -331,7 +331,7 @@ def main() -> int:
         },
     )
     check("attack_think fake ок", think.get("ok") is True and think.get("looks"))
-    check("attack_think не заглушка kind", think["looks"][0].get("kind") in ("tone", "ofdm", "cycle", "noise", "unknown"))
+    check("attack_think fake тон", think["looks"][0].get("kind") == "tone", str(think["looks"][0]))
     check(
         "handle знает только attack_think рядом с attack_scan",
         'if op == "attack_think":' in open(WORKER).read(),
@@ -353,6 +353,42 @@ def main() -> int:
         check("пауза обнуляет IQ Атаки", radio._attack_mem_live is False and radio._attack_mem.available() == 0)
         radio.scan(2442, 20, 32)
         check("scan() оставляет флаг выключенным", radio._attack_mem_live is False)
+
+        live = w.Radio()
+        live.fake = False
+        live._rx_fs = 61.44e6
+        live._tx_fs = 61.44e6
+        live._ensure_attack_mem()
+        n_live = w.ATTACK_THINK_N
+        fs_live = 61.44e6
+        tt = np_atk.arange(n_live, dtype=np_atk.float64) / fs_live
+        rng_l = np_atk.random.default_rng(3)
+        ofdm_l = np_atk.zeros(n_live, dtype=np_atk.complex128)
+        for k in range(-16, 17):
+            if k == 0:
+                continue
+            ofdm_l += np_atk.exp(1j * (2.0 * np_atk.pi * k * (2e6 / 32.0) * tt + float(rng_l.uniform(0, 2 * np_atk.pi))))
+        ofdm_l = (0.04 * ofdm_l).astype(np_atk.complex64)
+        live._attack_mem.push_block(ofdm_l)
+        think_live = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], False)
+        kind_live = (think_live.get("looks") or [{}])[0].get("kind")
+        check("think 61.44 OFDM не тон", think_live.get("ok") is True and kind_live != "tone", str(think_live.get("looks")))
+        live._tone_bb = ofdm_l[:4096]
+        live._tx_fs = 2e6
+        think_mis = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], True)
+        check("вычет при разных часах не врёт leftover", think_mis.get("leftover") is None and think_mis.get("cancelClock") is False)
+        tone_l = (0.4 * np_atk.exp(1j * 2.0 * np_atk.pi * 0.1e6 * tt)).astype(np_atk.complex64)
+        live._attack_mem.reset()
+        live._attack_mem.push_block((tone_l + 0.05 * ofdm_l).astype(np_atk.complex64))
+        live._tone_bb = tone_l
+        live._tx_fs = 61.44e6
+        think_ok = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], True)
+        check(
+            "вычет на тех же часах считает leftover",
+            think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
+            str(think_ok.get("leftover")),
+        )
+        check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

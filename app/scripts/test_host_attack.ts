@@ -105,6 +105,14 @@ async function main(): Promise<void> {
     "think после Старт сверяет поколение",
     storeSrc.includes("bumpAttackThinkGen") && storeSrc.includes("thinkGen !== gAttackThinkGen"),
   );
+  const fireSrc = storeSrc.slice(storeSrc.indexOf("const fireAttackPaintTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  check(
+    "рамка ПЕРЕДАТЬ всегда hostTxWave на часах рамки",
+    fireSrc.includes("hostTxWave") &&
+      fireSrc.includes('?? "sine"') &&
+      !fireSrc.includes("hostTx(") &&
+      !fireSrc.includes("txCue"),
+  );
   check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({

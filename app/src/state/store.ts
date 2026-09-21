@@ -1353,8 +1353,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `ПЕРЕДАТЬ: пауза ${ATTACK_COOLDOWN_MS} мс после прошлой заливки`);
       return false;
     }
-    const waveKind = get().txWaveKind;
-    const params = waveKind ? attackWaveParams(waveKind, clipped, get().txWaveParams) : {};
+    const waveKind = get().txWaveKind ?? "sine";
+    const params = attackWaveParams(waveKind, clipped, get().txWaveParams);
     const fsHz = paintTxFsHz(clipped);
     const mhz = paintCenterMhz(clipped);
     const hold = clampAttackHoldMs(get().attackHoldMs);
@@ -1380,12 +1380,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     gGate.reserve(plan.freqMhz);
     try {
       const tx = gLive
-        ? waveKind
-          ? await hostTxWave(plan.freqMhz, waveKind, params, fsHz)
-          : await hostTx(plan.freqMhz)
-        : waveKind
-          ? gSdr.txWave(plan.freqMhz, waveKind)
-          : gSdr.txCue(plan.freqMhz);
+        ? await hostTxWave(plan.freqMhz, waveKind, params, fsHz)
+        : gSdr.txWave(plan.freqMhz, waveKind);
       pushLog("sys", tx.reason);
       if (!tx.ok) {
         gGate.abort();

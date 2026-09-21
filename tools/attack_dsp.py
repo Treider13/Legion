@@ -14,6 +14,10 @@ scan() / FPGA / ESP32 сюда не ходят.
   FAM точка — PySDR SCF: X(f+α/2)·conj(X(f−α/2)), когерентность.
   Вычет — корреляция на полном круге (как corr_est), масштаб,
     затем LMS GNU Radio: y = w·u, w += μ e conj(u).
+    Опора — baseband TX (как Adaptive_SIC / gr-fullduplex), те же часы что RX.
+  Канализатор — GNU Radio freq_xlating: сдвиг на DC, ФНЧ, децимация.
+    AMC (gr-inspector, Swami/Sadler): признаки после канала, не на нулях
+    61.44-МГц FFT. Wiener/MPEG-7 — по занятому каналу, не по вырезанному Nyquist.
   Кумулянты C20/C21/C40 — Swami & Sadler AMC.
 """
 from __future__ import annotations
@@ -28,6 +32,8 @@ ATTACK_TAPERS = 3
 ATTACK_NW = 2.5
 ATTACK_FAM_ALPHAS = 16
 ATTACK_LOOK_N = 8192
+ATTACK_THINK_N = 1 << 16  # хвост на разбор; кольцо 2^24 через FFT не гоняем
+ATTACK_LOOK_FS = 2.0e6  # пол канала AMC, чтобы FAM и решётка не умерли
 ATTACK_LMS_TAPS = 32
 ATTACK_CLIP = 0.92
 
@@ -81,8 +87,10 @@ def dpss_tapers(n: int, k: int = ATTACK_TAPERS, nw: float = ATTACK_NW) -> np.nda
     return tapers
 
 
-def multitaper_dbm(x: np.ndarray, k: int = ATTACK_TAPERS) -> np.ndarray:
-    """Thomson: среднее K эйгенспектров, дБм как welch_dbm (|X|²/N²)."""
+def multitaper_dbm(x: np.ndarray, k: int = ATTACK_TAPERS, blank_dc: bool = True) -> np.ndarray:
+    """Thomson: среднее K эйгенспектров, дБм как welch_dbm (|X|²/N²).
+    blank_dc — для водопада (утечка LO). Разбор выреза после xlating — False:
+    тон на DC иначе стирается, и AMC врёт «шум»."""
     n = int(x.shape[-1]) if x.ndim == 1 else int(x.shape[1])
     if x.ndim == 1:
         frames = x.reshape(1, n)
@@ -100,9 +108,10 @@ def multitaper_dbm(x: np.ndarray, k: int = ATTACK_TAPERS) -> np.ndarray:
     power = np.maximum(avg / (n * n), 1e-20)
     db = 10.0 * np.log10(power)
     db = np.fft.fftshift(db)
-    half = n // 2
-    if 0 < half < n - 1:
-        db[half] = 0.5 * (db[half - 1] + db[half + 1])
+    if blank_dc:
+        half = n // 2
+        if 0 < half < n - 1:
+            db[half] = 0.5 * (db[half - 1] + db[half + 1])
     return db
 
 
@@ -351,7 +360,8 @@ def leftover_ratio(before: np.ndarray, after: np.ndarray) -> float:
 
 
 def crop_iq(x: np.ndarray, fs: float, center_mhz: float, lo_mhz: float, bw_mhz: float, n: int = ATTACK_LOOK_N) -> np.ndarray:
-    """Вырезать полосу вокруг частоты: сдвиг на DC + низкочастотный отбор."""
+    """Вырезать полосу на родной fs (сдвиг + ФНЧ). Не для AMC: нули Nyquist
+    роняют Wiener-плоскость. Разбор — channelize_look. Вычет — до выреза, на fs RX."""
     if len(x) == 0 or fs <= 0:
         return np.zeros(0, dtype=np.complex64)
     want = min(int(n), int(len(x)))
@@ -365,6 +375,39 @@ def crop_iq(x: np.ndarray, fs: float, center_mhz: float, lo_mhz: float, bw_mhz: 
     X = np.fft.fft(shifted)
     X[np.abs(freq) > cutoff * fs] = 0
     return np.fft.ifft(X).astype(np.complex64)
+
+
+def channelize_look(
+    x: np.ndarray,
+    fs: float,
+    center_mhz: float,
+    lo_mhz: float,
+    bw_mhz: float,
+    n: int = ATTACK_THINK_N,
+    target_fs: float = ATTACK_LOOK_FS,
+) -> tuple[np.ndarray, float]:
+    """GNU Radio Frequency Xlating FIR: сдвиг на DC, ФНЧ, децимация.
+
+    want_fs ≥ max(2·BW, 2 МГц), decim = floor(fs/want_fs) — не уже Найквиста канала.
+    Спектр на fs_out занимает канал, не «дырявый» 61.44 МГц.
+    """
+    if len(x) == 0 or fs <= 0:
+        return np.zeros(0, dtype=np.complex64), 0.0
+    want = min(int(n), int(len(x)))
+    block = np.asarray(x[-want:], dtype=np.complex64)
+    df = (float(center_mhz) - float(lo_mhz)) * 1e6
+    t = np.arange(want, dtype=np.float64) / fs
+    shifted = block * np.exp(-1j * 2.0 * np.pi * df * t)
+    bw_hz = max(float(bw_mhz) * 1e6, fs / float(max(want, 1)))
+    want_fs = min(float(fs), max(2.0 * bw_hz, float(target_fs)))
+    decim = max(1, int(math.floor(fs / want_fs)))
+    fs_out = float(fs) / float(decim)
+    cutoff = 0.45 * fs_out
+    freq = np.fft.fftfreq(want, d=1.0 / fs)
+    X = np.fft.fft(shifted)
+    X[np.abs(freq) > cutoff] = 0
+    filtered = np.fft.ifft(X)
+    return np.asarray(filtered[::decim], dtype=np.complex64), fs_out
 
 
 def analyze_iq(
@@ -383,7 +426,7 @@ def analyze_iq(
     else:
         n = int(len(x))
         if n >= 64:
-            spec = multitaper_dbm(x[-min(n, 4096) :])
+            spec = multitaper_dbm(x[-min(n, 4096) :], blank_dc=False)
             flat = spectral_flatness(spec)
             cep = cepstrum_peak(spec)
             var = power_var_db(spec)
