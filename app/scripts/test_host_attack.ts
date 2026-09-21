@@ -7,7 +7,7 @@ import { AttackTracker, ATTACK_MIN_HITS } from "../src/sense/attackTracks";
 import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
-import { buildAttackAdvice, waveClassOf } from "../src/sense/attackAdvisor";
+import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
 import {
@@ -380,6 +380,7 @@ async function main(): Promise<void> {
   check("шум заливает рамку", Math.abs(waveOccupiesPaintMhz("awgn", p, {}) - 20) < 1e-9);
   check("SC-FDMA не заливка", Math.abs(waveOccupiesPaintMhz("scfdma", p, {}) - 5) < 1e-9);
   check("SC-FDMA класс часть", waveClassOf("scfdma") === "part");
+  check("текст заливки без SC-FDMA", waveClassRu("fill").includes("OFDM") && !waveClassRu("fill").includes("SC-FDMA"));
   const chirp = attackWaveParams("chirp", p, {});
   check("чирп размах = рамка, не 1 МГц", (chirp.spanKhz ?? 0) >= 10000);
   check("fs рамки в потолке USB", paintTxFsHz(p) <= 40e6 && paintTxFsHz(p) >= 20e6 * 0.99);

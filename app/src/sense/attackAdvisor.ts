@@ -55,7 +55,7 @@ export function waveClassOf(kind: WaveKind | null): AttackWaveClass {
 }
 
 export function waveClassRu(c: AttackWaveClass): string {
-  if (c === "fill") return "заливка всей рамки (шум / OFDM / SC-FDMA / OTFS / AFDM / OCDM)";
+  if (c === "fill") return "заливка всей рамки (шум / OFDM / OTFS / AFDM / OCDM)";
   if (c === "chirp") return "чирп по ширине рамки";
   if (c === "narrow") return "узкий тон в центре";
   return "часть рамки (~треть) — края не зальёт";
