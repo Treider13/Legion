@@ -1,9 +1,11 @@
 // ============================================================================
-// LEGION — советник Атаки. Только текст и предложение. Не пишет в TX.
+// LEGION — помощник Атаки. Только текст и предложение. Не пишет в TX.
 // Классы волны — факт waveOccupiesPaintMhz: заливка / чирп / узкая / часть.
+// Информация (роли и тень) только выбирает уже видимую рамку.
 // ============================================================================
 import { atlasForTracks, bandBucket, classifyAttackFamily } from "./attackAtlas";
 import { chunkInsideEnvelope, familySpanWithPad, type AttackHopFamily } from "./attackFamily";
+import { attackLiveTracks, readAttackInfo, type AttackInfo, type AttackInfoSnap } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
 import { residualLineRu, type AttackMemStats, type AttackResidual } from "./attackMemory";
@@ -92,7 +94,7 @@ function inCorridor(mhz: number, bands: readonly AllowBand[]): boolean {
   return bands.some((b) => mhz >= b.f1Mhz && mhz <= b.f2Mhz);
 }
 
-/** Самая сильная живая вспышка, которую коридор вообще пускает в рамку. */
+/** Самая сильная вспышка семьи, которую коридор вообще пускает в рамку. */
 function paintableFocusMhz(
   tracks: readonly AttackTrack[],
   fam: AttackHopFamily,
@@ -107,12 +109,36 @@ function paintableFocusMhz(
   return best ? best.freqMhz : null;
 }
 
-/** Огибающая семьи. Шире 40 МГц — кусок вокруг живой вспышки, не нижний край и не следующий канал. */
+/**
+ * Частота, вокруг которой режется огибающая.
+ * Сначала та, которую обводим, если коридор её пускает.
+ * Если она снаружи, а в семье есть вспышка внутри коридора — берём её,
+ * а не обрезанный край, который вспышку снаружи не накрывает.
+ */
+function familyPaintFocusMhz(
+  tracks: readonly AttackTrack[],
+  fam: AttackHopFamily,
+  bands: readonly AllowBand[],
+  preferMhz: number,
+): number | null {
+  const preferred = tracks.find(
+    (t) =>
+      t.state !== "cooled" &&
+      fam.members.includes(t.id) &&
+      Math.abs(t.freqMhz - preferMhz) <= 1e-3 &&
+      inCorridor(t.freqMhz, bands),
+  );
+  if (preferred) return preferred.freqMhz;
+  return paintableFocusMhz(tracks, fam, bands);
+}
+
+/** Огибающая семьи. Шире 40 МГц — кусок вокруг уже виденной вспышки, не нижний край и не следующий канал. */
 function proposeFamilyPaint(
   fam: AttackHopFamily,
   tracks: readonly AttackTrack[],
   bands: readonly AllowBand[],
   memoryHopsMhz: readonly number[],
+  preferMhz: number,
 ): { clipped: AttackPaint | null; text: string; why: string } {
   const span = familySpanWithPad(fam);
   const seen = paintSpanMhz(span);
@@ -120,7 +146,7 @@ function proposeFamilyPaint(
   const where = neighbors ? "по соседним окнам" : "в кадре";
   const why = fam.gridMhz > 0 ? `шаг ≈ ${fam.gridMhz.toFixed(2)} МГц` : "несколько вспышек в одной корзине";
   const outside = ` Огибающая ${where} ≈ ${seen.toFixed(0)} МГц. Канал не угадываем.`;
-  const focus = paintableFocusMhz(tracks, fam, bands);
+  const focus = familyPaintFocusMhz(tracks, fam, bands, preferMhz);
   if (focus == null) {
     const seenAt = familyFocusMhz(tracks, fam);
     return {
@@ -171,10 +197,15 @@ export function buildAttackAdvice(input: {
   memory: AttackMemStats;
   memoryHopsMhz?: readonly number[];
   transmitArmed: boolean;
+  snaps?: readonly AttackInfoSnap[];
+  info?: AttackInfo;
+  /** Номер обхода трекера. Без него берётся последний lastSweep на следах. */
+  sweep?: number;
 }): AttackAdvice {
-  const live = input.tracks.filter((t) => t.state !== "cooled");
+  const live = attackLiveTracks(input.tracks, input.sweep);
   const hints: AttackHint[] = [];
   let suggestPaint: AttackPaint | null = null;
+  const memoryHops = input.memoryHopsMhz ?? [];
 
   if (live.length === 0) {
     return {
@@ -198,15 +229,51 @@ export function buildAttackAdvice(input: {
     };
   }
 
-  const top = strongest(live);
-  const fam = input.families[0] ?? null;
+  let top = strongest(live);
   const floors = twoFloor(live, input.windowMhz);
+  const info =
+    input.info ??
+    readAttackInfo({
+      tracks: input.tracks,
+      snaps: input.snaps,
+      sweep: input.sweep,
+    });
+  // Тень может держать канал hop, который в «живые» не попал: один удар на частоте,
+  // окно уже на 5.8. Он не остыл — это увиденный пульт, не предсказанный канал.
+  const known = input.tracks.filter((t) => t.state !== "cooled");
+  const veto = info.redirectId != null ? known.find((t) => t.id === info.redirectId) ?? null : null;
+  const prefer =
+    veto == null && !floors && info.preferWideId != null
+      ? live.find((t) => t.id === info.preferWideId) ?? null
+      : null;
+  const framed = veto ?? prefer;
+  // Семья той частоты, которую обводим. families[0] — другая полоса:
+  // пульт 915 МГц отдавал кнопку семье на 2416, а громкие 2440 — тихой семье на 868.
+  const focusId = top?.id ?? null;
+  let fam: AttackHopFamily | null =
+    focusId == null ? null : (input.families.find((f) => f.members.includes(focusId)) ?? null);
+  let honest = 0;
+  if (top) {
+    const w = input.widths.get(top.id);
+    honest = w ? honestWidthMhz(w, top.widthMhz) : top.widthMhz;
+  }
+  if (framed) {
+    top = framed;
+    fam =
+      framed.duty >= 0.7 && framed.widthMhz >= 6
+        ? null
+        : input.families.find((f) => f.members.includes(framed.id)) ?? null;
+    const fw = input.widths.get(top.id);
+    honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
+  }
   const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
-  const topAtlas = top ? atlasForTracks(live, input.windowMhz).find((t) => t.id === top.id)?.atlas ?? atlas : null;
-  const w = top ? input.widths.get(top.id) : undefined;
-  const honest = top && w ? honestWidthMhz(w, top.widthMhz) : top?.widthMhz ?? 0;
-  const windowFill = topAtlas?.id === "window-fill" || atlas?.id === "window-fill" || (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
-  const memoryHops = input.memoryHopsMhz ?? [];
+  const topAtlas = top
+    ? atlasForTracks(live, input.windowMhz).find((t) => t.id === top.id)?.atlas ?? atlas
+    : null;
+  const windowFill =
+    topAtlas?.id === "window-fill" ||
+    atlas?.id === "window-fill" ||
+    (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
 
   let scene = `${live.length} след(ов) в кадре.`;
   if (topAtlas) scene += ` Класс энергии: ${topAtlas.label}. ${topAtlas.hint}.`;
@@ -222,14 +289,66 @@ export function buildAttackAdvice(input: {
   if (input.memory.hopRemembered > 4) {
     scene += ` Память видела уже ${input.memory.hopRemembered} hop-вспышек за сессию.`;
   }
+  if (info.line) scene += ` ${info.line}`;
   scene += " Слушатель не читает имена бортов и текст модема: MAVLink — байты внутри пакета, не форма спектра.";
   scene += " Предложение не команда: ширину и тип волны можно указать другими, затем ПЕРЕДАТЬ. «Взять» не передаёт.";
   if (input.transmitArmed) scene += " Идёт передача: кнопки «Взять» выключены.";
 
-  if (floors && top) {
+  if (framed && top) {
+    const wide = top.duty >= 0.7 && top.widthMhz >= 6;
+    if (wide) {
+      const vw = input.widths.get(top.id);
+      const span = vw ? honestWidthMhz(vw, top.widthMhz) : top.widthMhz;
+      const raw = clampPaintToCaps({ f1Mhz: top.freqMhz - span / 2, f2Mhz: top.freqMhz + span / 2 });
+      const clipped = allowedPaint(raw, input.bands);
+      suggestPaint = clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: clipped
+          ? `Широкая полка сейчас: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц.`
+          : `Широкая полка ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+        why: "информация: широкая полка",
+        applyLabel: clipped ? "Взять широкую рамку" : null,
+        paint: clipped,
+        wave: null,
+        holdMs: null,
+      });
+    } else if (fam) {
+      const proposed = proposeFamilyPaint(fam, known, input.bands, memoryHops, top.freqMhz);
+      suggestPaint = proposed.clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: proposed.text,
+        why: proposed.why,
+        applyLabel: proposed.clipped ? "Взять рамку семьи" : null,
+        paint: proposed.clipped,
+        wave: null,
+        holdMs: null,
+      });
+    } else {
+      const span = Math.min(Math.max(honest, 0.2), ATTACK_TX_MAX_MHZ);
+      const raw = clampPaintToCaps({ f1Mhz: top.freqMhz - span / 2, f2Mhz: top.freqMhz + span / 2 });
+      const clipped = allowedPaint(raw, input.bands);
+      suggestPaint = clipped;
+      hints.push({
+        kind: "paint",
+        title: "Рамка",
+        text: clipped
+          ? `Текущая частота: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц.`
+          : `Полоса ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
+        why: "информация: текущая частота",
+        applyLabel: clipped ? "Взять эту рамку" : null,
+        paint: clipped,
+        wave: null,
+        holdMs: null,
+      });
+    }
+  } else if (floors && top) {
     const video = live.filter((t) => t.duty >= 0.7 && t.widthMhz >= 6);
     const hop = live.filter((t) => t.duty < 0.45 && t.widthMhz <= 2);
-    const v = video[0];
+    const v = strongest(video);
     if (v) {
       const vw = input.widths.get(v.id);
       const span = vw ? honestWidthMhz(vw, v.widthMhz) : v.widthMhz;
@@ -249,7 +368,7 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     } else if (hop[0] && fam) {
-      const proposed = proposeFamilyPaint(fam, live, input.bands, memoryHops);
+      const proposed = proposeFamilyPaint(fam, known, input.bands, memoryHops, hop[0].freqMhz);
       suggestPaint = proposed.clipped;
       hints.push({
         kind: "paint",
@@ -262,8 +381,8 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     }
-  } else if (fam) {
-    const proposed = proposeFamilyPaint(fam, live, input.bands, memoryHops);
+  } else if (fam && top) {
+    const proposed = proposeFamilyPaint(fam, known, input.bands, memoryHops, top.freqMhz);
     suggestPaint = proposed.clipped;
     hints.push({
       kind: "paint",

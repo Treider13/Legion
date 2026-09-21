@@ -19,9 +19,8 @@ import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
-import { ATTACK_SILENT_HINT, atlasForTracks, type AttackAtlasRow } from "../sense/attackAtlas";
+import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
-import type { AttackTrack } from "../sense/attackTracks";
 import { lookRu } from "../sense/attackLook";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
@@ -36,18 +35,6 @@ import {
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
 import { SpectrumScope } from "./SpectrumScope";
-
-type AtlasOnlyRow = AttackTrack & { atlas: AttackAtlasRow };
-
-// Явный тип возврата: тернарный оператор схлопнул бы AttackRow в строку атласа.
-function attackTableRows(
-  rows: readonly AttackRow[],
-  tracks: readonly AttackTrack[],
-  windowMhz: number,
-): readonly AttackRow[] | readonly AtlasOnlyRow[] {
-  const src = rows.length ? rows : atlasForTracks(tracks, windowMhz);
-  return src.slice().sort((a, b) => b.powerDbm - a.powerDbm).slice(0, 10);
-}
 
 export function ScanPanel() {
   const s = useLegion();
@@ -345,7 +332,7 @@ export function ScanPanel() {
             }`
           : auto
             ? s.attackPaint
-              ? "Атака: рамка ваша. Подсказки ниже — совет, не кнопка. ПЕРЕДАТЬ жмёте вы."
+              ? "Атака: рамка ваша. Подсказки ниже — помощник, не кнопка. ПЕРЕДАТЬ жмёте вы."
               : s.autoDispatch === "priority"
               ? "рамки нет: без обвода ПЕРЕДАТЬ возьмёт живую засечку. Приоритет — сильнее рядом."
               : s.autoDispatch === "park"
@@ -549,6 +536,7 @@ export function ScanPanel() {
                 <th title="полоса, где сидит 99% энергии">99%</th>
                 <th title="какая доля кадров след был жив">доля</th>
                 <th>СЕМЬЯ</th>
+                <th>ИНФОРМАЦИЯ</th>
                 <th>РАЗБОР</th>
                 <th>СЛЕД</th>
               </tr>
@@ -556,11 +544,27 @@ export function ScanPanel() {
             <tbody>
               {s.attackTracks.length === 0 && (
                 <tr>
-                  <td colSpan={8}>{ATTACK_SILENT_HINT}</td>
+                  <td colSpan={9}>{ATTACK_SILENT_HINT}</td>
                 </tr>
               )}
-              {attackTableRows(s.attackRows, s.attackTracks, analogBw).map((t) => {
-                  const row = "look" in t ? t : null;
+              {(s.attackRows.length
+                ? s.attackRows
+                : atlasForTracks(s.attackTracks, analogBw).map(
+                    (t): AttackRow => ({
+                      ...t,
+                      width3Mhz: t.widthMhz,
+                      width26Mhz: t.widthMhz,
+                      occ99Mhz: t.widthMhz,
+                      look: undefined,
+                      familyId: null,
+                      infoRu: "",
+                    }),
+                  )
+              )
+                .slice()
+                .sort((a, b) => b.powerDbm - a.powerDbm)
+                .slice(0, 10)
+                .map((t) => {
                   return (
                   <tr
                     key={t.id}
@@ -576,12 +580,13 @@ export function ScanPanel() {
                     title={t.atlas.hint}
                   >
                     <td>{t.freqMhz.toFixed(3)}</td>
-                    <td>{row ? row.width3Mhz.toFixed(2) : t.widthMhz.toFixed(2)}</td>
-                    <td>{row ? row.width26Mhz.toFixed(2) : "—"}</td>
-                    <td>{row ? row.occ99Mhz.toFixed(2) : "—"}</td>
+                    <td>{t.width3Mhz.toFixed(2)}</td>
+                    <td>{t.width26Mhz.toFixed(2)}</td>
+                    <td>{t.occ99Mhz.toFixed(2)}</td>
                     <td>{t.duty.toFixed(2)}</td>
                     <td className="attack-atlas">{t.atlas.label}</td>
-                    <td className="attack-atlas">{row?.look ? lookRu(row.look) : t.atlas.hint}</td>
+                    <td className="attack-atlas">{t.infoRu || "—"}</td>
+                    <td className="attack-atlas">{t.look ? lookRu(t.look) : t.atlas.hint}</td>
                     <td>
                       {t.state === "held"
                         ? "ДЕРЖИМ"
@@ -597,7 +602,7 @@ export function ScanPanel() {
             </tbody>
           </table>
           <div className="attack-advice">
-            <p className="attack-advice-title">Что видит Атака</p>
+            <p className="attack-advice-title">Помощник</p>
             <p>{s.attackAdvice.scene || "Сцена ещё копится — нужен живой взгляд."}</p>
             <p className="sens-hint">{s.attackMemoryLine || "Память сессии пуста, пока не было вспышек."}</p>
             {s.attackAdvice.hints.map((h) => (
