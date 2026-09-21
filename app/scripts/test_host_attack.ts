@@ -29,7 +29,7 @@ import {
   paintWaveHint,
   waveOccupiesPaintMhz,
 } from "../src/sense/attackPaint";
-import { detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
+import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
 
@@ -280,18 +280,15 @@ async function main(): Promise<void> {
   await L().stopTransmit();
   L().stopScan();
 
-  L().setScanPattern("sweep");
-  L().startScan();
-  check("скан sweep пошёл", await waitFor("sweep", () => L().scanRunning));
-  check("sweep bins есть", await waitFor("sweep bins", () => L().scanBins.length > 8));
-  const sweepSpan =
-    L().scanBins.length > 1
-      ? L().scanBins[L().scanBins.length - 1]!.freqMhz - L().scanBins[0]!.freqMhz
-      : 0;
-  check("sweep окно всё ещё ~20 (crop 0.5)", Math.abs(sweepSpan - 20) < 2, `span=${sweepSpan.toFixed(2)}`);
-  check("sweep не FFT Атаки", L().scanBins.length <= 520);
-  L().stopScan();
-  L().setScanPattern("auto");
+  // sweep/band/hop сканер не поднимают (scanRefusedReason). Тот же crop, что tickScan без listen.
+  const other = new MockSdrBackend();
+  other.setEmulation(true);
+  other.open("bladerf-micro-xa4");
+  const otherBins = cropPsdBins(other.scanWindow(2442, hostScanSpanMhz(56), 1024));
+  const otherSpan =
+    otherBins.length > 1 ? otherBins[otherBins.length - 1]!.freqMhz - otherBins[0]!.freqMhz : 0;
+  check("чужой путь: 1024 × crop 0.5", otherBins.length === 512);
+  check("чужой путь: окно ~20, не 56", Math.abs(otherSpan - 20) < 2, `span=${otherSpan.toFixed(2)}`);
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
