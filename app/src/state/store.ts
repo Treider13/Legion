@@ -73,7 +73,6 @@ import {
   paintCenterMhz,
   paintRefuseReason,
   paintSpanMhz,
-  paintTxFsHz,
   paintWaveHint,
   type AttackPaint,
 } from "../sense/attackPaint";
@@ -2113,7 +2112,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         attackMemoryLine: "",
         attackSuggestPaint: null,
       });
-      if (p !== "auto") gAttackMemory.reset();
+      gAttackMemory.reset();
     },
     setAttackPaint: (p) => {
       if (get().scanPattern !== "auto") return;

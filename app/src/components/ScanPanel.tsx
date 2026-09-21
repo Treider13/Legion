@@ -19,7 +19,9 @@ import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
-import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
+import { ATTACK_SILENT_HINT, atlasForTracks, type AttackAtlasRow } from "../sense/attackAtlas";
+import type { AttackRow } from "../sense/attackScene";
+import type { AttackTrack } from "../sense/attackTracks";
 import { lookRu } from "../sense/attackLook";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
@@ -34,6 +36,18 @@ import {
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
 import { SpectrumScope } from "./SpectrumScope";
+
+type AtlasOnlyRow = AttackTrack & { atlas: AttackAtlasRow };
+
+// Явный тип возврата: тернарный оператор схлопнул бы AttackRow в строку атласа.
+function attackTableRows(
+  rows: readonly AttackRow[],
+  tracks: readonly AttackTrack[],
+  windowMhz: number,
+): readonly AttackRow[] | readonly AtlasOnlyRow[] {
+  const src = rows.length ? rows : atlasForTracks(tracks, windowMhz);
+  return src.slice().sort((a, b) => b.powerDbm - a.powerDbm).slice(0, 10);
+}
 
 export function ScanPanel() {
   const s = useLegion();
@@ -545,11 +559,7 @@ export function ScanPanel() {
                   <td colSpan={8}>{ATTACK_SILENT_HINT}</td>
                 </tr>
               )}
-              {(s.attackRows.length ? s.attackRows : atlasForTracks(s.attackTracks, analogBw))
-                .slice()
-                .sort((a, b) => b.powerDbm - a.powerDbm)
-                .slice(0, 10)
-                .map((t) => {
+              {attackTableRows(s.attackRows, s.attackTracks, analogBw).map((t) => {
                   const row = "look" in t ? t : null;
                   return (
                   <tr
