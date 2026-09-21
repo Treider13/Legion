@@ -775,7 +775,13 @@ const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
+let gAttackThinkGen = 0;
 let gAttackThinkResidual: { tracks: AttackTrack[]; fsHz: number; centerMhz: number } | null = null;
+
+function bumpAttackThinkGen(): void {
+  gAttackThinkGen += 1;
+  gAttackThinkResidual = null;
+}
 
 const EMPTY_ATTACK_ADVICE: AttackAdvice = { scene: "", after: "", hints: [], suggestPaint: null };
 
@@ -1258,6 +1264,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     if (!residual && Date.now() - gAttackThinkAt < 450) return;
     const live = tracks.filter((t) => t.state !== "cooled").slice(0, 3);
     if (live.length === 0 && !residual) return;
+    const thinkGen = gAttackThinkGen;
     gAttackThinkBusy = true;
     gAttackThinkAt = Date.now();
     try {
@@ -1270,7 +1277,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         looks.unshift({ freqMhz: paintCenterMhz(paint), bwMhz: Math.max(0.4, paintSpanMhz(paint)) });
       }
       const r = await hostAttackThink(centerMhz, fsHz, looks, residual);
-      if (get().scanPattern !== "auto") return;
+      if (thinkGen !== gAttackThinkGen || get().scanPattern !== "auto") return;
       if (r.memoryCap) gAttackMemory.noteWorker(r.memorySamples ?? 0, r.memoryCap, r.memoryMs ?? 0);
       if (!r.ok) return;
       for (const row of r.looks) {
@@ -1309,7 +1316,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gAttackThinkBusy = false;
       const pend = gAttackThinkResidual;
       gAttackThinkResidual = null;
-      if (pend && get().scanPattern === "auto" && gLive) {
+      if (pend && thinkGen === gAttackThinkGen && get().scanPattern === "auto" && gLive) {
         void thinkAttackLooks(pend.tracks, pend.fsHz, pend.centerMhz, true);
       }
     }
@@ -2032,6 +2039,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       clearAttackHoldTimer();
       gAttackTracker.reset();
+      bumpAttackThinkGen();
       set({
         scanPattern: p,
         attackTracks: [],
@@ -4295,6 +4303,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (st.scanPattern === "auto" && !(st.transmitArmed && st.attackPaint)) {
           gAttackTracker.reset();
           gAttackMemory.forgetLooks();
+          bumpAttackThinkGen();
           set({
             scanRunning: true,
             scanCenterMhz: null,

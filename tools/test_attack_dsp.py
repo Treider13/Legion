@@ -32,7 +32,13 @@ def main() -> int:
     nlook = d.analyze_iq(d.synth_look_iq("noise", 2048, 2e6), 2e6)
     check("тон не unknown", tlook["kind"] in ("tone", "cycle"), str(tlook))
     check("OFDM не тон", olook["kind"] != "tone", str(olook))
+    if float(olook["cepstrum"]) >= 0.22:
+        check("OFDM с решёткой не цикл", olook["kind"] == "ofdm", str(olook))
     check("шум не тон", nlook["kind"] in ("noise", "unknown", "ofdm"), str(nlook))
+    n = 256
+    t = np.arange(n)
+    off = 0.5 * t[1:] * (n - t[1:])
+    check("DPSS off как SciPy t(M-t)/2", abs(float(off[10]) - (11 * (n - 11) / 2.0)) < 1e-9)
     spec = d.multitaper_dbm(tone)
     freqs = np.linspace(-1, 1, spec.size)
     check("multitaper длина", spec.size == 2048)
@@ -41,6 +47,9 @@ def main() -> int:
     e, clip = d.cancel_own(tone + 0.05 * ofdm, tone)
     check("вычет не клип", clip is False)
     check("вычет снижает энергию", d.leftover_ratio(tone + 0.05 * ofdm, e) < 0.5)
+    delayed = np.roll(tone, -80)
+    e2, clip2 = d.cancel_own(delayed + 0.05 * ofdm, tone)
+    check("вычет ловит отрицательный лаг", clip2 is False and d.leftover_ratio(delayed + 0.05 * ofdm, e2) < 0.5)
     check("память 2^24", d.ATTACK_MEM_CAP == 1 << 24)
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1

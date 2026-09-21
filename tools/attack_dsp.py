@@ -4,14 +4,16 @@
 scan() / FPGA / ESP32 сюда не ходят.
 
 Откуда формулы (код, не маркетинг):
-  Thomson DPSS — scipy.signal.windows.dpss, трёхдиагональ Slepian
-    (Percival & Walden; numpy.linalg.eigh_tridiagonal).
-  ITU-R SM.443 / SM.328 — занятая полоса 99% (β/2=0.5%) и x-dB от пика.
-  rtl-sdr-analyzer / labPsd.width3dbMhz — −3 дБ от пика.
+  Thomson DPSS — scipy.signal.windows.dpss (Percival & Walden):
+    diag = ((M-1-2t)/2)² cos(2πW), off = t(M-t)/2, старшие k векторов.
+    SciPy зовёт scipy.linalg.eigh_tridiagonal; здесь итерация подпространства.
+  ITU-R SM.443 §3 / SM.328: span ≈ 1.5× ожидаемой полосы вокруг пика,
+    сумма линейной мощности = 100%, с краёв по β/2 = 0.5%.
+  −3 дБ — rtl-sdr-analyzer / labPsd.width3dbMhz; −26 дБ — SM.443 x-dB.
   Spectral flatness — MPEG-7 / Wiener: геом. / арифм. среднее линейной PSD.
-  FAM точка — PySDR cyclostationary + gr-specest cyclo_fam: сдвиг спектра на α.
-  Вычет своей волны — корреляционное выравнивание + масштаб
-    (первый каскад IBFD / Adaptive_SIC), затем короткий LMS.
+  FAM точка — PySDR SCF: X(f+α/2)·conj(X(f−α/2)), когерентность.
+  Вычет — корреляция на полном круге (как corr_est), масштаб,
+    затем LMS GNU Radio: y = w·u, w += μ e conj(u).
   Кумулянты C20/C21/C40 — Swami & Sadler AMC.
 """
 from __future__ import annotations
@@ -149,21 +151,22 @@ def width_xd_b(dbm: np.ndarray, freqs: np.ndarray, peak_mhz: float, x_db: float)
 
 
 def occupied_99(dbm: np.ndarray, freqs: np.ndarray, peak_mhz: float) -> float:
-    """ITU SM.328: 99% мощности вокруг пика (по 0.5% с каждого края)."""
+    """ITU-R SM.443 §3: span ≈ 1.5× ожидаемой полосы, затем β/2 = 0.5% с краёв."""
     if dbm.size < 4:
         return 0.0
     i = _peak_index(dbm, freqs, peak_mhz)
-    lin = lin_from_dbm(dbm)
-    floor = float(np.percentile(lin, 30))
-    mask = lin >= floor * (10.0 ** 0.3)
-    if not mask[i]:
-        mask[i] = True
+    expected = max(width_xd_b(dbm, freqs, peak_mhz, 26), width_xd_b(dbm, freqs, peak_mhz, 3))
+    df = abs(float(freqs[1] - freqs[0])) if freqs.size > 1 else 0.0
+    if expected < df * 2:
+        expected = max(df * 4, expected)
+    half = 0.75 * max(expected, df)
     lo = i
     hi = i
-    while lo > 0 and mask[lo - 1]:
+    while lo > 0 and float(freqs[lo - 1]) >= peak_mhz - half:
         lo -= 1
-    while hi + 1 < lin.size and mask[hi + 1]:
+    while hi + 1 < freqs.size and float(freqs[hi + 1]) <= peak_mhz + half:
         hi += 1
+    lin = lin_from_dbm(dbm)
     sl = lin[lo : hi + 1]
     total = float(np.sum(sl))
     if total <= 0:
@@ -200,7 +203,7 @@ def cepstrum_peak(dbm: np.ndarray) -> float:
 
 
 def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
-    """Точечный FAM: когерентность на сетке α. Не полный SCF 56 МГц."""
+    """Точечный SCF как PySDR: X(f+α/2)·conj(X(f−α/2)), когерентность. Не полный FAM-карта."""
     n = int(len(x))
     if n < 64 or fs <= 0:
         return {"alphaHz": 0.0, "coh": 0.0}
@@ -209,15 +212,15 @@ def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
     best_a = 0.0
     best_c = 0.0
     fmax = min(fs / 4.0, 2.0e6)
-    mag = np.abs(X)
     for i in range(1, ATTACK_FAM_ALPHAS + 1):
         alpha = fmax * i / ATTACK_FAM_ALPHAS
-        shift = int(round(alpha * n / fs))
-        if shift <= 0 or shift >= n:
+        half = int(round((alpha * 0.5) * n / fs))
+        if half <= 0 or 2 * half >= n:
             continue
-        rolled = np.roll(X, -shift)
-        den = float(np.mean(mag * np.abs(rolled))) + 1e-20
-        coh = abs(complex(np.mean(X * np.conj(rolled)))) / den
+        up = np.roll(X, -half)
+        dn = np.roll(X, half)
+        den = float(np.mean(np.abs(up) * np.abs(dn))) + 1e-20
+        coh = abs(complex(np.mean(up * np.conj(dn)))) / den
         if coh > best_c:
             best_c = coh
             best_a = alpha
@@ -245,16 +248,17 @@ def cumulants(x: np.ndarray) -> dict[str, float]:
 
 
 def classify_look(flat: float, cep: float, fam_coh: float, c20: float, kurt: float) -> dict[str, Any]:
-    """Семья разбора, не имя фирмы."""
-    if flat < 0.22:
+    """Семья разбора, не имя фирмы. Порядок как lookFromBins: тон → решётка → цикл → шум.
+    Иначе OFDM с CP всегда падал в «цикл» (он циклостационарен — факт, не семья для оператора)."""
+    if flat < 0.22 or (c20 >= 0.55 and flat < 0.35):
         kind = "tone"
         ru = "похоже на тон"
-    elif fam_coh >= 0.22 and flat < 0.7:
-        kind = "cycle"
-        ru = "есть цикл (энергия могла занизить ширину)"
     elif cep >= 0.22 and 0.25 <= flat < 0.75:
         kind = "ofdm"
         ru = "решётка / OFDM-подобно"
+    elif fam_coh >= 0.22 and flat < 0.7:
+        kind = "cycle"
+        ru = "есть цикл (энергия могла занизить ширину)"
     elif flat >= 0.45:
         kind = "noise"
         ru = "плоский / шум-подобный"
@@ -295,7 +299,9 @@ def align_scale_cancel(rx: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.
         r = r[:n]
     nfft = 1 << int(math.ceil(math.log2(max(n * 2, 8))))
     corr = np.fft.ifft(np.fft.fft(x, nfft) * np.conj(np.fft.fft(r, nfft)))
-    lag = int(np.argmax(np.abs(corr[:n])))
+    lag = int(np.argmax(np.abs(corr)))
+    if lag > nfft // 2:
+        lag -= nfft
     rs = np.roll(r, lag)
     denom = complex(np.vdot(rs, rs))
     if abs(denom) < 1e-12:
@@ -305,14 +311,15 @@ def align_scale_cancel(rx: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.
 
 
 def lms_polish(rx: np.ndarray, ref: np.ndarray, taps: int = ATTACK_LMS_TAPS, mu: float = 0.008) -> np.ndarray:
-    """Короткий LMS после выравнивания. Не полный IBFD 90 дБ."""
+    """Короткий LMS после выравнивания. GNU Radio adaptive_algorithm_lms:
+    y = w·u, w += μ e conj(u). Не полный IBFD 90 дБ."""
     n = int(len(rx))
     t = min(int(taps), n // 4)
     if n < t * 4:
         return rx
     r = np.asarray(ref, dtype=np.complex128)
     if len(r) < n:
-        r = np.tile(r, int(math.ceil(n / len(r))))[:n]
+        r = np.tile(r, int(math.ceil(n / max(len(r), 1))))[:n]
     else:
         r = r[:n]
     x = np.asarray(rx, dtype=np.complex128)
@@ -321,10 +328,10 @@ def lms_polish(rx: np.ndarray, ref: np.ndarray, taps: int = ATTACK_LMS_TAPS, mu:
     e[:t] = x[:t]
     for i in range(t, n):
         u = r[i - t : i][::-1]
-        y = np.vdot(w, u)
+        y = np.dot(w, u)
         err = x[i] - y
         e[i] = err
-        w += mu * err * u
+        w += mu * err * np.conj(u)
     return e.astype(np.complex64)
 
 

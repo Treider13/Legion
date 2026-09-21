@@ -102,6 +102,10 @@ async function main(): Promise<void> {
     storeSrc.includes("gAttackThinkResidual") && storeSrc.includes("pend.centerMhz"),
   );
   check(
+    "think после Старт сверяет поколение",
+    storeSrc.includes("bumpAttackThinkGen") && storeSrc.includes("thinkGen !== gAttackThinkGen"),
+  );
+  check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({
       liveWindow: [],
@@ -220,6 +224,11 @@ async function main(): Promise<void> {
   check("−3 дБ на кирпиче ~20", Math.abs(width3dbMhzAttack(brick20, 2442) - 20) < 1.5);
   check("−26 дБ не уже −3", width26dbMhz(brick20, 2442) + 1e-9 >= width3dbMhzAttack(brick20, 2442) - 0.2);
   check("99% на кирпиче живая", occupied99Mhz(brick20, 2442) > 10);
+  check(
+    "99% на кирпиче ~20 по SM.443",
+    occupied99Mhz(brick20, 2442) > 15 && occupied99Mhz(brick20, 2442) < 26,
+    `occ=${occupied99Mhz(brick20, 2442).toFixed(2)}`,
+  );
 
   const hopTracks = [2440, 2441, 2442].map((mhz, i) => ({
     id: i + 1,
@@ -293,6 +302,24 @@ async function main(): Promise<void> {
   });
   check("тон против 20 МГц — спор", advice.hints.some((h) => h.kind === "wave" && h.wave === "awgn"));
   check("рамка предлагается, не ставится", advice.suggestPaint != null && advice.hints.some((h) => h.kind === "paint" && h.paint != null));
+  const adviceOut = buildAttackAdvice({
+    tracks: sticky,
+    families: [],
+    widths: new Map([[1, { width3Mhz: 19.5, width26Mhz: 20.2, occ99Mhz: 20.0 }]]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 5100, f2Mhz: 5200 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "рамка вне коридора не предлагается взять",
+    !adviceOut.hints.some((h) => h.kind === "paint" && h.paint != null && h.applyLabel != null),
+  );
   check("пустая волна = узкий класс", waveClassOf(null) === "narrow");
   const scene = buildAttackScene({
     tracks: sticky,

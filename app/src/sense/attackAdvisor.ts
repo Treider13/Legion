@@ -72,6 +72,11 @@ function twoFloor(tracks: readonly AttackTrack[], windowMhz: number): boolean {
   return atlasForTracks(tracks, windowMhz).some((t) => t.atlas.id === "two-floor");
 }
 
+/** Не предлагать «взять» рамку, которую ПЕРЕДАТЬ отвергнет (вне коридора). */
+function allowedPaint(raw: AttackPaint, bands: readonly AllowBand[]): AttackPaint | null {
+  return clipPaintToAllowlist(raw, bands);
+}
+
 export function buildAttackAdvice(input: {
   tracks: readonly AttackTrack[];
   families: readonly AttackHopFamily[];
@@ -142,14 +147,16 @@ export function buildAttackAdvice(input: {
       const vw = input.widths.get(v.id);
       const span = vw ? honestWidthMhz(vw, v.widthMhz) : v.widthMhz;
       const raw = clampPaintToCaps({ f1Mhz: v.freqMhz - span / 2, f2Mhz: v.freqMhz + span / 2 });
-      const clipped = clipPaintToAllowlist(raw, input.bands) ?? raw;
+      const clipped = allowedPaint(raw, input.bands);
       suggestPaint = clipped;
       hints.push({
         kind: "paint",
         title: "Рамка",
-        text: `Сначала широкое: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Hop — второй раз, другой рамкой.`,
+        text: clipped
+          ? `Сначала широкое: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Hop — второй раз, другой рамкой.`
+          : `Широкое ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
         why: "два этажа в одной корзине",
-        applyLabel: "Взять широкую рамку",
+        applyLabel: clipped ? "Взять широкую рамку" : null,
         paint: clipped,
         wave: null,
         holdMs: null,
@@ -157,14 +164,16 @@ export function buildAttackAdvice(input: {
     } else if (hop[0] && fam) {
       const span = familySpanWithPad(fam);
       const raw = clampPaintToCaps(span);
-      const clipped = clipPaintToAllowlist(raw, input.bands) ?? raw;
+      const clipped = allowedPaint(raw, input.bands);
       suggestPaint = clipped;
       hints.push({
         kind: "paint",
         title: "Рамка",
-        text: `Hop-семья ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Не одна вспышка.`,
+        text: clipped
+          ? `Hop-семья ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Не одна вспышка.`
+          : `Hop-семья ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
         why: "огибающая уже виденных вспышек",
-        applyLabel: "Взять рамку семьи",
+        applyLabel: clipped ? "Взять рамку семьи" : null,
         paint: clipped,
         wave: null,
         holdMs: null,
@@ -180,7 +189,7 @@ export function buildAttackAdvice(input: {
         f2Mhz: fam.fLowMhz + ATTACK_TX_MAX_MHZ,
       });
     }
-    const clipped = clipPaintToAllowlist(raw, input.bands) ?? raw;
+    const clipped = allowedPaint(raw, input.bands);
     suggestPaint = clipped;
     const extra =
       want > ATTACK_TX_MAX_MHZ
@@ -189,9 +198,11 @@ export function buildAttackAdvice(input: {
     hints.push({
       kind: "paint",
       title: "Рамка",
-      text: `Обведите семью hop ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц, не одну вспышку.${extra}`,
+      text: clipped
+        ? `Обведите семью hop ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц, не одну вспышку.${extra}`
+        : `Семья hop ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
       why: fam.gridMhz > 0 ? `шаг ≈ ${fam.gridMhz.toFixed(2)} МГц` : "несколько вспышек в одной корзине",
-      applyLabel: "Взять рамку семьи",
+      applyLabel: clipped ? "Взять рамку семьи" : null,
       paint: clipped,
       wave: null,
       holdMs: null,
@@ -199,16 +210,18 @@ export function buildAttackAdvice(input: {
   } else if (top) {
     const span = Math.min(Math.max(honest, 0.2), ATTACK_TX_MAX_MHZ);
     const raw = clampPaintToCaps({ f1Mhz: top.freqMhz - span / 2, f2Mhz: top.freqMhz + span / 2 });
-    const clipped = clipPaintToAllowlist(raw, input.bands) ?? raw;
+    const clipped = allowedPaint(raw, input.bands);
     suggestPaint = clipped;
     hints.push({
       kind: "paint",
       title: "Рамка",
-      text: windowFill
-        ? `Слышим край фильтра. Рука 40 МГц: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)}. Остальное этой заливкой не взять.`
-        : `По честной ширине: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц (−26 / 99% / −3, не юбка CFAR).`,
+      text: !clipped
+        ? `Полоса ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`
+        : windowFill
+          ? `Слышим край фильтра. Рука 40 МГц: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)}. Остальное этой заливкой не взять.`
+          : `По честной ширине: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц (−26 / 99% / −3, не юбка CFAR).`,
       why: `ширина ≈ ${span.toFixed(2)} МГц`,
-      applyLabel: "Взять эту рамку",
+      applyLabel: clipped ? "Взять эту рамку" : null,
       paint: clipped,
       wave: null,
       holdMs: null,

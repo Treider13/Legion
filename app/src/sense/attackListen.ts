@@ -1,7 +1,7 @@
 // ============================================================================
 // LEGION — слух хост-Атаки. Не hostScanSpanMhz / crop 0.5 / DIO 40.
 // Слух: 61.44 MSPS + фильтр 56 (Nuand xA4). ПЕРЕДАТЬ: USB FD ≤40, те же часы.
-// FFT 4096/8192, Hann+Welch-8 overlap 0.5 — как soapy_power / GQRX, только Атака.
+// FFT 4096/8192. Живой attack_scan — Thomson DPSS×3; эмуляция — спектр эмулятора.
 // ============================================================================
 import { ATTACK_TX_FS_MIN_HZ, ATTACK_TX_MAX_MHZ, paintTxFsHz, type AttackPaint } from "./attackPaint";
 

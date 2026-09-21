@@ -46,35 +46,38 @@ export function width26dbMhz(bins: readonly ScanBin[], peakMhz: number): number 
   return widthXdBMhz(bins, peakMhz, 26);
 }
 
-/** ITU: 99% мощности вокруг пика (по 0.5% с краёв области над полом). */
+/** ITU-R SM.443 §3: span ≈ 1.5× ожидаемой полосы вокруг пика, затем β/2 = 0.5%. */
 export function occupied99Mhz(bins: readonly ScanBin[], peakMhz: number): number {
   if (bins.length < 4) return 0;
   const i = peakIndex(bins, peakMhz);
-  const lin = bins.map((b) => (finiteDbm(b.powerDbm) ? dbmToLin(b.powerDbm) : 0));
-  const sorted = lin.slice().sort((a, b) => a - b);
-  const floor = sorted[Math.max(0, Math.floor(sorted.length * 0.3))] ?? 0;
-  const gate = floor * Math.pow(10, 0.3);
+  const w26 = widthXdBMhz(bins, peakMhz, 26);
+  const w3 = widthXdBMhz(bins, peakMhz, 3);
+  let expected = Math.max(w26, w3);
+  const df = bins.length > 1 ? Math.abs(bins[1]!.freqMhz - bins[0]!.freqMhz) : 0;
+  if (expected < df * 2) expected = Math.max(df * 4, expected);
+  const half = 0.75 * Math.max(expected, df);
   let lo = i;
   let hi = i;
-  while (lo > 0 && lin[lo - 1] >= gate) lo -= 1;
-  while (hi + 1 < lin.length && lin[hi + 1] >= gate) hi += 1;
+  while (lo > 0 && bins[lo - 1]!.freqMhz >= peakMhz - half) lo -= 1;
+  while (hi + 1 < bins.length && bins[hi + 1]!.freqMhz <= peakMhz + half) hi += 1;
+  const lin = bins.map((b) => (finiteDbm(b.powerDbm) ? dbmToLin(b.powerDbm) : 0));
   let total = 0;
-  for (let k = lo; k <= hi; k++) total += lin[k];
-  if (!(total > 0)) return Math.max(0, bins[hi].freqMhz - bins[lo].freqMhz);
+  for (let k = lo; k <= hi; k++) total += lin[k]!;
+  if (!(total > 0)) return Math.max(0, bins[hi]!.freqMhz - bins[lo]!.freqMhz);
   const cut = 0.005 * total;
   let acc = 0;
   let left = lo;
-  while (left < hi && acc + lin[left] < cut) {
-    acc += lin[left];
+  while (left < hi && acc + lin[left]! < cut) {
+    acc += lin[left]!;
     left += 1;
   }
   acc = 0;
   let right = hi;
-  while (right > left && acc + lin[right] < cut) {
-    acc += lin[right];
+  while (right > left && acc + lin[right]! < cut) {
+    acc += lin[right]!;
     right -= 1;
   }
-  return Math.max(0, bins[right].freqMhz - bins[left].freqMhz);
+  return Math.max(0, bins[right]!.freqMhz - bins[left]!.freqMhz);
 }
 
 export function spectralFlatness(bins: readonly ScanBin[]): number {
