@@ -58,7 +58,7 @@ import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { detectAttackHits } from "../sense/attackDetect";
 import { attackListenPlan } from "../sense/attackListen";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
-import { matchAttackLook, parseWorkerLook } from "../sense/attackLook";
+import { matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../sense/attackLook";
 import { AttackSessionMemory } from "../sense/attackMemory";
 import { buildAttackScene, type AttackRow, type AttackSceneView } from "../sense/attackScene";
 import { type AttackAdvice, type AttackHintKind } from "../sense/attackAdvisor";
@@ -776,7 +776,12 @@ const gAttackMemory = new AttackSessionMemory();
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
 let gAttackThinkGen = 0;
-let gAttackThinkResidual: { tracks: AttackTrack[]; fsHz: number; centerMhz: number } | null = null;
+let gAttackThinkResidual: {
+  tracks: AttackTrack[];
+  fsHz: number;
+  centerMhz: number;
+  spanMhz: number;
+} | null = null;
 
 function bumpAttackThinkGen(): void {
   gAttackThinkGen += 1;
@@ -1259,6 +1264,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     tracks: readonly AttackTrack[],
     fsHz: number,
     centerMhz: number,
+    spanMhz: number,
     residual: boolean,
   ): Promise<void> => {
     if (get().scanPattern !== "auto" || !gLive) return;
@@ -1268,12 +1274,13 @@ export const useLegion = create<LegionStore>((set, get) => {
           tracks: tracks.map((t) => ({ ...t })),
           fsHz,
           centerMhz,
+          spanMhz,
         };
       }
       return;
     }
     if (!residual && Date.now() - gAttackThinkAt < 450) return;
-    const live = tracks.filter((t) => t.state !== "cooled").slice(0, 3);
+    const live = pickAttackThinkTracks(tracks, centerMhz, spanMhz, 3);
     if (live.length === 0 && !residual) return;
     const thinkGen = gAttackThinkGen;
     gAttackThinkBusy = true;
@@ -1328,7 +1335,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       const pend = gAttackThinkResidual;
       gAttackThinkResidual = null;
       if (pend && thinkGen === gAttackThinkGen && get().scanPattern === "auto" && gLive) {
-        void thinkAttackLooks(pend.tracks, pend.fsHz, pend.centerMhz, true);
+        void thinkAttackLooks(pend.tracks, pend.fsHz, pend.centerMhz, pend.spanMhz, true);
       }
     }
   };
@@ -1439,7 +1446,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }).spanMhz),
         lastCueReason: `атака рамка ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц · ${wave} · ${hold} мс · fs ${(fsHz / 1e6).toFixed(2)} МГц · ${paintWaveHint(waveKind, clipped, params)}`,
       });
-      void thinkAttackLooks(gAttackTracker.snapshot(), fsHz, plan.freqMhz, true);
+      void thinkAttackLooks(gAttackTracker.snapshot(), fsHz, plan.freqMhz, listen.spanMhz, true);
       armAttackHoldTimer(hold);
       return true;
     } finally {
@@ -4534,7 +4541,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             const snap = gAttackTracker.snapshot();
             gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz, blankedByOwnTx);
             set(attackBrainPatch(cur, snap, bins, listen?.spanMhz ?? spanMhz));
-            void thinkAttackLooks(snap, listen?.fsHz ?? 61_440_000, centerMhz, paintTx);
+            void thinkAttackLooks(snap, listen?.fsHz ?? 61_440_000, centerMhz, listen?.spanMhz ?? spanMhz, paintTx);
           }
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
           if (attackPaintOwnsTx(cur.scanPattern, cur.attackPaint, cur.transmitArmed)) return;

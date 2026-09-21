@@ -86,6 +86,26 @@ export function parseWorkerLook(raw: Record<string, unknown>, freqMhz: number): 
 }
 
 /**
+ * Кого отдать воркеру IQ. Он режет вырез вокруг текущей стоянки.
+ * След вне этого окна (915 при слухе на 5800) даёт алиас чужого кадра,
+ * и разбор потом висит на чужой частоте. Берём громкие следы внутри окна,
+ * не первые по времени создания: hop оставляет десятки старых id.
+ */
+export function pickAttackThinkTracks<T extends { freqMhz: number; powerDbm: number; state: string }>(
+  tracks: readonly T[],
+  centerMhz: number,
+  spanMhz: number,
+  limit = 3,
+): T[] {
+  if (!Number.isFinite(centerMhz) || !(spanMhz > 0) || limit <= 0) return [];
+  const half = spanMhz / 2;
+  return tracks
+    .filter((t) => t.state !== "cooled" && Math.abs(t.freqMhz - centerMhz) <= half)
+    .sort((a, b) => b.powerDbm - a.powerDbm)
+    .slice(0, limit);
+}
+
+/**
  * Разбор IQ садится на ближайший след и только внутри ворот трекера (0.2 МГц).
  * Первый след в 0.35 МГц забирал чужой разбор: 2440.00 получал OFDM с 2440.30.
  */
