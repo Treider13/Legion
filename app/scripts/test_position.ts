@@ -282,6 +282,33 @@ test("рельеф Украины в файле и покрывает крайн
   assert.equal(outside.profile.at(-1)?.terrainM, 140);
 });
 
+test("два холма, которые берёт мачта, не называются непроходимыми", () => {
+  const two = computePosition({
+    ...blocked(2400),
+    marks: [
+      { km: 12, m: 260 },
+      { km: 15, m: 280 },
+      { km: 18, m: 80 },
+      { km: 27, m: 80 },
+      { km: 30, m: 280 },
+      { km: 33, m: 260 },
+    ],
+  }, false);
+  assert.equal(two.verdict, "ridge", `${two.phrase} ${two.raiseNormM}`);
+  assert.match(two.action, /Поднимите/);
+  assert.ok(two.raiseNormM < 500, `norm ${two.raiseNormM}`);
+  const hopeless = computePosition({
+    ...blocked(2400),
+    marks: [
+      { km: 15, m: 900 },
+      { km: 22, m: 80 },
+      { km: 30, m: 900 },
+    ],
+  }, false);
+  assert.equal(hopeless.verdict, "closed");
+  assert.match(hopeless.phrase, /Холмов несколько/);
+});
+
 test("пустая клетка не отменяет вписанную отметку", () => {
   const grid: DemGrid = {
     lat0: 50,

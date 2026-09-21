@@ -483,11 +483,13 @@ export function computePosition(input: PositionInput, withAround = true): Positi
     diffraction = knifeEdgeDb(worst.intrusionM, d1, d2, input.freqMhz);
   }
   const multi = segs.length >= 2;
-  const blockHard = input.freqMhz >= 1000 && (multi || input.clutter);
-  const mastHopeless = input.freqMhz >= 1000 && raiseNormM > 500;
+  // Несколько холмов закрывают ответ только когда мачта, которая поднимает луч над всеми ними, уже нереальна.
+  // Иначе одно действие — поднять антенну. Лес и дома закрывают выше 1 ГГц: их высоты в метрах нет.
+  const mastHopeless = input.freqMhz >= 1000 && raiseNormM > 500 && segs.length > 0;
+  const clutterBlock = input.freqMhz >= 1000 && input.clutter;
 
   let verdict: VerdictKind = "open";
-  if (blockHard || (mastHopeless && segs.length > 0)) verdict = "closed";
+  if (clutterBlock || mastHopeless) verdict = "closed";
   else if (segs.length > 0 || raiseNormM > 0.5) verdict = "ridge";
 
   const fspl = fsplDb(input.freqMhz, dist);
