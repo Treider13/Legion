@@ -253,6 +253,24 @@ async function main(): Promise<void> {
     4,
   );
   check("память hop пишет новый канал того же следа", hopMem.hops.length === hopTracks.length + 1);
+  hopMem.noteLook(1, {
+    freqMhz: 2440,
+    kind: "tone",
+    label: "похоже на тон",
+    conf: 0.8,
+    flatness: 0.1,
+    cepstrum: 0,
+    famCoh: 0,
+    famAlphaHz: 0,
+    c20: 0,
+    kurt: 0,
+    clip: false,
+    leftover: null,
+    source: "iq",
+  });
+  hopMem.forgetLooks();
+  check("старт скана забывает разбор старых id", hopMem.looks.size === 0);
+  check("старт скана не трёт hop-память", hopMem.hops.length === hopTracks.length + 1);
 
   const sticky = [{
     id: 1, freqMhz: 2442, fLowMhz: 2432, fHighMhz: 2452, widthMhz: 20,

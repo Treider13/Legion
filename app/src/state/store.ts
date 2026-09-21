@@ -4294,6 +4294,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gLabSpur.recalibrate();
         if (st.scanPattern === "auto" && !(st.transmitArmed && st.attackPaint)) {
           gAttackTracker.reset();
+          gAttackMemory.forgetLooks();
           set({
             scanRunning: true,
             scanCenterMhz: null,

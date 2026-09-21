@@ -92,6 +92,11 @@ export class AttackSessionMemory {
     this.looks.set(id, look);
   }
 
+  /** Старт скана обнуляет id трекера — старый разбор к новым следам не липнет. Hop не трогаем. */
+  forgetLooks(): void {
+    this.looks.clear();
+  }
+
   noteResidual(row: AttackResidual): void {
     this.residuals.push(row);
     if (this.residuals.length > RES_KEEP) this.residuals = this.residuals.slice(-RES_KEEP);
