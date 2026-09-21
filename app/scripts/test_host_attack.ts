@@ -8,6 +8,7 @@ import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/a
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
+import { matchAttackLook } from "../src/sense/attackLook";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -415,6 +416,15 @@ async function main(): Promise<void> {
     4,
   );
   check("память hop пишет новый канал того же следа", hopMem.hops.length === hopTracks.length + 1);
+  const lookPeers = [
+    { id: 1, freqMhz: 2440 },
+    { id: 2, freqMhz: 2440.3 },
+  ];
+  check(
+    "разбор IQ садится на свой след, не на соседний",
+    matchAttackLook(lookPeers, 2440.3)?.id === 2 && matchAttackLook(lookPeers, 2440)?.id === 1,
+  );
+  check("разбор дальше ворот трекера никому не пишется", matchAttackLook(lookPeers, 2441) == null);
   hopMem.noteLook(1, {
     freqMhz: 2440,
     kind: "tone",

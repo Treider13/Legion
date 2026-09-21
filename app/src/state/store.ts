@@ -58,7 +58,7 @@ import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { detectAttackHits } from "../sense/attackDetect";
 import { attackListenPlan } from "../sense/attackListen";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
-import { parseWorkerLook } from "../sense/attackLook";
+import { matchAttackLook, parseWorkerLook } from "../sense/attackLook";
 import { AttackSessionMemory } from "../sense/attackMemory";
 import { buildAttackScene, type AttackRow, type AttackSceneView } from "../sense/attackScene";
 import { type AttackAdvice, type AttackHintKind } from "../sense/attackAdvisor";
@@ -1292,7 +1292,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.memoryCap) gAttackMemory.noteWorker(r.memorySamples ?? 0, r.memoryCap, r.memoryMs ?? 0);
       if (!r.ok) return;
       for (const row of r.looks) {
-        const tr = live.find((t) => Math.abs(t.freqMhz - (row.freqMhz ?? 0)) < 0.35);
+        const tr = matchAttackLook(live, row.freqMhz ?? Number.NaN);
         if (tr) gAttackMemory.noteLook(tr.id, parseWorkerLook(row as unknown as Record<string, unknown>, row.freqMhz ?? 0));
       }
       if (residual) {
