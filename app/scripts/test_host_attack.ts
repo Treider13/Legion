@@ -32,6 +32,9 @@ import {
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let failures = 0;
 
@@ -75,6 +78,16 @@ async function main(): Promise<void> {
   check("хост FFT span чужих режимов 40", hostScanSpanMhz(56) === 40);
   check("soapy crop чужих режимов 0.5", SOAPY_CROP_FACTOR === 0.5);
   check("RESENSE_MS 1 с как был", RESENSE_MS === 1000);
+  const storeSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/state/store.ts"), "utf8");
+  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const armAttackHoldTimer"));
+  check(
+    "resense Атаки не зовёт DIO-40",
+    resenseSrc.includes("hostAttackScan") && resenseSrc.includes("attackListenPlan"),
+  );
+  check(
+    "тик скана сверяет gScanGen после await",
+    storeSrc.includes("let gScanGen = 0") && storeSrc.includes("scanGen !== gScanGen"),
+  );
   check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({

@@ -2164,6 +2164,15 @@ async function main(): Promise<void> {
     );
     check("tickScan: паттерн fpga fail-closed, не USB-handoff",
       fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff("));
+    check("tickScan: поколение после await (stop/playlist не пишет чужое окно)",
+      tickFn.includes("scanGen !== gScanGen") && storeSrc.includes("let gScanGen = 0"));
+  }
+  {
+    const resense = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const armAttackHoldTimer"));
+    check("resense Атаки: hostAttackScan, не DIO-40 hostScan в auto",
+      resense.includes("hostAttackScan") && resense.includes('scanPattern === "auto"'));
+    const stopScan = storeSrc.slice(storeSrc.indexOf("stopScan:"), storeSrc.indexOf("startTransmit:"));
+    check("stopScan бампает gScanGen", stopScan.includes("gScanGen += 1"));
   }
   check("живой автоперехват не подписывается «автономный эфир без сканера»",
     scanSrc.indexOf("fpgaAir") < scanSrc.indexOf("АВТОНОМНЫЙ ЭФИР") &&

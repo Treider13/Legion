@@ -522,6 +522,8 @@ const gSdr = new MockSdrBackend();
 let gLive = false;
 let gWalker: ScanWalker | null = null;
 let gScanTimer: ReturnType<typeof setInterval> | null = null;
+/** stopScan / новый startScan: старый tick после await hostAttackScan не пишет в новый обход. */
+let gScanGen = 0;
 let gTxWalk: ReturnType<typeof setInterval> | null = null;
 /** FPGA solo: прыжки LO через шлюз tune. Не скан и не recapture RAM. */
 let gSoloWalk: ReturnType<typeof setInterval> | null = null;
@@ -1077,14 +1079,28 @@ export const useLegion = create<LegionStore>((set, get) => {
         else gSdr.txOff();
       }
       let bins: ScanBin[] = [];
+      // Атака слушает 61.44/56. hostScan = DIO 40 — после этого слайса LO/ADC
+      // дёргались бы 61.44↔40 каждый RESENSE_MS. Чужие режимы этот путь не зовут.
+      const analogMhz = gLive ? catalogCaps(get().sdrId).analogBwMhz : gSdr.analogBwMhz();
+      const listen =
+        get().scanPattern === "auto"
+          ? attackListenPlan({ analogMhz, paintOwnsTx: false, paint: null })
+          : null;
       if (gLive) {
-        const win = await hostScan(heldMhz, hostScanSpanMhz(catalogCaps(get().sdrId).analogBwMhz), nBins);
+        const win = listen
+          ? await hostAttackScan(heldMhz, listen)
+          : await hostScan(heldMhz, hostScanSpanMhz(catalogCaps(get().sdrId).analogBwMhz), nBins);
         if (!win.ok) {
           pushLog("sys", win.reason || "re-sense fail — возвращаем TX");
           await restoreHeldTx(heldMhz);
           return "error";
         }
         bins = win.bins;
+      } else if (listen) {
+        bins = cropPsdBins(
+          gSdr.scanWindow(heldMhz, listen.fsHz / 1e6, Math.min(listen.fftN, 4096)),
+          listen.cropFactor,
+        );
       } else {
         bins = cropPsdBins(gSdr.scanWindow(heldMhz, hostScanSpanMhz(gSdr.analogBwMhz()), nBins));
       }
@@ -4022,6 +4038,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           clearInterval(gScanTimer);
           gScanTimer = null;
         }
+        gScanGen += 1;
+        const scanGen = gScanGen;
         const st = get();
         const caps = catalogCaps(st.sdrId);
         const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
@@ -4061,7 +4079,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         let inflight = false;
         let lastResenseAt = 0;
         const tickScan = async (): Promise<void> => {
-          if (!get().scanRunning || get().flashBusy) return;
+          if (scanGen !== gScanGen || !get().scanRunning || get().flashBusy) return;
           let bins: ScanBin[] = [];
           let centerMhz = 0;
           let detections: Detection[] = [];
@@ -4088,10 +4106,11 @@ export const useLegion = create<LegionStore>((set, get) => {
             const win = listen
               ? await hostAttackScan(centerMhz, listen)
               : await hostScan(centerMhz, spanMhz, nBins);
-            if (!get().scanRunning || get().flashBusy) return;
+            if (scanGen !== gScanGen || !get().scanRunning || get().flashBusy) return;
             if (win.txError) {
               pushLog("sys", win.txError);
               await get().stopTransmit();
+              if (scanGen !== gScanGen) return;
             }
             if (!win.ok) {
               pushLog("sys", win.reason || "scan fail");
@@ -4163,7 +4182,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           ) {
             lastResenseAt = Date.now();
             const rs = await resenseHeld(held, nBins);
-            if (!shouldContinuePriorityTick(rs)) return;
+            if (scanGen !== gScanGen || !shouldContinuePriorityTick(rs)) return;
           }
           if (!get().scanRunning || get().flashBusy || !get().transmitArmed) return;
           const after = get();
@@ -4195,6 +4214,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
 
     stopScan: () => {
+      gScanGen += 1;
       if (gScanTimer) {
         clearInterval(gScanTimer);
         gScanTimer = null;

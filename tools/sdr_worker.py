@@ -230,11 +230,13 @@ def attack_crop_factor(fs_hz: float, filter_hz: float) -> float:
     return min(0.49, max(0.0, 1.0 - filt / span))
 
 
-def attack_pick_fft_n(hint: int, available: int) -> int:
-    """4096 сразу; 8192 если в кольце хватает на Welch-8 (GQRX default)."""
+def attack_pick_fft_n(hint: int, available: int | None = None) -> int:
+    """8192 если просили и (available неизвестен — ждём в _wait_psd, либо уже хватает).
+    available=0 после hop не повод резать: кольцо пустое из-за reset, не из-за USB."""
     want = int(hint) if hint else ATTACK_FFT_N
-    need_full = welch_need_samples(ATTACK_FFT_N_FULL)
-    if want >= ATTACK_FFT_N_FULL and int(available) >= need_full:
+    if want < ATTACK_FFT_N_FULL:
+        return ATTACK_FFT_N
+    if available is None or int(available) >= welch_need_samples(ATTACK_FFT_N_FULL):
         return ATTACK_FFT_N_FULL
     return ATTACK_FFT_N
 
@@ -1337,8 +1339,8 @@ class Radio:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6, filt_mhz * 1e6)
-            avail = self._ring.available() if self._ring is not None else 0
-            fft_n = attack_pick_fft_n(hint, avail)
+            # hint, не available(): после LO hop кольцо сброшено, 8192 Welch ≈ 0.6 мс @ 61.44.
+            fft_n = attack_pick_fft_n(hint)
             spec = self._wait_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop, fft_n)
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}

@@ -297,6 +297,12 @@ def main() -> int:
         "attack FFT хватает → 8192",
         w.attack_pick_fft_n(8192, w.welch_need_samples(8192)) == 8192,
     )
+    check("attack FFT без available — ждём 8192", w.attack_pick_fft_n(8192) == 8192)
+    check(
+        "attack_scan не режет FFT по пустому кольцу после hop",
+        "fft_n = attack_pick_fft_n(hint)" in open(WORKER).read()
+        and "avail = self._ring.available() if self._ring is not None else 0" not in open(WORKER).read(),
+    )
     atk = rpc(
         proc,
         {
