@@ -268,7 +268,7 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     }
-  } else if (fam) {
+  } else if (fam && !(top && top.duty >= 0.7 && top.widthMhz >= 6)) {
     const span = familySpanWithPad(fam);
     let raw = clampPaintToCaps(span);
     const want = paintSpanMhz(span);

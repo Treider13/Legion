@@ -902,6 +902,40 @@ async function main(): Promise<void> {
     "hop-рамка по-прежнему семья уже виденных",
     hopAdvice.suggestPaint != null && paintSpanMhz(hopAdvice.suggestPaint) > 2,
   );
+  const boardOverHop = buildAttackAdvice({
+    tracks: [
+      track({ id: 40, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -28, streak: 8, maxStreak: 8 }),
+      ...[2410, 2414, 2418, 2422].map((f, i) =>
+        track({ id: 41 + i, freqMhz: f, widthMhz: 0.5, duty: 0.2, powerDbm: -55, streak: 1 }),
+      ),
+    ],
+    families: stitchHopFamilies(
+      [
+        track({ id: 40, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -28, streak: 8, maxStreak: 8 }),
+        ...[2410, 2414, 2418, 2422].map((f, i) =>
+          track({ id: 41 + i, freqMhz: f, widthMhz: 0.5, duty: 0.2, powerDbm: -55, streak: 1 }),
+        ),
+      ],
+      [],
+    ),
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "широкий борт не отдаёт рамку чужой hop-семье",
+    boardOverHop.suggestPaint != null &&
+      Math.abs(mid(boardOverHop.suggestPaint) - 5800) < 2 &&
+      paintSpanMhz(boardOverHop.suggestPaint) < 40,
+    `mid=${mid(boardOverHop.suggestPaint).toFixed(2)} span=${boardOverHop.suggestPaint ? paintSpanMhz(boardOverHop.suggestPaint).toFixed(1) : "нет"}`,
+  );
   check("сетка hop не называется одной радиосвязью", !hopAdvice.scene.includes("одна радиосвязь"));
   check("hop в информации — пульт", hopAdvice.scene.includes("Информация") && hopAdvice.scene.includes("пульт"));
 
