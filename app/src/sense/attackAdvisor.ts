@@ -5,7 +5,7 @@
 // ============================================================================
 import { atlasForTracks, classifyAttackFamily } from "./attackAtlas";
 import { familySpanWithPad, type AttackHopFamily } from "./attackFamily";
-import { readAttackInfo, type AttackInfo, type AttackInfoSnap } from "./attackInfo";
+import { attackLiveTracks, readAttackInfo, type AttackInfo, type AttackInfoSnap } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
 import type { AttackMemStats, AttackResidual } from "./attackMemory";
@@ -96,7 +96,7 @@ export function buildAttackAdvice(input: {
   snaps?: readonly AttackInfoSnap[];
   info?: AttackInfo;
 }): AttackAdvice {
-  const live = input.tracks.filter((t) => t.state !== "cooled");
+  const live = attackLiveTracks(input.tracks);
   const hints: AttackHint[] = [];
   let suggestPaint: AttackPaint | null = null;
 

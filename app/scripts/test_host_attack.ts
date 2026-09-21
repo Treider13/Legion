@@ -193,6 +193,32 @@ async function main(): Promise<void> {
     ownKept != null && ownKept.state !== "cooled",
     ownKept ? ownKept.state : "след пропал",
   );
+  const staleTr = new AttackTracker();
+  staleTr.update([shelfHit], 1, { centerMhz: 5800, spanMhz: 56 });
+  const quiet = { freqMhz: 915, fLowMhz: 914.7, fHighMhz: 915.3, widthMhz: 0.6, powerDbm: -50, noiseDbm: -90, snrDb: 40 };
+  for (let i = 0; i < 6; i++) staleTr.update([quiet], 2 + i, { centerMhz: 915, spanMhz: 56 });
+  const staleAdvice = buildAttackAdvice({
+    tracks: staleTr.snapshot(),
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 800, f2Mhz: 1000 }, { f1Mhz: 5600, f2Mhz: 5900 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  const staleMid = staleAdvice.suggestPaint
+    ? (staleAdvice.suggestPaint.f1Mhz + staleAdvice.suggestPaint.f2Mhz) / 2
+    : Number.NaN;
+  check(
+    "старая вспышка не забирает рамку у сигнала в окне",
+    Math.abs(staleMid - 915) < 2,
+    `mid=${staleMid.toFixed(2)}`,
+  );
 
   check("2.4 12 МГц sticky — цифровой класс", classifyAttackFamily({
     freqMhz: 2442, widthMhz: 12, duty: 0.85, streak: 8,

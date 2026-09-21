@@ -83,6 +83,22 @@ function liveState(state: AttackTrackState): boolean {
   return state === "new" || state === "confirmed" || state === "held";
 }
 
+/**
+ * Кто участвует в рамке. Подтверждённый след в другой полосе остаётся:
+ * его id и ход мощности ещё нужны. Одиночная вспышка, на которую этот
+ * обход уже не смотрит, целью не остаётся — иначе старый громкий пик
+ * забирает рамку у сигнала, который сейчас в окне.
+ */
+export function attackLiveTracks(tracks: readonly AttackTrack[]): AttackTrack[] {
+  let sweep = 0;
+  for (const t of tracks) if (t.lastSweep > sweep) sweep = t.lastSweep;
+  return tracks.filter((t) => {
+    if (!liveState(t.state)) return false;
+    if (t.state === "new" && t.lastSweep !== sweep) return false;
+    return true;
+  });
+}
+
 function mean(xs: readonly number[]): number {
   let s = 0;
   for (const x of xs) s += x;
@@ -272,7 +288,7 @@ export function readAttackInfo(input: {
 }): AttackInfo {
   const snaps = input.snaps ?? [];
   const tracks = input.tracks;
-  const live = tracks.filter((t) => liveState(t.state));
+  const live = attackLiveTracks(tracks);
   if (live.length === 0) return emptyInfo();
 
   const seen = buildSeen(tracks, snaps);
