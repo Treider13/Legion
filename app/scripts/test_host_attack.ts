@@ -929,6 +929,67 @@ async function main(): Promise<void> {
     memory: new AttackSessionMemory().stats(),
     transmitArmed: false,
   });
+  const handOverHop = buildAttackAdvice({
+    tracks: [
+      track({ id: 50, freqMhz: 915, widthMhz: 0.5, duty: 0.3, powerDbm: -20, streak: 4, maxStreak: 4 }),
+      ...[2410, 2414, 2418, 2422].map((f, i) =>
+        track({ id: 51 + i, freqMhz: f, widthMhz: 0.5, duty: 0.2, powerDbm: -55, streak: 1 }),
+      ),
+    ],
+    families: stitchHopFamilies(
+      [
+        track({ id: 50, freqMhz: 915, widthMhz: 0.5, duty: 0.3, powerDbm: -20, streak: 4, maxStreak: 4 }),
+        ...[2410, 2414, 2418, 2422].map((f, i) =>
+          track({ id: 51 + i, freqMhz: f, widthMhz: 0.5, duty: 0.2, powerDbm: -55, streak: 1 }),
+        ),
+      ],
+      [],
+    ),
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "громкий пульт не отдаёт рамку hop-семье другой полосы",
+    handOverHop.suggestPaint != null &&
+      Math.abs(mid(handOverHop.suggestPaint) - 915) < 2 &&
+      paintSpanMhz(handOverHop.suggestPaint) < 5,
+    `mid=${mid(handOverHop.suggestPaint).toFixed(2)} span=${handOverHop.suggestPaint ? paintSpanMhz(handOverHop.suggestPaint).toFixed(1) : "нет"}`,
+  );
+  const loudHop = [2440, 2444, 2448, 2452].map((f, i) =>
+    track({ id: 70 + i, freqMhz: f, widthMhz: 0.4, duty: 0.2, powerDbm: -25, streak: 1 }),
+  );
+  const quietHop = [868, 870, 872, 874].map((f, i) =>
+    track({ id: 60 + i, freqMhz: f, widthMhz: 0.4, duty: 0.2, powerDbm: -60, streak: 1 }),
+  );
+  const twoFamilies = buildAttackAdvice({
+    tracks: [...quietHop, ...loudHop],
+    families: stitchHopFamilies([...quietHop, ...loudHop], []),
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "рамка семьи — та, где громкая вспышка, не первая в списке",
+    twoFamilies.suggestPaint != null &&
+      twoFamilies.suggestPaint.f1Mhz > 2400 &&
+      twoFamilies.suggestPaint.f2Mhz < 2500,
+    `f1=${twoFamilies.suggestPaint?.f1Mhz.toFixed(2)} f2=${twoFamilies.suggestPaint?.f2Mhz.toFixed(2)}`,
+  );
   check(
     "широкий борт не отдаёт рамку чужой hop-семье",
     boardOverHop.suggestPaint != null &&

@@ -140,7 +140,11 @@ export function buildAttackAdvice(input: {
       ? live.find((t) => t.id === info.preferWideId) ?? null
       : null;
   const framed = veto ?? prefer;
-  let fam: AttackHopFamily | null = input.families[0] ?? null;
+  // Семья той частоты, которую обводим. families[0] — другая полоса:
+  // пульт 915 МГц отдавал кнопку семье на 2416, а громкие 2440 — тихой семье на 868.
+  const focusId = top?.id ?? null;
+  let fam: AttackHopFamily | null =
+    focusId == null ? null : (input.families.find((f) => f.members.includes(focusId)) ?? null);
   if (framed) {
     top = framed;
     fam =
@@ -268,7 +272,7 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     }
-  } else if (fam && !(top && top.duty >= 0.7 && top.widthMhz >= 6)) {
+  } else if (fam) {
     const span = familySpanWithPad(fam);
     let raw = clampPaintToCaps(span);
     const want = paintSpanMhz(span);
