@@ -892,6 +892,41 @@ async function main(): Promise<void> {
       `mid=${beaconMid.toFixed(2)} ${beacon.advice.scene}`,
     );
   }
+  // Семья 2400…2479 шире руки 40 МГц. Срез от низа оставлял кнопку на 2400…2440,
+  // канал 2479 в неё не входил.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    let ts = 1000;
+    for (let f = 2400; f <= 2479; f++) {
+      const snap = tr.update(
+        [{ freqMhz: f, fLowMhz: f - 0.3, fHighMhz: f + 0.3, widthMhz: 0.6, powerDbm: -40, noiseDbm: -90, snrDb: 50 }],
+        ts,
+        { centerMhz: f, spanMhz: 56 },
+      );
+      mem.notePowers(ts, snap, tr.currentSweep(), f, 56);
+      mem.noteHops(snap, ts);
+      ts += 20;
+    }
+    const wideHop = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: [],
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const hp = wideHop.advice.suggestPaint;
+    check(
+      "широкая сетка hop держит текущий канал",
+      hp != null && 2479 >= hp.f1Mhz && 2479 <= hp.f2Mhz && paintSpanMhz(hp) <= ATTACK_TX_MAX_MHZ + 1e-6 && hp.f1Mhz > 2420,
+      hp ? `${hp.f1Mhz.toFixed(2)}…${hp.f2Mhz.toFixed(2)}` : "нет рамки",
+    );
+  }
 
   const txMem = new AttackSessionMemory();
   const shelfAt = (lastSweep: number) =>

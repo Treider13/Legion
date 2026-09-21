@@ -71,6 +71,35 @@ function strongest(
   return live.reduce((a, b) => (b.powerDbm > a.powerDbm ? b : a));
 }
 
+/**
+ * Рука 40 МГц на уже виденной семье. Срез от нижнего края оставлял
+ * 2400…2440, когда обводился канал 2479. Окно содержит эту частоту
+ * и не вылезает за семью — следующий канал не дорисовывается.
+ */
+function paintOverFamily(fam: AttackHopFamily, focusMhz: number): { f1Mhz: number; f2Mhz: number } {
+  const span = familySpanWithPad(fam);
+  if (paintSpanMhz(span) <= ATTACK_TX_MAX_MHZ) return span;
+  let f1 = focusMhz - ATTACK_TX_MAX_MHZ / 2;
+  let f2 = focusMhz + ATTACK_TX_MAX_MHZ / 2;
+  if (f1 < span.f1Mhz) {
+    f2 += span.f1Mhz - f1;
+    f1 = span.f1Mhz;
+  }
+  if (f2 > span.f2Mhz) {
+    f1 -= f2 - span.f2Mhz;
+    f2 = span.f2Mhz;
+  }
+  if (f2 - f1 > ATTACK_TX_MAX_MHZ) f1 = f2 - ATTACK_TX_MAX_MHZ;
+  if (focusMhz < f1) {
+    f1 = Math.max(span.f1Mhz, focusMhz);
+    f2 = Math.min(span.f2Mhz, f1 + ATTACK_TX_MAX_MHZ);
+  } else if (focusMhz > f2) {
+    f2 = Math.min(span.f2Mhz, focusMhz);
+    f1 = Math.max(span.f1Mhz, f2 - ATTACK_TX_MAX_MHZ);
+  }
+  return { f1Mhz: f1, f2Mhz: f2 };
+}
+
 function twoFloor(tracks: readonly AttackTrack[], windowMhz: number): boolean {
   return atlasForTracks(tracks, windowMhz).some((t) => t.atlas.id === "two-floor");
 }
@@ -198,21 +227,15 @@ export function buildAttackAdvice(input: {
       });
     } else if (fam) {
       const span = familySpanWithPad(fam);
-      let raw = clampPaintToCaps(span);
+      const raw = clampPaintToCaps(paintOverFamily(fam, top.freqMhz));
       const want = paintSpanMhz(span);
-      if (want > ATTACK_TX_MAX_MHZ) {
-        raw = clampPaintToCaps({
-          f1Mhz: fam.fLowMhz,
-          f2Mhz: fam.fLowMhz + ATTACK_TX_MAX_MHZ,
-        });
-      }
       const clipped = allowedPaint(raw, input.bands);
       suggestPaint = clipped;
       hints.push({
         kind: "paint",
         title: "Рамка",
         text: clipped
-          ? `Узкие пакеты, уже виденные: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Канал не угадываем.`
+          ? `Узкие пакеты, уже виденные: ${clipped.f1Mhz.toFixed(2)}…${clipped.f2Mhz.toFixed(2)} МГц. Канал не угадываем.${want > ATTACK_TX_MAX_MHZ ? ` Сетка шире руки: видно ≈ ${want.toFixed(1)} МГц, залить можно ${ATTACK_TX_MAX_MHZ}.` : ""}`
           : `Узкие пакеты ${raw.f1Mhz.toFixed(2)}…${raw.f2Mhz.toFixed(2)} МГц вне коридора — взять нельзя.`,
         why: "информация: уже виденные вспышки",
         applyLabel: clipped ? "Взять рамку семьи" : null,
@@ -261,8 +284,7 @@ export function buildAttackAdvice(input: {
         holdMs: null,
       });
     } else if (hop[0] && fam) {
-      const span = familySpanWithPad(fam);
-      const raw = clampPaintToCaps(span);
+      const raw = clampPaintToCaps(paintOverFamily(fam, hop[0].freqMhz));
       const clipped = allowedPaint(raw, input.bands);
       suggestPaint = clipped;
       hints.push({
@@ -280,14 +302,8 @@ export function buildAttackAdvice(input: {
     }
   } else if (fam) {
     const span = familySpanWithPad(fam);
-    let raw = clampPaintToCaps(span);
+    const raw = clampPaintToCaps(paintOverFamily(fam, top.freqMhz));
     const want = paintSpanMhz(span);
-    if (want > ATTACK_TX_MAX_MHZ) {
-      raw = clampPaintToCaps({
-        f1Mhz: fam.fLowMhz,
-        f2Mhz: fam.fLowMhz + ATTACK_TX_MAX_MHZ,
-      });
-    }
     const clipped = allowedPaint(raw, input.bands);
     suggestPaint = clipped;
     const extra =
