@@ -219,6 +219,71 @@ async function main(): Promise<void> {
     Math.abs(staleMid - 915) < 2,
     `mid=${staleMid.toFixed(2)}`,
   );
+  const flashGone = new AttackTracker();
+  flashGone.update(
+    [{ freqMhz: 2440, fLowMhz: 2439.7, fHighMhz: 2440.3, widthMhz: 0.6, powerDbm: -18, noiseDbm: -90, snrDb: 72 }],
+    1,
+    { centerMhz: 2440, spanMhz: 56 },
+  );
+  for (let i = 0; i < 12; i++) flashGone.update([], 2 + i, { centerMhz: 5800, spanMhz: 56 });
+  const goneAdvice = buildAttackAdvice({
+    tracks: flashGone.snapshot(),
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }, { f1Mhz: 5600, f2Mhz: 5900 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    sweep: flashGone.currentSweep(),
+  });
+  check(
+    "пустые обходы гасят рамку одиночной вспышки",
+    goneAdvice.suggestPaint == null,
+    `mid=${goneAdvice.suggestPaint ? ((goneAdvice.suggestPaint.f1Mhz + goneAdvice.suggestPaint.f2Mhz) / 2).toFixed(2) : "нет"}`,
+  );
+  const flashSeen = new AttackTracker();
+  const flash = { freqMhz: 2440, fLowMhz: 2439.7, fHighMhz: 2440.3, widthMhz: 0.6, powerDbm: -18, noiseDbm: -90, snrDb: 72 };
+  flashSeen.update([flash], 1, { centerMhz: 2440, spanMhz: 56 });
+  const fresh = buildAttackAdvice({
+    tracks: flashSeen.snapshot(),
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    sweep: flashSeen.currentSweep(),
+  });
+  const freshMid = fresh.suggestPaint ? (fresh.suggestPaint.f1Mhz + fresh.suggestPaint.f2Mhz) / 2 : Number.NaN;
+  check("вспышка этого обхода остаётся рамкой", Math.abs(freshMid - 2440) < 2, `mid=${freshMid.toFixed(2)}`);
+  flashSeen.update([], 2, { centerMhz: 2440, spanMhz: 56 });
+  flashSeen.update([], 3, { centerMhz: 2440, spanMhz: 56 });
+  const flashMissedAdvice = buildAttackAdvice({
+    tracks: flashSeen.snapshot(),
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    sweep: flashSeen.currentSweep(),
+  });
+  check("промах в том же окне не держит рамку вспышки", flashMissedAdvice.suggestPaint == null);
 
   check("2.4 12 МГц sticky — цифровой класс", classifyAttackFamily({
     freqMhz: 2442, widthMhz: 12, duty: 0.85, streak: 8,
@@ -1067,6 +1132,29 @@ async function main(): Promise<void> {
   check(
     "два этажа в одной корзине по-прежнему с широкого",
     floorAdvice.hints.some((h) => h.kind === "paint" && h.text.includes("Сначала широкое")),
+  );
+  const louderShelf = buildAttackAdvice({
+    tracks: [
+      track({ id: 80, freqMhz: 5780, widthMhz: 20, duty: 0.9, powerDbm: -40, streak: 8, maxStreak: 8 }),
+      track({ id: 81, freqMhz: 5820, widthMhz: 12, duty: 0.9, powerDbm: -22, streak: 8, maxStreak: 8 }),
+      track({ id: 82, freqMhz: 5760, widthMhz: 0.5, duty: 0.2, powerDbm: -15, streak: 1, maxStreak: 1 }),
+    ],
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: [{ f1Mhz: 5600, f2Mhz: 5900 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  check(
+    "два этажа берут громкую полку, не первую в списке",
+    louderShelf.suggestPaint != null && Math.abs(mid(louderShelf.suggestPaint) - 5820) < 2,
+    `mid=${mid(louderShelf.suggestPaint).toFixed(2)}`,
   );
   check("пустая волна = узкий класс", waveClassOf(null) === "narrow");
   const scene = buildAttackScene({

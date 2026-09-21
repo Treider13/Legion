@@ -43,6 +43,8 @@ export function buildAttackScene(input: {
   holdMs: number;
   bands: readonly AllowBand[];
   transmitArmed: boolean;
+  /** Номер обхода трекера. Карточка его не выдумывает из lastSweep. */
+  sweep?: number;
 }): AttackSceneView {
   const widths = new Map<number, AttackWidths>();
   const looks = new Map<number, AttackLook>();
@@ -65,6 +67,7 @@ export function buildAttackScene(input: {
   const info = readAttackInfo({
     tracks: input.tracks,
     snaps: input.memory.powerSnaps(),
+    sweep: input.sweep,
   });
   const roleOf = new Map(info.roles.map((r) => [r.trackId, r.roleRu]));
   const rows: AttackRow[] = atlas.map((t) => {
@@ -94,6 +97,7 @@ export function buildAttackScene(input: {
     transmitArmed: input.transmitArmed,
     snaps: input.memory.powerSnaps(),
     info,
+    sweep: input.sweep,
   });
   return {
     rows,

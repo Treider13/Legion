@@ -95,8 +95,10 @@ export function buildAttackAdvice(input: {
   transmitArmed: boolean;
   snaps?: readonly AttackInfoSnap[];
   info?: AttackInfo;
+  /** Номер обхода трекера. Без него берётся последний lastSweep на следах. */
+  sweep?: number;
 }): AttackAdvice {
-  const live = attackLiveTracks(input.tracks);
+  const live = attackLiveTracks(input.tracks, input.sweep);
   const hints: AttackHint[] = [];
   let suggestPaint: AttackPaint | null = null;
 
@@ -133,6 +135,7 @@ export function buildAttackAdvice(input: {
     readAttackInfo({
       tracks: input.tracks,
       snaps: input.snaps,
+      sweep: input.sweep,
     });
   const veto = info.redirectId != null ? live.find((t) => t.id === info.redirectId) ?? null : null;
   const prefer =
@@ -235,7 +238,7 @@ export function buildAttackAdvice(input: {
   } else if (floors && top) {
     const video = live.filter((t) => t.duty >= 0.7 && t.widthMhz >= 6);
     const hop = live.filter((t) => t.duty < 0.45 && t.widthMhz <= 2);
-    const v = video[0];
+    const v = strongest(video);
     if (v) {
       const vw = input.widths.get(v.id);
       const span = vw ? honestWidthMhz(vw, v.widthMhz) : v.widthMhz;

@@ -89,12 +89,17 @@ function liveState(state: AttackTrackState): boolean {
  * обход уже не смотрит, целью не остаётся — иначе старый громкий пик
  * забирает рамку у сигнала, который сейчас в окне.
  */
-export function attackLiveTracks(tracks: readonly AttackTrack[]): AttackTrack[] {
-  let sweep = 0;
-  for (const t of tracks) if (t.lastSweep > sweep) sweep = t.lastSweep;
+export function attackLiveTracks(tracks: readonly AttackTrack[], sweep?: number): AttackTrack[] {
+  // Промах не двигает lastSweep. Без номера обхода трекера вспышка
+  // кажется «только что», хотя окно уже ушло или на неё смотрели и её нет.
+  let current = sweep;
+  if (current == null) {
+    current = 0;
+    for (const t of tracks) if (t.lastSweep > current) current = t.lastSweep;
+  }
   return tracks.filter((t) => {
     if (!liveState(t.state)) return false;
-    if (t.state === "new" && t.lastSweep !== sweep) return false;
+    if (t.state === "new" && t.lastSweep !== current) return false;
     return true;
   });
 }
@@ -288,10 +293,12 @@ function emptyInfo(): AttackInfo {
 export function readAttackInfo(input: {
   tracks: readonly AttackTrack[];
   snaps?: readonly AttackInfoSnap[];
+  /** Номер обхода трекера. Промах его не пишет в lastSweep. */
+  sweep?: number;
 }): AttackInfo {
   const snaps = input.snaps ?? [];
   const tracks = input.tracks;
-  const live = attackLiveTracks(tracks);
+  const live = attackLiveTracks(tracks, input.sweep);
   if (live.length === 0) return emptyInfo();
 
   const seen = buildSeen(tracks, snaps);

@@ -808,6 +808,7 @@ function attackViewOf(
     holdMs: s.attackHoldMs,
     bands: s.sdrBands,
     transmitArmed: s.transmitArmed,
+    sweep: gAttackTracker.currentSweep(),
   });
 }
 
