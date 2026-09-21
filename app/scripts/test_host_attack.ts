@@ -892,6 +892,58 @@ async function main(): Promise<void> {
       `mid=${beaconMid.toFixed(2)} ${beacon.advice.scene}`,
     );
   }
+  // Окно уже на 5.8. Ближний бин этого спектра — не ширина пульта 915.
+  // Раньше кнопка была 895…935 МГц: 56 МГц чужого окна, обрезанные рукой 40.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    let ts = 1000;
+    const videoP = [-30, -30, -30, -50];
+    for (let i = 0; i < 4; i++) {
+      const a = tr.update(
+        [{ freqMhz: 915, fLowMhz: 914.75, fHighMhz: 915.25, widthMhz: 0.5, powerDbm: -40, noiseDbm: -90, snrDb: 50 }],
+        ts, { centerMhz: 915, spanMhz: 56 },
+      );
+      mem.notePowers(ts, a, tr.currentSweep(), 915, 56);
+      ts += 100;
+      const c = tr.update(
+        [{ freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810, widthMhz: 20, powerDbm: videoP[i]!, noiseDbm: -90, snrDb: 40 }],
+        ts, { centerMhz: 5800, spanMhz: 56 },
+      );
+      mem.notePowers(ts, c, tr.currentSweep(), 5800, 56);
+      ts += 100;
+    }
+    const bins5800 = [];
+    for (let i = 0; i < 400; i++) {
+      const f = 5800 - 28 + (56 * i) / 399;
+      bins5800.push({ freqMhz: f, powerDbm: f >= 5790 && f <= 5810 ? -30 : -92 });
+    }
+    const foreign = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: bins5800,
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const fp = foreign.advice.suggestPaint;
+    const hand = foreign.rows.find((r) => Math.abs(r.freqMhz - 915) < 1);
+    const board = foreign.rows.find((r) => Math.abs(r.freqMhz - 5800) < 1);
+    check(
+      "чужое окно не раздаёт пульту ширину полки",
+      fp != null && 915 >= fp.f1Mhz && 915 <= fp.f2Mhz && paintSpanMhz(fp) < 2
+        && hand != null && hand.width26Mhz < 2
+        && board != null && board.width26Mhz > 10
+        && foreign.advice.scene.includes("тень"),
+      fp && hand && board
+        ? `paint ${fp.f1Mhz.toFixed(2)}…${fp.f2Mhz.toFixed(2)} hand26=${hand.width26Mhz.toFixed(2)} board26=${board.width26Mhz.toFixed(2)}`
+        : "нет рамки",
+    );
+  }
   // Семья 2400…2479 шире руки 40 МГц. Срез от низа оставлял кнопку на 2400…2440,
   // канал 2479 в неё не входил.
   {

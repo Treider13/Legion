@@ -7,7 +7,7 @@ import { buildAttackAdvice, type AttackAdvice } from "./attackAdvisor";
 import { readAttackInfo } from "./attackInfo";
 import { stitchHopFamilies, type AttackHopFamily } from "./attackFamily";
 import { lookFromBins, type AttackLook } from "./attackLook";
-import { measureHitWidths, type AttackWidths } from "./attackMeasure";
+import { measureHitWidths, spectrumCoversMhz, type AttackWidths } from "./attackMeasure";
 import { memoryLineRu, type AttackSessionMemory } from "./attackMemory";
 import type { AttackPaint } from "./attackPaint";
 import type { AttackTrack } from "./attackTracks";
@@ -49,14 +49,17 @@ export function buildAttackScene(input: {
   const widths = new Map<number, AttackWidths>();
   const looks = new Map<number, AttackLook>();
   for (const t of input.tracks) {
-    const w = input.bins.length ? measureHitWidths(input.bins, t.freqMhz) : {
-      width3Mhz: t.widthMhz,
-      width26Mhz: t.widthMhz,
-      occ99Mhz: t.widthMhz,
-    };
+    // Спектр этого обхода чужую частоту не содержит. Ширина хита — та,
+    // что трекер записал, когда частота была в окне. Разбор чужого окна
+    // к этому следу не приписываем.
+    const seenHere = spectrumCoversMhz(input.bins, t.freqMhz);
+    const w: AttackWidths = seenHere
+      ? measureHitWidths(input.bins, t.freqMhz)
+      : { width3Mhz: t.widthMhz, width26Mhz: t.widthMhz, occ99Mhz: t.widthMhz };
     widths.set(t.id, w);
     const remembered = input.memory.looks.get(t.id);
-    looks.set(t.id, remembered ?? lookFromBins(input.bins, t.freqMhz, w));
+    if (remembered) looks.set(t.id, remembered);
+    else if (seenHere) looks.set(t.id, lookFromBins(input.bins, t.freqMhz, w));
   }
   const families = stitchHopFamilies(input.tracks, input.memory.hopMhz());
   const famOf = new Map<number, string>();

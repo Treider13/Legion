@@ -7,6 +7,23 @@
 import { finiteDbm } from "./labPsd";
 import type { ScanBin } from "../sdr/types";
 
+/**
+ * Частота лежит в этом спектре. Ближний бин чужого окна — не замер:
+ * окно на 5800 не имеет права назвать ширину 915.
+ */
+export function spectrumCoversMhz(bins: readonly ScanBin[], freqMhz: number): boolean {
+  if (bins.length === 0 || !Number.isFinite(freqMhz)) return false;
+  let lo = bins[0]!.freqMhz;
+  let hi = lo;
+  for (let i = 1; i < bins.length; i++) {
+    const f = bins[i]!.freqMhz;
+    if (f < lo) lo = f;
+    if (f > hi) hi = f;
+  }
+  const step = bins.length > 1 ? Math.abs(bins[1]!.freqMhz - bins[0]!.freqMhz) : 0;
+  return freqMhz >= lo - step && freqMhz <= hi + step;
+}
+
 function peakIndex(bins: readonly ScanBin[], peakMhz: number): number {
   let best = 0;
   let dmin = Number.POSITIVE_INFINITY;
@@ -26,7 +43,7 @@ function dbmToLin(dbm: number): number {
 
 /** x дБ ниже пика, непрерывный проход влево/вправо. */
 export function widthXdBMhz(bins: readonly ScanBin[], peakMhz: number, xDb: number): number {
-  if (bins.length === 0) return 0;
+  if (bins.length === 0 || !spectrumCoversMhz(bins, peakMhz)) return 0;
   const i = peakIndex(bins, peakMhz);
   const peak = bins[i].powerDbm;
   if (!finiteDbm(peak)) return 0;
@@ -48,7 +65,7 @@ export function width26dbMhz(bins: readonly ScanBin[], peakMhz: number): number 
 
 /** ITU-R SM.443 §3: span ≈ 1.5× ожидаемой полосы вокруг пика, затем β/2 = 0.5%. */
 export function occupied99Mhz(bins: readonly ScanBin[], peakMhz: number): number {
-  if (bins.length < 4) return 0;
+  if (bins.length < 4 || !spectrumCoversMhz(bins, peakMhz)) return 0;
   const i = peakIndex(bins, peakMhz);
   const w26 = widthXdBMhz(bins, peakMhz, 26);
   const w3 = widthXdBMhz(bins, peakMhz, 3);
@@ -114,7 +131,7 @@ export function binsAroundPeak(
   halfMhz: number,
   maxN = 512,
 ): ScanBin[] {
-  if (bins.length === 0) return [];
+  if (bins.length === 0 || !spectrumCoversMhz(bins, peakMhz)) return [];
   const half = Math.max(halfMhz, 0.3);
   const lo = peakMhz - half;
   const hi = peakMhz + half;
