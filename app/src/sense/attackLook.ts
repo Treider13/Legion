@@ -3,6 +3,7 @@
 // не имя борта. Ответ воркера attack_think или запас с одних бинов.
 // ============================================================================
 import { binsAroundPeak, cepstrumPeak, spectralFlatness, type AttackWidths } from "./attackMeasure";
+import { ATTACK_ASSOC_MHZ } from "./attackTracks";
 import type { ScanBin } from "../sdr/types";
 
 export type AttackLookKind = "tone" | "ofdm" | "cycle" | "noise" | "unknown";
@@ -82,6 +83,48 @@ export function parseWorkerLook(raw: Record<string, unknown>, freqMhz: number): 
     leftover: raw.leftover == null ? null : Number(raw.leftover),
     source: "iq",
   };
+}
+
+/**
+ * Кого отдать воркеру IQ. Он режет вырез вокруг текущей стоянки.
+ * След вне этого окна (915 при слухе на 5800) даёт алиас чужого кадра,
+ * и разбор потом висит на чужой частоте. Берём громкие следы внутри окна,
+ * не первые по времени создания: hop оставляет десятки старых id.
+ */
+export function pickAttackThinkTracks<T extends { freqMhz: number; powerDbm: number; state: string }>(
+  tracks: readonly T[],
+  centerMhz: number,
+  spanMhz: number,
+  limit = 3,
+): T[] {
+  if (!Number.isFinite(centerMhz) || !(spanMhz > 0) || limit <= 0) return [];
+  const half = spanMhz / 2;
+  return tracks
+    .filter((t) => t.state !== "cooled" && Math.abs(t.freqMhz - centerMhz) <= half)
+    .sort((a, b) => b.powerDbm - a.powerDbm)
+    .slice(0, limit);
+}
+
+/**
+ * Разбор IQ садится на ближайший след и только внутри ворот трекера (0.2 МГц).
+ * Первый след в 0.35 МГц забирал чужой разбор: 2440.00 получал OFDM с 2440.30.
+ */
+export function matchAttackLook<T extends { freqMhz: number }>(
+  tracks: readonly T[],
+  freqMhz: number,
+): T | null {
+  if (!Number.isFinite(freqMhz)) return null;
+  let best: T | null = null;
+  let bestD = Infinity;
+  for (const t of tracks) {
+    const d = Math.abs(t.freqMhz - freqMhz);
+    if (d < bestD) {
+      best = t;
+      bestD = d;
+    }
+  }
+  if (best == null || bestD > ATTACK_ASSOC_MHZ) return null;
+  return best;
 }
 
 export function lookRu(look: AttackLook | undefined): string {

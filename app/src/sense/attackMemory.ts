@@ -5,6 +5,7 @@
 // ============================================================================
 import { bandBucket } from "./attackAtlas";
 import type { AttackHopFamily } from "./attackFamily";
+import type { AttackInfoSnap } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { ATTACK_ASSOC_MHZ, type AttackTrack } from "./attackTracks";
 
@@ -34,6 +35,10 @@ export interface AttackMemStats {
 const HOP_KEEP = 512;
 const SCENE_KEEP = 96;
 const RES_KEEP = 24;
+/** Столько последних взглядов хранится на каждый след, а не на все окна скана. */
+const POWER_KEEP = 48;
+/** Остывшие id, которых уже нет в снимке трекера. Живые следы сюда не попадают. */
+const POWER_GHOST_IDS = 32;
 const SCENE_MIN_MS = 400;
 
 export class AttackSessionMemory {
@@ -41,6 +46,9 @@ export class AttackSessionMemory {
   scenes: Array<{ ts: number; n: number; bands: string }> = [];
   residuals: AttackResidual[] = [];
   looks = new Map<number, AttackLook>();
+  /** Мощность по id трекера. Только Атака. Один обход — один замер. */
+  powers: AttackInfoSnap[] = [];
+  private lastPowerSweep = 0;
   workerSamples = 0;
   workerCap = 0;
   workerMs = 0;
@@ -51,6 +59,8 @@ export class AttackSessionMemory {
     this.scenes = [];
     this.residuals = [];
     this.looks.clear();
+    this.powers = [];
+    this.lastPowerSweep = 0;
     this.lastHopById.clear();
     this.workerSamples = 0;
     this.workerCap = 0;
@@ -80,6 +90,83 @@ export class AttackSessionMemory {
     if (this.hops.length > HOP_KEEP) this.hops = this.hops.slice(-HOP_KEEP);
   }
 
+  /**
+   * Один замер на обход трекера. Пишет только то, что этот обход реально видел:
+   * свежий хит, либо след в окне и промах. Старую мощность не повторяет.
+   * Карточка, «взять» и разбор IQ сюда не входят — они не новый взгляд на эфир.
+   * ownTxMhz — частоты, которые этот обход сам вычеркнул из ленты (свой TX).
+   * По ним нет ни хита, ни промаха: энергия вырезана до трекера, полка не «села».
+   */
+  notePowers(
+    ts: number,
+    tracks: readonly AttackTrack[],
+    sweep: number,
+    centerMhz: number,
+    spanMhz: number,
+    ownTxMhz?: (freqMhz: number) => boolean,
+  ): void {
+    if (!(sweep > this.lastPowerSweep)) return;
+    this.lastPowerSweep = sweep;
+    const half = spanMhz > 0 ? spanMhz / 2 : 0;
+    const rows: AttackInfoSnap["rows"] = [];
+    for (const t of tracks) {
+      const measured = t.lastSweep === sweep && t.state !== "cooled";
+      if (!measured && ownTxMhz?.(t.freqMhz)) continue;
+      const inView = half > 0 && Math.abs(t.freqMhz - centerMhz) <= half;
+      if (!measured && !inView) continue;
+      rows.push({
+        id: t.id,
+        freqMhz: t.freqMhz,
+        powerDbm: t.powerDbm,
+        widthMhz: t.widthMhz,
+        duty: t.duty,
+        firstSweep: t.firstSweep,
+        state: t.state,
+        measured,
+      });
+    }
+    if (rows.length === 0) return;
+    this.powers.push({ ts, rows });
+    this.retainPerTrack(new Set(tracks.map((t) => t.id)));
+  }
+
+  /**
+   * Чужое окно и пустой обход своего TX не затирают замеры другой частоты.
+   * Кольцо общее на все окна оставляло у полки 1.2 и 5.8 ГГц по три точки
+   * вместо хода, и ретранслятор не назывался.
+   */
+  private retainPerTrack(liveIds: ReadonlySet<number>): void {
+    const kept = new Map<number, number>();
+    for (let i = this.powers.length - 1; i >= 0; i--) {
+      const snap = this.powers[i]!;
+      const rows: AttackInfoSnap["rows"] = [];
+      for (const row of snap.rows) {
+        const n = kept.get(row.id) ?? 0;
+        if (n >= POWER_KEEP) continue;
+        kept.set(row.id, n + 1);
+        rows.push(row);
+      }
+      snap.rows = rows;
+    }
+    this.powers = this.powers.filter((s) => s.rows.length > 0);
+    const ghostNewest = new Map<number, number>();
+    for (const snap of this.powers) {
+      for (const row of snap.rows) {
+        if (liveIds.has(row.id)) continue;
+        ghostNewest.set(row.id, snap.ts);
+      }
+    }
+    if (ghostNewest.size <= POWER_GHOST_IDS) return;
+    const dropIds = new Set(
+      [...ghostNewest.entries()]
+        .sort((a, b) => a[1] - b[1])
+        .slice(0, ghostNewest.size - POWER_GHOST_IDS)
+        .map(([id]) => id),
+    );
+    for (const snap of this.powers) snap.rows = snap.rows.filter((r) => !dropIds.has(r.id));
+    this.powers = this.powers.filter((s) => s.rows.length > 0);
+  }
+
   noteScene(ts: number, tracks: readonly AttackTrack[]): void {
     if (this.scenes.length && ts - this.scenes[this.scenes.length - 1]!.ts < SCENE_MIN_MS) return;
     const live = tracks.filter((t) => t.state !== "cooled");
@@ -92,9 +179,15 @@ export class AttackSessionMemory {
     this.looks.set(id, look);
   }
 
-  /** Старт скана обнуляет id трекера — старый разбор к новым следам не липнет. Hop не трогаем. */
+  /** Старт скана обнуляет id трекера — старый разбор и ряд мощности к новым id не липнут. Hop не трогаем. */
   forgetLooks(): void {
     this.looks.clear();
+    this.powers = [];
+    this.lastPowerSweep = 0;
+  }
+
+  powerSnaps(): readonly AttackInfoSnap[] {
+    return this.powers;
   }
 
   noteResidual(row: AttackResidual): void {

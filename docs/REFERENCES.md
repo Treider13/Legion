@@ -75,6 +75,9 @@ BATC, Hackaday, IEEE).
 | [njavro/SpectralEye](https://github.com/njavro/SpectralEye) | нет | Cesium + опциональный Sionna RT | Карта мощности ≠ «SJR kill». Другой продукт |
 | [AsaqeLee/EW-THREAT-DETECTION-SYSTEM](https://github.com/AsaqeLee/EW-THREAT-DETECTION-SYSTEM) | MIT | Flask, RSS log-distance, 8 виртуальных станций | Скан находит частоту, не координаты. Один SDR ≠ геолокация |
 
+Разбор поля C-UAS / DroneID / акустики / пассивного радара по исходникам
+(2026-09-21, код не копировали): [analysis-cuas-field.md](analysis-cuas-field.md).
+
 ## Ровесники того же класса прибора (разбор, код не копировали)
 
 Полный текст: [analysis-peer-projects.md](analysis-peer-projects.md).

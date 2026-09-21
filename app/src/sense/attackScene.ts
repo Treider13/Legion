@@ -1,12 +1,13 @@
 // ============================================================================
-// LEGION — сборка сцены Атаки: ширины, семьи, разбор, совет, память.
+// LEGION — сборка сцены Атаки: ширины, семьи, разбор, помощник, память.
 // Не пишет в рамку / волну / ПЕРЕДАТЬ.
 // ============================================================================
 import { atlasForTracks, type AttackAtlasRow } from "./attackAtlas";
 import { buildAttackAdvice, type AttackAdvice } from "./attackAdvisor";
+import { readAttackInfo } from "./attackInfo";
 import { stitchHopFamilies, type AttackHopFamily } from "./attackFamily";
 import { lookFromBins, type AttackLook } from "./attackLook";
-import { measureHitWidths, type AttackWidths } from "./attackMeasure";
+import { measureHitWidths, spectrumCoversMhz, type AttackWidths } from "./attackMeasure";
 import { memoryLineRu, type AttackSessionMemory } from "./attackMemory";
 import type { AttackPaint } from "./attackPaint";
 import type { AttackTrack } from "./attackTracks";
@@ -21,6 +22,8 @@ export interface AttackRow extends AttackTrack {
   occ99Mhz: number;
   look: AttackLook | undefined;
   familyId: string | null;
+  /** Роль для оператора: фон / борт / пульт / ретранслятор. Пусто, если роли нет. */
+  infoRu: string;
 }
 
 export interface AttackSceneView {
@@ -40,18 +43,23 @@ export function buildAttackScene(input: {
   holdMs: number;
   bands: readonly AllowBand[];
   transmitArmed: boolean;
+  /** Номер обхода трекера. Карточка его не выдумывает из lastSweep. */
+  sweep?: number;
 }): AttackSceneView {
   const widths = new Map<number, AttackWidths>();
   const looks = new Map<number, AttackLook>();
   for (const t of input.tracks) {
-    const w = input.bins.length ? measureHitWidths(input.bins, t.freqMhz) : {
-      width3Mhz: t.widthMhz,
-      width26Mhz: t.widthMhz,
-      occ99Mhz: t.widthMhz,
-    };
+    // Спектр этого обхода чужую частоту не содержит. Ширина хита — та,
+    // что трекер записал, когда частота была в окне. Разбор чужого окна
+    // к этому следу не приписываем.
+    const seenHere = spectrumCoversMhz(input.bins, t.freqMhz);
+    const w: AttackWidths = seenHere
+      ? measureHitWidths(input.bins, t.freqMhz)
+      : { width3Mhz: t.widthMhz, width26Mhz: t.widthMhz, occ99Mhz: t.widthMhz };
     widths.set(t.id, w);
     const remembered = input.memory.looks.get(t.id);
-    looks.set(t.id, remembered ?? lookFromBins(input.bins, t.freqMhz, w));
+    if (remembered) looks.set(t.id, remembered);
+    else if (seenHere) looks.set(t.id, lookFromBins(input.bins, t.freqMhz, w));
   }
   const families = stitchHopFamilies(input.tracks, input.memory.hopMhz());
   const famOf = new Map<number, string>();
@@ -59,6 +67,12 @@ export function buildAttackScene(input: {
     for (const id of f.members) famOf.set(id, f.id);
   }
   const atlas = atlasForTracks(input.tracks, input.windowMhz);
+  const info = readAttackInfo({
+    tracks: input.tracks,
+    snaps: input.memory.powerSnaps(),
+    sweep: input.sweep,
+  });
+  const roleOf = new Map(info.roles.map((r) => [r.trackId, r.roleRu]));
   const rows: AttackRow[] = atlas.map((t) => {
     const w = widths.get(t.id) ?? { width3Mhz: t.widthMhz, width26Mhz: t.widthMhz, occ99Mhz: t.widthMhz };
     return {
@@ -68,6 +82,7 @@ export function buildAttackScene(input: {
       occ99Mhz: w.occ99Mhz,
       look: looks.get(t.id),
       familyId: famOf.get(t.id) ?? null,
+      infoRu: roleOf.get(t.id) ?? "",
     };
   });
   const advice = buildAttackAdvice({
@@ -84,6 +99,9 @@ export function buildAttackScene(input: {
     memory: input.memory.stats(),
     memoryHopsMhz: input.memory.hopMhz(),
     transmitArmed: input.transmitArmed,
+    snaps: input.memory.powerSnaps(),
+    info,
+    sweep: input.sweep,
   });
   return {
     rows,
