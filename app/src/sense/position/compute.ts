@@ -1,16 +1,18 @@
 // Трасса до антенны противника. Нормы P.530-19 и P.526, газ по порядку P.676.
 // Сеть не нужна: рельеф — отметки, ровная земля или файл на диске.
 
-import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM, formatDeg } from "./geo";
+import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM } from "./geo";
 import { inBounds, sampleDem } from "./terrain";
 import type {
   AntennaKind,
   DemGrid,
   MapCell,
-  MovePoint,
   PositionInput,
   PositionResult,
   ProfileSample,
+  SearchBox,
+  SitePick,
+  SquareSearch,
   VerdictKind,
 } from "./types";
 
@@ -53,10 +55,10 @@ export function beamwidthDeg(dbi: number): number {
 }
 
 /**
- * Усиление не в пик, а под углом offDeg от оси антенны.
+ * Усиление под углом offDeg от оси.
  * До края луча — парабола, на краю ровно −3 дБ.
- * Дальше первый боковой лепесток обычного раскрыва: на 13 дБ ниже пика.
- * Ещё дальше — на 20 дБ ниже пика. Ниже 0 дБи не опускаем.
+ * Сразу за лучом патч теряет около 8 дБ, дальше около 13.
+ * Тарелка сбоку около 20 дБ, сзади около 34. Волновой канал сбоку около 15.
  */
 export function gainTowardDb(kind: AntennaKind, peakDbi: number, offDeg: number): number {
   if (kind === "whip" || !(peakDbi >= 5) || !Number.isFinite(offDeg)) return peakDbi;
@@ -64,8 +66,9 @@ export function gainTowardDb(kind: AntennaKind, peakDbi: number, offDeg: number)
   const half = beamwidthDeg(peakDbi) / 2;
   if (!(half > 0)) return peakDbi;
   if (off <= half) return peakDbi - 3 * (off / half) ** 2;
-  if (off <= half * 4) return Math.max(0, peakDbi - 13);
-  return Math.max(0, peakDbi - 20);
+  if (kind === "dish") return peakDbi - (off <= half * 4 ? 20 : 34);
+  if (kind === "yagi") return peakDbi - 15;
+  return peakDbi - (off <= half * 2 ? 8 : 13);
 }
 
 /** Боковой лепесток: сразу за краем главного луча. */
@@ -126,6 +129,40 @@ export function knifeEdgeDb(hM: number, d1M: number, d2M: number, freqMhz: numbe
   return 6.9 + 20 * Math.log10(Math.sqrt(shifted * shifted + 1) + shifted);
 }
 
+const EARTH_M = 6371000;
+const AE_M = EARTH_M * 4 / 3;
+const AE_KM = AE_M / 1000;
+
+function p526Field(dKm: number, h1: number, h2: number, freqMhz: number): number {
+  const beta = 1;
+  const f13 = freqMhz ** (1 / 3);
+  const f23 = freqMhz ** (2 / 3);
+  const x = 2.188 * beta * f13 * AE_KM ** (-2 / 3) * dKm;
+  const g = (h: number) => {
+    const y = 9.575e-3 * beta * f23 * AE_KM ** (-1 / 3) * Math.max(h, 0.5);
+    if (y > 2) return 17.6 * Math.sqrt(y - 1.1) - 5 * Math.log10(y - 1.1) - 8;
+    return 20 * Math.log10(y + 0.1 * y ** 3);
+  };
+  const f = x >= 1.6
+    ? 11 + 10 * Math.log10(x) - 17.6 * x
+    : -20 * Math.log10(Math.max(x, 1e-6)) - 5.6488 * x ** 1.425;
+  return f + g(h1) + g(h2);
+}
+
+/** Гладкая земля, ITU-R P.526 §3. Высоты — над землёй, метры. Не для острого гребня. */
+export function smoothEarthDb(distKm: number, h1M: number, h2M: number, freqMhz: number): number {
+  if (distKm <= 0 || freqMhz <= 0) return 0;
+  const h1 = Math.max(h1M, 0.5);
+  const h2 = Math.max(h2M, 0.5);
+  const dlos = (Math.sqrt(2 * AE_M * h1) + Math.sqrt(2 * AE_M * h2)) / 1000;
+  const clearance = (h1 + h2) / 2 - earthBulgeM(distKm / 2, distKm / 2);
+  if (distKm >= dlos || clearance <= 0) return Math.max(0, -p526Field(distKm, h1, h2, freqMhz));
+  const need = 0.6 * fresnelRadiusM(distKm / 2, distKm / 2, freqMhz);
+  if (!(need > 0) || clearance >= need) return 0;
+  // Внутри горизонта касание даёт около 6 дБ, к чистой зоне сходит к нулю. Это не высота мачты.
+  return 6 * (1 - clearance / need);
+}
+
 function normFraction(freqMhz: number, extended: boolean): number {
   if (freqMhz < 2000) return extended ? 0.15 : 0;
   return extended ? 0.3 : 0;
@@ -146,6 +183,7 @@ function empty(phrase: string, action: string): PositionResult {
     fsplDb: 0,
     diffractionDb: 0,
     gasDb: 0,
+    aim: "",
     rainDb: null,
     raiseGrazeM: 0,
     raiseCleanM: 0,
@@ -304,14 +342,27 @@ function segments(profile: ProfileSample[], freqMhz: number, distKm: number): Se
   return found;
 }
 
-function aimAction(input: PositionInput, azimuth: number, elevation: number, beam: number | null, ourOff: number): { text: string; miss: boolean } {
+function showEl(elevation: number): string {
+  return (Math.abs(elevation) < 0.3 ? 0 : elevation).toFixed(1);
+}
+
+function pathElevationDeg(h1: number, h2: number, distKm: number): number {
+  const geometric = (Math.atan2(h2 - h1, distKm * 1000) * 180) / Math.PI;
+  const dip = ((distKm * 1000) / (2 * AE_M)) * (180 / Math.PI);
+  return geometric - dip;
+}
+
+function aimAction(input: PositionInput, azimuth: number, elevation: number, beam: number | null): { text: string; miss: boolean } {
   if (whip(input.ourKind) || input.ourDbi < 5 || beam == null) {
     return { text: "Крутить не нужно.", miss: false };
   }
-  const aim = `Поверните нашу антенну: азимут ${azimuth.toFixed(1)}°, наклон ${elevation.toFixed(1)}°.`;
-  if (ourOff > beam / 2) return { text: `Луч смотрит мимо. ${aim}`, miss: true };
+  const aim = `Поверните нашу антенну: азимут ${azimuth.toFixed(1)}°, наклон ${showEl(elevation)}°.`;
+  const curAz = input.ourAimAzDeg == null ? azimuth : input.ourAimAzDeg;
+  const curEl = input.ourAimElDeg ?? 0;
+  const off = angleOffDeg(curAz, curEl, azimuth, elevation);
+  if (off > beam / 2) return { text: `Луч смотрит мимо. ${aim}`, miss: true };
   if (input.ourDbi >= 15 && input.ourAimAzDeg == null) return { text: aim, miss: false };
-  if (input.ourDbi >= 15 && input.ourAimAzDeg != null && ourOff > 1) return { text: aim, miss: false };
+  if (input.ourDbi >= 15 && off > 1) return { text: aim, miss: false };
   return { text: "Крутить не нужно.", miss: false };
 }
 
@@ -330,67 +381,26 @@ function marginDb(input: PositionInput, ourDb: number, oppDb: number, fspl: numb
   return powerDbm + oppDb + ourDb - fspl - diffraction - gas - input.thresholdDbm;
 }
 
-function linkGains(input: PositionInput, az: number, el: number): { ourDb: number; oppDb: number; ourOff: number; side: string } {
-  const ourAz = input.ourAimAzDeg == null ? az : input.ourAimAzDeg;
-  const ourEl = input.ourAimElDeg ?? 0;
-  const ourOff = angleOffDeg(ourAz, ourEl, az, el);
-  const ourDb = gainTowardDb(input.ourKind, input.ourDbi, ourOff);
-  const round = whip(input.oppKind) || input.oppDbi < 5;
-  if (input.oppAimAzDeg == null && input.oppAimElDeg == null) {
-    return {
-      ourDb,
-      oppDb: sideGainDb(input.oppKind, input.oppDbi),
-      ourOff,
-      side: round ? "Антенна противника почти круговая." : "Станция может стоять сбоку. Берём боковой лепесток, не пик из паспорта.",
-    };
-  }
-  const toUsAz = azimuthDeg(input.oppLat, input.oppLon, input.ourLat, input.ourLon);
-  const off = angleOffDeg(input.oppAimAzDeg ?? toUsAz, input.oppAimElDeg ?? 0, toUsAz, -el);
-  const half = beamwidthDeg(input.oppDbi) / 2;
-  const side = round
-    ? "Антенна противника почти круговая."
-    : off <= half
-      ? "Антенна противника смотрит к нам."
-      : "Антенна противника смотрит мимо нас. Сбоку сигнал слабее.";
-  return { ourDb, oppDb: gainTowardDb(input.oppKind, input.oppDbi, off), ourOff, side };
+function oppNeedsAim(input: PositionInput): boolean {
+  return !whip(input.oppKind) && input.oppDbi >= 5 && input.oppAimAzDeg == null && input.oppAimElDeg == null;
 }
 
-function findMove(input: PositionInput, grid: DemGrid, ends: Ends): MovePoint | null {
-  const cos = Math.max(0.2, Math.cos((input.ourLat * Math.PI) / 180));
-  const dLat = 45 / 111.32;
-  const dLon = 45 / (111.32 * cos);
-  const iy0 = Math.max(0, Math.floor(((input.ourLat - dLat) - grid.lat0) / grid.dlat));
-  const iy1 = Math.min(grid.nlat - 1, Math.ceil(((input.ourLat + dLat) - grid.lat0) / grid.dlat));
-  const ix0 = Math.max(0, Math.floor(((input.ourLon - dLon) - grid.lon0) / grid.dlon));
-  const ix1 = Math.min(grid.nlon - 1, Math.ceil(((input.ourLon + dLon) - grid.lon0) / grid.dlon));
-  const strideLat = Math.max(1, Math.floor((iy1 - iy0) / 40));
-  const strideLon = Math.max(1, Math.floor((ix1 - ix0) / 40));
-  let best: MovePoint | null = null;
-  for (let iy = iy0; iy <= iy1; iy += strideLat) {
-    for (let ix = ix0; ix <= ix1; ix += strideLon) {
-      const h = grid.heights[iy * grid.nlon + ix];
-      if (!finite(h) || h <= ends.ourGround + 5) continue;
-      const lat = grid.lat0 + iy * grid.dlat;
-      const lon = grid.lon0 + ix * grid.dlon;
-      const hop = distanceKm(input.ourLat, input.ourLon, lat, lon);
-      if (hop < 0.2 || hop > 40) continue;
-      if (best && hop >= best.distanceKm) continue;
-      const trial: PositionInput = {
-        ...input,
-        ourLat: lat,
-        ourLon: lon,
-        ourGroundM: h,
-        grid,
-        marks: [],
-        flatM: null,
-      };
-      const result = computePosition(trial, false);
-      if (result.verdict === "open") {
-        best = { lat, lon, distanceKm: hop, groundM: h };
-      }
-    }
+function linkGains(input: PositionInput, el: number, ourOff: number): { ourDb: number; oppDb: number; side: string | null; aimed: boolean } {
+  const ourDb = gainTowardDb(input.ourKind, input.ourDbi, ourOff);
+  const round = whip(input.oppKind) || input.oppDbi < 5;
+  if (round) {
+    return { ourDb, oppDb: input.oppDbi, side: "Антенна противника почти круговая.", aimed: true };
   }
-  return best;
+  if (oppNeedsAim(input)) {
+    return { ourDb, oppDb: 0, side: null, aimed: false };
+  }
+  const toUsAz = (azimuthDeg(input.oppLat, input.oppLon, input.ourLat, input.ourLon) + 360) % 360;
+  const off = angleOffDeg(input.oppAimAzDeg ?? toUsAz, input.oppAimElDeg ?? 0, toUsAz, -el);
+  const half = beamwidthDeg(input.oppDbi) / 2;
+  const side = off <= half
+    ? "Антенна противника смотрит к нам."
+    : "Антенна противника смотрит мимо нас. Сбоку сигнал слабее.";
+  return { ourDb, oppDb: gainTowardDb(input.oppKind, input.oppDbi, off), side, aimed: true };
 }
 
 function buildMap(input: PositionInput, grid: DemGrid): MapCell[] {
@@ -460,7 +470,8 @@ export function computePosition(input: PositionInput, withAround = true): Positi
       ...empty("Мало данных.", "Шаг рельефа крупнее полосы луча. Ответ по земле ненадёжен."),
       distanceKm: dist,
       azimuthDeg: (az + 360) % 360,
-      elevationDeg: (Math.atan2(h2 - h1, dist * 1000) * 180) / Math.PI,
+      elevationDeg: pathElevationDeg(h1, h2, dist),
+      aim: "",
       gasDb: gas,
       fsplDb: fsplDb(input.freqMhz, dist),
       profile,
@@ -474,70 +485,101 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const raiseGrazeM = raiseFor(profile, ends, () => 0);
   const raiseCleanM = raiseFor(profile, ends, (s) => 0.6 * s.fresnelM);
   const raiseNormM = raiseFor(profile, ends, (s) => frac * s.fresnelM);
-
-  let diffraction = 0;
-  if (segs.length > 0) {
-    const worst = segs.reduce((a, b) => (a.intrusionM >= b.intrusionM ? a : b));
-    const d1 = worst.worst.km * 1000;
-    const d2 = (dist - worst.worst.km) * 1000;
-    diffraction = knifeEdgeDb(worst.intrusionM, d1, d2, input.freqMhz);
-  }
-  const multi = segs.length >= 2;
-  // Несколько холмов закрывают ответ только когда мачта, которая поднимает луч над всеми ними, уже нереальна.
-  // Иначе одно действие — поднять антенну. Лес и дома закрывают выше 1 ГГц: их высоты в метрах нет.
-  const mastHopeless = input.freqMhz >= 1000 && raiseNormM > 500 && segs.length > 0;
-  const clutterBlock = input.freqMhz >= 1000 && input.clutter;
-
-  let verdict: VerdictKind = "open";
-  if (clutterBlock || mastHopeless) verdict = "closed";
-  else if (segs.length > 0 || raiseNormM > 0.5) verdict = "ridge";
+  const ridge = ridgeExcessM(profile, ends) > 8;
+  const multi = segs.filter((s) => s.intrusionM > 0).length >= 2;
 
   const fspl = fsplDb(input.freqMhz, dist);
   const gas = gasDbPerKm(input.freqMhz) * dist;
   const rain = input.rainMmH != null && input.rainMmH > 0 ? rainDbPerKm(input.freqMhz, input.rainMmH) * dist : null;
-  const elevation = (Math.atan2(h2 - h1, dist * 1000) * 180) / Math.PI;
-  const linked = linkGains(input, (az + 360) % 360, elevation);
-  const margin = marginDb(input, linked.ourDb, linked.oppDb, fspl, verdict === "closed" ? 0 : diffraction, gas);
+  const elevation = pathElevationDeg(h1, h2, dist);
+  const azimuth = (az + 360) % 360;
   const beam = whip(input.ourKind) ? null : beamwidthDeg(input.ourDbi);
-  const aim = aimAction(input, (az + 360) % 360, elevation, beam, linked.ourOff);
-  const halfOur = beam == null ? 0 : beam / 2;
-  let side = linked.side;
-  if (input.ourAimAzDeg != null && beam != null && linked.ourOff > halfOur) {
-    side = margin != null && margin > 0
-      ? `${side} Сбоку тоже поймаете.`
-      : `${side} Сбоку слабо, поверните антенну на станцию.`;
-  }
+  const aim = aimAction(input, azimuth, elevation, beam);
+  const linked = linkGains(input, elevation, aim.miss ? 0 : angleOffDeg(
+    input.ourAimAzDeg ?? azimuth,
+    input.ourAimElDeg ?? 0,
+    azimuth,
+    elevation,
+  ));
 
-  let phrase = "Доходит.";
-  let action = aim.text;
-  let move: MovePoint | null = null;
-  if (verdict === "closed") {
-    phrase = "Не доходит.";
-    if (input.clutter && input.freqMhz >= 1000) phrase = "Не доходит. По пути лес или дома.";
-    else if (multi) phrase = "Не доходит. Холмов несколько.";
-    else phrase = "Не доходит. Мачтой это не поднять.";
-    if (withAround && base.useGrid && grid) move = findMove(input, grid, ends);
-    action = move
-      ? `Встаньте на ${move.groundM.toFixed(0)} м над морем, ${move.distanceKm.toFixed(1)} км отсюда. Широта ${formatDeg(move.lat)}, долгота ${formatDeg(move.lon)}.`
-      : base.useGrid
-        ? "С этой точки не доходит. Рядом выше по рельефу места нет."
-        : "С этой точки не доходит. Чтобы искать другую точку, нужен рельеф вокруг. По Украине он уже в памяти.";
-  } else if (verdict === "ridge") {
-    phrase = "Мешает земля.";
-    if (!aim.miss) {
-      action = `Поднимите нашу антенну на ${raiseNormM.toFixed(0)} м. Чтобы коснуться земли — ${raiseGrazeM.toFixed(0)} м. Чтобы земля не лезла в луч — ${raiseCleanM.toFixed(0)} м.`;
+  const lossAt = (extraM: number): number => {
+    if (input.freqMhz >= 1000 && input.clutter) return 0;
+    if (!ridge) return smoothEarthDb(dist, input.ourAglM + extraM, input.oppAglM, input.freqMhz);
+    const prof = extraM === 0 ? profile : buildProfile(input, base.useGrid ? grid : null, ends, extraM);
+    if (!prof) return 80;
+    const cuts = segments(prof, input.freqMhz, dist).filter((s) => s.intrusionM > 0);
+    if (cuts.length === 0) return 0;
+    const worst = cuts.reduce((a, b) => (a.intrusionM >= b.intrusionM ? a : b));
+    return knifeEdgeDb(worst.intrusionM, worst.worst.km * 1000, (dist - worst.worst.km) * 1000, input.freqMhz);
+  };
+
+  const diffraction = lossAt(0);
+  const margin = linked.aimed ? marginDb(input, linked.ourDb, linked.oppDb, fspl, diffraction, gas) : null;
+  const marginAt = (extraM: number): number | null => {
+    if (!linked.aimed) return null;
+    return marginDb(input, linked.ourDb, linked.oppDb, fspl, lossAt(extraM), gas);
+  };
+
+  let hearingExtra = 0;
+  if (margin != null && margin <= 0 && !(input.freqMhz >= 1000 && input.clutter)) {
+    let lo = 0;
+    let hi = 30;
+    if ((marginAt(30) ?? -999) >= 6) {
+      for (let i = 0; i < 8; i++) {
+        const mid = (lo + hi) / 2;
+        if ((marginAt(mid) ?? -999) >= 6) hi = mid;
+        else lo = mid;
+      }
+      hearingExtra = Math.ceil(hi * 2) / 2;
+    } else {
+      hearingExtra = 31;
     }
   }
 
-  const map = withAround && base.useGrid && grid ? buildMap(input, grid) : null;
+  const clutterBlock = input.freqMhz >= 1000 && input.clutter;
+  let verdict: VerdictKind = "open";
+  let phrase = "Доходит.";
+  let action = "Поймаете. Мачта для слышимости не нужна.";
+  if (!linked.aimed) {
+    verdict = "insufficient";
+    phrase = "Мало данных.";
+    action = "Укажите, в какую сторону ушёл их борт.";
+  } else if (margin == null) {
+    verdict = "insufficient";
+    phrase = "Мало данных.";
+    action = "Нужны мощность противника и порог приёмника.";
+  } else if (clutterBlock) {
+    verdict = "closed";
+    phrase = "Не доходит. По пути лес или дома.";
+    action = "С этой точки не доходит.";
+  } else if (aim.miss) {
+    verdict = margin > 0 ? "open" : hearingExtra > 30 ? "closed" : "ridge";
+    phrase = verdict === "closed" ? "Не доходит." : verdict === "ridge" ? "Мешает земля." : "Доходит.";
+    action = aim.text;
+  } else if (margin > 0) {
+    verdict = "open";
+    phrase = "Доходит.";
+    action = "Поймаете. Мачта для слышимости не нужна.";
+  } else if (hearingExtra <= 30) {
+    verdict = "ridge";
+    phrase = "Мешает земля.";
+    action = `Поднимите нашу антенну ещё на ${formatMast(hearingExtra)} м, до ${formatMast(input.ourAglM + hearingExtra)} м.`;
+  } else {
+    verdict = "closed";
+    phrase = multi ? "Не доходит. Холмов несколько." : "Не доходит. Мачтой это не поднять.";
+    action = "С этой точки не доходит. Выделите квадрат и ищите место, откуда до них доходит.";
+  }
+
+  const map = withAround && linked.aimed && base.useGrid && grid ? buildMap(input, grid) : null;
   return {
     verdict,
     phrase,
     action,
-    side,
+    aim: aim.text,
+    side: linked.side,
     rx1: rx1Line(input.freqMhz, verdict, margin),
     distanceKm: dist,
-    azimuthDeg: (az + 360) % 360,
+    azimuthDeg: azimuth,
     elevationDeg: elevation,
     beamwidthDeg: beam,
     marginDb: margin,
@@ -549,7 +591,131 @@ export function computePosition(input: PositionInput, withAround = true): Positi
     raiseCleanM,
     raiseNormM,
     profile,
-    move,
+    move: null,
     map,
   };
+}
+
+function formatMast(m: number): string {
+  const rounded = Math.round(m * 2) / 2;
+  return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
+}
+
+function ridgeExcessM(profile: ProfileSample[], ends: Ends): number {
+  let excess = 0;
+  for (const s of profile) {
+    const f = ends.distanceKm <= 0 ? 0 : s.km / ends.distanceKm;
+    if (f <= 0.05 || f >= 0.95) continue;
+    const linear = ends.ourGround * (1 - f) + ends.oppGround * f;
+    excess = Math.max(excess, s.terrainM - linear);
+  }
+  return excess;
+}
+
+function boxSidesKm(box: SearchBox): { ns: number; ew: number } | null {
+  const south = Math.min(box.south, box.north);
+  const north = Math.max(box.south, box.north);
+  const west = Math.min(box.west, box.east);
+  const east = Math.max(box.west, box.east);
+  if (![south, north, west, east].every(finite)) return null;
+  return {
+    ns: distanceKm(south, west, north, west),
+    ew: distanceKm(south, west, south, east),
+  };
+}
+
+/** Поиск нашей точки внутри квадрата. Их точка остаётся. Вершину и ровное поле не предлагает. */
+export function searchSquare(input: PositionInput, box: SearchBox): SquareSearch {
+  const cover = "Лес на снимке не вижу, укрытие по складке рельефа.";
+  const grid = input.grid;
+  if (!grid) return { note: "В этом квадрате рельеф не читается.", picks: [] };
+  if (oppNeedsAim(input)) return { note: "Укажите, в какую сторону ушёл их борт.", picks: [] };
+  const sides = boxSidesKm(box);
+  if (!sides) return { note: "Квадрат не задан.", picks: [] };
+  if (sides.ns < 1 || sides.ew < 1) return { note: "Квадрат слишком мал.", picks: [] };
+  if (sides.ns > 40 || sides.ew > 40) return { note: "Выделите участок до 40 км.", picks: [] };
+
+  const south = Math.min(box.south, box.north);
+  const north = Math.max(box.south, box.north);
+  const west = Math.min(box.west, box.east);
+  const east = Math.max(box.west, box.east);
+  const iy0 = Math.max(0, Math.ceil((south - grid.lat0) / grid.dlat));
+  const iy1 = Math.min(grid.nlat - 1, Math.floor((north - grid.lat0) / grid.dlat));
+  const ix0 = Math.max(0, Math.ceil((west - grid.lon0) / grid.dlon));
+  const ix1 = Math.min(grid.nlon - 1, Math.floor((east - grid.lon0) / grid.dlon));
+  if (iy1 < iy0 || ix1 < ix0) return { note: "В этом квадрате рельеф не читается.", picks: [] };
+  const strideLat = Math.max(1, Math.ceil((iy1 - iy0 + 1) / 40));
+  const strideLon = Math.max(1, Math.ceil((ix1 - ix0 + 1) / 40));
+  const radius = Math.max(1, Math.round(1000 / Math.max(grid.cellM, 1)));
+
+  const folded: Array<{ lat: number; lon: number; h: number }> = [];
+  let sawRelief = false;
+  for (let iy = iy0; iy <= iy1; iy += strideLat) {
+    for (let ix = ix0; ix <= ix1; ix += strideLon) {
+      const h = grid.heights[iy * grid.nlon + ix];
+      if (!finite(h)) continue;
+      let minH = h;
+      let maxH = h;
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const y = iy + dy;
+          const x = ix + dx;
+          if (y < 0 || x < 0 || y >= grid.nlat || x >= grid.nlon) continue;
+          const n = grid.heights[y * grid.nlon + x];
+          if (!finite(n)) continue;
+          minH = Math.min(minH, n);
+          maxH = Math.max(maxH, n);
+        }
+      }
+      if (maxH - minH >= 8) sawRelief = true;
+      if (h >= maxH - 3) continue;
+      const lat = grid.lat0 + iy * grid.dlat;
+      const lon = grid.lon0 + ix * grid.dlon;
+      const az = azimuthDeg(lat, lon, input.oppLat, input.oppLon);
+      const back = destination(lat, lon, az + 180, 1);
+      const behind = sampleDem(grid, back.lat, back.lon);
+      if (behind == null || behind < h + 5) continue;
+      const aheadPos = destination(lat, lon, az, 1);
+      const ahead = sampleDem(grid, aheadPos.lat, aheadPos.lon);
+      if (ahead != null && ahead > h + input.ourAglM + 15) continue;
+      folded.push({ lat, lon, h });
+    }
+  }
+  if (folded.length === 0) {
+    return {
+      note: sawRelief
+        ? "В этом квадрате складки нет. Берите край ближе к ним."
+        : "В этом квадрате складки нет. Берите край ближе к ним.",
+      picks: [],
+    };
+  }
+
+  const picks: SitePick[] = [];
+  for (const spot of folded) {
+    const trial: PositionInput = {
+      ...input,
+      ourLat: spot.lat,
+      ourLon: spot.lon,
+      ourGroundM: spot.h,
+      marks: [],
+      flatM: null,
+    };
+    const result = computePosition(trial, false);
+    if (result.verdict !== "open" && result.verdict !== "ridge") continue;
+    if (result.marginDb == null) continue;
+    picks.push({
+      lat: spot.lat,
+      lon: spot.lon,
+      groundM: spot.h,
+      distanceKm: result.distanceKm,
+      marginDb: result.marginDb,
+      azimuthDeg: result.azimuthDeg,
+      elevationDeg: result.elevationDeg,
+      phrase: `Встаньте здесь. ${result.phrase} За спиной складка. Азимут ${result.azimuthDeg.toFixed(1)}°, наклон ${showEl(result.elevationDeg)}°.`,
+    });
+  }
+  picks.sort((a, b) => b.marginDb - a.marginDb);
+  const top = picks.slice(0, 3);
+  if (top.length === 0) return { note: "В этом квадрате до них не доходит.", picks: [] };
+  return { note: cover, picks: top };
 }

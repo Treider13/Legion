@@ -79,11 +79,36 @@ export interface MapCell {
   verdict: VerdictKind;
 }
 
+export interface SearchBox {
+  south: number;
+  north: number;
+  west: number;
+  east: number;
+}
+
+export interface SitePick {
+  lat: number;
+  lon: number;
+  groundM: number;
+  distanceKm: number;
+  marginDb: number;
+  azimuthDeg: number;
+  elevationDeg: number;
+  phrase: string;
+}
+
+export interface SquareSearch {
+  note: string;
+  picks: SitePick[];
+}
+
 export interface PositionResult {
   verdict: VerdictKind;
   phrase: string;
   action: string;
-  /** Отдельная строка: станция сбоку и боковой лепесток. */
+  /** Куда повернуть нашу антенну. Это не приказ ставить мачту. */
+  aim: string;
+  /** Отдельная строка: куда смотрит антенна противника. */
   side: string | null;
   rx1: string | null;
   distanceKm: number;

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { computePosition } from "../sense/position/compute";
+import { computePosition, searchSquare } from "../sense/position/compute";
 import { formatDeg } from "../sense/position/geo";
 import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
-import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, VerdictKind } from "../sense/position/types";
+import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
 import { loadUkraineDem } from "../sense/position/ukraineDem";
 import "./position.css";
 
@@ -54,7 +54,15 @@ export function PositionPanel() {
   const [ukraine, setUkraine] = useState<DemGrid | null>(null);
   const [pending, setPending] = useState(true);
   const [fileNote, setFileNote] = useState("Свой файл не выбран. Берём рельеф Украины из памяти.");
+  const [boxSouth, setBoxSouth] = useState("");
+  const [boxNorth, setBoxNorth] = useState("");
+  const [boxWest, setBoxWest] = useState("");
+  const [boxEast, setBoxEast] = useState("");
+  const [searchNote, setSearchNote] = useState("");
+  const [picks, setPicks] = useState<SitePick[]>([]);
+  const [searching, setSearching] = useState(false);
   const fileGen = useRef(0);
+  const searchGen = useRef(0);
 
   const activeGrid = grid ?? ukraine;
   const ourMapH = activeGrid ? sampleDem(activeGrid, num(ourLat), num(ourLon)) : null;
@@ -171,8 +179,8 @@ export function PositionPanel() {
       <span className="panel-title">ПОЗИЦИЯ // ДОЙДЁТ ЛИ СИГНАЛ ДО СТАНЦИИ ПРОТИВНИКА</span>
       <p className="panel-note">
         Считает на этом компьютере. Интернет не нужен. Широта и долгота — в градусах, как на карте.
-        Если антенна противника смотрит не на нас, берём боковой лепесток: станция может стоять сбоку, и сигнал всё равно ловится.
-        Передатчик отсюда не включается.
+        Сначала поставьте свою точку и точку противника. Квадрат ниже ищет, куда встать вместо нашей точки, и сам её не переносит.
+        Укажите, в какую сторону противник смотрит на свой борт. Передатчик отсюда не включается.
       </p>
       <p className="panel-note">{frame}</p>
       <div className="pos-wrap">
@@ -201,8 +209,8 @@ export function PositionPanel() {
           <label>Противник, дБи<input value={oppDbi} onChange={(e) => setOppDbi(e.target.value)} /></label>
           <label>Куда смотрит наша, °<input value={ourAimAz} placeholder="пусто — повернём" onChange={(e) => setOurAimAz(e.target.value)} /></label>
           <label>Наклон нашей, °<input value={ourAimEl} placeholder="пусто — ровно" onChange={(e) => setOurAimEl(e.target.value)} /></label>
-          <label>Куда смотрит противник, °<input value={oppAimAz} placeholder="пусто — сбоку" onChange={(e) => setOppAimAz(e.target.value)} /></label>
-          <label>Наклон противника, °<input value={oppAimEl} placeholder="пусто — сбоку" onChange={(e) => setOppAimEl(e.target.value)} /></label>
+          <label>Куда смотрит противник, °<input value={oppAimAz} placeholder="сторона их борта" onChange={(e) => setOppAimAz(e.target.value)} /></label>
+          <label>Наклон противника, °<input value={oppAimEl} placeholder="пусто — в горизонт" onChange={(e) => setOppAimEl(e.target.value)} /></label>
           <label className="pos-wide">Порог приёмника, дБм<input value={threshold} onChange={(e) => setThreshold(e.target.value)} /></label>
           <label className="pos-check">
             <input type="checkbox" checked={flat} onChange={(e) => setFlat(e.target.checked)} />
@@ -224,6 +232,46 @@ export function PositionPanel() {
             <input type="file" accept=".json,.hgt,application/json" onChange={(e) => void onFile(e.target.files?.[0])} />
           </label>
           <p className="panel-note pos-wide">{fileNote}</p>
+          <label>Квадрат, юг °<input value={boxSouth} placeholder="южная широта" onChange={(e) => setBoxSouth(e.target.value)} onBlur={() => blurDeg(boxSouth, setBoxSouth)} /></label>
+          <label>Квадрат, север °<input value={boxNorth} placeholder="северная широта" onChange={(e) => setBoxNorth(e.target.value)} onBlur={() => blurDeg(boxNorth, setBoxNorth)} /></label>
+          <label>Квадрат, запад °<input value={boxWest} placeholder="западная долгота" onChange={(e) => setBoxWest(e.target.value)} onBlur={() => blurDeg(boxWest, setBoxWest)} /></label>
+          <label>Квадрат, восток °<input value={boxEast} placeholder="восточная долгота" onChange={(e) => setBoxEast(e.target.value)} onBlur={() => blurDeg(boxEast, setBoxEast)} /></label>
+          <button type="button" className="btn-ghost pos-wide" disabled={searching} onClick={() => {
+            const gen = ++searchGen.current;
+            setSearching(true);
+            setSearchNote("Ищем в квадрате…");
+            setPicks([]);
+            const snapshot = input;
+            window.setTimeout(() => {
+              if (gen !== searchGen.current) return;
+              const found = searchSquare(snapshot, {
+                south: num(boxSouth),
+                north: num(boxNorth),
+                west: num(boxWest),
+                east: num(boxEast),
+              });
+              if (gen !== searchGen.current) return;
+              setPicks(found.picks);
+              setSearchNote(found.note);
+              setSearching(false);
+            }, 0);
+          }}>
+            Искать в квадрате
+          </button>
+          {searchNote && <p className="panel-note pos-wide">{searchNote}</p>}
+          {picks.map((pick) => (
+            <button
+              key={`${pick.lat.toFixed(5)}-${pick.lon.toFixed(5)}`}
+              type="button"
+              className="btn-ghost pos-wide"
+              onClick={() => {
+                setOurLat(pick.lat.toFixed(6));
+                setOurLon(pick.lon.toFixed(6));
+              }}
+            >
+              {pick.phrase} {formatDeg(pick.lat)} {formatDeg(pick.lon)}, земля {pick.groundM.toFixed(0)} м, {pick.distanceKm.toFixed(1)} км, запас {pick.marginDb.toFixed(0)} дБ.
+            </button>
+          ))}
           {grid && (
             <button type="button" className="btn-ghost pos-wide" onClick={() => { fileGen.current += 1; setGrid(null); setFileNote("Свой файл снят. Снова рельеф Украины из памяти."); }}>
               Снять свой файл
@@ -233,12 +281,13 @@ export function PositionPanel() {
         <div>
           <p className={`pos-verdict ${result.verdict}`}>{phraseTitle(result.verdict)}</p>
           <p className="pos-action">{result.phrase} {result.action}</p>
+          {result.aim && <p className="panel-note">{result.aim}</p>}
           {result.side && <p className="panel-note">{result.side}</p>}
           {result.rx1 && <p className="panel-note">{result.rx1}</p>}
           <div className="pos-meta">
             <span>Дальность {result.distanceKm.toFixed(2)} км</span>
             <span>Азимут {result.azimuthDeg.toFixed(1)}°</span>
-            <span>Наклон {result.elevationDeg.toFixed(1)}°</span>
+            <span>Наклон {(Math.abs(result.elevationDeg) < 0.3 ? 0 : result.elevationDeg).toFixed(1)}°</span>
             {Number.isFinite(num(ourLat)) && Number.isFinite(num(oppLat)) && (
               <span>Градусы {formatDeg(num(ourLat))} {formatDeg(num(ourLon))} → {formatDeg(num(oppLat))} {formatDeg(num(oppLon))}</span>
             )}
@@ -248,7 +297,7 @@ export function PositionPanel() {
             <span>Поглощение в воздухе {result.gasDb.toFixed(1)} дБ</span>
             <span>{result.rainDb == null ? "Дождь не задан" : `Дождь ${result.rainDb.toFixed(1)} дБ, в сухой ответ не входит`}</span>
             <span>{result.marginDb == null || result.verdict === "closed" ? "Запас здесь не смотрим" : `Запас ${result.marginDb.toFixed(1)} дБ`}</span>
-            <span>Мачта до нормы {result.raiseNormM.toFixed(0)} м</span>
+            <span>Для чистой трассы, не для слышимости: касание {result.raiseGrazeM.toFixed(0)} м, норма {result.raiseNormM.toFixed(0)} м, чистая {result.raiseCleanM.toFixed(0)} м</span>
           </div>
           <canvas ref={profileRef} className="pos-canvas" width={900} height={420} />
           <div className="pos-legend">
@@ -258,7 +307,7 @@ export function PositionPanel() {
           </div>
           {result.map && result.map.length > 0 && (
             <>
-              <p className="panel-note" style={{ marginTop: 12 }}>Карта вокруг нас. Станция может стоять и сбоку. Зелёное — доходит, жёлтое — мешает земля, красное — не доходит.</p>
+              <p className="panel-note" style={{ marginTop: 12 }}>Карта вокруг поставленной точки. Зелёное — доходит, жёлтое — мешает земля, красное — не доходит. Место для нас ищется кнопкой в квадрате.</p>
               <canvas ref={mapRef} className="pos-canvas" width={900} height={420} />
             </>
           )}

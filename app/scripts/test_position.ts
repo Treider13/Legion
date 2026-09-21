@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, sideGainDb } from "../src/sense/position/compute";
+import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, searchSquare, sideGainDb, smoothEarthDb } from "../src/sense/position/compute";
 import { azimuthDeg, destination, distanceKm, formatDeg } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
@@ -52,24 +52,23 @@ test("вкладка позиции остаётся режимом SDR и не 
 test("45 км, 2,4 ГГц, гребень 220 м: вся трасса, не только середина", () => {
   const r = computePosition(blocked(2400), false);
   assert.ok(r.distanceKm > 44.5 && r.distanceKm < 45.5, `distance ${r.distanceKm}`);
-  assert.equal(r.verdict, "ridge");
+  assert.equal(r.verdict, "insufficient");
+  assert.match(r.action, /ушёл их борт/);
   assert.ok(r.raiseGrazeM > 90 && r.raiseGrazeM < 120, `graze ${r.raiseGrazeM}`);
   assert.ok(r.raiseCleanM > 250 && r.raiseCleanM < 320, `clean ${r.raiseCleanM}`);
-  assert.match(r.action, /Поднимите нашу антенну/);
-  assert.match(r.side ?? "", /сбоку/);
-  assert.match(r.phrase, /Мешает земля/);
-  assert.equal(r.rx1, "На приёмнике RX1 сигнала не хватит.");
   const aimed = computePosition({ ...blocked(2400), oppAimAzDeg: 180, oppAimElDeg: 0 }, false);
-  assert.ok((aimed.marginDb ?? -999) > 0);
-  assert.equal(aimed.rx1, "На приёмнике RX1 поймаете.");
+  assert.notEqual(aimed.verdict, "insufficient");
+  assert.doesNotMatch(aimed.action, /на 1[0-9]{2} м/);
 });
 
 test("те же точки на 100 МГц: холм не закрывает фразой «не увидите», запас больше", () => {
-  const low = computePosition(blocked(100), false);
-  const mid = computePosition(blocked(2400), false);
+  const aim = { oppAimAzDeg: 180, oppAimElDeg: 0, ourAglM: 10, oppAglM: 10 };
+  const low = computePosition({ ...blocked(100), ...aim }, false);
+  const mid = computePosition({ ...blocked(2400), ...aim }, false);
   assert.notEqual(low.verdict, "closed");
+  assert.match(low.action, /Поймаете/);
   assert.doesNotMatch(`${low.phrase} ${low.action}`, /не увидите/);
-  assert.ok((low.marginDb ?? 0) > (mid.marginDb ?? 0) + 25);
+  assert.ok((low.marginDb ?? 0) > (mid.marginDb ?? 0) + 20, `${low.marginDb} vs ${mid.marginDb}`);
 });
 
 test("22 ГГц и клетка 30 м: мало данных, RX1 эту частоту не принимает, газ есть", () => {
@@ -97,6 +96,8 @@ test("узкий луч с высоты смотрит мимо, мачту не
     flatM: 0,
     ourKind: "dish",
     ourDbi: 19,
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
     terrainPending: false,
   }, false);
   assert.equal(r.verdict, "open");
@@ -118,7 +119,8 @@ test("штырь не просит доворот", () => {
     flatM: 180,
   }, false);
   assert.equal(r.verdict, "open");
-  assert.match(r.action, /Крутить не нужно/);
+  assert.match(r.aim, /Крутить не нужно/);
+  assert.match(r.action, /Поймаете/);
 });
 
 test("без земли по пути ответа нет", () => {
@@ -154,7 +156,7 @@ test("JSON решётки читается офлайн и даёт высоту
   assert.deepEqual(swCornerFromHgtName("S12W077"), { lat: -12, lon: -77 });
 });
 
-test("файл рельефа предлагает точку, с которой трасса открыта", () => {
+test("квадрат предлагает складку, не вершину", () => {
   const nlat = 9;
   const nlon = 9;
   const dlat = 0.03;
@@ -190,15 +192,48 @@ test("файл рельефа предлагает точку, с которой
     rainMmH: null,
     ourAimAzDeg: null,
     ourAimElDeg: null,
-    oppAimAzDeg: null,
-    oppAimElDeg: null,
+    oppAimAzDeg: 0,
+    oppAimElDeg: 0,
     terrainPending: false,
-  });
+  }, false);
   assert.equal(r.verdict, "closed");
-  assert.ok(r.move, "должна найтись точка по ту сторону гребня");
-  assert.ok((r.move?.groundM ?? 0) > 200);
-  assert.ok(r.map && r.map.length > 0);
-  assert.ok(r.map?.some((c) => c.verdict === "open" || c.verdict === "closed"));
+  assert.equal(r.move, null);
+  const spot = {
+    ourLat: 0.03,
+    ourLon: 0.12,
+    ourGroundM: 80,
+    ourAglM: 2,
+    oppLat: 0.21,
+    oppLon: 0.12,
+    oppGroundM: 250,
+    oppAglM: 2,
+    freqMhz: 2400,
+    ourKind: "patch" as const,
+    ourDbi: 19,
+    oppKind: "patch" as const,
+    oppDbi: 21,
+    powerW: 1,
+    thresholdDbm: -90,
+    marks: [],
+    flatM: null,
+    grid,
+    cellM: null,
+    clutter: false,
+    rainMmH: null,
+    ourAimAzDeg: null,
+    ourAimElDeg: null,
+    oppAimAzDeg: 0,
+    oppAimElDeg: 0,
+    terrainPending: false,
+  };
+  const found = searchSquare(spot, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  assert.ok(found.picks.length > 0, found.note);
+  assert.ok(found.picks.every((p) => p.groundM < 500), `crest ${found.picks.map((p) => p.groundM).join(",")}`);
+  const flatHeights = new Float64Array(nlat * nlon).fill(100);
+  const flat: DemGrid = { ...grid, heights: flatHeights };
+  const plain = searchSquare({ ...spot, ourGroundM: 100, oppGroundM: 100, grid: flat }, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  assert.equal(plain.picks.length, 0);
+  assert.match(plain.note, /складки нет/);
 });
 
 test("градусы WGS84 сходятся с известной геодезической задачей", () => {
@@ -215,14 +250,14 @@ test("градусы WGS84 сходятся с известной геодези
   assert.equal(formatDeg(50.45), "50.450000°");
 });
 
-test("станция сбоку: боковой лепесток на 13 дБ ниже пика, штырь не режем", () => {
+test("патч сразу за лучом теряет около 8 дБ, пустая сторона борта не берёт пик", () => {
   const side = sideGainDb("patch", 21);
-  assert.ok(Math.abs(side - 8) < 0.2, `side ${side}`);
+  assert.ok(Math.abs(side - 13) < 0.2, `side ${side}`);
   assert.equal(sideGainDb("whip", 2), 2);
-  const aimed = computePosition({ ...blocked(2400), oppAimAzDeg: 180, oppAimElDeg: 0 }, false);
+  assert.ok(Math.abs(sideGainDb("dish", 30) - 10) < 0.5, `dish ${sideGainDb("dish", 30)}`);
   const blind = computePosition(blocked(2400), false);
-  assert.ok((aimed.marginDb ?? 0) > (blind.marginDb ?? 0) + 10);
-  assert.match(blind.side ?? "", /боковой лепесток/);
+  assert.match(blind.action, /ушёл их борт/);
+  assert.equal(blind.marginDb, null);
 });
 
 test("рельеф Украины в файле и покрывает крайние точки", async () => {
@@ -272,6 +307,8 @@ test("рельеф Украины в файле и покрывает крайн
     ourGroundM: Number.NaN,
     oppLat: 55,
     oppLon: 37,
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
     oppGroundM: 140,
     marks: [],
     flatM: 150,
@@ -285,6 +322,8 @@ test("рельеф Украины в файле и покрывает крайн
 test("два холма, которые берёт мачта, не называются непроходимыми", () => {
   const two = computePosition({
     ...blocked(2400),
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
     marks: [
       { km: 12, m: 260 },
       { km: 15, m: 280 },
@@ -294,11 +333,13 @@ test("два холма, которые берёт мачта, не называ
       { km: 33, m: 260 },
     ],
   }, false);
-  assert.equal(two.verdict, "ridge", `${two.phrase} ${two.raiseNormM}`);
-  assert.match(two.action, /Поднимите/);
-  assert.ok(two.raiseNormM < 500, `norm ${two.raiseNormM}`);
+  assert.notEqual(two.verdict, "closed", `${two.phrase} ${two.action}`);
+  assert.match(two.action, /Поймаете/);
+  assert.ok(two.raiseNormM > 0, `norm ${two.raiseNormM}`);
   const hopeless = computePosition({
     ...blocked(2400),
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
     marks: [
       { km: 15, m: 900 },
       { km: 22, m: 80 },
@@ -337,6 +378,8 @@ test("пустая клетка не отменяет вписанную отм�
     ...blocked(145),
     ourLat: 50,
     ourLon: 30,
+    oppAimAzDeg: 270,
+    oppAimElDeg: 0,
     ourGroundM: 80,
     oppLat: 50,
     oppLon: 30.5,
@@ -348,4 +391,42 @@ test("пустая клетка не отменяет вписанную отм�
   assert.notEqual(typed.verdict, "insufficient", typed.action);
   assert.equal(typed.profile[0].terrainM, 80);
   assert.equal(typed.profile.at(-1)?.terrainM, 100);
+});
+
+test("30 км в лоб слышно без мачты, на 45 км подъём около 14 м", () => {
+  const opp = destination(50, 30, 0, 30);
+  const face = {
+    ...blocked(2400),
+    ourLat: 50,
+    ourLon: 30,
+    ourGroundM: 200,
+    ourAglM: 10,
+    oppLat: opp.lat,
+    oppLon: opp.lon,
+    oppGroundM: 200,
+    oppAglM: 10,
+    ourKind: "patch" as const,
+    ourDbi: 19,
+    oppKind: "patch" as const,
+    oppDbi: 22,
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
+    powerW: 10,
+    thresholdDbm: -90,
+    marks: [],
+    flatM: 200,
+  };
+  const near = computePosition(face, false);
+  assert.equal(near.verdict, "open", `${near.phrase} ${near.action} ${near.marginDb}`);
+  assert.match(near.action, /Поймаете/);
+  assert.doesNotMatch(near.action, /Поднимите/);
+  assert.ok((near.marginDb ?? 0) > 14 && (near.marginDb ?? 0) < 20, `margin ${near.marginDb}`);
+  assert.match(near.aim, /наклон 0\.0/);
+  const farOpp = destination(50, 30, 0, 45);
+  const far = computePosition({ ...face, oppLat: farOpp.lat, oppLon: farOpp.lon }, false);
+  assert.equal(far.verdict, "ridge", `${far.phrase} ${far.action} ${far.marginDb}`);
+  assert.match(far.action, /ещё на 1[2-6]/);
+  const loss = smoothEarthDb(40, 10, 10, 2400);
+  assert.ok(loss > 30 && loss < 45, `smooth ${loss}`);
+  assert.ok(smoothEarthDb(10, 10, 10, 2400) < 6);
 });
