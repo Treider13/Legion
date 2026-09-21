@@ -21,6 +21,37 @@ export interface HostScanResult {
   reason?: string;
   txLive?: boolean;
   txError?: string;
+  fsHz?: number;
+  memorySamples?: number;
+  memoryCap?: number;
+  memoryMs?: number;
+  flatness?: number;
+}
+
+export interface HostAttackLook {
+  freqMhz: number;
+  kind?: string;
+  label?: string;
+  conf?: number;
+  flatness?: number;
+  cepstrum?: number;
+  famCoh?: number;
+  famAlphaHz?: number;
+  c20?: number;
+  kurt?: number;
+  clip?: boolean;
+  leftover?: number | null;
+}
+
+export interface HostAttackThinkResult {
+  ok: boolean;
+  reason?: string;
+  looks: HostAttackLook[];
+  leftover?: number | null;
+  clip?: boolean;
+  memorySamples?: number;
+  memoryCap?: number;
+  memoryMs?: number;
 }
 
 async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -112,6 +143,59 @@ export async function hostScan(centerMhz: number, bwMhz: number, bins: number): 
     reason: r.reason,
     txLive: r.txLive,
     txError: r.txError,
+  };
+}
+
+/** Только Атака. Не op=scan (DIO 40 + crop 0.5). */
+export async function hostAttackScan(
+  centerMhz: number,
+  plan: { fsHz: number; filterMhz: number; cropFactor: number; fftN: number },
+): Promise<HostScanResult> {
+  const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
+    op: "attack_scan",
+    centerMhz,
+    fsHz: plan.fsHz,
+    bwMhz: plan.filterMhz,
+    bins: plan.fftN,
+    cropFactor: plan.cropFactor,
+  });
+  return {
+    ok: !!r.ok,
+    bins: r.bins ?? [],
+    reason: r.reason,
+    txLive: r.txLive,
+    txError: r.txError,
+    fsHz: r.fsHz,
+    memorySamples: r.memorySamples,
+    memoryCap: r.memoryCap,
+    memoryMs: r.memoryMs,
+    flatness: r.flatness,
+  };
+}
+
+/** Только Атака. Разбор вырезов из памяти IQ. Не scan() и не TX. */
+export async function hostAttackThink(
+  centerMhz: number,
+  fsHz: number,
+  looks: Array<{ freqMhz: number; bwMhz: number }>,
+  residual: boolean,
+): Promise<HostAttackThinkResult> {
+  const r = await hostRpc<HostAttackThinkResult>({
+    op: "attack_think",
+    centerMhz,
+    fsHz,
+    looks,
+    residual,
+  });
+  return {
+    ok: !!r.ok,
+    reason: r.reason,
+    looks: r.looks ?? [],
+    leftover: r.leftover,
+    clip: r.clip,
+    memorySamples: r.memorySamples,
+    memoryCap: r.memoryCap,
+    memoryMs: r.memoryMs,
   };
 }
 

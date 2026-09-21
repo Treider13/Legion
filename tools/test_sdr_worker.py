@@ -290,6 +290,105 @@ def main() -> int:
     mid = len(scan["bins"]) // 2
     check("scan freqs", abs(scan["bins"][mid]["freqMhz"] - 2442) < 2)
     check("fake paint = 20 МГц (40 ADC × crop 0.5)", abs(scan["bins"][-1]["freqMhz"] - scan["bins"][0]["freqMhz"] - 20) < 1.5)
+    check("attack crop 61.44/56", abs(w.attack_crop_factor(61.44e6, 56e6) - (1 - 56 / 61.44)) < 1e-6)
+    check("attack crop 40/40 край", abs(w.attack_crop_factor(40e6, 40e6) - w.ATTACK_EDGE_CROP) < 1e-9)
+    check("attack FFT мало сэмплов → 4096", w.attack_pick_fft_n(8192, 100) == 4096)
+    check(
+        "attack FFT хватает → 8192",
+        w.attack_pick_fft_n(8192, w.welch_need_samples(8192)) == 8192,
+    )
+    check("attack FFT без available — ждём 8192", w.attack_pick_fft_n(8192) == 8192)
+    check(
+        "attack_scan не режет FFT по пустому кольцу после hop",
+        "fft_n = attack_pick_fft_n(hint)" in open(WORKER).read()
+        and "avail = self._ring.available() if self._ring is not None else 0" not in open(WORKER).read(),
+    )
+    atk = rpc(
+        proc,
+        {
+            "op": "attack_scan",
+            "centerMhz": 5800,
+            "fsHz": 61.44e6,
+            "bwMhz": 56,
+            "bins": 8192,
+            "cropFactor": 1 - 56 / 61.44,
+        },
+    )
+    check("attack_scan fake ок", atk.get("ok") is True and atk.get("attack") is True)
+    check("attack_scan не 512 soapy", len(atk.get("bins") or []) > 2000)
+    atk_span = atk["bins"][-1]["freqMhz"] - atk["bins"][0]["freqMhz"]
+    check("attack_scan окно ≈56", abs(atk_span - 56) < 1.5)
+    check("attack_scan память объявлена", int(atk.get("memoryCap") or 0) == w.ATTACK_MEM_CAP)
+    check("attack_scan отдаёт fsHz", float(atk.get("fsHz") or 0) == 61.44e6)
+    check("attack_scan не scan-кольцо", int(atk.get("memoryCap") or 0) > w.RING_CAP)
+    think = rpc(
+        proc,
+        {
+            "op": "attack_think",
+            "centerMhz": 2442,
+            "fsHz": 2e6,
+            "looks": [{"freqMhz": 2442, "bwMhz": 2}],
+            "residual": False,
+        },
+    )
+    check("attack_think fake ок", think.get("ok") is True and think.get("looks"))
+    check("attack_think fake тон", think["looks"][0].get("kind") == "tone")
+    check(
+        "handle знает только attack_think рядом с attack_scan",
+        'if op == "attack_think":' in open(WORKER).read(),
+    )
+    scan2 = rpc(proc, {"op": "scan", "centerMhz": 2442, "bwMhz": 20, "bins": 32})
+    check(
+        "scan() изоляция: снова 20 МГц crop",
+        scan2.get("ok") is True and abs(scan2["bins"][-1]["freqMhz"] - scan2["bins"][0]["freqMhz"] - 20) < 1.5,
+    )
+    src = open(WORKER).read()
+    check("scan() гасит кольцо Атаки", "self._pause_attack_mem()" in src and "self._attack_mem_live" in src)
+    if w.NUMPY:
+        import numpy as np_atk
+        radio = w.Radio()
+        radio._ensure_attack_mem()
+        radio._attack_mem.push_block(np_atk.ones(1024, dtype=np_atk.complex64))
+        check("память Атаки живая", radio._attack_mem_live is True and radio._attack_mem.available() == 1024)
+        radio._pause_attack_mem()
+        check("пауза обнуляет IQ Атаки", radio._attack_mem_live is False and radio._attack_mem.available() == 0)
+        radio.scan(2442, 20, 32)
+        check("scan() оставляет флаг выключенным", radio._attack_mem_live is False)
+
+        live = w.Radio()
+        live.fake = False
+        live._rx_fs = 61.44e6
+        live._tx_fs = 61.44e6
+        live._ensure_attack_mem()
+        n_live = w.ATTACK_THINK_N
+        fs_live = 61.44e6
+        tt = np_atk.arange(n_live, dtype=np_atk.float64) / fs_live
+        rng_l = np_atk.random.default_rng(3)
+        ofdm_l = np_atk.zeros(n_live, dtype=np_atk.complex128)
+        for k in range(-16, 17):
+            if k == 0:
+                continue
+            ofdm_l += np_atk.exp(1j * (2.0 * np_atk.pi * k * (2e6 / 32.0) * tt + float(rng_l.uniform(0, 2 * np_atk.pi))))
+        ofdm_l = (0.04 * ofdm_l).astype(np_atk.complex64)
+        live._attack_mem.push_block(ofdm_l)
+        think_live = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], False)
+        kind_live = (think_live.get("looks") or [{}])[0].get("kind")
+        check("think 61.44 OFDM не тон", think_live.get("ok") is True and kind_live != "tone")
+        live._tone_bb = ofdm_l[:4096]
+        live._tx_fs = 2e6
+        think_mis = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], True)
+        check("вычет при разных часах не врёт leftover", think_mis.get("leftover") is None and think_mis.get("cancelClock") is False)
+        tone_l = (0.4 * np_atk.exp(1j * 2.0 * np_atk.pi * 0.1e6 * tt)).astype(np_atk.complex64)
+        live._attack_mem.reset()
+        live._attack_mem.push_block((tone_l + 0.05 * ofdm_l).astype(np_atk.complex64))
+        live._tone_bb = tone_l
+        live._tx_fs = 61.44e6
+        think_ok = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], True)
+        check(
+            "вычет на тех же часах считает leftover",
+            think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
+        )
+        check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())
@@ -578,6 +677,45 @@ def main() -> int:
 
     bad = rpc(proc, {"op": "nope"})
     check("unknown op", bad.get("ok") is False)
+
+    if w.NUMPY:
+        import numpy as np_bbpll
+
+        class _TxClk:
+            def __init__(self) -> None:
+                self.rates = 0
+
+            def setSampleRate(self, _d, _c, _fs):
+                self.rates += 1
+
+            def getSampleRate(self, _d, _c):
+                return 10e6
+
+            def setBandwidth(self, *_a):
+                return None
+
+            def setFrequency(self, *_a):
+                return None
+
+            def setupStream(self, *_a):
+                return object()
+
+            def activateStream(self, *_a):
+                return None
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": 64})()
+
+        rt = w.Radio()
+        rt.fake = False
+        rt.hardware_key = "bladerf2"
+        rt._rx_fs = 10e6
+        rt._tx_fs = 2e6
+        rt.dev = _TxClk()
+        buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
+        err = rt._tx_prime(buf, 2442e6, None, 10e6)
+        check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+        check("AD9361: _tx_fs берёт часы RX", abs(rt._tx_fs - 10e6) < 1)
 
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading

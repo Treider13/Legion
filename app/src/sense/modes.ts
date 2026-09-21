@@ -48,11 +48,15 @@ export const FPGA_AIR_MODE_RU = "Умная атака";
 export const FPGA_AIR_MODE_RU_CAPS = "УМНАЯ АТАКА";
 export const FPGA_AIR_MODE_START_RU = "СТАРТ УМНОЙ АТАКИ";
 
+/** Имя хост-режима для оператора. Wire id — scanPattern="auto". */
+export const HOST_ATTACK_MODE_RU = "Атака";
+export const HOST_ATTACK_MODE_RU_CAPS = "АТАКА";
+
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
 export function patternLabelRu(pattern: SdrWalkPattern): string {
   switch (pattern) {
     case "auto":
-      return "АВТО";
+      return HOST_ATTACK_MODE_RU_CAPS;
     case "sweep":
       return "КАЧАНИЕ";
     case "band":
@@ -67,7 +71,7 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
 export function patternOptionRu(pattern: SdrWalkPattern): string {
   switch (pattern) {
     case "auto":
-      return "АВТО (сканер → ПЕРЕДАТЬ)";
+      return `${HOST_ATTACK_MODE_RU} (сканер → ПЕРЕДАТЬ)`;
     case "sweep":
       return "КАЧАНИЕ TX (реверс, без сканера)";
     case "band":
@@ -81,7 +85,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
 
 export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
   if (scannerParticipates(pattern) || isFpgaAirPattern(pattern)) return null;
-  return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите АВТО`;
+  return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите ${HOST_ATTACK_MODE_RU_CAPS}`;
 }
 
 export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
@@ -131,7 +135,7 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       useScanner: true,
       openLoopTx: false,
       useFpgaAir: false,
-      reason: `сканер RX → ${how}, пока оператор не стопнет`,
+      reason: `${HOST_ATTACK_MODE_RU}: сканер RX → ${how}, пока оператор не стопнет`,
     };
   }
   return {

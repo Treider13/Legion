@@ -14,7 +14,7 @@ export interface HandoffInput {
   lastCuedMhz: number | null;
   inflight: boolean;
   sdrCanTx: boolean;
-  /** Устаревший ручной замок. Live АВТО его не ставит — цель берёт pickPriorityTarget. */
+  /** Устаревший ручной замок. Живая Атака его не ставит — цель берёт pickPriorityTarget. */
   holdLock?: boolean;
   /** СБРОСИТЬ: разрешить другую частоту. */
   forceRetarget?: boolean;
