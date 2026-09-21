@@ -555,6 +555,28 @@
   background: rgba(255, 90, 95, 0.12);
 }
 
+.det-row-held td {
+  color: #f5c16c;
+  background: rgba(245, 193, 108, 0.10);
+}
+
+.det-row-confirmed td {
+  color: #5ef2a0;
+}
+
+.det-row-new td {
+  color: var(--lg-dim);
+}
+
+.attack-atlas {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.scope-canvas.attack-brush {
+  cursor: crosshair;
+}
+
 .freq-hud {
   display: grid;
   grid-template-columns: 1fr 1fr;

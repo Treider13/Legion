@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { allocAtMhz, bandsInSpan } from "../sense/labAlloc";
 import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
+import { normalizePaint } from "../sense/attackPaint";
 import { dbmToUnit, heatRgb } from "../sense/waterfall";
 import { useLegion } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
@@ -20,6 +21,8 @@ export function SpectrumScope() {
   const [readout, setReadout] = useState("наведите — частота и дБм");
   const readoutRef = useRef(readout);
   readoutRef.current = readout;
+  const geomRef = useRef({ padL: 62, plotW: 1, loF: 0, span: 1 });
+  const brushRef = useRef<{ down: boolean; a: number }>({ down: false, a: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -80,6 +83,7 @@ export function SpectrumScope() {
       const plotW = Math.max(8, cssW - padL - padR);
       const plotH = Math.max(8, cssH - padT - padB);
       const xOf = (mhz: number) => padL + ((mhz - loF) / span) * plotW;
+      geomRef.current = { padL, plotW, loF, span };
 
       const live = st.labSubtractBaseline
         ? subtractBaseline(st.labPsd.composite, st.labPsd.baseline)
@@ -328,6 +332,33 @@ export function SpectrumScope() {
         ctx.fillRect(x0, padT, Math.max(x1 - x0, 2), plotH);
       }
 
+      if (st.scanPattern === "auto") {
+        for (const t of st.attackTracks) {
+          if (t.state === "cooled") continue;
+          const x0 = Math.max(padL, xOf(t.fLowMhz));
+          const x1 = Math.min(padL + plotW, xOf(t.fHighMhz));
+          ctx.fillStyle =
+            t.state === "held"
+              ? "rgba(245,193,108,0.16)"
+              : t.state === "confirmed"
+                ? "rgba(94,242,160,0.12)"
+                : "rgba(232,228,220,0.06)";
+          ctx.fillRect(x0, padT, Math.max(x1 - x0, 2), plotH);
+        }
+        const paint = st.attackPaintDraft ?? st.attackPaint;
+        if (paint) {
+          const x0 = Math.max(padL, xOf(paint.f1Mhz));
+          const x1 = Math.min(padL + plotW, xOf(paint.f2Mhz));
+          ctx.fillStyle = st.attackPaintDraft ? "rgba(255,168,136,0.10)" : "rgba(255,168,136,0.18)";
+          ctx.fillRect(x0, padT, Math.max(x1 - x0, 3), plotH);
+          ctx.strokeStyle = "rgba(255,168,136,0.85)";
+          ctx.lineWidth = 1.4;
+          ctx.setLineDash(st.attackPaintDraft ? [5, 4] : []);
+          ctx.strokeRect(x0 + 0.5, padT + 0.5, Math.max(x1 - x0, 3) - 1, plotH - 1);
+          ctx.setLineDash([]);
+        }
+      }
+
       if (cursorX >= padL && cursorX <= padL + plotW) {
         const mhz = loF + ((cursorX - padL) / plotW) * span;
         ctx.strokeStyle = "rgba(236,230,218,0.35)";
@@ -366,21 +397,64 @@ export function SpectrumScope() {
       raf = requestAnimationFrame(draw);
     };
 
+    const mhzAt = (clientX: number): number => {
+      const r = canvas.getBoundingClientRect();
+      const x = clientX - r.left;
+      const g = geomRef.current;
+      const t = g.plotW > 0 ? (x - g.padL) / g.plotW : 0;
+      return g.loF + Math.min(1, Math.max(0, t)) * g.span;
+    };
     const onMove = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       cursorX = e.clientX - r.left;
+      if (brushRef.current.down) {
+        const st = useLegion.getState();
+        if (st.scanPattern === "auto") {
+          st.setAttackPaintDraft(normalizePaint(brushRef.current.a, mhzAt(e.clientX)));
+        }
+      }
+    };
+    const onDown = (e: PointerEvent) => {
+      const st = useLegion.getState();
+      if (st.scanPattern !== "auto" || st.fpgaArmed || st.transmitArmed) return;
+      if (e.button !== 0) return;
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      const a = mhzAt(e.clientX);
+      brushRef.current = { down: true, a };
+      st.setAttackPaintDraft(normalizePaint(a, a));
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!brushRef.current.down) return;
+      const st = useLegion.getState();
+      brushRef.current.down = false;
+      if (st.scanPattern === "auto") {
+        st.setAttackPaint(normalizePaint(brushRef.current.a, mhzAt(e.clientX)));
+      }
+      try {
+        canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* capture already gone */
+      }
     };
     const onLeave = () => {
+      if (brushRef.current.down) return;
       cursorX = -1;
       setReadout("наведите — частота и дБм");
     };
     canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
     canvas.addEventListener("pointerleave", onLeave);
     raf = requestAnimationFrame(draw);
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
       canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
       canvas.removeEventListener("pointerleave", onLeave);
     };
   }, []);
@@ -437,7 +511,12 @@ export function SpectrumScope() {
           СБРОС HOLD
         </button>
       </div>
-      <canvas ref={canvasRef} className="scope-canvas" role="img" aria-label={`PSD · ${formatDisplayRange(range)}`} />
+      <canvas
+        ref={canvasRef}
+        className={st.scanPattern === "auto" ? "scope-canvas attack-brush" : "scope-canvas"}
+        role="img"
+        aria-label={`PSD · ${formatDisplayRange(range)}${st.scanPattern === "auto" ? " · рамка Атаки мышкой" : ""}`}
+      />
       <div className="scope-meta">
         <span>{displayRangeNotice(range) ?? readout}</span>
         <span>
