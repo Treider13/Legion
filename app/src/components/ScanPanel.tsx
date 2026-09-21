@@ -5,6 +5,7 @@ import {
   FPGA_AIR_MODE_RU_CAPS,
   FPGA_AI_OPTION_RU,
   FPGA_AIR_MODE_START_RU,
+  HOST_ATTACK_MODE_RU_CAPS,
   fpgaInnerDispatch,
   isFpgaAirLive,
   isFpgaAirPattern,
@@ -53,7 +54,7 @@ export function ScanPanel() {
             ? `РЕЖИМ SDR // ${FPGA_AIR_MODE_RU_CAPS} · РЕТРАНСЛЯЦИЯ В FPGA`
             : airLive
               ? "РЕЖИМ SDR // FPGA · АВТОНОМНЫЙ ЭФИР (БЕЗ СКАНЕРА)"
-              : "РЕЖИМ SDR // АВТО-СКАНЕР ИЛИ TX С НОУТБУКА"}
+              : `РЕЖИМ SDR // ${HOST_ATTACK_MODE_RU_CAPS} ИЛИ TX С НОУТБУКА`}
       </span>
       <p className="panel-note">
         {taskLive
@@ -62,7 +63,7 @@ export function ScanPanel() {
             ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
-              : `АВТО + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: ${FPGA_AIR_MODE_RU.toLowerCase()}. Хост-скан и FPGA вместе не работают (один USB).`}
+              : `${HOST_ATTACK_MODE_RU_CAPS} + ПЕРЕДАТЬ — хост-скан (на ноутбуке), задержка миллисекунды. Микросекунды: ${FPGA_AIR_MODE_RU.toLowerCase()}. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -220,9 +221,9 @@ export function ScanPanel() {
         )}
         {auto && (
           <label>
-            АВТО
+            {HOST_ATTACK_MODE_RU_CAPS}
             <select
-              aria-label="Приоритет или очередь АВТО"
+              aria-label={`Приоритет или очередь ${HOST_ATTACK_MODE_RU_CAPS}`}
               value={s.autoDispatch}
               onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
               disabled={busy}

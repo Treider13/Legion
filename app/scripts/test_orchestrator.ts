@@ -490,16 +490,19 @@ async function main(): Promise<void> {
   check("конфликт: ESP32 при FPGA ARM", modeConflict("esp32", false, false, true) !== null);
   check("конфликт FPGA: текст про ОСТАНОВИТЬ FPGA", (modeConflict("esp32", false, false, true) ?? "").includes("FPGA"));
   check("обход полосы сам TX не включает", walkPatternArmsTx() === false);
-  check("авто — сканер участвует", scannerParticipates("auto") === true);
+  check("атака — сканер участвует", scannerParticipates("auto") === true);
   check("случайная — сканер не участвует", scannerParticipates("hop") === false);
   check("сплошная — сканер не участвует", scannerParticipates("band") === false);
-  check("planSdrWork авто: сканер, не open-loop", planSdrWork("auto").useScanner && !planSdrWork("auto").openLoopTx);
+  check("planSdrWork атака: сканер, не open-loop", planSdrWork("auto").useScanner && !planSdrWork("auto").openLoopTx);
   check("planSdrWork hop: Ethernet TX, без сканера", planSdrWork("hop").openLoopTx && !planSdrWork("hop").useScanner);
   check("planSdrWork качание: Ethernet TX, без сканера", planSdrWork("sweep").openLoopTx && !planSdrWork("sweep").useScanner);
   check("planSdrWork сплошная: Ethernet TX, без сканера", planSdrWork("band").openLoopTx && !planSdrWork("band").useScanner);
   check("имя sweep = КАЧАНИЕ, не туда-сюда", patternLabelRu("sweep") === "КАЧАНИЕ");
   check("опция качания без туда-сюда", !patternOptionRu("sweep").toLowerCase().includes("туда"));
-  check("СКАНИРОВАТЬ в АВТО можно", scanRefusedReason("auto") === null);
+  check("СКАНИРОВАТЬ в Атаке можно", scanRefusedReason("auto") === null);
+  check("имя атаки", patternLabelRu("auto") === "АТАКА");
+  check("опция атаки — сканер → ПЕРЕДАТЬ", patternOptionRu("auto").startsWith("Атака"));
+  check("отказ качания шлёт в АТАКУ", (scanRefusedReason("sweep") ?? "").includes("выберите АТАКА"));
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
   check("умная атака имя", patternLabelRu("fpga") === "УМНАЯ АТАКА");
@@ -516,7 +519,7 @@ async function main(): Promise<void> {
   check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
   check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
   check(
-    "пустой эфир не стопает АВТО",
+    "пустой эфир не стопает Атаку",
     shouldKeepTransmit({ operatorArmed: true, liveEmpty: true }) === true,
   );
   check(
@@ -524,12 +527,13 @@ async function main(): Promise<void> {
     shouldKeepTransmit({ operatorArmed: true, walkerFinished: true }) === true,
   );
   check("без ПЕРЕДАТЬ процесс не живёт", shouldKeepTransmit({ operatorArmed: false, liveEmpty: true }) === false);
-  check("авто reason — до стопа оператора", planSdrWork("auto").reason.includes("пока оператор не стопнет"));
+  check("атака reason — до стопа оператора",
+    planSdrWork("auto").reason.startsWith("Атака:") && planSdrWork("auto").reason.includes("пока оператор не стопнет"));
   check("качание reason — Ethernet до стопа", planSdrWork("sweep").reason.includes("пока оператор не стопнет"));
-  check("обычный АВТО по очереди", planSdrWork("auto", "turn").reason.includes("по очереди"));
-  check("приоритет АВТО держим", planSdrWork("auto", "priority").reason.includes("держим"));
-  check("стоянка АВТО про цифровой вырез", planSdrWork("auto", "park").reason.includes("цифрой"));
-  check("имя обычного АВТО", autoDispatchLabelRu("turn") === "ОБЫЧНЫЙ");
+  check("обычная Атака по очереди", planSdrWork("auto", "turn").reason.includes("по очереди"));
+  check("приоритет Атаки держим", planSdrWork("auto", "priority").reason.includes("держим"));
+  check("стоянка Атаки про цифровой вырез", planSdrWork("auto", "park").reason.includes("цифрой"));
+  check("имя обычной Атаки", autoDispatchLabelRu("turn") === "ОБЫЧНЫЙ");
   check("имя приоритета", autoDispatchLabelRu("priority") === "ПРИОРИТЕТ");
   check("имя стоянки", autoDispatchLabelRu("park") === "СТОЯНКА");
   check("ИИ — окно на всплеск", FPGA_AI_LABEL_RU === "ИИ");

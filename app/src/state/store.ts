@@ -265,7 +265,7 @@ interface LegionStore {
   /** 0 = все подряд, 100 = только сильные. */
   scanSensitivity: number;
   scanPattern: ScanPattern;
-  /** АВТО: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
+  /** Атака: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
   scanDwellMs: string;
@@ -313,7 +313,7 @@ interface LegionStore {
   signalFreqMhz: string;
   /** TX именно сигнальной волны — взаимоисключение со сканером-оркестратором. */
   signalTxActive: boolean;
-  /** Зашитая волна для ВСЕХ TX-путей SDR (АВТО/ПРИОРИТЕТ, open-loop). null = CW тон. */
+  /** Зашитая волна для ВСЕХ TX-путей SDR (Атака/приоритет, open-loop). null = CW тон. */
   txWaveKind: WaveKind | null;
   txWaveParams: Record<string, number>;
   // FPGA-ревизия legion (bladeRF 1 x40): автономный тракт в FPGA
@@ -934,7 +934,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       lastForwardPowerDbm: powerDbm,
       lastSdrTxUs: sdrUs || get().lastSdrTxUs,
       sdrHoldSince: Date.now(),
-      lastCueReason: `авто → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${wave} · ${sdrUs} µs host`,
+      lastCueReason: `атака → ${plan.freqMhz.toFixed(3)} МГц на усилитель · ${wave} · ${sdrUs} µs host`,
     });
   };
 
@@ -2450,7 +2450,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({
         transmitArmed: true,
         signalTxActive: true,
-        // Волна зашита: теперь её используют и АВТО/ПРИОРИТЕТ, и open-loop TX.
+        // Волна зашита: теперь её используют и Атака/приоритет, и open-loop TX.
         txWaveKind: kind,
         txWaveParams: { ...get().signalParams },
         lastForwardMhz: mhz,
@@ -2470,7 +2470,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       set({ txWaveKind: null, txWaveParams: {} });
-      pushLog("sys", "TX-контент снят: АВТО/ПРИОРИТЕТ и open-loop снова на CW тоне");
+      pushLog("sys", "TX-контент снят: Атака/приоритет и open-loop снова на CW тоне");
     },
 
     setFpgaMode: (m) => set({ fpgaMode: m }),

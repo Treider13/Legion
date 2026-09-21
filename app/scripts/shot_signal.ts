@@ -1,5 +1,5 @@
 // E2E (ручная проверка, не CI): зашитый сигнал идёт во все TX-режимы.
-// 1) ТИП СИГНАЛА → ЗАШИТЬ → TX с волной. 2) СТОП. 3) СКАН: АВТО → ПЕРЕДАТЬ
+// 1) ТИП СИГНАЛА → ЗАШИТЬ → TX с волной. 2) СТОП. 3) СКАН: Атака → ПЕРЕДАТЬ
 //    → handoff использует зашитую волну (не CW). 4) КАЧАНИЕ (без сканера) → то же.
 import puppeteer from "puppeteer-core";
 
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   await clickButton(page, "СТОП TX");
   await new Promise((r) => setTimeout(r, 500));
 
-  // --- 3) СКАН: АВТО + демо-несущая + ПЕРЕДАТЬ → handoff с волной ---
+  // --- 3) СКАН: Атака + демо-несущая + ПЕРЕДАТЬ → handoff с волной ---
   await page.evaluate(`document.querySelector('[data-workspace="scan"]').click()`);
   await new Promise((r) => setTimeout(r, 500));
   await clickButton(page, "ДЕМО-НЕСУЩАЯ");
@@ -65,14 +65,14 @@ async function main(): Promise<void> {
     await poll(
       page,
       `(() => { const t = document.querySelector('.status-line')?.textContent ?? "";
-        return t.includes("авто →") && t.includes("· qpsk ·"); })()`,
+        return t.includes("атака →") && t.includes("· qpsk ·"); })()`,
       15000,
     );
     autoOk = true;
   } catch {
     autoOk = false;
   }
-  console.log("3. АВТО handoff использует зашитую волну qpsk:", autoOk);
+  console.log("3. Атака handoff использует зашитую волну qpsk:", autoOk);
   const statusLine = String(await page.evaluate(`document.querySelector('.status-line')?.textContent ?? ""`));
   console.log("3. status-line:", JSON.stringify(statusLine));
   await page.screenshot({ path: "/tmp/legion_sig_auto.png" });
