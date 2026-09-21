@@ -98,6 +98,15 @@ export function attackWaveParams(kind: WaveKind, paint: AttackPaint, base: Recor
   return next;
 }
 
+/** Рамка оператора уже выбрана и ПЕРЕДАТЬ нажат — тик не имеет права перенацеливать. */
+export function attackPaintOwnsTx(
+  pattern: string,
+  paint: AttackPaint | null | undefined,
+  transmitArmed: boolean,
+): boolean {
+  return pattern === "auto" && paint != null && transmitArmed;
+}
+
 export function paintRefuseReason(
   paint: AttackPaint | null,
   bands: readonly AllowBand[],

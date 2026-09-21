@@ -58,6 +58,7 @@ import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
 import {
   ATTACK_COOLDOWN_MS,
   ATTACK_HOLD_DEFAULT_MS,
+  attackPaintOwnsTx,
   attackWaveParams,
   clampAttackHoldMs,
   clampPaintToCaps,
@@ -1067,8 +1068,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     gResense = true;
     try {
       const listenWhileTx =
-        get().scanPattern === "auto" &&
-        get().attackPaint != null &&
+        attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed) &&
         (gLive ? catalogCaps(get().sdrId).fullDuplex : gSdr.fullDuplex());
       if (!listenWhileTx) {
         if (gLive) await hostTxOff();
@@ -4053,7 +4053,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           let bins: ScanBin[] = [];
           let centerMhz = 0;
           let detections: Detection[] = [];
-          const starePaint = get().scanPattern === "auto" && get().transmitArmed && get().lastForwardMhz != null
+          const starePaint = attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed)
             ? get().attackPaint
             : null;
           if (starePaint) {
@@ -4111,7 +4111,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               cur.sdrBands.length === 0 ? true : cueFreqAllowed(h.freqMhz, cur.sdrBands),
             );
             const paint = cur.attackPaint;
-            const paintTx = paint != null && cur.transmitArmed && cur.lastForwardMhz != null;
+            const paintTx = attackPaintOwnsTx(cur.scanPattern, paint, cur.transmitArmed);
             const guard = ownTxGuardMhz(cur.txWaveKind !== null);
             const fwd = cur.lastForwardMhz;
             const feed = hits.filter((h) => {
@@ -4124,7 +4124,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             set({ attackTracks: gAttackTracker.snapshot() });
           }
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
-          if (cur.scanPattern === "auto" && cur.attackPaint && cur.lastForwardMhz != null) return;
+          if (attackPaintOwnsTx(cur.scanPattern, cur.attackPaint, cur.transmitArmed)) return;
           gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);
           const held = gGate.lastCuedMhz;
           if (

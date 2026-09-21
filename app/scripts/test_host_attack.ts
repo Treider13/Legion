@@ -9,6 +9,7 @@ import {
   ATTACK_COOLDOWN_MS,
   ATTACK_HOLD_MIN_MS,
   ATTACK_TX_MAX_MHZ,
+  attackPaintOwnsTx,
   attackWaveParams,
   clampAttackHoldMs,
   clipPaintToAllowlist,
@@ -132,6 +133,13 @@ async function main(): Promise<void> {
   check("чирп размах = рамка, не 1 МГц", (chirp.spanKhz ?? 0) >= 10000);
   check("fs рамки в потолке USB", paintTxFsHz(p) <= 40e6 && paintTxFsHz(p) >= 20e6 * 0.99);
   check("подсказка волны честная", paintWaveHint("sine", p, {}).includes("не всю"));
+  check(
+    "рамка владеет TX с момента ПЕРЕДАТЬ, не с lastForward",
+    attackPaintOwnsTx("auto", p, true) &&
+      !attackPaintOwnsTx("auto", p, false) &&
+      !attackPaintOwnsTx("auto", null, true) &&
+      !attackPaintOwnsTx("fpga", p, true),
+  );
 
   const old = detectFromBins(bins, 12);
   check("detectFromBins по-прежнему жив", old.some((d) => Math.abs(d.freqMhz - 2442) < 0.5));
@@ -160,6 +168,18 @@ async function main(): Promise<void> {
   L().startScan();
   check("скан Атаки пошёл", await waitFor("scan", () => L().scanRunning));
   L().injectDemoTone();
+  // Замок рамки должен держать оператора, а не lastForward (его ещё нет до
+  // commit ПЕРЕДАТЬ). Иначе тик скана в окне armed→TX забирает демо-несущую.
+  useLegion.setState({ transmitArmed: true });
+  const stolen = await waitFor("тик украл TX", () => L().lastForwardMhz != null, 500);
+  check(
+    "рамка+armed: тик не авто-handoff до ПЕРЕДАТЬ",
+    !stolen,
+    `lastForward=${L().lastForwardMhz}`,
+  );
+  await L().stopTransmit();
+  await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
+  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
   await L().startTransmit();
   check("рамка TX на центр, не на демо", L().transmitArmed && L().lastForwardMhz != null && Math.abs(L().lastForwardMhz! - 2440) < 0.15);
   check("выдержка рамки заведена", L().attackTxUntil != null && L().attackTxUntil! > Date.now());
