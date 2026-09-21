@@ -348,6 +348,16 @@ async function main(): Promise<void> {
   const clipped = clipPaintToAllowlist({ f1Mhz: 2430, f2Mhz: 2440 }, bands);
   check("рамка в allowlist", clipped != null && paintCenterMhz(clipped!) > 2430);
   check("рамка вне полосы отказ", clipPaintToAllowlist({ f1Mhz: 900, f2Mhz: 910 }, bands) === null);
+  const twoCorridors = [
+    { f1Mhz: 2400, f2Mhz: 2500 },
+    { f1Mhz: 5725, f2Mhz: 5850 },
+  ];
+  const leak = clipPaintToAllowlist({ f1Mhz: 2490, f2Mhz: 2510 }, twoCorridors);
+  check(
+    "клип не вылезает в дыру между коридорами",
+    leak != null && leak.f2Mhz <= 2500 + 1e-9 && leak.f1Mhz >= 2400 - 1e-9,
+    leak ? `${leak.f1Mhz}…${leak.f2Mhz}` : "null",
+  );
   check("без рамки ПЕРЕДАТЬ отказ", paintRefuseReason(null, bands, true)?.includes("мышкой") === true);
   check("без 50 Ом отказ", paintRefuseReason({ f1Mhz: 2430, f2Mhz: 2440 }, bands, false)?.includes("50") === true);
   check("выдержка режется", clampAttackHoldMs(10) === 200 && clampAttackHoldMs(999999) === 120000);

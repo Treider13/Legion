@@ -3,7 +3,7 @@
 // Потолок USB FD xA4 ≈ 40 МГц (Reddit / Nuand). Минимум канала как AD9361.
 // Волна — из WAVE_CATALOG, размах чирпа = ширина рамки (не потолок 1 МГц).
 // ============================================================================
-import { cueFreqAllowed, type AllowBand } from "../policy/allowlist";
+import { rangeInAllowlist, type AllowBand } from "../policy/allowlist";
 import type { WaveKind } from "../sdr/waveforms";
 import { defaultParams, waveMeta } from "../sdr/waveforms";
 
@@ -54,16 +54,17 @@ export function clampPaintToCaps(p: AttackPaint): AttackPaint {
 export function clipPaintToAllowlist(p: AttackPaint, bands: readonly AllowBand[]): AttackPaint | null {
   const raw = clampPaintToCaps(p);
   if (bands.length === 0) return raw;
-  let f1 = raw.f1Mhz;
-  let f2 = raw.f2Mhz;
-  const lo = Math.min(...bands.map((b) => b.f1Mhz));
-  const hi = Math.max(...bands.map((b) => b.f2Mhz));
-  f1 = Math.max(f1, lo);
-  f2 = Math.min(f2, hi);
+  const mid = paintCenterMhz(raw);
+  const home =
+    bands.find((b) => mid >= b.f1Mhz && mid <= b.f2Mhz) ??
+    bands.find((b) => raw.f1Mhz <= b.f2Mhz && raw.f2Mhz >= b.f1Mhz);
+  if (!home) return null;
+  const f1 = Math.max(raw.f1Mhz, home.f1Mhz);
+  const f2 = Math.min(raw.f2Mhz, home.f2Mhz);
   if (f2 - f1 < ATTACK_TX_MIN_MHZ) return null;
-  const mid = (f1 + f2) / 2;
-  if (!cueFreqAllowed(mid, bands)) return null;
-  return clampPaintToCaps({ f1Mhz: f1, f2Mhz: f2 });
+  const clipped = clampPaintToCaps({ f1Mhz: f1, f2Mhz: f2 });
+  if (!rangeInAllowlist(clipped.f1Mhz, clipped.f2Mhz, [home])) return null;
+  return clipped;
 }
 
 export function paintTxFsHz(p: AttackPaint): number {
