@@ -334,6 +334,22 @@ async function main(): Promise<void> {
     transmitArmed: false,
   });
   check("тон против 20 МГц — спор", advice.hints.some((h) => h.kind === "wave" && h.wave === "awgn"));
+  const chirpAdvice = buildAttackAdvice({
+    tracks: sticky,
+    families: [],
+    widths: new Map([[1, { width3Mhz: 19.5, width26Mhz: 20.2, occ99Mhz: 20.0 }]]),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: { f1Mhz: 2432, f2Mhz: 2452 },
+    wave: "chirp",
+    holdMs: 3000,
+    bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+  });
+  const chirpWave = chirpAdvice.hints.find((h) => h.kind === "wave");
+  check("чирп на широкой рамке зальёт края", (chirpWave?.text ?? "").includes("зальёт"), chirpWave?.text ?? "");
   check("рамка предлагается, не ставится", advice.suggestPaint != null && advice.hints.some((h) => h.kind === "paint" && h.paint != null));
   check("предложение не команда", advice.scene.includes("не команда"));
   check("MAVLink не форма спектра", advice.scene.includes("MAVLink"));

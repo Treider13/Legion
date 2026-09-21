@@ -294,6 +294,12 @@ export function buildAttackAdvice(input: {
       waveText += ` Края рамки она не зальёт: ≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц.`;
     }
   }
+  if (input.paint && span > 0 && !waveText.includes("кра")) {
+    waveText +=
+      occ + 0.35 >= span
+        ? ` Выбранная волна зальёт края рамки (≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц).`
+        : ` Выбранная волна не зальёт края: ≈ ${occ.toFixed(2)} из ${span.toFixed(2)} МГц.`;
+  }
   hints.push({
     kind: "wave",
     title: "Волна",

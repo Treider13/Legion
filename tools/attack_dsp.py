@@ -296,8 +296,10 @@ def point_fam(x: np.ndarray, fs: float) -> dict[str, float]:
         alphas.append(coarse + fine)
     mag = np.concatenate(mags)
     alpha = np.concatenate(alphas)
-    step = fs / float(Np)
-    ok = (np.abs(alpha) >= max(2_000.0, step * 0.35)) & (np.abs(alpha) <= fs * 0.45)
+    # α≈0 — обычный спектр, не цикл. Режем только низ, около 2 кГц.
+    # Не долю шага fs/Np: этот шаг 30–60 кГц и выкидывал 10–22 кГц,
+    # как раз те циклы, которые после канализатора должна видеть FAM.
+    ok = (np.abs(alpha) >= 2_000.0) & (np.abs(alpha) <= fs * 0.45)
     mag = mag[ok]
     alpha = alpha[ok]
     if mag.size < 8 or not np.any(np.isfinite(mag)):
