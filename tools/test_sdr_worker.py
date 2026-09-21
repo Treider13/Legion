@@ -331,7 +331,7 @@ def main() -> int:
         },
     )
     check("attack_think fake ок", think.get("ok") is True and think.get("looks"))
-    check("attack_think fake тон", think["looks"][0].get("kind") == "tone", str(think["looks"][0]))
+    check("attack_think fake тон", think["looks"][0].get("kind") == "tone")
     check(
         "handle знает только attack_think рядом с attack_scan",
         'if op == "attack_think":' in open(WORKER).read(),
@@ -372,7 +372,7 @@ def main() -> int:
         live._attack_mem.push_block(ofdm_l)
         think_live = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], False)
         kind_live = (think_live.get("looks") or [{}])[0].get("kind")
-        check("think 61.44 OFDM не тон", think_live.get("ok") is True and kind_live != "tone", str(think_live.get("looks")))
+        check("think 61.44 OFDM не тон", think_live.get("ok") is True and kind_live != "tone")
         live._tone_bb = ofdm_l[:4096]
         live._tx_fs = 2e6
         think_mis = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 2}], True)
@@ -386,7 +386,6 @@ def main() -> int:
         check(
             "вычет на тех же часах считает leftover",
             think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
-            str(think_ok.get("leftover")),
         )
         check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
 
