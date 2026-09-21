@@ -3198,105 +3198,108 @@ export const useLegion = create<LegionStore>((set, get) => {
         airGen = gFpgaAirGen;
       }
 
-      get().stopScan();
-      if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
-      if (soloRevoked()) {
-        pushLog("sys", "FPGA solo: отменён оператором в полёте");
-        return false;
-      }
-      if (airRevoked()) {
-        pushLog("sys", "FPGA эфир: отменён оператором в полёте");
-        return false;
-      }
-
-      const bands = get().sdrBands;
-      const f1 =
-        path === "solo"
-          ? parseFloat(get().sdrF1)
-          : bands.length
-            ? Math.min(...bands.map((b) => b.f1Mhz))
-            : parseFloat(get().sdrF1);
-      const f2 =
-        path === "solo"
-          ? parseFloat(get().sdrF2)
-          : bands.length
-            ? Math.max(...bands.map((b) => b.f2Mhz))
-            : parseFloat(get().sdrF2);
-      const mid = (f1 + f2) / 2;
-      const analog = catalogCaps(get().sdrId).analogBwMhz;
-      const span = Math.max(f2 - f1, 0);
-      // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
-      // коридор шире канала либо ходится по стоянкам (micro), либо честно
-      // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
-
+      // Блокировка охватывает всю подготовку, включая первый ping.
+      // Иначе поздний ответ продолжит запуск уже после смены подключения.
       let usbTouched = false;
-      const gw = (cmd: Record<string, unknown>) => {
-        if (cmd.op === "usb") usbTouched = true;
-        return hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
-      };
       let usbOut = false;
-      const abortSoloIfRevoked = async (armAttempted = false): Promise<boolean> => {
-        if (!soloRevoked()) return false;
-        pushLog("sys", "FPGA solo: отменён оператором в полёте");
-        stopSoloWalk();
-        // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
-        // иначе осиротевший опрос статуса тикал бы до следующей сессии.
-        stopFpgaKick();
-        stopFpgaObserve();
-        if (armAttempted || get().fpgaArmed) {
-          await get().fpgaDisarm();
-          usbTouched = false; // DISARM-путь сам завершает или повторяет release.
-          usbOut = false;
-          if (get().fpgaStopPending) return true;
-        }
-        if (usbOut) {
-          await releaseSoapyForFpga();
-          usbOut = false;
-        }
-        if (usbTouched) {
-          await releaseCancelledFpgaUsb(s0);
-          usbTouched = false;
-        }
-        set({ fpgaPath: null });
-        return true;
-      };
-      const abortAirIfRevoked = async (armAttempted = false): Promise<boolean> => {
-        if (!airRevoked()) return false;
-        pushLog("sys", "FPGA эфир: отменён оператором в полёте");
-        // Kick и observe неразрывны (см. abortSoloIfRevoked).
-        stopFpgaKick();
-        stopFpgaObserve();
-        stopAirWalk();
-        if (armAttempted || get().fpgaArmed) {
-          await get().fpgaDisarm();
-          usbTouched = false;
-          if (get().fpgaStopPending) return true;
-        }
-        if (usbTouched) {
-          await releaseCancelledFpgaUsb(s0);
-          usbTouched = false;
-        }
-        set({ fpgaPath: null });
-        return true;
-      };
-
-      const ping = await gw({ op: "ping" });
-      if (await abortSoloIfRevoked()) return false;
-      if (await abortAirIfRevoked()) return false;
-      if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
-      const pingNo = fpgaGatewayRefused(ping);
-      if (pingNo) {
-        pushLog("sys", pingNo);
-        return false;
-      }
-      const noLegionPath = fpgaLegionMissing(ping);
-      if (noLegionPath) {
-        pushLog("sys", noLegionPath);
-        return false;
-      }
-
-      set({ fpgaBusy: true, fpgaPath: path, fpgaStatus: null });
+      set({ fpgaBusy: true, fpgaStatus: null });
       try {
+        get().stopScan();
+        if (get().transmitArmed || get().signalTxActive) await get().stopTransmit();
+        if (soloRevoked()) {
+          pushLog("sys", "FPGA solo: отменён оператором в полёте");
+          return false;
+        }
+        if (airRevoked()) {
+          pushLog("sys", "FPGA эфир: отменён оператором в полёте");
+          return false;
+        }
+
+        const bands = get().sdrBands;
+        const f1 =
+          path === "solo"
+            ? parseFloat(get().sdrF1)
+            : bands.length
+              ? Math.min(...bands.map((b) => b.f1Mhz))
+              : parseFloat(get().sdrF1);
+        const f2 =
+          path === "solo"
+            ? parseFloat(get().sdrF2)
+            : bands.length
+              ? Math.max(...bands.map((b) => b.f2Mhz))
+              : parseFloat(get().sdrF2);
+        const mid = (f1 + f2) / 2;
+        const analog = catalogCaps(get().sdrId).analogBwMhz;
+        const span = Math.max(f2 - f1, 0);
+        // Предупреждения «чип видит центр, не обход» больше нет: с air-обходом
+        // коридор шире канала либо ходится по стоянкам (micro), либо честно
+        // отказывает (x40, airHopBlockedReason) — оба текста в air-ветке.
+
+        const gw = (cmd: Record<string, unknown>) => {
+          if (cmd.op === "usb") usbTouched = true;
+          return hostFpga({ ...cmd, token: get().fpgaToken }, get().sdrGateway);
+        };
+        const abortSoloIfRevoked = async (armAttempted = false): Promise<boolean> => {
+          if (!soloRevoked()) return false;
+          pushLog("sys", "FPGA solo: отменён оператором в полёте");
+          stopSoloWalk();
+          // Kick и observe живут и умирают вместе (beginFpgaKick заводит оба) —
+          // иначе осиротевший опрос статуса тикал бы до следующей сессии.
+          stopFpgaKick();
+          stopFpgaObserve();
+          if (armAttempted || get().fpgaArmed) {
+            await get().fpgaDisarm();
+            usbTouched = false; // DISARM-путь сам завершает или повторяет release.
+            usbOut = false;
+            if (get().fpgaStopPending) return true;
+          }
+          if (usbOut) {
+            await releaseSoapyForFpga();
+            usbOut = false;
+          }
+          if (usbTouched) {
+            await releaseCancelledFpgaUsb(s0);
+            usbTouched = false;
+          }
+          set({ fpgaPath: null });
+          return true;
+        };
+        const abortAirIfRevoked = async (armAttempted = false): Promise<boolean> => {
+          if (!airRevoked()) return false;
+          pushLog("sys", "FPGA эфир: отменён оператором в полёте");
+          // Kick и observe неразрывны (см. abortSoloIfRevoked).
+          stopFpgaKick();
+          stopFpgaObserve();
+          stopAirWalk();
+          if (armAttempted || get().fpgaArmed) {
+            await get().fpgaDisarm();
+            usbTouched = false;
+            if (get().fpgaStopPending) return true;
+          }
+          if (usbTouched) {
+            await releaseCancelledFpgaUsb(s0);
+            usbTouched = false;
+          }
+          set({ fpgaPath: null });
+          return true;
+        };
+
+        const ping = await gw({ op: "ping" });
+        if (await abortSoloIfRevoked()) return false;
+        if (await abortAirIfRevoked()) return false;
+        if (ping.legion !== undefined) set({ fpgaLegion: ping.legion ?? null });
+        const pingNo = fpgaGatewayRefused(ping);
+        if (pingNo) {
+          pushLog("sys", pingNo);
+          return false;
+        }
+        const noLegionPath = fpgaLegionMissing(ping);
+        if (noLegionPath) {
+          pushLog("sys", noLegionPath);
+          return false;
+        }
+
+        set({ fpgaPath: path });
         if (path === "air") {
           set({ fpgaMode: "lb_gated" });
           const tract = airTractParams(parseFloat(get().fpgaAirBwMhz), analog, get().fpgaDetShift);

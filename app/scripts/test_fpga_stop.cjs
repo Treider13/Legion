@@ -719,6 +719,73 @@ test('manual cleanup and automatic release retry share one request', async () =>
     assert.equal(r.clock.pending().length, 0);
 });
 
+
+for (const entry of ['solo', 'air']) {
+    test(`${entry}: preparation owns the connection before its first awaited reply`, async () => {
+        const r = makeRuntime();
+        let ping;
+        r.get().setSdrGateway('gateway-A');
+        r.get().setFpgaToken('token-A');
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        r.setHandler(q => q.cmd?.op === 'ping' ? new Promise(resolve => ping = resolve) : normal(q));
+        const starting = r.get().startFpgaPath(entry);
+        await r.clock.flush();
+        assert(ping, 'preparation must have issued ping');
+        const busy = r.get().fpgaBusy;
+        const stopVisible = r.run.cinemaIsLive(r.get());
+        r.get().setSdrGateway('gateway-B');
+        r.get().setFpgaToken('token-B');
+        r.get().setSdrEmulation(true);
+        assert.deepEqual({ busy, stopVisible, gateway: r.get().sdrGateway, token: r.get().fpgaToken, emulation: r.get().sdrEmulation },
+            { busy: true, stopVisible: true, gateway: 'gateway-A', token: 'token-A', emulation: false });
+        const from = r.calls.length;
+        await r.get().fpgaArm();
+        assert.equal(await r.get().startFpgaPath(entry === 'solo' ? 'air' : 'solo'), false);
+        assert.equal(r.calls.length, from, 'another start cannot enter preparation');
+        await r.run.runCinemaStop();
+        ping({ ok: true, legion: true, fake: false });
+        assert.equal(await starting, false);
+        assert(!r.get().fpgaBusy && !r.get().fpgaArmed && !r.get().fpgaStopPending);
+        assert(!r.calls.some(c => c.op === 'arm' || c.op === 'usb' || c.op === 'kick'));
+        assert.equal(r.clock.pending().length, 0);
+        r.get().setSdrGateway('gateway-B');
+        assert.equal(r.get().sdrGateway, 'gateway-B', 'cancellation releases the connection lock');
+    });
+}
+
+
+for (const entry of ['solo', 'air']) {
+    test(`${entry}: refused initial ping releases the preparation lock`, async () => {
+        const r = makeRuntime();
+        r.get().setSdrLoad(true);
+        r.setHandler(q => q.cmd?.op === 'ping' ? { ok: false, reason: 'gateway unavailable' } : normal(q));
+        assert.equal(await r.get().startFpgaPath(entry), false);
+        assert(!r.get().fpgaBusy && !r.get().fpgaStopPending && !r.get().fpgaArmed);
+        assert(!r.calls.some(c => c.op === 'arm' || c.op === 'usb'));
+        r.get().setSdrGateway('gateway-B');
+        assert.equal(r.get().sdrGateway, 'gateway-B');
+        assert.equal(r.clock.pending().length, 0);
+    });
+    test(`${entry}: ordinary preparation completes and remains stoppable`, async () => {
+        const r = makeRuntime();
+        r.get().setSdrLoad(true);
+        r.get().setFpgaMode('nco');
+        r.get().armTxWave('sine');
+        r.get().setSdrAllowField('sdrF2', String(Number(r.get().sdrF1) + 1));
+        r.setHandler(q => {
+            if (q.op === 'probe') return { ok: true, soapy: true };
+            if (q.op === 'open' || q.op === 'park') return { ok: true, fake: false };
+            return normal(q);
+        });
+        assert.equal(await r.get().startFpgaPath(entry), true);
+        assert(r.get().fpgaArmed && !r.get().fpgaBusy);
+        await clean(r);
+    });
+}
+
 (async () => {
     let failures = 0;
     for (const { name, run } of tests) {
