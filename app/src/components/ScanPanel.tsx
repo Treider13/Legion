@@ -20,8 +20,8 @@ import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
-import { lookRu } from "../sense/attackLook";
 import type { AttackRow } from "../sense/attackScene";
+import { lookRu } from "../sense/attackLook";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
   ATTACK_HOLD_MAX_MS,

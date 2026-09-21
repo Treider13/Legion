@@ -423,7 +423,7 @@ export function buildAttackAdvice(input: {
     return "fill";
   })();
   const haveClass = waveClassOf(input.wave);
-  const wavePick: WaveKind | null = wantClass === "fill" ? "awgn" : wantClass === "chirp" ? "chirp" : wantClass === "narrow" ? "sine" : null;
+  const wavePick: WaveKind | null = wantClass === "fill" ? "awgn" : wantClass === "narrow" ? "sine" : null;
   const occ = input.paint ? waveOccupiesPaintMhz(input.wave, input.paint, {}) : 0;
   const span = input.paint ? paintSpanMhz(input.paint) : 0;
   let waveText = `По картине ближе класс «${waveClassRu(wantClass)}».`;
