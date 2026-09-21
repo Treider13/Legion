@@ -651,6 +651,156 @@ async function main(): Promise<void> {
   });
   check("посадка полки на 20 дБ за четыре взгляда — тень", shortDrop.line.includes("тень"), shortDrop.line);
 
+  // Живой трекер: 915 и 5800 не бывают в одном окне. Duty пульта остаётся 1,
+  // полка садится на 20 дБ. Раньше preferWide отдавал рамку севшей полке.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    const narrow = (p: number) => ({
+      freqMhz: 915, fLowMhz: 914.75, fHighMhz: 915.25, widthMhz: 0.5, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    const shelf = (p: number) => ({
+      freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810, widthMhz: 20, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    let ts = 1000;
+    const videoP = [-30, -30, -30, -50];
+    for (let i = 0; i < 4; i++) {
+      const snap = tr.update([narrow(-40)], ts, { centerMhz: 915, spanMhz: 56 });
+      mem.notePowers(ts, snap, tr.currentSweep(), 915, 56);
+      ts += 100;
+      const seen = tr.update([shelf(videoP[i]!)], ts, { centerMhz: 5800, spanMhz: 56 });
+      mem.notePowers(ts, seen, tr.currentSweep(), 5800, 56);
+      ts += 100;
+    }
+    const held = buildAttackAdvice({
+      tracks: tr.snapshot(),
+      families: [],
+      widths: new Map(),
+      looks: new Map(),
+      windowMhz: 56,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      residual: null,
+      memory: mem.stats(),
+      transmitArmed: false,
+      snaps: mem.powerSnaps(),
+      sweep: tr.currentSweep(),
+    });
+    const heldMid = mid(held.suggestPaint);
+    check(
+      "ровный пульт не отдаёт рамку севшей полке",
+      Math.abs(heldMid - 915) < 2 && held.scene.includes("тень") && held.scene.includes("пульт") && !held.scene.includes("фон"),
+      `mid=${heldMid.toFixed(2)} ${held.scene}`,
+    );
+  }
+  // Тот же обход, но пульт ни разу не попал дважды подряд — след остаётся new.
+  // Последний взгляд на 5.8. Раньше такой след выкидывался из кадра вместе с тенью.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    const narrow = (p: number) => ({
+      freqMhz: 915, fLowMhz: 914.75, fHighMhz: 915.25, widthMhz: 0.5, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    const shelf = (p: number) => ({
+      freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810, widthMhz: 20, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    let ts = 1000;
+    const videoP = [-30, -30, -30, -50];
+    const steps: Array<"hit" | "miss"> = ["hit", "miss", "hit", "miss", "hit", "miss", "hit"];
+    let vi = 0;
+    for (let i = 0; i < steps.length; i++) {
+      const hits = steps[i] === "hit" ? [narrow(-40)] : [];
+      const snap = tr.update(hits, ts, { centerMhz: 915, spanMhz: 56 });
+      mem.notePowers(ts, snap, tr.currentSweep(), 915, 56);
+      ts += 100;
+      if (i >= steps.length - videoP.length) {
+        const seen = tr.update([shelf(videoP[vi]!)], ts, { centerMhz: 5800, spanMhz: 56 });
+        mem.notePowers(ts, seen, tr.currentSweep(), 5800, 56);
+        vi += 1;
+        ts += 100;
+      }
+    }
+    const hop = tr.snapshot().find((t) => Math.abs(t.freqMhz - 915) < 1);
+    const hopped = buildAttackAdvice({
+      tracks: tr.snapshot(),
+      families: [],
+      widths: new Map(),
+      looks: new Map(),
+      windowMhz: 56,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      residual: null,
+      memory: mem.stats(),
+      transmitArmed: false,
+      snaps: mem.powerSnaps(),
+      sweep: tr.currentSweep(),
+    });
+    const hopMid = mid(hopped.suggestPaint);
+    check(
+      "мигающий пульт другого окна держит тень",
+      hop != null && hop.state === "new" && hop.lastSweep !== tr.currentSweep() && Math.abs(hopMid - 915) < 2 && hopped.scene.includes("тень"),
+      `state=${hop?.state} last=${hop?.lastSweep} sweep=${tr.currentSweep()} mid=${hopMid.toFixed(2)} ${hopped.scene}`,
+    );
+  }
+  // Сначала долго видим только 915, потом полка. firstSweep полки далеко:
+  // раньше ровный пульт становился «фоном», рамка уходила на севшую 5.8.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    const narrow = (p: number) => ({
+      freqMhz: 915, fLowMhz: 914.75, fHighMhz: 915.25, widthMhz: 0.5, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    const shelf = (p: number) => ({
+      freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810, widthMhz: 20, powerDbm: p, noiseDbm: -90, snrDb: p + 90,
+    });
+    let ts = 1000;
+    for (let i = 0; i < 4; i++) {
+      const snap = tr.update([narrow(-40)], ts, { centerMhz: 915, spanMhz: 56 });
+      mem.notePowers(ts, snap, tr.currentSweep(), 915, 56);
+      ts += 100;
+    }
+    for (let i = 0; i < 8; i++) {
+      const snap = tr.update([], ts, { centerMhz: 2000, spanMhz: 56 });
+      mem.notePowers(ts, snap, tr.currentSweep(), 2000, 56);
+      ts += 100;
+    }
+    const videoP = [-30, -30, -30, -50];
+    for (let i = 0; i < videoP.length; i++) {
+      const back = tr.update([narrow(-40)], ts, { centerMhz: 915, spanMhz: 56 });
+      mem.notePowers(ts, back, tr.currentSweep(), 915, 56);
+      ts += 100;
+      const seen = tr.update([shelf(videoP[i]!)], ts, { centerMhz: 5800, spanMhz: 56 });
+      mem.notePowers(ts, seen, tr.currentSweep(), 5800, 56);
+      ts += 100;
+    }
+    const late = buildAttackAdvice({
+      tracks: tr.snapshot(),
+      families: [],
+      widths: new Map(),
+      looks: new Map(),
+      windowMhz: 56,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      residual: null,
+      memory: mem.stats(),
+      transmitArmed: false,
+      snaps: mem.powerSnaps(),
+      sweep: tr.currentSweep(),
+    });
+    const lateMid = mid(late.suggestPaint);
+    check(
+      "поздняя полка не делает живой пульт фоном",
+      Math.abs(lateMid - 915) < 2 && late.scene.includes("тень") && late.scene.includes("пульт") && !late.scene.includes("фон"),
+      `mid=${lateMid.toFixed(2)} ${late.scene}`,
+    );
+  }
+
   const txMem = new AttackSessionMemory();
   const shelfAt = (lastSweep: number) =>
     track({ id: 4, freqMhz: 5800, widthMhz: 20, duty: 0.9, powerDbm: -30, firstSweep: 1, lastSweep, streak: 6 });

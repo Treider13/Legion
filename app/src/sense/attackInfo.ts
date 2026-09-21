@@ -99,7 +99,13 @@ export function attackLiveTracks(tracks: readonly AttackTrack[], sweep?: number)
   }
   return tracks.filter((t) => {
     if (!liveState(t.state)) return false;
-    if (t.state === "new" && t.lastSweep !== current) return false;
+    if (t.state === "new" && t.lastSweep !== current) {
+      // Один удар — вспышка, её рамка гаснет, когда окно ушло.
+      // Узкий след с двумя попаданиями, но без двух подряд, так и остаётся
+      // new: порог серии его не подтверждает. Выкинуть его — стереть пульт
+      // ровно к тому обходу, где на 5.8 уже видна севшая полка.
+      if (!(t.hits >= 2 && t.widthMhz <= 2)) return false;
+    }
     return true;
   });
 }
@@ -241,6 +247,14 @@ function diedInView(seen: Seen): boolean {
   return tail.every((p) => !p) && head.some((p) => p);
 }
 
+/** Полка реально села, а не просто стала тише на шуме замера. */
+function powerFell(seen: Seen | undefined): boolean {
+  if (!seen) return false;
+  if (diedInView(seen)) return true;
+  const drop = dropDb(seen.powers);
+  return drop != null && drop >= SHADOW_DROP_DB;
+}
+
 /**
  * Одинаковый ход двух полок на одном отрезке времени.
  * Сравниваются наклоны двух половин общего окна хитов, а не сжатые знаки
@@ -306,7 +320,15 @@ export function readAttackInfo(input: {
   for (const t of live) {
     const powers = seen.get(t.id)?.powers ?? [];
     if (powers.length < ROOM_MIN_SAMPLES || stdev(powers) >= ROOM_STD_DB) continue;
-    const bornLater = live.some((o) => o.id !== t.id && o.firstSweep >= t.firstSweep + ROOM_BIRTH_SWEEPS);
+    const bornLater = live.some((o) => {
+      if (o.id === t.id || o.firstSweep < t.firstSweep + ROOM_BIRTH_SWEEPS) return false;
+      // 915 и 5800 не входят в одно окно 56 МГц, поэтому полка всегда
+      // «родилась позже». Если она уже села — это не новый борт рядом
+      // с вышкой, и ровный пульт нельзя называть фоном.
+      const later = seen.get(o.id);
+      if (later && videoLike(o) && HIGH_VIDEO.includes(bandBucket(o.freqMhz)) && powerFell(later)) return false;
+      return true;
+    });
     if (!bornLater) continue;
     if (videoLike(t)) {
       const withControl = live.some(
@@ -408,6 +430,34 @@ export function readAttackInfo(input: {
     }
   }
 
+  // Пульт, который был на каждом взгляде своего окна, имеет duty 1:
+  // промахов нет, потому что слух ушёл, а не потому что голос пропал.
+  // Порог duty < 0.45 его не видит, и тень молчит при уже измеренной посадке.
+  if (!fade && !shadow) {
+    const holders: AttackTrack[] = [];
+    for (const t of live) {
+      if (t.widthMhz > 2 || t.duty < 0.45) continue;
+      if (!CONTROL_BANDS.includes(bandBucket(t.freqMhz))) continue;
+      if (roomIds.has(t.id)) continue;
+      const cs = seen.get(t.id);
+      if (!cs) continue;
+      const controlDrop = dropDb(cs.powers);
+      if (!(controlDrop != null && controlDrop < CONTROL_HOLD_DB)) continue;
+      let videoGone = false;
+      for (const s of seen.values()) {
+        if (s.id === t.id || !videoLike(s) || !HIGH_VIDEO.includes(bandBucket(s.freqMhz))) continue;
+        if (snaps.length > 0 && !timeOverlap(s.obsTs, cs.obsTs)) continue;
+        if (powerFell(s)) videoGone = true;
+      }
+      if (videoGone) holders.push(t);
+    }
+    const pick = loudest(holders);
+    if (pick) {
+      shadow = true;
+      shadowControl = pick;
+    }
+  }
+
   let flutterId: number | null = null;
   let flutterScore = 0;
   for (const t of live) {
@@ -458,7 +508,11 @@ export function readAttackInfo(input: {
   let preferWideId: number | null = null;
   if (redirectId == null) {
     const top = loudest(live);
-    const wide = repeater && repeaterLoud ? repeaterLoud : loudest(wides);
+    const healthyWides = wides.filter((w) => !powerFell(seen.get(w.id)));
+    const wide =
+      repeater && repeaterLoud && healthyWides.some((w) => w.id === repeaterLoud.id)
+        ? repeaterLoud
+        : loudest(healthyWides);
     if (top && wide && top.id !== wide.id && !videoLike(top)) preferWideId = wide.id;
   }
 
@@ -470,6 +524,10 @@ export function readAttackInfo(input: {
     }
     if (repeater && (t.id === repeaterLoud?.id || t.id === repeaterOther?.id)) {
       roleOf.set(t.id, "ретранслятор");
+      continue;
+    }
+    if (shadowControl && t.id === shadowControl.id) {
+      roleOf.set(t.id, "пульт");
       continue;
     }
     if (videoLike(t)) roleOf.set(t.id, "борт");
