@@ -83,39 +83,38 @@ export function gasDbPerKm(freqMhz: number): number {
   return vapor + tail;
 }
 
-const RAIN: Array<[number, number, number]> = [
-  [5, 0.0009, 1.2],
-  [6, 0.00175, 1.308],
-  [8, 0.00395, 1.31],
-  [10, 0.0101, 1.276],
-  [12, 0.0188, 1.217],
-  [15, 0.0367, 1.154],
-  [20, 0.0751, 1.099],
-  [25, 0.124, 1.061],
-  [30, 0.187, 1.021],
-  [40, 0.35, 0.939],
-];
+// ITU-R P.838-3, горизонтальная поляризация. Дождь в сухой ответ не входит.
+const KH = {
+  a: [-5.3398, -0.35351, -0.23789, -0.94158],
+  b: [-0.10008, 1.2697, 0.86036, 0.64552],
+  c: [1.13098, 0.454, 0.15354, 0.16817],
+  m: -0.18961,
+  c0: 0.71147,
+};
+const AH = {
+  a: [-0.14318, 0.29591, 0.32177, -5.3761, 16.1721],
+  b: [1.82442, 0.77564, 0.63773, -0.9623, -3.2998],
+  c: [-0.55187, 0.19822, 0.13164, 1.47828, 3.4399],
+  m: 0.67849,
+  c0: -1.95537,
+};
+
+function p838Fit(fGHz: number, row: { a: number[]; b: number[]; c: number[]; m: number; c0: number }): number {
+  const logf = Math.log10(fGHz);
+  let sum = row.m * logf + row.c0;
+  for (let j = 0; j < row.a.length; j++) {
+    const t = (logf - row.b[j]) / row.c[j];
+    sum += row.a[j] * Math.exp(-(t * t));
+  }
+  return sum;
+}
 
 export function rainDbPerKm(freqMhz: number, mmPerH: number): number {
   const f = freqMhz / 1000;
-  if (f < 5 || mmPerH <= 0) return 0;
-  let lo = RAIN[0];
-  let hi = RAIN[RAIN.length - 1];
-  for (let i = 0; i < RAIN.length - 1; i++) {
-    if (f >= RAIN[i][0] && f <= RAIN[i + 1][0]) {
-      lo = RAIN[i];
-      hi = RAIN[i + 1];
-      break;
-    }
-  }
-  if (f <= RAIN[0][0]) {
-    lo = RAIN[0];
-    hi = RAIN[0];
-  }
-  const span = hi[0] === lo[0] ? 0 : (Math.log(f) - Math.log(lo[0])) / (Math.log(hi[0]) - Math.log(lo[0]));
-  const k = lo[1] * (hi[1] / lo[1]) ** span;
-  const a = lo[2] + (hi[2] - lo[2]) * span;
-  return k * mmPerH ** a;
+  if (f < 5 || mmPerH <= 0 || f > 1000) return 0;
+  const k = 10 ** p838Fit(f, KH);
+  const alpha = p838Fit(f, AH);
+  return k * mmPerH ** alpha;
 }
 
 /** Потеря одного острого гребня, ITU-R P.526, дБ. hM — высота земли над лучом. */

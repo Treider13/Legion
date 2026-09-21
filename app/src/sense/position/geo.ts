@@ -43,7 +43,7 @@ function vincentyInverse(lat1: number, lon1: number, lat2: number, lon2: number)
     const sinAlpha = (cosU1 * cosU2 * sinL) / sinSigma;
     cos2Alpha = 1 - sinAlpha * sinAlpha;
     cos2SigmaM = Math.abs(cos2Alpha) < 1e-12 ? 0 : cosSigma - (2 * sinU1 * sinU2) / cos2Alpha;
-    const C = (F / 16) * cos2Alpha * (2 + F * (4 - 3 * cos2Alpha));
+    const C = (F / 16) * cos2Alpha * (4 + F * (4 - 3 * cos2Alpha));
     const next = L + (1 - C) * F * sinAlpha * (sigma + C * sinSigma * (cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)));
     if (Math.abs(next - lambda) < 1e-12) {
       lambda = next;
@@ -101,7 +101,7 @@ export function destination(lat: number, lon: number, bearingDeg: number, distKm
   const tmp = sinU1 * sinSigma - cosU1 * cosSigma * cosAlpha1;
   const lat2 = Math.atan2(sinU1 * cosSigma + cosU1 * sinSigma * cosAlpha1, (1 - F) * Math.sqrt(sinAlpha * sinAlpha + tmp * tmp));
   const lambda = Math.atan2(sinSigma * sinAlpha1, cosU1 * cosSigma - sinU1 * sinSigma * cosAlpha1);
-  const C = (F / 16) * cos2Alpha * (2 + F * (4 - 3 * cos2Alpha));
+  const C = (F / 16) * cos2Alpha * (4 + F * (4 - 3 * cos2Alpha));
   const L = lambda - (1 - C) * F * sinAlpha * (sigma + C * sinSigma * (cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)));
   return { lat: (lat2 * 180) / Math.PI, lon: wrapLon(lon + (L * 180) / Math.PI) };
 }

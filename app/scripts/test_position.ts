@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, sideGainDb } from "../src/sense/position/compute";
+import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, sideGainDb } from "../src/sense/position/compute";
 import { azimuthDeg, destination, distanceKm, formatDeg } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
@@ -130,6 +130,11 @@ test("дифракция и газ на краях диапазона", () => {
   assert.ok(knifeEdgeDb(30, 20000, 25000, 2400) > knifeEdgeDb(30, 20000, 25000, 100));
   assert.equal(gasDbPerKm(2400), 0);
   assert.ok(gasDbPerKm(22000) > 0.15);
+  // ITU-R P.838-3, таблица 5, 10 ГГц, горизонтально: k = 0,01217, α = 1,2571.
+  const at10 = rainDbPerKm(10000, 25);
+  const table = 0.01217 * 25 ** 1.2571;
+  assert.ok(Math.abs(at10 - table) / table < 0.02, `rain ${at10} vs ${table}`);
+  assert.equal(rainDbPerKm(2400, 25), 0);
 });
 
 test("JSON решётки читается офлайн и даёт высоту", () => {
@@ -202,9 +207,9 @@ test("градусы WGS84 сходятся с известной геодези
   const lat2 = -(37 + 39 / 60 + 10.1561 / 3600);
   const lon2 = 143 + 55 / 60 + 35.3839 / 3600;
   const dist = distanceKm(lat1, lon1, lat2, lon2);
-  assert.ok(Math.abs(dist - 54.972271) < 0.001, `distance ${dist}`);
+  assert.ok(Math.abs(dist - 54.972271) < 0.000002, `distance ${dist}`);
   const az = (azimuthDeg(lat1, lon1, lat2, lon2) + 360) % 360;
-  assert.ok(Math.abs(az - 306.868158) < 0.01, `azimuth ${az}`);
+  assert.ok(Math.abs(az - 306.868158) < 1e-5, `azimuth ${az}`);
   const back = destination(50.45, 30.5234, 90, 10);
   assert.ok(Math.abs(distanceKm(50.45, 30.5234, back.lat, back.lon) - 10) < 0.001);
   assert.equal(formatDeg(50.45), "50.450000°");
