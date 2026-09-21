@@ -927,6 +927,91 @@ async function main(): Promise<void> {
       hp ? `${hp.f1Mhz.toFixed(2)}…${hp.f2Mhz.toFixed(2)}` : "нет рамки",
     );
   }
+  // Маяк duty 1 на каждом взгляде в 2 МГц от края сетки. Это не свежая вспышка:
+  // кнопка должна обвести маяк, а не всю семью hop.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    const hops = [2405, 2406, 2407];
+    let ts = 1000;
+    for (let i = 0; i < 12; i++) {
+      const f = hops[i % hops.length]!;
+      const snap = tr.update(
+        [
+          { freqMhz: f, fLowMhz: f - 0.3, fHighMhz: f + 0.3, widthMhz: 0.6, powerDbm: -45, noiseDbm: -90, snrDb: 45 },
+          { freqMhz: 2409, fLowMhz: 2408.8, fHighMhz: 2409.2, widthMhz: 0.4, powerDbm: -20, noiseDbm: -90, snrDb: 70 },
+        ],
+        ts,
+        { centerMhz: 2407, spanMhz: 56 },
+      );
+      mem.notePowers(ts, snap, tr.currentSweep(), 2407, 56);
+      mem.noteHops(snap, ts);
+      ts += 20;
+    }
+    const stuck = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: [],
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const sp = stuck.advice.suggestPaint;
+    const beaconIn = sp != null && 2409 >= sp.f1Mhz && 2409 <= sp.f2Mhz;
+    const famHi = stuck.families.reduce((m, f) => Math.max(m, f.fHighMhz), 0);
+    check(
+      "липкий маяк не входит в семью hop",
+      beaconIn && sp != null && paintSpanMhz(sp) < 2 && famHi < 2408.5,
+      sp ? `paint ${sp.f1Mhz.toFixed(2)}…${sp.f2Mhz.toFixed(2)} famHi=${famHi.toFixed(2)}` : "нет рамки",
+    );
+  }
+  // Свежий удар duty 1 (ещё без промахов) по-прежнему входит в уже виденную сетку.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    const hops = [2405, 2406, 2407];
+    let ts = 1000;
+    for (let i = 0; i < 9; i++) {
+      const f = hops[i % hops.length]!;
+      const snap = tr.update(
+        [{ freqMhz: f, fLowMhz: f - 0.3, fHighMhz: f + 0.3, widthMhz: 0.6, powerDbm: -45, noiseDbm: -90, snrDb: 45 }],
+        ts,
+        { centerMhz: 2407, spanMhz: 56 },
+      );
+      mem.notePowers(ts, snap, tr.currentSweep(), 2407, 56);
+      mem.noteHops(snap, ts);
+      ts += 20;
+    }
+    const snap = tr.update(
+      [{ freqMhz: 2408, fLowMhz: 2407.7, fHighMhz: 2408.3, widthMhz: 0.6, powerDbm: -40, noiseDbm: -90, snrDb: 50 }],
+      ts,
+      { centerMhz: 2407, spanMhz: 56 },
+    );
+    mem.notePowers(ts, snap, tr.currentSweep(), 2407, 56);
+    mem.noteHops(snap, ts);
+    const fresh = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: [],
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const fp = fresh.advice.suggestPaint;
+    check(
+      "свежий удар входит в уже виденную сетку",
+      fp != null && 2408 >= fp.f1Mhz && 2408 <= fp.f2Mhz && paintSpanMhz(fp) > 2,
+      fp ? `${fp.f1Mhz.toFixed(2)}…${fp.f2Mhz.toFixed(2)}` : "нет рамки",
+    );
+  }
 
   const txMem = new AttackSessionMemory();
   const shelfAt = (lastSweep: number) =>
