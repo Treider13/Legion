@@ -18,7 +18,7 @@ function yOf(dbm: number, lo: number, hi: number, top: number, h: number): numbe
 
 export function SpectrumScope() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [readout, setReadout] = useState("наведите — частота и дБм");
+  const [readout, setReadout] = useState("наведите — частота и относительный уровень");
   const readoutRef = useRef(readout);
   readoutRef.current = readout;
   const geomRef = useRef({ padL: 62, plotW: 1, loF: 0, span: 1 });
@@ -74,7 +74,7 @@ export function SpectrumScope() {
       }
       const { f1: loF, f2: hiF } = range;
       const span = hiF - loF;
-      if (readoutRef.current === "Коридор не задан") setReadout("наведите — частота и дБм");
+      if (readoutRef.current === "Коридор не задан") setReadout("наведите — частота и относительный уровень");
 
       const padL = 62;
       const padR = 22;
@@ -205,7 +205,7 @@ export function SpectrumScope() {
       ctx.save();
       ctx.translate(13, padT + plotH / 2);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText(st.labSubtractBaseline ? "Уровень относительно полки (дБ)" : "Уровень (дБм)", 0, 0);
+      ctx.fillText(st.labSubtractBaseline ? "Уровень относительно полки (дБ)" : "Относительный уровень (дБ)", 0, 0);
       ctx.restore();
       ctx.save();
       ctx.beginPath();
@@ -385,7 +385,7 @@ export function SpectrumScope() {
         const alloc = st.labShowAlloc ? allocAtMhz(mhz) : null;
         const text =
           dbm != null
-            ? `${formatFrequency(mhz, span / plotW)} МГц · ${dbm.toFixed(1)} дБм${alloc ? ` · ${alloc.name}` : ""}`
+            ? `${formatFrequency(mhz, span / plotW)} МГц · ${dbm.toFixed(1)} дБ (отн.)${alloc ? ` · ${alloc.name}` : ""}`
             : `${formatFrequency(mhz, span / plotW)} МГц · нет бина${alloc ? ` · ${alloc.name}` : ""}`;
         if (text !== readoutRef.current) setReadout(text);
       }
@@ -450,7 +450,7 @@ export function SpectrumScope() {
     const onLeave = () => {
       if (brushRef.current.down) return;
       cursorX = -1;
-      setReadout("наведите — частота и дБм");
+      setReadout("наведите — частота и относительный уровень");
     };
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerdown", onDown);
@@ -525,13 +525,13 @@ export function SpectrumScope() {
         ref={canvasRef}
         className={st.scanPattern === "auto" ? "scope-canvas attack-brush" : "scope-canvas"}
         role="img"
-        aria-label={`PSD · ${formatDisplayRange(range)}${st.scanPattern === "auto" ? " · рамка Атаки мышкой" : ""}`}
+        aria-label={`PSD · относительный уровень, дБ · ${formatDisplayRange(range)}${st.scanPattern === "auto" ? " · рамка Атаки мышкой" : ""}`}
       />
       <div className="scope-meta">
         <span>{displayRangeNotice(range) ?? readout}</span>
-        <span>
+        <span title="Относительный уровень цифровых отсчётов; абсолютная мощность в дБм не подтверждена">
           {peak
-            ? `пик ${peak.freqMhz.toFixed(3)} · ${peak.powerDbm.toFixed(1)} дБм · 3дБ ${w3.toFixed(2)} МГц`
+            ? `пик ${peak.freqMhz.toFixed(3)} · ${peak.powerDbm.toFixed(1)} дБ (отн.) · 3дБ ${w3.toFixed(2)} МГц`
             : "пик —"}
           {st.labCoverage != null ? ` · занятость ${(st.labCoverage * 100).toFixed(1)} %` : ""}
         </span>

@@ -6,7 +6,7 @@ import { atlasForTracks, classifyAttackFamily } from "./attackAtlas";
 import { familySpanWithPad, type AttackHopFamily } from "./attackFamily";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
-import type { AttackMemStats, AttackResidual } from "./attackMemory";
+import { residualLineRu, type AttackMemStats, type AttackResidual } from "./attackMemory";
 import {
   ATTACK_HOLD_DEFAULT_MS,
   ATTACK_HOLD_MAX_MS,
@@ -100,7 +100,7 @@ export function buildAttackAdvice(input: {
     return {
       scene: "Эфир тихий этим режимом: волокно, автономия и чужая сотовая отсюда не видны.",
       after: input.residual
-        ? input.residual.note
+        ? residualLineRu(input.residual)
         : "После передачи здесь появится, что осталось в рамке.",
       hints: [
         {
@@ -281,7 +281,7 @@ export function buildAttackAdvice(input: {
   });
 
   let after = "Пока не передавали — остатка нет. После ПЕРЕДАТЬ здесь будет, накрыли ли края.";
-  if (input.residual) after = input.residual.note;
+  if (input.residual) after = residualLineRu(input.residual);
   if (input.transmitArmed && !input.residual) {
     after = "Идёт передача. Остаток появится, когда память IQ вычтет свою волну. Если усилитель в клипе — вычет мёртв.";
   }
