@@ -5,7 +5,7 @@
 // ============================================================================
 import { atlasForTracks, classifyAttackFamily } from "./attackAtlas";
 import { familySpanWithPad, type AttackHopFamily } from "./attackFamily";
-import { readAttackInfo, type AttackInfo, type AttackInfoSnap, type AttackPlate } from "./attackInfo";
+import { readAttackInfo, type AttackInfo, type AttackInfoSnap } from "./attackInfo";
 import type { AttackLook } from "./attackLook";
 import { honestWidthMhz, type AttackWidths } from "./attackMeasure";
 import type { AttackMemStats, AttackResidual } from "./attackMemory";
@@ -94,7 +94,6 @@ export function buildAttackAdvice(input: {
   memory: AttackMemStats;
   transmitArmed: boolean;
   snaps?: readonly AttackInfoSnap[];
-  plate?: AttackPlate | null;
   info?: AttackInfo;
 }): AttackAdvice {
   const live = input.tracks.filter((t) => t.state !== "cooled");
@@ -124,12 +123,33 @@ export function buildAttackAdvice(input: {
   }
 
   let top = strongest(live);
-  let fam: AttackHopFamily | null = input.families[0] ?? null;
   const floors = twoFloor(live, input.windowMhz);
   const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
   const w = top ? input.widths.get(top.id) : undefined;
   let honest = top && w ? honestWidthMhz(w, top.widthMhz) : top?.widthMhz ?? 0;
   const windowFill = atlas?.id === "window-fill" || (top != null && input.windowMhz > 0 && top.widthMhz >= 0.85 * input.windowMhz);
+  const info =
+    input.info ??
+    readAttackInfo({
+      tracks: input.tracks,
+      snaps: input.snaps,
+    });
+  const veto = info.redirectId != null ? live.find((t) => t.id === info.redirectId) ?? null : null;
+  const prefer =
+    veto == null && !floors && info.preferWideId != null
+      ? live.find((t) => t.id === info.preferWideId) ?? null
+      : null;
+  const framed = veto ?? prefer;
+  let fam: AttackHopFamily | null = input.families[0] ?? null;
+  if (framed) {
+    top = framed;
+    fam =
+      framed.duty >= 0.7 && framed.widthMhz >= 6
+        ? null
+        : input.families.find((f) => f.members.includes(framed.id)) ?? null;
+    const fw = input.widths.get(top.id);
+    honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
+  }
 
   let scene = `${live.length} след(ов) в кадре.`;
   if (floors) scene += " Два этажа: широкое липкое и hop рядом — это не один сигнал.";
@@ -144,43 +164,9 @@ export function buildAttackAdvice(input: {
   if (input.memory.hopRemembered > 4) {
     scene += ` Память видела уже ${input.memory.hopRemembered} hop-вспышек за сессию.`;
   }
-  const info =
-    input.info ??
-    readAttackInfo({
-      tracks: input.tracks,
-      snaps: input.snaps,
-      plate: input.plate ?? null,
-    });
   if (info.line) scene += ` ${info.line}`;
 
-  const veto = info.redirectId != null ? live.find((t) => t.id === info.redirectId) ?? null : null;
-  const prefer =
-    veto == null && !floors && info.preferWideId != null
-      ? live.find((t) => t.id === info.preferWideId) ?? null
-      : null;
-  const framed = veto ?? prefer;
-  if (framed) {
-    top = framed;
-    fam =
-      framed.duty >= 0.7 && framed.widthMhz >= 6
-        ? null
-        : input.families.find((f) => f.members.includes(framed.id)) ?? null;
-    const fw = input.widths.get(top.id);
-    honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
-  }
-
-  if (info.suppressPaint) {
-    hints.push({
-      kind: "paint",
-      title: "Рамка",
-      text: "Рамку не предлагаем: табличка о движении не сходится с телом.",
-      why: "информация: ложная табличка",
-      applyLabel: null,
-      paint: null,
-      wave: null,
-      holdMs: null,
-    });
-  } else if (framed && top) {
+  if (framed && top) {
     const wide = top.duty >= 0.7 && top.widthMhz >= 6;
     if (wide) {
       const vw = input.widths.get(top.id);

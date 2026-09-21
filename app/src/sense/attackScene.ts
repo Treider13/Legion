@@ -65,7 +65,6 @@ export function buildAttackScene(input: {
   const info = readAttackInfo({
     tracks: input.tracks,
     snaps: input.memory.powerSnaps(),
-    plate: null,
   });
   const roleOf = new Map(info.roles.map((r) => [r.trackId, r.roleRu]));
   const rows: AttackRow[] = atlas.map((t) => {
@@ -94,7 +93,6 @@ export function buildAttackScene(input: {
     memory: input.memory.stats(),
     transmitArmed: input.transmitArmed,
     snaps: input.memory.powerSnaps(),
-    plate: null,
     info,
   });
   return {

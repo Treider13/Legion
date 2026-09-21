@@ -294,7 +294,25 @@ async function main(): Promise<void> {
   });
   hopMem.noteScene(1, hopTracks);
   hopMem.noteScene(2, hopTracks);
-  check("ряд мощности копится чаще строки сцены", hopMem.powerSnaps().length === 2 && hopMem.scenes.length === 1);
+  check("карточка не пишет замер эфира", hopMem.powerSnaps().length === 0 && hopMem.scenes.length === 1);
+  const atSweep = (sweep: number) => hopTracks.map((t) => ({ ...t, lastSweep: sweep }));
+  hopMem.notePowers(10, atSweep(1), 1, 2441, 56);
+  hopMem.notePowers(11, atSweep(1), 1, 2441, 56);
+  check("повтор того же обхода не второй замер", hopMem.powerSnaps().length === 1);
+  hopMem.notePowers(12, atSweep(2), 2, 2441, 56);
+  check("следующий обход пишет замер", hopMem.powerSnaps().length === 2);
+  hopMem.notePowers(13, hopTracks.map((t, i) => ({ ...t, lastSweep: i === 0 ? 3 : 1 })), 3, hopTracks[0]!.freqMhz, 1);
+  const freshOnly = hopMem.powerSnaps().at(-1)!;
+  check(
+    "замер берёт свежий хит, не старую мощность",
+    freshOnly.rows.length === 1 && freshOnly.rows[0]!.id === hopTracks[0]!.id && freshOnly.rows[0]!.measured === true,
+  );
+  hopMem.notePowers(14, atSweep(1), 4, 2441, 56);
+  const missed = hopMem.powerSnaps().at(-1)!;
+  check(
+    "взгляд в окно без хита — промах, не повтор мощности",
+    missed.rows.length === hopTracks.length && missed.rows.every((r) => r.measured === false),
+  );
   hopMem.forgetLooks();
   check("старт скана забывает разбор старых id", hopMem.looks.size === 0);
   check("старт скана забывает ряд мощности", hopMem.powerSnaps().length === 0);
@@ -363,7 +381,7 @@ async function main(): Promise<void> {
     };
   }
   function powerSnaps(
-    series: Array<Array<{ id: number; freqMhz: number; powerDbm: number; widthMhz: number; duty: number; firstSweep?: number }>>,
+    series: Array<Array<{ id: number; freqMhz: number; powerDbm: number; widthMhz: number; duty: number; firstSweep?: number; measured?: boolean }>>,
   ): AttackInfoSnap[] {
     return series.map((rows, i) => ({
       ts: i + 1,
@@ -438,10 +456,12 @@ async function main(): Promise<void> {
       { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
     ],
     [
+      { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9, firstSweep: 1, measured: false },
       { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
       { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
     ],
     [
+      { id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9, firstSweep: 1, measured: false },
       { id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2, firstSweep: 2 },
       { id: 1, freqMhz: 2412, powerDbm: -20, widthMhz: 0.4, duty: 0.95, firstSweep: 1 },
     ],
@@ -471,9 +491,24 @@ async function main(): Promise<void> {
     "тень не растягивает рамку на весь эфир",
     shadowAdvice.suggestPaint != null && paintSpanMhz(shadowAdvice.suggestPaint) < 20,
   );
+  const walkedAway = powerSnaps([
+    [{ id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 }],
+    [{ id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 }],
+    [{ id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 }],
+    [{ id: 4, freqMhz: 5800, powerDbm: -30, widthMhz: 20, duty: 0.9 }],
+    [{ id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 }],
+    [{ id: 3, freqMhz: 915, powerDbm: -55, widthMhz: 0.5, duty: 0.2 }],
+  ]);
+  const walked = readAttackInfo({ tracks: [room, hand], snaps: walkedAway });
+  check("уход окна с полки — не тень", !walked.line.includes("тень"));
 
+  const breathe = [-40, -34, -42, -30, -38, -28];
   const lowCopy = track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: -22, streak: 8 });
   const highShelf = track({ id: 6, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -40, streak: 8 });
+  const repeaterSnaps = powerSnaps(breathe.map((p) => [
+    { id: 6, freqMhz: 5800, powerDbm: p, widthMhz: 16, duty: 0.9 },
+    { id: 5, freqMhz: 1280, powerDbm: p + 18, widthMhz: 16, duty: 0.9 },
+  ]));
   const repeaterAdvice = buildAttackAdvice({
     tracks: [lowCopy, highShelf],
     families: [],
@@ -487,6 +522,7 @@ async function main(): Promise<void> {
     residual: null,
     memory: new AttackSessionMemory().stats(),
     transmitArmed: false,
+    snaps: repeaterSnaps,
   });
   check(
     "ретранслятор: рамка на громкой полке сейчас",
@@ -502,6 +538,14 @@ async function main(): Promise<void> {
       repeaterAdvice.scene.includes("5800.00") &&
       repeaterAdvice.scene.includes("сейчас"),
   );
+  const apart = readAttackInfo({
+    tracks: [lowCopy, highShelf],
+    snaps: powerSnaps(breathe.map((p) => [
+      { id: 6, freqMhz: 5800, powerDbm: p, widthMhz: 16, duty: 0.9 },
+      { id: 5, freqMhz: 1280, powerDbm: -62 - p, widthMhz: 16, duty: 0.9 },
+    ])),
+  });
+  check("разный ход полок — не ретранслятор", !apart.line.includes("ретранслятор"));
 
   const geminiAdvice = buildAttackAdvice({
     tracks: [
@@ -521,12 +565,40 @@ async function main(): Promise<void> {
     transmitArmed: false,
   });
   check(
-    "две узкие частоты — одна рамка, не мост 900–2400",
+    "разные полосы без совместного окна — не одна радиосвязь и не мост",
     geminiAdvice.suggestPaint != null &&
       geminiAdvice.suggestPaint.f1Mhz > 800 &&
-      geminiAdvice.suggestPaint.f2Mhz < 1100,
+      geminiAdvice.suggestPaint.f2Mhz < 1100 &&
+      !geminiAdvice.scene.includes("одна радиосвязь"),
   );
-  check("одна радиосвязь в информации", geminiAdvice.scene.includes("одна радиосвязь"));
+  const geminiPair = [
+    track({ id: 21, freqMhz: 2420, widthMhz: 0.5, duty: 0.2, powerDbm: -28, streak: 1 }),
+    track({ id: 22, freqMhz: 2448, widthMhz: 0.5, duty: 0.2, powerDbm: -36, streak: 1 }),
+  ];
+  const geminiSeen = buildAttackAdvice({
+    tracks: geminiPair,
+    families: [],
+    widths: new Map(),
+    looks: new Map(),
+    windowMhz: 56,
+    paint: null,
+    wave: null,
+    holdMs: 3000,
+    bands: wideBands,
+    residual: null,
+    memory: new AttackSessionMemory().stats(),
+    transmitArmed: false,
+    snaps: powerSnaps([1, 2, 3, 4].map(() => [
+      { id: 21, freqMhz: 2420, powerDbm: -28, widthMhz: 0.5, duty: 0.2 },
+      { id: 22, freqMhz: 2448, powerDbm: -36, widthMhz: 0.5, duty: 0.2 },
+    ])),
+  });
+  check(
+    "две узкие в одном окне четыре раза — одна радиосвязь",
+    geminiSeen.scene.includes("одна радиосвязь") &&
+      geminiSeen.suggestPaint != null &&
+      paintSpanMhz(geminiSeen.suggestPaint) < 20,
+  );
 
   const stepWide = track({ id: 9, freqMhz: 5800, widthMhz: 12, duty: 0.9, powerDbm: -35, streak: 8 });
   const stepHand = track({ id: 10, freqMhz: 2440, widthMhz: 0.6, duty: 0.2, powerDbm: -30, streak: 1 });
@@ -624,6 +696,8 @@ async function main(): Promise<void> {
   const plateSnaps = powerSnaps(
     [1, 2, 3, 4, 5, 6].map(() => [{ id: 16, freqMhz: 5800, powerDbm: -30, widthMhz: 12, duty: 0.9 }]),
   );
+  const noPlate = readAttackInfo({ tracks: [plateBody], snaps: plateSnaps });
+  check("декодера таблички нет — слово не появляется", !noPlate.line.includes("табличка"));
   const plateAdvice = buildAttackAdvice({
     tracks: [plateBody],
     families: [],
@@ -638,16 +712,11 @@ async function main(): Promise<void> {
     memory: new AttackSessionMemory().stats(),
     transmitArmed: false,
     snaps: plateSnaps,
-    plate: { claimsMotion: true },
   });
   check(
-    "ложная табличка не предлагает рамку",
-    plateAdvice.suggestPaint == null &&
-      !plateAdvice.hints.some((h) => h.kind === "paint" && h.applyLabel != null),
+    "ровная полка без таблички остаётся рамкой",
+    plateAdvice.suggestPaint != null && Math.abs(mid(plateAdvice.suggestPaint) - 5800) < 2,
   );
-  check("ложная табличка названа в информации", plateAdvice.scene.includes("ложная табличка"));
-  const quietPlate = readAttackInfo({ tracks: [plateBody], snaps: plateSnaps, plate: null });
-  check("без таблички проверка молчит", !quietPlate.line.includes("табличка") && !quietPlate.suppressPaint);
 
   const hopAdvice = buildAttackAdvice({
     tracks: hopTracks,

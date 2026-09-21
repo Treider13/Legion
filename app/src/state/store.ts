@@ -4530,6 +4530,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             gAttackTracker.update(feed, now);
             if (paintTx && paint) gAttackTracker.markHeld(paintCenterMhz(paint));
             const snap = gAttackTracker.snapshot();
+            gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz);
             set(attackBrainPatch(cur, snap, bins, listen?.spanMhz ?? spanMhz));
             void thinkAttackLooks(snap, listen?.fsHz ?? 61_440_000, centerMhz, paintTx);
           }

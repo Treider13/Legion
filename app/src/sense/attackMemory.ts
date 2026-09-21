@@ -43,8 +43,9 @@ export class AttackSessionMemory {
   scenes: Array<{ ts: number; n: number; bands: string }> = [];
   residuals: AttackResidual[] = [];
   looks = new Map<number, AttackLook>();
-  /** Мощность по id трекера. Только Атака. Старт скана обнуляет id — ряд тоже. */
+  /** Мощность по id трекера. Только Атака. Один обход — один замер. */
   powers: AttackInfoSnap[] = [];
+  private lastPowerSweep = 0;
   workerSamples = 0;
   workerCap = 0;
   workerMs = 0;
@@ -56,6 +57,7 @@ export class AttackSessionMemory {
     this.residuals = [];
     this.looks.clear();
     this.powers = [];
+    this.lastPowerSweep = 0;
     this.lastHopById.clear();
     this.workerSamples = 0;
     this.workerCap = 0;
@@ -85,10 +87,27 @@ export class AttackSessionMemory {
     if (this.hops.length > HOP_KEEP) this.hops = this.hops.slice(-HOP_KEEP);
   }
 
-  noteScene(ts: number, tracks: readonly AttackTrack[]): void {
-    this.powers.push({
-      ts,
-      rows: tracks.map((t) => ({
+  /**
+   * Один замер на обход трекера. Пишет только то, что этот обход реально видел:
+   * свежий хит, либо след в окне и промах. Старую мощность не повторяет.
+   * Карточка, «взять» и разбор IQ сюда не входят — они не новый взгляд на эфир.
+   */
+  notePowers(
+    ts: number,
+    tracks: readonly AttackTrack[],
+    sweep: number,
+    centerMhz: number,
+    spanMhz: number,
+  ): void {
+    if (!(sweep > this.lastPowerSweep)) return;
+    this.lastPowerSweep = sweep;
+    const half = spanMhz > 0 ? spanMhz / 2 : 0;
+    const rows: AttackInfoSnap["rows"] = [];
+    for (const t of tracks) {
+      const measured = t.lastSweep === sweep && t.state !== "cooled";
+      const inView = half > 0 && Math.abs(t.freqMhz - centerMhz) <= half;
+      if (!measured && !inView) continue;
+      rows.push({
         id: t.id,
         freqMhz: t.freqMhz,
         powerDbm: t.powerDbm,
@@ -96,9 +115,14 @@ export class AttackSessionMemory {
         duty: t.duty,
         firstSweep: t.firstSweep,
         state: t.state,
-      })),
-    });
+        measured,
+      });
+    }
+    this.powers.push({ ts, rows });
     if (this.powers.length > POWER_KEEP) this.powers = this.powers.slice(-POWER_KEEP);
+  }
+
+  noteScene(ts: number, tracks: readonly AttackTrack[]): void {
     if (this.scenes.length && ts - this.scenes[this.scenes.length - 1]!.ts < SCENE_MIN_MS) return;
     const live = tracks.filter((t) => t.state !== "cooled");
     const bands = [...new Set(live.map((t) => bandBucket(t.freqMhz)))].join(",");
@@ -114,6 +138,7 @@ export class AttackSessionMemory {
   forgetLooks(): void {
     this.looks.clear();
     this.powers = [];
+    this.lastPowerSweep = 0;
   }
 
   powerSnaps(): readonly AttackInfoSnap[] {

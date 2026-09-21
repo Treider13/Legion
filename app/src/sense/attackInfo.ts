@@ -18,16 +18,17 @@ export interface AttackInfoRow {
   duty: number;
   firstSweep: number;
   state: AttackTrackState;
+  /**
+   * true — хит этого обхода, мощность свежая.
+   * false — окно накрывало частоту, хита не было.
+   * Поле можно не ставить: тогда строка считается свежим хитом.
+   */
+  measured?: boolean;
 }
 
 export interface AttackInfoSnap {
   ts: number;
   rows: AttackInfoRow[];
-}
-
-export interface AttackPlate {
-  /** Табличка (Remote ID / DroneID) утверждает, что борт летит. Нет таблички — проверка молчит. */
-  claimsMotion: boolean;
 }
 
 export interface AttackInfoRole {
@@ -46,8 +47,6 @@ export interface AttackInfo {
   redirectId: number | null;
   /** Широкая полка вместо более громкого узкого голоса. Два этажа в одной корзине помощник уже закрывает сам. */
   preferWideId: number | null;
-  /** Ложная табличка: рамку не предлагать. */
-  suppressPaint: boolean;
 }
 
 const HIGH_VIDEO: readonly AttackBand[] = ["c51", "c58"];
@@ -69,7 +68,8 @@ const FLUTTER_REVERSALS = 3;
 const ROOM_STD_DB = 1.2;
 const ROOM_MIN_SAMPLES = 4;
 const ROOM_BIRTH_SWEEPS = 4;
-const PLATE_STEADY_DB = 1.5;
+/** Столько совместных попаданий в одно окно, чтобы сказать «одна радиосвязь». */
+const GEMINI_SHARED_HITS = 4;
 
 function videoLike(t: { widthMhz: number; duty: number }): boolean {
   return t.duty >= 0.7 && t.widthMhz >= 6;
@@ -127,8 +127,12 @@ interface Seen {
   duty: number;
   firstSweep: number;
   state: AttackTrackState;
+  /** Свежие хиты, по времени. Промах и чужое окно сюда не входят. */
   powers: number[];
+  /** Каждый взгляд, когда частота была в окне: true = хит. */
   present: boolean[];
+  hitTs: number[];
+  obsTs: number[];
 }
 
 function buildSeen(tracks: readonly AttackTrack[], snaps: readonly AttackInfoSnap[]): Map<number, Seen> {
@@ -145,28 +149,27 @@ function buildSeen(tracks: readonly AttackTrack[], snaps: readonly AttackInfoSna
         state: "new",
         powers: [],
         present: [],
+        hitTs: [],
+        obsTs: [],
       };
       map.set(id, row);
     }
     return row;
   };
-  for (let si = 0; si < snaps.length; si++) {
-    const snap = snaps[si]!;
-    const hit = new Set<number>();
+  for (const snap of snaps) {
     for (const row of snap.rows) {
-      if (row.state === "cooled") continue;
+      const measured = row.measured !== false && row.state !== "cooled";
       const seen = ensure(row.id);
+      seen.obsTs.push(snap.ts);
+      seen.present.push(measured);
+      if (!measured) continue;
       seen.freqMhz = row.freqMhz;
       seen.widthMhz = row.widthMhz;
       seen.duty = row.duty;
       seen.firstSweep = row.firstSweep;
       seen.state = row.state;
       seen.powers.push(row.powerDbm);
-      hit.add(row.id);
-    }
-    for (const seen of map.values()) {
-      while (seen.present.length < si) seen.present.push(false);
-      seen.present.push(hit.has(seen.id));
+      seen.hitTs.push(snap.ts);
     }
   }
   for (const t of tracks) {
@@ -180,12 +183,16 @@ function buildSeen(tracks: readonly AttackTrack[], snaps: readonly AttackInfoSna
   return map;
 }
 
-function overlapped(a: Seen, b: Seen): boolean {
-  const n = Math.min(a.present.length, b.present.length);
-  for (let i = 0; i < n; i++) {
-    if (a.present[i] && b.present[i]) return true;
-  }
-  return false;
+function timeOverlap(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  return a[0]! <= b[b.length - 1]! && b[0]! <= a[a.length - 1]!;
+}
+
+function sharedHits(a: Seen, b: Seen): number {
+  const set = new Set(a.hitTs);
+  let n = 0;
+  for (const ts of b.hitTs) if (set.has(ts)) n += 1;
+  return n;
 }
 
 function dropDb(powers: readonly number[]): number | null {
@@ -202,26 +209,33 @@ function stepDb(powers: readonly number[]): number | null {
   return late - prev;
 }
 
-function disappeared(seen: Seen): boolean {
+/** Последние взгляды в окно — пустые, раньше хит был. Чужое окно сюда не попадает. */
+function diedInView(seen: Seen): boolean {
   if (seen.present.length < 4) return false;
   const tail = seen.present.slice(-2);
   const head = seen.present.slice(0, -2);
   return tail.every((p) => !p) && head.some((p) => p);
 }
 
-function breatheTogether(a: readonly number[], b: readonly number[]): boolean {
-  const n = Math.min(a.length, b.length);
-  if (n < 3) return true;
-  let same = 0;
-  let steps = 0;
-  for (let i = 1; i < n; i++) {
-    const da = a[i]! - a[i - 1]!;
-    const db = b[i]! - b[i - 1]!;
-    if (Math.abs(da) < 0.8 && Math.abs(db) < 0.8) continue;
-    steps += 1;
-    if (da * db > 0) same += 1;
+function trendSigns(powers: readonly number[]): number[] {
+  const signs: number[] = [];
+  for (let i = 1; i < powers.length; i++) {
+    const d = powers[i]! - powers[i - 1]!;
+    if (Math.abs(d) < 0.8) continue;
+    signs.push(Math.sign(d));
   }
-  return steps === 0 || same >= steps * 0.6;
+  return signs;
+}
+
+/** Одинаковый ход двух рядов свежих хитов. Мало точек или ровные полки — свидетельства нет. */
+function trendsMatch(a: readonly number[], b: readonly number[]): boolean {
+  const sa = trendSigns(a);
+  const sb = trendSigns(b);
+  if (sa.length < 2 || sb.length < 2) return false;
+  const n = Math.min(sa.length, sb.length);
+  let same = 0;
+  for (let i = 0; i < n; i++) if (sa[i] === sb[i]) same += 1;
+  return same >= 2 && same >= n * 0.6;
 }
 
 function loudest(tracks: readonly AttackTrack[]): AttackTrack | null {
@@ -230,16 +244,16 @@ function loudest(tracks: readonly AttackTrack[]): AttackTrack | null {
 }
 
 function emptyInfo(): AttackInfo {
-  return { line: "", roles: [], redirectId: null, preferWideId: null, suppressPaint: false };
+  return { line: "", roles: [], redirectId: null, preferWideId: null };
 }
 
 /**
  * Роли кадра и вето физики. Частоты в ответе — только те, что уже в треках.
+ * Таблички Remote ID / DroneID в этом процессе нет — такая проверка не запускается.
  */
 export function readAttackInfo(input: {
   tracks: readonly AttackTrack[];
   snaps?: readonly AttackInfoSnap[];
-  plate?: AttackPlate | null;
 }): AttackInfo {
   const snaps = input.snaps ?? [];
   const tracks = input.tracks;
@@ -275,7 +289,7 @@ export function readAttackInfo(input: {
     const low = loudest(lowWides)!;
     const hs = seen.get(high.id);
     const ls = seen.get(low.id);
-    if (!hs || !ls || breatheTogether(hs.powers, ls.powers)) {
+    if (hs && ls && timeOverlap(hs.hitTs, ls.hitTs) && trendsMatch(hs.powers, ls.powers)) {
       repeater = true;
       repeaterLoud = high.powerDbm >= low.powerDbm ? high : low;
       repeaterOther = repeaterLoud.id === high.id ? low : high;
@@ -284,18 +298,20 @@ export function readAttackInfo(input: {
 
   let gemini = false;
   if (wides.length < 2 && narrows.length >= 2) {
-    const byBand = new Map<AttackBand, number[]>();
-    for (const t of narrows) {
-      const band = bandBucket(t.freqMhz);
-      if (!CONTROL_BANDS.includes(band)) continue;
-      const arr = byBand.get(band) ?? [];
-      arr.push(t.freqMhz);
-      byBand.set(band, arr);
-    }
-    if (byBand.size >= 2) gemini = true;
-    else if (byBand.size === 1) {
-      const freqs = [...byBand.values()][0]!.slice().sort((a, b) => a - b);
-      gemini = freqs.length === 2 && freqs[1]! - freqs[0]! >= 10;
+    for (let i = 0; i < narrows.length && !gemini; i++) {
+      for (let j = i + 1; j < narrows.length && !gemini; j++) {
+        const a = narrows[i]!;
+        const b = narrows[j]!;
+        const ba = bandBucket(a.freqMhz);
+        const bb = bandBucket(b.freqMhz);
+        if (!CONTROL_BANDS.includes(ba) || !CONTROL_BANDS.includes(bb)) continue;
+        const spread = Math.abs(a.freqMhz - b.freqMhz);
+        if (ba === bb && spread < 10) continue;
+        const sa = seen.get(a.id);
+        const sb = seen.get(b.id);
+        if (!sa || !sb || sharedHits(sa, sb) < GEMINI_SHARED_HITS) continue;
+        gemini = true;
+      }
     }
   }
 
@@ -309,11 +325,11 @@ export function readAttackInfo(input: {
     if (!cs) continue;
     for (const s of seen.values()) {
       if (s.id === c.id || !videoLike(s) || !HIGH_VIDEO.includes(bandBucket(s.freqMhz))) continue;
-      if (snaps.length > 0 && !overlapped(s, cs)) continue;
+      if (snaps.length > 0 && !timeOverlap(s.obsTs, cs.obsTs)) continue;
       const videoDrop = dropDb(s.powers);
-      const videoGone = disappeared(s) || (videoDrop != null && videoDrop >= SHADOW_DROP_DB);
+      const videoGone = diedInView(s) || (videoDrop != null && videoDrop >= SHADOW_DROP_DB);
       const controlDrop = dropDb(cs.powers);
-      const controlHolds = controlDrop == null || controlDrop < CONTROL_HOLD_DB;
+      const controlHolds = controlDrop != null && controlDrop < CONTROL_HOLD_DB;
       const bothDown =
         videoDrop != null &&
         controlDrop != null &&
@@ -366,38 +382,29 @@ export function readAttackInfo(input: {
     }
   }
 
-  const plate = input.plate ?? null;
-  let suppressPaint = false;
-  if (plate?.claimsMotion) {
-    const body = loudest(wides) ?? loudest(live.filter((t) => !roomIds.has(t.id))) ?? loudest(live);
-    const powers = body ? (seen.get(body.id)?.powers ?? []) : [];
-    const steady = powers.length >= ROOM_MIN_SAMPLES && stdev(powers) < PLATE_STEADY_DB;
-    if (body && (steady || shadow || fade)) suppressPaint = true;
-  }
-
   let redirectId: number | null = null;
-  if (!suppressPaint && fade && fadeKeep) {
+  if (fade && fadeKeep) {
     const top = loudest(live);
     const pair = new Set<number>([fadeKeep.id]);
     if (top && !pair.has(top.id) && top.id !== fadeKeep.id) redirectId = fadeKeep.id;
     else if (top && roomIds.has(top.id)) redirectId = fadeKeep.id;
   }
-  if (!suppressPaint && redirectId == null && step && stepWide) {
+  if (redirectId == null && step && stepWide) {
     const top = loudest(live);
     if (top && top.id !== stepWide.id) redirectId = stepWide.id;
   }
-  if (!suppressPaint && redirectId == null && shadow && shadowControl) {
+  if (redirectId == null && shadow && shadowControl) {
     const top = loudest(live);
     const videoIds = new Set(
       [...seen.values()].filter((s) => videoLike(s) && HIGH_VIDEO.includes(bandBucket(s.freqMhz))).map((s) => s.id),
     );
     if (top && top.id !== shadowControl.id && !videoIds.has(top.id)) redirectId = shadowControl.id;
   }
-  if (!suppressPaint && redirectId == null && flutterId != null) {
+  if (redirectId == null && flutterId != null) {
     const top = loudest(live);
     if (top && top.id !== flutterId) redirectId = flutterId;
   }
-  if (!suppressPaint && redirectId == null) {
+  if (redirectId == null) {
     const top = loudest(live);
     if (top && roomIds.has(top.id)) {
       const rest = live.filter((t) => !roomIds.has(t.id));
@@ -408,7 +415,7 @@ export function readAttackInfo(input: {
   }
 
   let preferWideId: number | null = null;
-  if (!suppressPaint && redirectId == null) {
+  if (redirectId == null) {
     const top = loudest(live);
     const wide = repeater && repeaterLoud ? repeaterLoud : loudest(wides);
     if (top && wide && top.id !== wide.id && !videoLike(top)) preferWideId = wide.id;
@@ -416,10 +423,6 @@ export function readAttackInfo(input: {
 
   const roleOf = new Map<number, string>();
   for (const t of live) {
-    if (suppressPaint && (loudest(wides)?.id === t.id || (wides.length === 0 && loudest(live)?.id === t.id))) {
-      roleOf.set(t.id, "ложная табличка");
-      continue;
-    }
     if (roomIds.has(t.id)) {
       roleOf.set(t.id, "фон");
       continue;
@@ -433,7 +436,6 @@ export function readAttackInfo(input: {
   }
 
   const bits: string[] = [];
-  if (suppressPaint) bits.push("ложная табличка: говорит о движении, тело ровное или в тени. Рамку не предлагаем");
   if (fade) bits.push("обе сели вместе — горизонт или тень");
   if (step) bits.push("шаг мощности узкого голоса, широкая полка на месте");
   if (shadow) bits.push("тень: верхняя полка села, узкий голос той же картины жив");
@@ -455,8 +457,7 @@ export function readAttackInfo(input: {
   return {
     line: bits.length ? `Информация: ${bits.join(". ")}.` : "",
     roles: [...roleOf.entries()].map(([trackId, roleRu]) => ({ trackId, roleRu })),
-    redirectId: suppressPaint ? null : redirectId,
-    preferWideId: suppressPaint ? null : preferWideId,
-    suppressPaint,
+    redirectId,
+    preferWideId,
   };
 }

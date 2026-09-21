@@ -52,6 +52,11 @@ export class AttackTracker {
     return this.snapshot().filter((t) => t.state === "confirmed" || t.state === "held");
   }
 
+  /** Номер обхода после update. Свежий хит: lastSweep === currentSweep(). */
+  currentSweep(): number {
+    return this.sweep;
+  }
+
   markHeld(mhz: number | null): void {
     for (const t of this.tracks) {
       if (t.state === "cooled") continue;
