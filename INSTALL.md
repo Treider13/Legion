@@ -86,6 +86,15 @@ npm ci
 npm run dev
 ```
 
+`./setup.sh --install` скачивает открытый рельеф Украины в
+`app/src/sense/position/data/ukraine-dem.bin.gz`. Вкладка «Позиция» считает
+по этому файлу и в сеть больше не ходит. Повторная установка обновляет файл.
+Если сети нет, остаётся копия из репозитория. Вручную то же самое:
+
+```bash
+node app/scripts/build_ukraine_dem.mjs
+```
+
 Desktop (Tauri) — дополнительно нужны Rust и системные библиотеки WebKit
 (те же, что в CI):
 

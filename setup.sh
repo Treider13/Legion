@@ -155,6 +155,32 @@ else
   fi
 fi
 
+echo "== Рельеф Украины (вкладка «Позиция») =="
+DEM="app/src/sense/position/data/ukraine-dem.bin.gz"
+if [ -f "$DEM" ]; then
+  ok "рельеф Украины в файле"
+else
+  warn "файла рельефа нет"
+fi
+if [ "$INSTALL" = "1" ]; then
+  if command -v node >/dev/null && [ "$(node --version | sed 's/v//;s/\..*//')" -ge 20 ]; then
+    echo "  … скачиваю свежий рельеф Украины"
+    if node app/scripts/build_ukraine_dem.mjs; then
+      ok "рельеф Украины обновлён"
+    else
+      warn "свежий рельеф не скачался — остаётся файл, который уже лежит в каталоге"
+      if [ ! -f "$DEM" ]; then
+        miss "рельеф Украины не скачан"
+      fi
+    fi
+  else
+    warn "Node ≥ 20 нет — свежий рельеф не скачать (INSTALL.md §3)"
+    if [ ! -f "$DEM" ]; then
+      miss "рельеф Украины не скачан"
+    fi
+  fi
+fi
+
 echo "== Rust (только для desktop-сборки Tauri; браузерная работает без него) =="
 if command -v cargo >/dev/null 2>&1; then
   ok "cargo $(cargo --version 2>/dev/null | awk '{print $2}')"
