@@ -81,8 +81,12 @@ export function clampAttackHoldMs(ms: number): number {
 export function waveOccupiesPaintMhz(kind: WaveKind | null, paint: AttackPaint, params: Record<string, number>): number {
   const span = paintSpanMhz(paint);
   if (kind == null || kind === "sine" || kind === "tone") return Math.min(span, 0.05);
-  if (kind === "awgn" || kind === "ofdm" || kind === "scfdma" || kind === "otfs" || kind === "afdm" || kind === "ocdm") {
+  if (kind === "awgn" || kind === "ofdm" || kind === "otfs" || kind === "afdm" || kind === "ocdm") {
     return span;
+  }
+  if (kind === "scfdma") {
+    // tools/_scfdma_wave: DFT(64) → IDFT(256) — 64/256 Найквиста, не заливка.
+    return span * (64 / 256);
   }
   if (kind === "chirp") {
     const want = (params.spanKhz ?? span * 1000) / 1000;

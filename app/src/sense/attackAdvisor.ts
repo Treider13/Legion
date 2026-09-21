@@ -47,9 +47,10 @@ export type AttackWaveClass = "fill" | "chirp" | "narrow" | "part";
 export function waveClassOf(kind: WaveKind | null): AttackWaveClass {
   if (kind == null || kind === "sine" || kind === "tone") return "narrow";
   if (kind === "chirp") return "chirp";
-  if (kind === "awgn" || kind === "ofdm" || kind === "scfdma" || kind === "otfs" || kind === "afdm" || kind === "ocdm") {
+  if (kind === "awgn" || kind === "ofdm" || kind === "otfs" || kind === "afdm" || kind === "ocdm") {
     return "fill";
   }
+  if (kind === "scfdma") return "part";
   return "part";
 }
 

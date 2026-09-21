@@ -1355,8 +1355,13 @@ export const useLegion = create<LegionStore>((set, get) => {
     }
     const waveKind = get().txWaveKind ?? "sine";
     const params = attackWaveParams(waveKind, clipped, get().txWaveParams);
-    const fsHz = paintTxFsHz(clipped);
     const mhz = paintCenterMhz(clipped);
+    const listen = attackListenPlan({
+      analogMhz: catalogCaps(get().sdrId).analogBwMhz,
+      paintOwnsTx: true,
+      paint: clipped,
+    });
+    let fsHz = listen.fsHz;
     const hold = clampAttackHoldMs(get().attackHoldMs);
     const caps = catalogCaps(get().sdrId);
     const plan = planHandoff({
@@ -1379,6 +1384,23 @@ export const useLegion = create<LegionStore>((set, get) => {
     const gen = gTxGen;
     gGate.reserve(plan.freqMhz);
     try {
+      // xA4 AD9361: один BBPLL. Сначала слух на часах рамки, потом TX — иначе
+      // setSampleRate(TX) перетягивает RX с 61.44, пока кольцо думает старое fs
+      // (Nuand forum, robert.ghilduta 2023-03-20).
+      if (gLive) {
+        const win = await hostAttackScan(mhz, listen);
+        if (gen !== gTxGen) {
+          gGate.abort();
+          pushLog("sys", "атака рамка: отменена оператором в полёте — состояние не коммитим");
+          return false;
+        }
+        if (!win.ok) {
+          gGate.abort();
+          pushLog("sys", win.reason || "ПЕРЕДАТЬ: слух не встал на часы рамки");
+          return false;
+        }
+        if (win.fsHz && win.fsHz > 0) fsHz = win.fsHz;
+      }
       const tx = gLive
         ? await hostTxWave(plan.freqMhz, waveKind, params, fsHz)
         : gSdr.txWave(plan.freqMhz, waveKind);

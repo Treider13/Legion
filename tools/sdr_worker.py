@@ -1404,6 +1404,7 @@ class Radio:
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         extra.update(self._attack_memory_fields(self._rx_fs or fs))
+        extra["fsHz"] = float(self._rx_fs or fs)
         if spec:
             db = np.array([b["powerDbm"] for b in spec], dtype=np.float64)
             extra["flatness"] = float(spectral_flatness(db))
@@ -1833,7 +1834,23 @@ class Radio:
                     if not self.full_duplex and self.rx is not None and self._rx_on:
                         self.dev.deactivateStream(self.rx)
                         self._rx_on = False
-                    self.dev.setSampleRate(SOAPY_SDR_TX, 0, tx_fs)
+                    # xA4 AD9361: один BBPLL (Nuand, robert.ghilduta 2023-03-20).
+                    # Если слух уже поставил эти часы — не зовём setSampleRate на живом RX.
+                    rx_fs = float(self._rx_fs) if self._rx_fs else 0.0
+                    have_tx = float(self._tx_fs) if self._tx_fs else 0.0
+                    shared = classify_bladerf_hw(self.hardware_key) == "ad9361"
+                    if _same_attack_clock(have_tx, tx_fs):
+                        tx_fs = have_tx
+                    elif shared and _same_attack_clock(rx_fs, tx_fs):
+                        tx_fs = rx_fs
+                    else:
+                        self.dev.setSampleRate(SOAPY_SDR_TX, 0, tx_fs)
+                        try:
+                            got = float(self.dev.getSampleRate(SOAPY_SDR_TX, 0))
+                            if got > 0:
+                                tx_fs = got
+                        except Exception:
+                            pass
                     try:
                         # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
                         # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.

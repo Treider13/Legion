@@ -21,6 +21,7 @@ export interface HostScanResult {
   reason?: string;
   txLive?: boolean;
   txError?: string;
+  fsHz?: number;
   memorySamples?: number;
   memoryCap?: number;
   memoryMs?: number;
@@ -164,6 +165,7 @@ export async function hostAttackScan(
     reason: r.reason,
     txLive: r.txLive,
     txError: r.txError,
+    fsHz: r.fsHz,
     memorySamples: r.memorySamples,
     memoryCap: r.memoryCap,
     memoryMs: r.memoryMs,

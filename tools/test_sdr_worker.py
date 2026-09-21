@@ -319,6 +319,7 @@ def main() -> int:
     atk_span = atk["bins"][-1]["freqMhz"] - atk["bins"][0]["freqMhz"]
     check("attack_scan окно ≈56", abs(atk_span - 56) < 1.5)
     check("attack_scan память объявлена", int(atk.get("memoryCap") or 0) == w.ATTACK_MEM_CAP)
+    check("attack_scan отдаёт fsHz", float(atk.get("fsHz") or 0) == 61.44e6)
     check("attack_scan не scan-кольцо", int(atk.get("memoryCap") or 0) > w.RING_CAP)
     think = rpc(
         proc,
@@ -676,6 +677,45 @@ def main() -> int:
 
     bad = rpc(proc, {"op": "nope"})
     check("unknown op", bad.get("ok") is False)
+
+    if w.NUMPY:
+        import numpy as np_bbpll
+
+        class _TxClk:
+            def __init__(self) -> None:
+                self.rates = 0
+
+            def setSampleRate(self, _d, _c, _fs):
+                self.rates += 1
+
+            def getSampleRate(self, _d, _c):
+                return 10e6
+
+            def setBandwidth(self, *_a):
+                return None
+
+            def setFrequency(self, *_a):
+                return None
+
+            def setupStream(self, *_a):
+                return object()
+
+            def activateStream(self, *_a):
+                return None
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": 64})()
+
+        rt = w.Radio()
+        rt.fake = False
+        rt.hardware_key = "bladerf2"
+        rt._rx_fs = 10e6
+        rt._tx_fs = 2e6
+        rt.dev = _TxClk()
+        buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
+        err = rt._tx_prime(buf, 2442e6, None, 10e6)
+        check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+        check("AD9361: _tx_fs берёт часы RX", abs(rt._tx_fs - 10e6) < 1)
 
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading

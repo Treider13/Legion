@@ -114,6 +114,12 @@ async function main(): Promise<void> {
       !fireSrc.includes("txCue"),
   );
   check(
+    "рамка ПЕРЕДАТЬ сначала слух на часах рамки (AD9361 один BBPLL)",
+    fireSrc.includes("hostAttackScan") &&
+      fireSrc.indexOf("hostAttackScan") < fireSrc.indexOf("hostTxWave") &&
+      fireSrc.includes("paintOwnsTx: true"),
+  );
+  check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({
       liveWindow: [],
@@ -372,6 +378,8 @@ async function main(): Promise<void> {
   const p = { f1Mhz: 2430, f2Mhz: 2450 };
   check("синус не заливает 20 МГц", waveOccupiesPaintMhz("sine", p, {}) < 1);
   check("шум заливает рамку", Math.abs(waveOccupiesPaintMhz("awgn", p, {}) - 20) < 1e-9);
+  check("SC-FDMA не заливка", Math.abs(waveOccupiesPaintMhz("scfdma", p, {}) - 5) < 1e-9);
+  check("SC-FDMA класс часть", waveClassOf("scfdma") === "part");
   const chirp = attackWaveParams("chirp", p, {});
   check("чирп размах = рамка, не 1 МГц", (chirp.spanKhz ?? 0) >= 10000);
   check("fs рамки в потолке USB", paintTxFsHz(p) <= 40e6 && paintTxFsHz(p) >= 20e6 * 0.99);
