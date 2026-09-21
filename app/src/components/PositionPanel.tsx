@@ -63,11 +63,11 @@ export function PositionPanel() {
   const input = useMemo<PositionInput>(() => ({
     ourLat: num(ourLat),
     ourLon: num(ourLon),
-    ourGroundM: num(ourGround),
+    ourGroundM: ourMapH ?? num(ourGround),
     ourAglM: num(ourAgl),
     oppLat: num(oppLat),
     oppLon: num(oppLon),
-    oppGroundM: num(oppGround),
+    oppGroundM: oppMapH ?? num(oppGround),
     oppAglM: num(oppAgl),
     freqMhz: num(freq),
     ourKind,
@@ -87,7 +87,7 @@ export function PositionPanel() {
     clutter,
     rainMmH: optionalNum(rain),
     terrainPending: pending && grid == null,
-  }), [ourLat, ourLon, ourGround, ourAgl, oppLat, oppLon, oppGround, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid]);
+  }), [ourLat, ourLon, ourGround, ourMapH, ourAgl, oppLat, oppLon, oppGround, oppMapH, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid]);
 
   const result = useMemo(() => computePosition(input), [input]);
   const profileRef = useRef<HTMLCanvasElement>(null);
@@ -111,10 +111,9 @@ export function PositionPanel() {
         }
       },
       () => {
-        if (live) {
-          setPending(false);
-          setFileNote("Рельеф Украины не прочитался.");
-        }
+        if (!live) return;
+        setPending(false);
+        if (fileGen.current === 0) setFileNote("Рельеф Украины не прочитался.");
       },
     );
     return () => {

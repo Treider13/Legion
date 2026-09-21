@@ -160,17 +160,27 @@ function gridCovers(grid: DemGrid | null, lat: number, lon: number): grid is Dem
   return grid != null && inBounds(grid, lat, lon);
 }
 
+function pickedGround(sample: number | null, typed: number): number | null {
+  if (sample != null) return sample;
+  return finite(typed) ? typed : null;
+}
+
 function grounds(input: PositionInput, grid: DemGrid | null): { our: number; opp: number; missing: string | null; useGrid: boolean } {
-  if (gridCovers(grid, input.ourLat, input.ourLon) && gridCovers(grid, input.oppLat, input.oppLon)) {
-    const our = sampleDem(grid, input.ourLat, input.ourLon);
-    const opp = sampleDem(grid, input.oppLat, input.oppLon);
-    if (our == null || opp == null) return { our: 0, opp: 0, missing: "В этих градусах рельеф пустой.", useGrid: false };
-    return { our, opp, missing: null, useGrid: true };
+  const ourIn = gridCovers(grid, input.ourLat, input.ourLon);
+  const oppIn = gridCovers(grid, input.oppLat, input.oppLon);
+  const ourSample = ourIn ? sampleDem(grid, input.ourLat, input.ourLon) : null;
+  const oppSample = oppIn ? sampleDem(grid, input.oppLat, input.oppLon) : null;
+  const our = pickedGround(ourSample, input.ourGroundM);
+  const opp = pickedGround(oppSample, input.oppGroundM);
+  if (our == null || opp == null) {
+    const emptyCell = (ourIn && ourSample == null && !finite(input.ourGroundM)) || (oppIn && oppSample == null && !finite(input.oppGroundM));
+    const missing = emptyCell
+      ? "В этих градусах рельеф пустой."
+      : "Нужны отметки земли под нашей антенной и под станцией противника.";
+    return { our: 0, opp: 0, missing, useGrid: false };
   }
-  if (!finite(input.ourGroundM) || !finite(input.oppGroundM)) {
-    return { our: 0, opp: 0, missing: "Нужны отметки земли под нашей антенной и под станцией противника.", useGrid: false };
-  }
-  return { our: input.ourGroundM, opp: input.oppGroundM, missing: null, useGrid: false };
+  // Сетка ведёт весь путь только когда обе земли с неё читаются. Иначе отметки и ровная земля.
+  return { our, opp, missing: null, useGrid: ourSample != null && oppSample != null };
 }
 
 function hasTerrain(input: PositionInput, grid: DemGrid | null): boolean {

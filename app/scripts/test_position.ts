@@ -264,4 +264,61 @@ test("рельеф Украины в файле и покрывает крайн
   assert.notEqual(path.verdict, "insufficient");
   assert.ok(path.profile.length > 100);
   assert.ok(path.profile[0].terrainM > 80 && path.profile[0].terrainM < 250);
+
+  const outside = computePosition({
+    ...blocked(145),
+    ourLat: 50.4501,
+    ourLon: 30.5234,
+    ourGroundM: Number.NaN,
+    oppLat: 55,
+    oppLon: 37,
+    oppGroundM: 140,
+    marks: [],
+    flatM: 150,
+    grid,
+  }, false);
+  assert.notEqual(outside.verdict, "insufficient", outside.action);
+  assert.ok(Math.abs(outside.profile[0].terrainM - kyiv) < 0.01, `our ${outside.profile[0].terrainM}`);
+  assert.equal(outside.profile.at(-1)?.terrainM, 140);
+});
+
+test("пустая клетка не отменяет вписанную отметку", () => {
+  const grid: DemGrid = {
+    lat0: 50,
+    lon0: 30,
+    nlat: 2,
+    nlon: 2,
+    dlat: 0.5,
+    dlon: 0.5,
+    cellM: 1000,
+    heights: new Float64Array([Number.NaN, 100, 100, 100]),
+  };
+  const refused = computePosition({
+    ...blocked(145),
+    ourLat: 50,
+    ourLon: 30,
+    ourGroundM: Number.NaN,
+    oppLat: 50,
+    oppLon: 30.5,
+    oppGroundM: 100,
+    marks: [],
+    flatM: 90,
+    grid,
+  }, false);
+  assert.match(refused.action, /пустой/);
+  const typed = computePosition({
+    ...blocked(145),
+    ourLat: 50,
+    ourLon: 30,
+    ourGroundM: 80,
+    oppLat: 50,
+    oppLon: 30.5,
+    oppGroundM: 999,
+    marks: [],
+    flatM: 90,
+    grid,
+  }, false);
+  assert.notEqual(typed.verdict, "insufficient", typed.action);
+  assert.equal(typed.profile[0].terrainM, 80);
+  assert.equal(typed.profile.at(-1)?.terrainM, 100);
 });
