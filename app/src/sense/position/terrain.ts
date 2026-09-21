@@ -1,5 +1,16 @@
 import type { DemGrid, TerrainMark } from "./types";
 
+export function inBounds(grid: DemGrid, lat: number, lon: number): boolean {
+  if (grid.nlat < 2 || grid.nlon < 2 || grid.dlat === 0 || grid.dlon === 0) return false;
+  const x = (lon - grid.lon0) / grid.dlon;
+  const y = (lat - grid.lat0) / grid.dlat;
+  return x >= 0 && y >= 0 && x <= grid.nlon - 1 && y <= grid.nlat - 1;
+}
+
+function heightOk(h: number): boolean {
+  return Number.isFinite(h) && h > -1000;
+}
+
 export function sampleDem(grid: DemGrid, lat: number, lon: number): number | null {
   if (grid.nlat < 2 || grid.nlon < 2 || grid.dlat === 0 || grid.dlon === 0) return null;
   const x = (lon - grid.lon0) / grid.dlon;
@@ -16,7 +27,7 @@ export function sampleDem(grid: DemGrid, lat: number, lon: number): number | nul
   const h10 = at(x1, y0);
   const h01 = at(x0, y1);
   const h11 = at(x1, y1);
-  if (![h00, h10, h01, h11].every((h) => Number.isFinite(h))) return null;
+  if (![h00, h10, h01, h11].every(heightOk)) return null;
   const h0 = h00 * (1 - tx) + h10 * tx;
   const h1 = h01 * (1 - tx) + h11 * tx;
   return h0 * (1 - ty) + h1 * ty;

@@ -35,6 +35,12 @@ export interface PositionInput {
   ourDbi: number;
   oppKind: AntennaKind;
   oppDbi: number;
+  /** Куда смотрит наша антенна. Пустой азимут — повернём её на станцию. Пустой наклон — стоит ровно. */
+  ourAimAzDeg: number | null;
+  ourAimElDeg: number | null;
+  /** Куда смотрит антенна противника. Оба пустые — станция может стоять сбоку, берём боковой лепесток. */
+  oppAimAzDeg: number | null;
+  oppAimElDeg: number | null;
   powerW: number | null;
   thresholdDbm: number | null;
   /** Отметки земли между концами, км от нас. Концы берутся из точек. */
@@ -46,6 +52,8 @@ export interface PositionInput {
   cellM: number | null;
   clutter: boolean;
   rainMmH: number | null;
+  /** Рельеф Украины ещё читается. Пока его нет, не подменяем ответ фразой «нет земли». */
+  terrainPending: boolean;
 }
 
 export interface ProfileSample {
@@ -75,6 +83,8 @@ export interface PositionResult {
   verdict: VerdictKind;
   phrase: string;
   action: string;
+  /** Отдельная строка: станция сбоку и боковой лепесток. */
+  side: string | null;
   rx1: string | null;
   distanceKm: number;
   azimuthDeg: number;

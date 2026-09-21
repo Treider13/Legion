@@ -1,8 +1,8 @@
 // Трасса до антенны противника. Нормы P.530-19 и P.526, газ по порядку P.676.
 // Сеть не нужна: рельеф — отметки, ровная земля или файл на диске.
 
-import { azimuthDeg, destination, distanceKm, earthBulgeM } from "./geo";
-import { sampleDem } from "./terrain";
+import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM, formatDeg } from "./geo";
+import { inBounds, sampleDem } from "./terrain";
 import type {
   AntennaKind,
   DemGrid,
@@ -50,6 +50,28 @@ export function fsplDb(freqMhz: number, distKm: number): number {
 export function beamwidthDeg(dbi: number): number {
   const linear = 10 ** (dbi / 10);
   return Math.sqrt(31000 / linear);
+}
+
+/**
+ * Усиление не в пик, а под углом offDeg от оси антенны.
+ * До края луча — парабола, на краю ровно −3 дБ.
+ * Дальше первый боковой лепесток обычного раскрыва: на 13 дБ ниже пика.
+ * Ещё дальше — на 20 дБ ниже пика. Ниже 0 дБи не опускаем.
+ */
+export function gainTowardDb(kind: AntennaKind, peakDbi: number, offDeg: number): number {
+  if (kind === "whip" || !(peakDbi >= 5) || !Number.isFinite(offDeg)) return peakDbi;
+  const off = Math.abs(offDeg);
+  const half = beamwidthDeg(peakDbi) / 2;
+  if (!(half > 0)) return peakDbi;
+  if (off <= half) return peakDbi - 3 * (off / half) ** 2;
+  if (off <= half * 4) return Math.max(0, peakDbi - 13);
+  return Math.max(0, peakDbi - 20);
+}
+
+/** Боковой лепесток: сразу за краем главного луча. */
+export function sideGainDb(kind: AntennaKind, peakDbi: number): number {
+  const half = beamwidthDeg(peakDbi) / 2;
+  return gainTowardDb(kind, peakDbi, half + 0.01);
 }
 
 /** Поглощение газа, дБ/км. Ниже 10 ГГц ноль. Пик водяного пара около 22 ГГц — порядка 0,2 дБ/км. */
@@ -115,6 +137,7 @@ function empty(phrase: string, action: string): PositionResult {
     verdict: "insufficient",
     phrase,
     action,
+    side: null,
     rx1: null,
     distanceKm: 0,
     azimuthDeg: 0,
@@ -134,17 +157,21 @@ function empty(phrase: string, action: string): PositionResult {
   };
 }
 
-function grounds(input: PositionInput, grid: DemGrid | null): { our: number; opp: number; missing: string | null } {
-  if (grid) {
+function gridCovers(grid: DemGrid | null, lat: number, lon: number): grid is DemGrid {
+  return grid != null && inBounds(grid, lat, lon);
+}
+
+function grounds(input: PositionInput, grid: DemGrid | null): { our: number; opp: number; missing: string | null; useGrid: boolean } {
+  if (gridCovers(grid, input.ourLat, input.ourLon) && gridCovers(grid, input.oppLat, input.oppLon)) {
     const our = sampleDem(grid, input.ourLat, input.ourLon);
     const opp = sampleDem(grid, input.oppLat, input.oppLon);
-    if (our == null || opp == null) return { our: input.ourGroundM, opp: input.oppGroundM, missing: "Файл рельефа не покрывает обе точки." };
-    return { our, opp, missing: null };
+    if (our == null || opp == null) return { our: 0, opp: 0, missing: "В этих градусах рельеф пустой.", useGrid: false };
+    return { our, opp, missing: null, useGrid: true };
   }
   if (!finite(input.ourGroundM) || !finite(input.oppGroundM)) {
-    return { our: 0, opp: 0, missing: "Нужны отметки земли под нашей антенной и под антенной противника." };
+    return { our: 0, opp: 0, missing: "Нужны отметки земли под нашей антенной и под станцией противника.", useGrid: false };
   }
-  return { our: input.ourGroundM, opp: input.oppGroundM, missing: null };
+  return { our: input.ourGroundM, opp: input.oppGroundM, missing: null, useGrid: false };
 }
 
 function hasTerrain(input: PositionInput, grid: DemGrid | null): boolean {
@@ -154,7 +181,7 @@ function hasTerrain(input: PositionInput, grid: DemGrid | null): boolean {
 }
 
 function terrainM(input: PositionInput, grid: DemGrid | null, km: number, dist: number, ourGround: number, oppGround: number, lat: number, lon: number): number | null {
-  if (grid) {
+  if (grid && gridCovers(grid, lat, lon)) {
     if (km <= 0) return ourGround;
     if (km >= dist) return oppGround;
     return sampleDem(grid, lat, lon);
@@ -268,39 +295,70 @@ function segments(profile: ProfileSample[], freqMhz: number, distKm: number): Se
   return found;
 }
 
-function aimAction(input: PositionInput, azimuth: number, elevation: number, beam: number | null): { text: string; miss: boolean } {
+function aimAction(input: PositionInput, azimuth: number, elevation: number, beam: number | null, ourOff: number): { text: string; miss: boolean } {
   if (whip(input.ourKind) || input.ourDbi < 5 || beam == null) {
     return { text: "Крутить не нужно.", miss: false };
   }
-  const aim = `Доверните нашу антенну: азимут ${azimuth.toFixed(1)}°, наклон ${elevation.toFixed(1)}°.`;
-  if (input.ourDbi >= 15 && Math.abs(elevation) > beam / 2) {
-    return { text: `Луч смотрит мимо. ${aim}`, miss: true };
-  }
-  if (input.ourDbi >= 15) return { text: aim, miss: false };
+  const aim = `Поверните нашу антенну: азимут ${azimuth.toFixed(1)}°, наклон ${elevation.toFixed(1)}°.`;
+  if (ourOff > beam / 2) return { text: `Луч смотрит мимо. ${aim}`, miss: true };
+  if (input.ourDbi >= 15 && input.ourAimAzDeg == null) return { text: aim, miss: false };
+  if (input.ourDbi >= 15 && input.ourAimAzDeg != null && ourOff > 1) return { text: aim, miss: false };
   return { text: "Крутить не нужно.", miss: false };
 }
 
 function rx1Line(freqMhz: number, verdict: VerdictKind, margin: number | null): string | null {
-  if (freqMhz > RX1_MAX_MHZ) return "Этим приёмником RX1 не засечёте.";
-  if (verdict === "open" && (margin == null || margin > 0)) return "Засечёте на RX1.";
-  if (verdict === "ridge" && margin != null && margin > 0) return "Засечёте на RX1.";
-  if (verdict === "ridge" && margin == null) return null;
-  return null;
+  if (freqMhz > RX1_MAX_MHZ) return "Этот приёмник RX1 такую частоту не берёт.";
+  if (verdict !== "open" && verdict !== "ridge") return null;
+  if (margin == null) return null;
+  if (margin > 0) return "На приёмнике RX1 поймаете.";
+  return "На приёмнике RX1 сигнала не хватит.";
 }
 
-function marginDb(input: PositionInput, fspl: number, diffraction: number, gas: number): number | null {
+function marginDb(input: PositionInput, ourDb: number, oppDb: number, fspl: number, diffraction: number, gas: number): number | null {
   if (input.powerW == null || input.thresholdDbm == null) return null;
   if (!(input.powerW > 0) || !finite(input.thresholdDbm)) return null;
   const powerDbm = 10 * Math.log10(input.powerW * 1000);
-  return powerDbm + input.oppDbi + input.ourDbi - fspl - diffraction - gas - input.thresholdDbm;
+  return powerDbm + oppDb + ourDb - fspl - diffraction - gas - input.thresholdDbm;
+}
+
+function linkGains(input: PositionInput, az: number, el: number): { ourDb: number; oppDb: number; ourOff: number; side: string } {
+  const ourAz = input.ourAimAzDeg == null ? az : input.ourAimAzDeg;
+  const ourEl = input.ourAimElDeg ?? 0;
+  const ourOff = angleOffDeg(ourAz, ourEl, az, el);
+  const ourDb = gainTowardDb(input.ourKind, input.ourDbi, ourOff);
+  const round = whip(input.oppKind) || input.oppDbi < 5;
+  if (input.oppAimAzDeg == null && input.oppAimElDeg == null) {
+    return {
+      ourDb,
+      oppDb: sideGainDb(input.oppKind, input.oppDbi),
+      ourOff,
+      side: round ? "Антенна противника почти круговая." : "Станция может стоять сбоку. Берём боковой лепесток, не пик из паспорта.",
+    };
+  }
+  const toUsAz = azimuthDeg(input.oppLat, input.oppLon, input.ourLat, input.ourLon);
+  const off = angleOffDeg(input.oppAimAzDeg ?? toUsAz, input.oppAimElDeg ?? 0, toUsAz, -el);
+  const half = beamwidthDeg(input.oppDbi) / 2;
+  const side = round
+    ? "Антенна противника почти круговая."
+    : off <= half
+      ? "Антенна противника смотрит к нам."
+      : "Антенна противника смотрит мимо нас. Сбоку сигнал слабее.";
+  return { ourDb, oppDb: gainTowardDb(input.oppKind, input.oppDbi, off), ourOff, side };
 }
 
 function findMove(input: PositionInput, grid: DemGrid, ends: Ends): MovePoint | null {
-  const strideLat = Math.max(1, Math.floor(grid.nlat / 40));
-  const strideLon = Math.max(1, Math.floor(grid.nlon / 40));
+  const cos = Math.max(0.2, Math.cos((input.ourLat * Math.PI) / 180));
+  const dLat = 45 / 111.32;
+  const dLon = 45 / (111.32 * cos);
+  const iy0 = Math.max(0, Math.floor(((input.ourLat - dLat) - grid.lat0) / grid.dlat));
+  const iy1 = Math.min(grid.nlat - 1, Math.ceil(((input.ourLat + dLat) - grid.lat0) / grid.dlat));
+  const ix0 = Math.max(0, Math.floor(((input.ourLon - dLon) - grid.lon0) / grid.dlon));
+  const ix1 = Math.min(grid.nlon - 1, Math.ceil(((input.ourLon + dLon) - grid.lon0) / grid.dlon));
+  const strideLat = Math.max(1, Math.floor((iy1 - iy0) / 40));
+  const strideLon = Math.max(1, Math.floor((ix1 - ix0) / 40));
   let best: MovePoint | null = null;
-  for (let iy = 0; iy < grid.nlat; iy += strideLat) {
-    for (let ix = 0; ix < grid.nlon; ix += strideLon) {
+  for (let iy = iy0; iy <= iy1; iy += strideLat) {
+    for (let ix = ix0; ix <= ix1; ix += strideLon) {
       const h = grid.heights[iy * grid.nlon + ix];
       if (!finite(h) || h <= ends.ourGround + 5) continue;
       const lat = grid.lat0 + iy * grid.dlat;
@@ -363,11 +421,14 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   if (input.ourAglM < 0 || input.oppAglM < 0) {
     return empty("Мало данных.", "Высота антенны над землёй не бывает ниже нуля.");
   }
+  if (input.terrainPending && !input.grid && !hasTerrain(input, null)) {
+    return empty("Мало данных.", "Рельеф Украины ещё читается.");
+  }
   const grid = input.grid;
   const base = grounds(input, grid);
   if (base.missing) return empty("Мало данных.", base.missing);
-  if (!hasTerrain(input, grid)) {
-    return empty("Мало данных.", "Нужна земля по пути: отметки, ровная отметка или файл рельефа.");
+  if (!base.useGrid && !hasTerrain(input, null)) {
+    return empty("Мало данных.", "Нужна земля по пути: отметки, ровная земля или точка на карте Украины.");
   }
   const dist = distanceKm(input.ourLat, input.ourLon, input.oppLat, input.oppLon);
   if (dist < 0.05) return empty("Мало данных.", "Точки слишком близко.");
@@ -375,10 +436,10 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const h1 = base.our + input.ourAglM;
   const h2 = base.opp + input.oppAglM;
   const ends: Ends = { distanceKm: dist, azimuthDeg: az, h1, h2, ourGround: base.our, oppGround: base.opp };
-  const profile = buildProfile(input, grid, ends, 0);
+  const profile = buildProfile(input, base.useGrid ? grid : null, ends, 0);
   if (!profile) return empty("Мало данных.", "Рельеф по пути не читается.");
 
-  const cell = grid ? grid.cellM : input.cellM;
+  const cell = base.useGrid && grid ? grid.cellM : input.cellM;
   const minFresnel = profile.reduce((m, s) => {
     const f = s.km / dist;
     if (f <= 0.05 || f >= 0.95) return m;
@@ -387,14 +448,14 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   if (input.freqMhz > 13000 && cell != null && cell > minFresnel) {
     const gas = gasDbPerKm(input.freqMhz) * dist;
     return {
-      ...empty("Мало данных.", "Клетка карты крупнее зоны Френеля. Ответ по просвету ненадёжен."),
+      ...empty("Мало данных.", "Шаг рельефа крупнее полосы луча. Ответ по земле ненадёжен."),
       distanceKm: dist,
-      azimuthDeg: az,
+      azimuthDeg: (az + 360) % 360,
       elevationDeg: (Math.atan2(h2 - h1, dist * 1000) * 180) / Math.PI,
       gasDb: gas,
       fsplDb: fsplDb(input.freqMhz, dist),
       profile,
-      rx1: "Этим приёмником RX1 не засечёте.",
+      rx1: "Этот приёмник RX1 такую частоту не берёт.",
     };
   }
 
@@ -423,40 +484,46 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const fspl = fsplDb(input.freqMhz, dist);
   const gas = gasDbPerKm(input.freqMhz) * dist;
   const rain = input.rainMmH != null && input.rainMmH > 0 ? rainDbPerKm(input.freqMhz, input.rainMmH) * dist : null;
-  const margin = marginDb(input, fspl, verdict === "closed" ? 0 : diffraction, gas);
   const elevation = (Math.atan2(h2 - h1, dist * 1000) * 180) / Math.PI;
+  const linked = linkGains(input, (az + 360) % 360, elevation);
+  const margin = marginDb(input, linked.ourDb, linked.oppDb, fspl, verdict === "closed" ? 0 : diffraction, gas);
   const beam = whip(input.ourKind) ? null : beamwidthDeg(input.ourDbi);
-  const aim = aimAction(input, az, elevation, beam);
+  const aim = aimAction(input, (az + 360) % 360, elevation, beam, linked.ourOff);
+  const halfOur = beam == null ? 0 : beam / 2;
+  let side = linked.side;
+  if (input.ourAimAzDeg != null && beam != null && linked.ourOff > halfOur) {
+    side = margin != null && margin > 0
+      ? `${side} Сбоку тоже поймаете.`
+      : `${side} Сбоку слабо, поверните антенну на станцию.`;
+  }
 
-  let phrase = "Открыто.";
+  let phrase = "Доходит.";
   let action = aim.text;
   let move: MovePoint | null = null;
   if (verdict === "closed") {
-    phrase = "Закрыто.";
-    if (input.clutter && input.freqMhz >= 1000) phrase = "Закрыто. Лес или дома на этой частоте.";
-    else if (multi) phrase = "Закрыто. Несколько гребней.";
-    else phrase = "Закрыто. Мачта этот гребень не поднимет.";
-    if (withAround && grid) move = findMove(input, grid, ends);
+    phrase = "Не доходит.";
+    if (input.clutter && input.freqMhz >= 1000) phrase = "Не доходит. По пути лес или дома.";
+    else if (multi) phrase = "Не доходит. Холмов несколько.";
+    else phrase = "Не доходит. Мачтой это не поднять.";
+    if (withAround && base.useGrid && grid) move = findMove(input, grid, ends);
     action = move
-      ? `Встаньте на ${move.groundM.toFixed(0)} м над морем, ${move.distanceKm.toFixed(1)} км отсюда (${move.lat.toFixed(5)}, ${move.lon.toFixed(5)}).`
-      : "С этой точки не увидите. Для новой точки нужен файл рельефа.";
+      ? `Встаньте на ${move.groundM.toFixed(0)} м над морем, ${move.distanceKm.toFixed(1)} км отсюда. Широта ${formatDeg(move.lat)}, долгота ${formatDeg(move.lon)}.`
+      : base.useGrid
+        ? "С этой точки не доходит. Рядом выше по рельефу места нет."
+        : "С этой точки не доходит. Чтобы искать другую точку, нужен рельеф вокруг. По Украине он уже в памяти.";
   } else if (verdict === "ridge") {
-    phrase = "Один гребень.";
-    if (aim.miss) {
-      action = aim.text;
-    } else {
-      action = `Поднимите нашу антенну на ${raiseNormM.toFixed(0)} м над текущей высотой. До касания ${raiseGrazeM.toFixed(0)} м, до чистого просвета ${raiseCleanM.toFixed(0)} м.`;
+    phrase = "Мешает земля.";
+    if (!aim.miss) {
+      action = `Поднимите нашу антенну на ${raiseNormM.toFixed(0)} м. Чтобы коснуться земли — ${raiseGrazeM.toFixed(0)} м. Чтобы земля не лезла в луч — ${raiseCleanM.toFixed(0)} м.`;
     }
-  } else if (aim.miss) {
-    phrase = "Открыто.";
-    action = aim.text;
   }
 
-  const map = withAround && grid ? buildMap(input, grid) : null;
+  const map = withAround && base.useGrid && grid ? buildMap(input, grid) : null;
   return {
     verdict,
     phrase,
     action,
+    side,
     rx1: rx1Line(input.freqMhz, verdict, margin),
     distanceKm: dist,
     azimuthDeg: (az + 360) % 360,
