@@ -125,42 +125,171 @@ export function knifeEdgeDb(hM: number, d1M: number, d2M: number, freqMhz: numbe
   if (hM <= 0 || d1M <= 0 || d2M <= 0 || freqMhz <= 0) return 0;
   const lambda = 300 / freqMhz;
   const v = hM * Math.sqrt((2 / lambda) * (1 / d1M + 1 / d2M));
-  const shifted = v - 0.1;
-  return 6.9 + 20 * Math.log10(Math.sqrt(shifted * shifted + 1) + shifted);
+  return knifeJ(v);
 }
 
 const EARTH_M = 6371000;
 const AE_M = EARTH_M * 4 / 3;
 const AE_KM = AE_M / 1000;
 
-function p526Field(dKm: number, h1: number, h2: number, freqMhz: number): number {
-  const beta = 1;
+function p526Field(dKm: number, h1: number, h2: number, freqMhz: number, aeKm: number): number {
   const f13 = freqMhz ** (1 / 3);
   const f23 = freqMhz ** (2 / 3);
-  const x = 2.188 * beta * f13 * AE_KM ** (-2 / 3) * dKm;
+  const x = 2.188 * f13 * aeKm ** (-2 / 3) * dKm;
   const g = (h: number) => {
-    const y = 9.575e-3 * beta * f23 * AE_KM ** (-1 / 3) * Math.max(h, 0.5);
+    const y = 9.575e-3 * f23 * aeKm ** (-1 / 3) * Math.max(h, 0.5);
     if (y > 2) return 17.6 * Math.sqrt(y - 1.1) - 5 * Math.log10(y - 1.1) - 8;
-    return 20 * Math.log10(y + 0.1 * y ** 3);
+    return 20 * Math.log10(Math.max(y + 0.1 * y ** 3, 1e-12));
   };
   const f = x >= 1.6
-    ? 11 + 10 * Math.log10(x) - 17.6 * x
+    ? 11 + 10 * Math.log10(Math.max(x, 1e-6)) - 17.6 * x
     : -20 * Math.log10(Math.max(x, 1e-6)) - 5.6488 * x ** 1.425;
   return f + g(h1) + g(h2);
 }
 
-/** Гладкая земля, ITU-R P.526 §3. Высоты — над землёй, метры. Не для острого гребня. */
+/** J(ν) по P.526. Ниже −0,78 формула не применяется, потеря ноль. */
+function knifeJ(v: number): number {
+  if (v <= -0.78) return 0;
+  return 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
+}
+
+/** Точка наименьшего просвета луча над выпуклостью земли. d1 — от нашей антенны, км. */
+function minClearance(distKm: number, h1: number, h2: number): { clearance: number; d1: number } {
+  let x = (distKm - (16.989 * (h2 - h1)) / distKm) / 2;
+  if (x < 0) x = 0;
+  if (x > distKm) x = distKm;
+  const f = x / distKm;
+  return { clearance: h1 * (1 - f) + h2 * f - earthBulgeM(x, distKm - x), d1: x };
+}
+
+/**
+ * Гладкая земля, ITU-R P.526 §3.2, уравнение (25).
+ * Высоты — над гладкой поверхностью, метры. Ноль потери только при просвете 0,552 первой зоны.
+ * Ниже 0,5 м ряд вычетов уходит в бесконечность, поэтому высота не ниже полуметра.
+ */
 export function smoothEarthDb(distKm: number, h1M: number, h2M: number, freqMhz: number): number {
   if (distKm <= 0 || freqMhz <= 0) return 0;
   const h1 = Math.max(h1M, 0.5);
   const h2 = Math.max(h2M, 0.5);
   const dlos = (Math.sqrt(2 * AE_M * h1) + Math.sqrt(2 * AE_M * h2)) / 1000;
-  const clearance = (h1 + h2) / 2 - earthBulgeM(distKm / 2, distKm / 2);
-  if (distKm >= dlos || clearance <= 0) return Math.max(0, -p526Field(distKm, h1, h2, freqMhz));
-  const need = 0.6 * fresnelRadiusM(distKm / 2, distKm / 2, freqMhz);
-  if (!(need > 0) || clearance >= need) return 0;
-  // Внутри горизонта касание даёт около 6 дБ, к чистой зоне сходит к нулю. Это не высота мачты.
-  return 6 * (1 - clearance / need);
+  const spot = minClearance(distKm, h1, h2);
+  if (distKm >= dlos || spot.clearance <= 0) return Math.max(0, -p526Field(distKm, h1, h2, freqMhz, AE_KM));
+  const need = 0.552 * fresnelRadiusM(spot.d1, distKm - spot.d1, freqMhz);
+  if (!(need > 0) || spot.clearance >= need) return 0;
+  const aem = AE_KM * (distKm / dlos) ** 2;
+  const atFit = Math.max(0, -p526Field(distKm, h1, h2, freqMhz, aem));
+  return (1 - spot.clearance / need) * atFit;
+}
+
+function bullingtonFromV(v: number): number {
+  const luc = knifeJ(v);
+  return luc + (1 - Math.exp(-luc / 6));
+}
+
+/** Потеря Буллингтона, ITU-R P.526 §4.5.1. heights — земля над уровнем моря, hts/hrs — антенны. */
+function bullingtonLb(distKm: number, heights: number[], hts: number, hrs: number, freqMhz: number): number {
+  const n = heights.length;
+  if (n < 3 || distKm <= 0 || freqMhz <= 0) return 0;
+  const lambda = 300 / freqMhz;
+  const last = n - 1;
+  const vAt = (obstruction: number, d1: number): number => {
+    const d2 = distKm - d1;
+    if (!(d1 > 0) || !(d2 > 0)) return Number.NEGATIVE_INFINITY;
+    return obstruction * Math.sqrt((0.002 * distKm) / (lambda * d1 * d2));
+  };
+  let stim = Number.NEGATIVE_INFINITY;
+  for (let i = 1; i < last; i++) {
+    const di = (distKm * i) / last;
+    const slope = (heights[i] + earthBulgeM(di, distKm - di) - hts) / di;
+    if (slope > stim) stim = slope;
+  }
+  if (!Number.isFinite(stim)) return 0;
+  const str = (hrs - hts) / distKm;
+  let v = Number.NEGATIVE_INFINITY;
+  if (stim < str) {
+    for (let i = 1; i < last; i++) {
+      const di = (distKm * i) / last;
+      const chord = (hts * (distKm - di) + hrs * di) / distKm;
+      const next = vAt(heights[i] + earthBulgeM(di, distKm - di) - chord, di);
+      if (next > v) v = next;
+    }
+  } else {
+    let srim = Number.NEGATIVE_INFINITY;
+    for (let i = 1; i < last; i++) {
+      const di = (distKm * i) / last;
+      const slope = (heights[i] + earthBulgeM(di, distKm - di) - hrs) / (distKm - di);
+      if (slope > srim) srim = slope;
+    }
+    const denom = stim + srim;
+    const db = denom > 0 ? (hrs - hts + srim * distKm) / denom : Number.NaN;
+    if (db > 0 && db < distKm) {
+      const chord = (hts * (distKm - db) + hrs * db) / distKm;
+      v = vAt(hts + stim * db - chord, db);
+    } else {
+      for (let i = 1; i < last; i++) {
+        const di = (distKm * i) / last;
+        const chord = (hts * (distKm - di) + hrs * di) / distKm;
+        const next = vAt(heights[i] + earthBulgeM(di, distKm - di) - chord, di);
+        if (next > v) v = next;
+      }
+    }
+  }
+  if (!Number.isFinite(v)) return 0;
+  return bullingtonFromV(v);
+}
+
+/** Высоты антенн над гладкой поверхностью, подогнанной к профилю. P.526 §4.5.2, (58)–(64). */
+function heightsAboveSmooth(distKm: number, heights: number[], hts: number, hrs: number): { h1: number; h2: number } {
+  const last = heights.length - 1;
+  let v1 = 0;
+  let v2 = 0;
+  for (let i = 1; i <= last; i++) {
+    const di = (distKm * i) / last;
+    const prev = (distKm * (i - 1)) / last;
+    const hi = heights[i];
+    const hp = heights[i - 1];
+    const step = di - prev;
+    v1 += step * (hi + hp);
+    v2 += step * (hi * (2 * di + prev) + hp * (di + 2 * prev));
+  }
+  const d2 = distKm * distKm;
+  let hst = (2 * distKm * v1 - v2) / d2;
+  let hsr = (v2 - distKm * v1) / d2;
+  let hobs = Number.NEGATIVE_INFINITY;
+  let ahead = Number.NEGATIVE_INFINITY;
+  let behind = Number.NEGATIVE_INFINITY;
+  for (let i = 1; i < last; i++) {
+    const di = (distKm * i) / last;
+    const rise = heights[i] - (hts * (distKm - di) + hrs * di) / distKm;
+    if (rise > hobs) hobs = rise;
+    const toTx = rise / di;
+    const toRx = rise / (distKm - di);
+    if (toTx > ahead) ahead = toTx;
+    if (toRx > behind) behind = toRx;
+  }
+  if (hobs > 0 && ahead + behind > 0) {
+    hst -= hobs * (ahead / (ahead + behind));
+    hsr -= hobs * (behind / (ahead + behind));
+  }
+  if (hst > heights[0]) hst = heights[0];
+  if (hsr > heights[last]) hsr = heights[last];
+  return { h1: Math.max(0, hts - hst), h2: Math.max(0, hrs - hsr) };
+}
+
+/**
+ * Дифракция всей трассы, ITU-R P.526 §4.5.2, уравнение (66):
+ * L = max(Lba + Lsph − Lbs, 0). Ровная земля даёт ровно гладкую сферу.
+ * Холм увеличивает Lba и поэтому всю потерю. Долина может её уменьшить.
+ */
+function pathDiffractionDb(heights: number[], distKm: number, hts: number, hrs: number, freqMhz: number): number {
+  const groundTx = heights[0] ?? 0;
+  const groundRx = heights[heights.length - 1] ?? 0;
+  if (heights.length < 3 || distKm <= 0) return smoothEarthDb(distKm, hts - groundTx, hrs - groundRx, freqMhz);
+  const actual = bullingtonLb(distKm, heights, hts, hrs, freqMhz);
+  const above = heightsAboveSmooth(distKm, heights, hts, hrs);
+  const smooth = bullingtonLb(distKm, heights.map(() => 0), above.h1, above.h2, freqMhz);
+  const sphere = smoothEarthDb(distKm, above.h1, above.h2, freqMhz);
+  return Math.max(0, actual + sphere - smooth);
 }
 
 function normFraction(freqMhz: number, extended: boolean): number {
@@ -485,8 +614,8 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const raiseGrazeM = raiseFor(profile, ends, () => 0);
   const raiseCleanM = raiseFor(profile, ends, (s) => 0.6 * s.fresnelM);
   const raiseNormM = raiseFor(profile, ends, (s) => frac * s.fresnelM);
-  const ridge = ridgeExcessM(profile, ends) > 8;
   const multi = segs.filter((s) => s.intrusionM > 0).length >= 2;
+  const terrain = profile.map((s) => s.terrainM);
 
   const fspl = fsplDb(input.freqMhz, dist);
   const gas = gasDbPerKm(input.freqMhz) * dist;
@@ -504,13 +633,7 @@ export function computePosition(input: PositionInput, withAround = true): Positi
 
   const lossAt = (extraM: number): number => {
     if (input.freqMhz >= 1000 && input.clutter) return 0;
-    if (!ridge) return smoothEarthDb(dist, input.ourAglM + extraM, input.oppAglM, input.freqMhz);
-    const prof = extraM === 0 ? profile : buildProfile(input, base.useGrid ? grid : null, ends, extraM);
-    if (!prof) return 80;
-    const cuts = segments(prof, input.freqMhz, dist).filter((s) => s.intrusionM > 0);
-    if (cuts.length === 0) return 0;
-    const worst = cuts.reduce((a, b) => (a.intrusionM >= b.intrusionM ? a : b));
-    return knifeEdgeDb(worst.intrusionM, worst.worst.km * 1000, (dist - worst.worst.km) * 1000, input.freqMhz);
+    return pathDiffractionDb(terrain, dist, ends.h1 + extraM, ends.h2, input.freqMhz);
   };
 
   const diffraction = lossAt(0);
@@ -599,17 +722,6 @@ export function computePosition(input: PositionInput, withAround = true): Positi
 function formatMast(m: number): string {
   const rounded = Math.round(m * 2) / 2;
   return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-}
-
-function ridgeExcessM(profile: ProfileSample[], ends: Ends): number {
-  let excess = 0;
-  for (const s of profile) {
-    const f = ends.distanceKm <= 0 ? 0 : s.km / ends.distanceKm;
-    if (f <= 0.05 || f >= 0.95) continue;
-    const linear = ends.ourGround * (1 - f) + ends.oppGround * f;
-    excess = Math.max(excess, s.terrainM - linear);
-  }
-  return excess;
 }
 
 function boxSidesKm(box: SearchBox): { ns: number; ew: number } | null {

@@ -137,6 +137,8 @@ test("дифракция и газ на краях диапазона", () => {
   const table = 0.01217 * 25 ** 1.2571;
   assert.ok(Math.abs(at10 - table) / table < 0.02, `rain ${at10} vs ${table}`);
   assert.equal(rainDbPerKm(2400, 25), 0);
+  const vhf = smoothEarthDb(3, 2, 2, 145);
+  assert.ok(vhf > 35 && vhf < 50, `vhf ${vhf}`);
 });
 
 test("JSON решётки читается офлайн и даёт высоту", () => {
@@ -319,7 +321,7 @@ test("рельеф Украины в файле и покрывает крайн
   assert.equal(outside.profile.at(-1)?.terrainM, 140);
 });
 
-test("два холма, которые берёт мачта, не называются непроходимыми", () => {
+test("два холма выше тридцати метров не называются слышимыми", () => {
   const two = computePosition({
     ...blocked(2400),
     oppAimAzDeg: 180,
@@ -333,8 +335,12 @@ test("два холма, которые берёт мачта, не называ
       { km: 33, m: 260 },
     ],
   }, false);
-  assert.notEqual(two.verdict, "closed", `${two.phrase} ${two.action}`);
-  assert.match(two.action, /Поймаете/);
+  assert.equal(two.verdict, "closed", `${two.phrase} ${two.action} ${two.marginDb}`);
+  assert.match(two.phrase, /Холмов несколько/);
+  assert.match(two.action, /квадрат/);
+  assert.doesNotMatch(two.action, /Поднимите/);
+  assert.ok((two.marginDb ?? 0) < 0, `margin ${two.marginDb}`);
+  assert.ok(two.diffractionDb > 20 && two.diffractionDb < 45, `diff ${two.diffractionDb}`);
   assert.ok(two.raiseNormM > 0, `norm ${two.raiseNormM}`);
   const hopeless = computePosition({
     ...blocked(2400),
@@ -429,4 +435,9 @@ test("30 км в лоб слышно без мачты, на 45 км подъё�
   const loss = smoothEarthDb(40, 10, 10, 2400);
   assert.ok(loss > 30 && loss < 45, `smooth ${loss}`);
   assert.ok(smoothEarthDb(10, 10, 10, 2400) < 6);
+  const horizon = smoothEarthDb(26, 10, 10, 2400);
+  assert.ok(horizon > 18 && horizon < 23, `horizon ${horizon}`);
+  const bump = computePosition({ ...face, marks: [{ km: 15, m: 209 }] }, false);
+  assert.ok(bump.diffractionDb > near.diffractionDb + 2, `bump ${bump.diffractionDb} flat ${near.diffractionDb}`);
+  assert.ok((bump.marginDb ?? 0) < (near.marginDb ?? 0), `bump margin ${bump.marginDb} vs ${near.marginDb}`);
 });
