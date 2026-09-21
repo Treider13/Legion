@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "node scripts/test_fpga_stop.cjs && tsx scripts/test_orchestrator.ts && tsx scripts/test_race_fixes.ts && tsx scripts/test_lab_scanner.ts && tsx scripts/test_host_attack.ts && tsx scripts/smoke_mock.ts && tsx scripts/smoke_ws.ts && tsx scripts/smoke_sl22.ts",
+    "test": "node scripts/test_fpga_stop.cjs && tsx scripts/test_orchestrator.ts && tsx scripts/test_race_fixes.ts && tsx scripts/test_lab_scanner.ts && tsx scripts/test_host_attack.ts && tsx scripts/smoke_mock.ts && tsx scripts/smoke_ws.ts && tsx scripts/smoke_sl22.ts && tsx scripts/test_position.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

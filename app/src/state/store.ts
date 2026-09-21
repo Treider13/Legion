@@ -188,6 +188,7 @@ export type WorkspaceId =
   | "pa"
   | "sdrFlash"
   | "sdrCustom"
+  | "position"
   | "esp32Flash";
 export type SdrFlashAction = "flash-fx3" | "flash-fpga" | "load-fpga";
 

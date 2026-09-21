@@ -430,8 +430,13 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.workspace-nav-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 @media (max-width: 900px) {
   .workspace-nav,
+  .workspace-nav-6,
   .workspace-nav-4,
   .workspace-nav-3,
   .workspace-nav-2 {
