@@ -114,3 +114,27 @@ export function familySpanWithPad(fam: AttackHopFamily): { f1Mhz: number; f2Mhz:
   const pad = fam.gridMhz > 0 ? fam.gridMhz * 0.5 : 0.5;
   return { f1Mhz: fam.fLowMhz - pad, f2Mhz: fam.fHighMhz + pad };
 }
+
+/** Кусок не шире maxMhz внутри огибающей. Центр — живая вспышка, не нижний край.
+ * Канал следующего прыжка не выбирает. */
+export function chunkInsideEnvelope(
+  span: { f1Mhz: number; f2Mhz: number },
+  focusMhz: number,
+  maxMhz: number,
+): { f1Mhz: number; f2Mhz: number } {
+  const f1 = Math.min(span.f1Mhz, span.f2Mhz);
+  const f2 = Math.max(span.f1Mhz, span.f2Mhz);
+  if (!(maxMhz > 0) || f2 - f1 <= maxMhz) return { f1Mhz: f1, f2Mhz: f2 };
+  const focus = Math.min(f2, Math.max(f1, focusMhz));
+  let a = focus - maxMhz / 2;
+  let b = focus + maxMhz / 2;
+  if (a < f1) {
+    a = f1;
+    b = f1 + maxMhz;
+  }
+  if (b > f2) {
+    b = f2;
+    a = Math.max(f1, f2 - maxMhz);
+  }
+  return { f1Mhz: a, f2Mhz: b };
+}
