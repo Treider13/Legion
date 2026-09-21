@@ -606,13 +606,13 @@ export function ScanPanel() {
                 )}
               </div>
             ))}
-            <p><strong>После передачи.</strong> {s.attackAdvice.after}</p>
+            <p><strong>Отчёт сессии.</strong> {s.attackAdvice.after}</p>
           </div>
           <table className="det-table">
             <thead>
               <tr>
                 <th>МГц</th>
-                <th>дБм</th>
+                <th title="Относительный цифровой уровень; абсолютная мощность в дБм не подтверждена">дБ (отн.)</th>
                 <th>СНР</th>
                 <th>СТАТУС</th>
               </tr>

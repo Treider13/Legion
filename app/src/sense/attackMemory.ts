@@ -125,11 +125,22 @@ export class AttackSessionMemory {
 export function memoryLineRu(s: AttackMemStats, families: readonly AttackHopFamily[]): string {
   const iq =
     s.workerCap > 0
-      ? `плата помнит ${s.workerMs.toFixed(0)} мс IQ (${s.workerSamples} из ${s.workerCap} отсчётов)`
-      : "память IQ на плате ещё пуста — копится с каждого взгляда Атаки";
+      ? `буфер IQ на компьютере: ${s.workerMs.toFixed(0)} мс (${s.workerSamples} из ${s.workerCap} отсчётов)`
+      : "буфер IQ на компьютере ещё пуст — заполняется при получении отсчётов";
   const hop = s.hopRemembered
     ? `мозг помнит ${s.hopRemembered} вспышек hop`
     : "hop-вспышек в памяти пока нет";
   const fam = families.length ? `семей hop: ${families.length}` : "семья hop ещё не сложилась";
   return `${iq}. ${hop}. ${fam}. сцен сессии ${s.scenes}.`;
+}
+
+export function residualLineRu(row: AttackResidual): string {
+  const date = new Date(row.ts);
+  const when = row.ts > 0 && Number.isFinite(date.getTime())
+    ? `${date.toLocaleString("ru-RU")} (местное время)`
+    : "время не записано";
+  const area = Number.isFinite(row.paintLow) && Number.isFinite(row.paintHigh) && row.paintHigh > row.paintLow
+    ? `область ${row.paintLow.toFixed(3)}–${row.paintHigh.toFixed(3)} МГц`
+    : "область не записана";
+  return `Последний сохранённый отчёт: ${when}; ${area}. ${row.note}`;
 }
