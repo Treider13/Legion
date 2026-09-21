@@ -5,6 +5,7 @@
 // Цепстр: JTIT 2008 picket-fence. Не трогает журнал лаборатории.
 // ============================================================================
 import { finiteDbm } from "./labPsd";
+import { estimateNoiseFloor } from "../sdr/backend";
 import type { ScanBin } from "../sdr/types";
 
 /**
@@ -47,6 +48,11 @@ export function widthXdBMhz(bins: readonly ScanBin[], peakMhz: number, xDb: numb
   const i = peakIndex(bins, peakMhz);
   const peak = bins[i].powerDbm;
   if (!finiteDbm(peak)) return 0;
+  // Контур на уровне шума — уже не ширина сигнала. Пол 60% тот же, что у
+  // детектора. Иначе −26 дБ при SNR ≤ 26 обходит всё окно, и рамка становится
+  // рукой 40 МГц вокруг узкого пульта.
+  const floor = estimateNoiseFloor(bins);
+  if (!(peak - xDb > floor)) return 0;
   const thr = peak - xDb;
   let lo = i;
   let hi = i;

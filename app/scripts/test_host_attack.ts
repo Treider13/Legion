@@ -6,7 +6,7 @@ import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from
 import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
 import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
-import { occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
+import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
@@ -367,6 +367,20 @@ async function main(): Promise<void> {
     "99% на кирпиче ~20 по SM.443",
     occupied99Mhz(brick20, 2442) > 15 && occupied99Mhz(brick20, 2442) < 26,
     `occ=${occupied99Mhz(brick20, 2442).toFixed(2)}`,
+  );
+  const weakNarrow = brickBins(915, 56, 800, 914.75, 915.25, -70);
+  const weakW = measureHitWidths(weakNarrow, 915);
+  check(
+    "−26 дБ в шуме не раздувает узкий сигнал до окна",
+    weakW.width26Mhz < 0.15 && weakW.width3Mhz > 0.2 && weakW.width3Mhz < 2 && honestWidthMhz(weakW, 0.5) < 2,
+    `w3=${weakW.width3Mhz.toFixed(2)} w26=${weakW.width26Mhz.toFixed(2)} occ=${weakW.occ99Mhz.toFixed(2)}`,
+  );
+  const clearNarrow = brickBins(915, 56, 800, 914.75, 915.25, -40);
+  const clearW = measureHitWidths(clearNarrow, 915);
+  check(
+    "−26 дБ выше пола остаётся шириной сигнала",
+    clearW.width26Mhz > 0.2 && clearW.width26Mhz < 2,
+    `w26=${clearW.width26Mhz.toFixed(2)}`,
   );
 
   const hopTracks = [2440, 2441, 2442].map((mhz, i) => ({
