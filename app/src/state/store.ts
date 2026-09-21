@@ -4528,7 +4528,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               return false;
             };
             const feed = hits.filter((h) => !blankedByOwnTx(h.freqMhz));
-            gAttackTracker.update(feed, now);
+            gAttackTracker.update(feed, now, { centerMhz, spanMhz, hidden: blankedByOwnTx });
             if (paintTx && paint) gAttackTracker.markHeld(paintCenterMhz(paint));
             const snap = gAttackTracker.snapshot();
             gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz, blankedByOwnTx);

@@ -33,15 +33,26 @@ export const ATTACK_MIN_WINDOWS = 2;
 export const ATTACK_MAX_GAP = 2;
 export const ATTACK_ASSOC_MHZ = FWD_BIN_MHZ;
 
+/** Что этот обход реально накрывал. Нет объекта — как раньше, промах есть любой след без хита. */
+export interface AttackSight {
+  centerMhz: number;
+  spanMhz: number;
+  /** Свой TX: частоту вырезали из ленты до трекера. Это не пропадание сигнала. */
+  hidden?: (freqMhz: number) => boolean;
+}
+
 export class AttackTracker {
   private tracks: AttackTrack[] = [];
   private nextId = 1;
   private sweep = 0;
+  /** Сколько раз след был в окне. Чужой обход сюда не входит — иначе duty широкой полки падает ниже 0.7. */
+  private views = new Map<number, number>();
 
   reset(): void {
     this.tracks = [];
     this.nextId = 1;
     this.sweep = 0;
+    this.views.clear();
   }
 
   snapshot(): AttackTrack[] {
@@ -65,7 +76,7 @@ export class AttackTracker {
     }
   }
 
-  update(hits: readonly AttackHit[], ts: number): AttackTrack[] {
+  update(hits: readonly AttackHit[], ts: number, sight?: AttackSight): AttackTrack[] {
     this.sweep += 1;
     const used = new Set<number>();
     for (const h of hits) {
@@ -81,19 +92,36 @@ export class AttackTracker {
     for (const t of this.tracks) {
       if (used.has(t.id)) {
         t.gap = 0;
-      } else {
+      } else if (this.inSight(t.freqMhz, sight)) {
         t.gap += 1;
         t.streak = 0;
+        this.countView(t);
       }
-      const span = this.sweep - t.firstSweep + 1;
-      t.duty = span > 0 ? t.hits / span : 1;
       if (t.gap > ATTACK_MAX_GAP) t.state = "cooled";
       else if (this.qualifies(t)) {
         if (t.state !== "held") t.state = "confirmed";
       } else if (t.state !== "held") t.state = "new";
     }
-    this.tracks = this.tracks.filter((t) => t.state !== "cooled" || t.gap <= ATTACK_MAX_GAP + 8);
+    this.tracks = this.tracks.filter((t) => {
+      const keep = t.state !== "cooled" || this.sweep - t.lastSweep <= ATTACK_MAX_GAP + 8;
+      if (!keep) this.views.delete(t.id);
+      return keep;
+    });
     return this.snapshot();
+  }
+
+  /** false — этот обход частоту не видел. Без sight каждый след без хита считается промахом. */
+  private inSight(freqMhz: number, sight?: AttackSight): boolean {
+    if (!sight || !(sight.spanMhz > 0)) return true;
+    if (Math.abs(freqMhz - sight.centerMhz) > sight.spanMhz / 2) return false;
+    if (sight.hidden?.(freqMhz)) return false;
+    return true;
+  }
+
+  private countView(t: AttackTrack): void {
+    const n = (this.views.get(t.id) ?? 0) + 1;
+    this.views.set(t.id, n);
+    t.duty = t.hits / n;
   }
 
   private qualifies(t: AttackTrack): boolean {
@@ -135,6 +163,7 @@ export class AttackTracker {
       state: "new",
       lastSeenTs: ts,
     };
+    this.views.set(t.id, 1);
     this.tracks.push(t);
     return t;
   }
@@ -152,6 +181,7 @@ export class AttackTracker {
     t.maxStreak = Math.max(t.maxStreak, t.streak);
     t.lastSweep = this.sweep;
     t.lastSeenTs = ts;
+    this.countView(t);
   }
 }
 

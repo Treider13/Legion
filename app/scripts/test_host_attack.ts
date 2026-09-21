@@ -161,6 +161,39 @@ async function main(): Promise<void> {
   tr.update([], 5);
   check("три промаха остужают", tr.confirmed().length === 0);
 
+  const walkedTr = new AttackTracker();
+  const shelfHit = { freqMhz: 5800, fLowMhz: 5792, fHighMhz: 5808, widthMhz: 16, powerDbm: -30, noiseDbm: -90, snrDb: 60 };
+  const lowHit = { freqMhz: 1280, fLowMhz: 1272, fHighMhz: 1288, widthMhz: 16, powerDbm: -20, noiseDbm: -90, snrDb: 70 };
+  for (let i = 0; i < 4; i++) walkedTr.update([shelfHit], i + 1, { centerMhz: 5800, spanMhz: 56 });
+  const shelfBorn = walkedTr.snapshot().find((t) => Math.abs(t.freqMhz - 5800) < 1)!;
+  for (let i = 0; i < 12; i++) walkedTr.update([lowHit], 10 + i, { centerMhz: 1280, spanMhz: 56 });
+  const shelfKept = walkedTr.snapshot().find((t) => t.id === shelfBorn.id);
+  check(
+    "уход окна не стирает полку и не сажает duty",
+    shelfKept != null && shelfKept.state === "confirmed" && shelfKept.duty >= 0.7,
+    shelfKept ? `state=${shelfKept.state} duty=${shelfKept.duty.toFixed(2)}` : "след пропал",
+  );
+  walkedTr.update([shelfHit], 30, { centerMhz: 5800, spanMhz: 56 });
+  const shelfBack = walkedTr.snapshot().find((t) => Math.abs(t.freqMhz - 5800) < 1);
+  check("возврат окна продолжает тот же след", shelfBack != null && shelfBack.id === shelfBorn.id && shelfBack.hits >= 5);
+  for (let i = 0; i < 3; i++) walkedTr.update([], 40 + i, { centerMhz: 5800, spanMhz: 56 });
+  check(
+    "промах в том же окне по-прежнему остужает",
+    walkedTr.snapshot().find((t) => t.id === shelfBorn.id)?.state === "cooled",
+  );
+  const ownTr = new AttackTracker();
+  for (let i = 0; i < 4; i++) ownTr.update([shelfHit], i + 1, { centerMhz: 5800, spanMhz: 40 });
+  const ownId = ownTr.snapshot()[0]!.id;
+  for (let i = 0; i < 15; i++) {
+    ownTr.update([], 10 + i, { centerMhz: 5800, spanMhz: 40, hidden: (mhz) => mhz >= 5790 && mhz <= 5810 });
+  }
+  const ownKept = ownTr.snapshot().find((t) => t.id === ownId);
+  check(
+    "свой TX не остужает след в рамке",
+    ownKept != null && ownKept.state !== "cooled",
+    ownKept ? ownKept.state : "след пропал",
+  );
+
   check("2.4 12 МГц sticky — цифровой класс", classifyAttackFamily({
     freqMhz: 2442, widthMhz: 12, duty: 0.85, streak: 8,
   }).id === "digital-video");
