@@ -2389,33 +2389,24 @@ async function main(): Promise<void> {
   check("air-обход: лог перед калибровкой с ценой стоянки", storeSrc.includes("~0.1–0.3 с/стоянка"));
   check("air-обход: StartGate показывает оценку калибровки", gateSrc.includes("калибровка порогов при старте"));
 
-  // Находка 5 (поведение, без Tauri — hostFpga честно падает «нет desktop»):
-  // мёртвый шлюз не клинит fpgaArmed, когда deadman железа доказан временем.
+  // Отказ DISARM не доказывает остановку даже при давно пропавшем kick.
+  // Повторы и гонки с ответами проверяет test_fpga_stop.cjs с подменой только IPC.
   useLegion.setState({ fpgaArmed: true, fpgaPath: "air", fpgaToken: "", sdrGateway: "", lastForwardMhz: 2442 });
-  pokeLastKickOkMs(performance.now()); // свежий kick — deadman НЕ доказан
+  pokeLastKickOkMs(performance.now());
   await L().fpgaDisarm();
-  check("мёртвый шлюз, свежий kick → ARM честно держим", L().fpgaArmed === true);
-  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442 });
-  pokeLastKickOkMs(performance.now() - 10_000); // тишина > 3 с: FPGA WD + сторож шлюза уже отработали
-  await L().fpgaDisarm();
-  check("мёртвый шлюз, deadman доказан → локальный ARM снят",
-    L().fpgaArmed === false && L().fpgaPath === null && L().lastForwardMhz === null);
-  check("лог честно называет собственный watchdog железа",
-    (L().log.at(-1)?.text ?? "").includes("watchdog"));
-  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442 });
-  pokeLastKickOkMs(null); // kick'ов не было вовсе — доказательства нет
-  await L().fpgaDisarm();
-  check("мёртвый шлюз без истории kick → ARM держим", L().fpgaArmed === true);
-  // closeSdr при мёртвом шлюзе: force-clear по доказательству + сбой release
-  // честно в логе (раньше release выбрасывался молча — следующий openSdr
-  // ловил бы «занятое устройство» без причины).
-  useLegion.setState({ fpgaArmed: true, fpgaPath: "air", lastForwardMhz: 2442, log: [] });
+  check("мёртвый шлюз, свежий kick → остановка не подтверждена",
+    L().fpgaArmed === true && L().fpgaStopPending === true);
   pokeLastKickOkMs(performance.now() - 10_000);
+  await L().fpgaDisarm();
+  check("давность kick не подменяет подтверждение остановки",
+    L().fpgaArmed === true && L().fpgaStopPending === true);
+  check("отказ СТОП виден вместо прежней ретрансляции",
+    heroStatusLine(L()).text === "ОСТАНОВКА НЕ ПОДТВЕРЖДЕНА");
+  const gatewayBefore = L().sdrGateway;
+  L().setSdrGateway("another-gateway");
+  check("адрес заблокирован до подтверждения СТОП", L().sdrGateway === gatewayBefore);
   await L().closeSdr();
-  check("closeSdr при мёртвом шлюзе: ARM снят по deadman-доказательству", L().fpgaArmed === false);
-  check("closeSdr: сбой usb release честно в логе",
-    L().log.some((e) => e.text.includes("FPGA USB release")));
-  useLegion.setState({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null });
+  check("closeSdr не скрывает отказ остановки", L().fpgaStopPending === true);
   pokeLastKickOkMs(null);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);

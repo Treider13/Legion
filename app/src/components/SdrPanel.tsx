@@ -11,6 +11,7 @@ export function SdrPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const opened = s.sdrOpened;
+  const connectionLocked = s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending;
   const plan = planEthernet(s.sdrId, s.sdrGateway);
   const images = imagesFor(s.sdrId);
 
@@ -30,7 +31,7 @@ export function SdrPanel() {
             aria-label="Тип SDR"
             value={s.sdrId}
             onChange={(e) => s.setSdrId(e.target.value)}
-            disabled={s.fpgaArmed}
+            disabled={connectionLocked}
           >
             {s.sdrDevices.map((d) => (
               <option key={d.id} value={d.id}>
@@ -46,6 +47,7 @@ export function SdrPanel() {
             placeholder={plan.defaultHost}
             value={s.sdrGateway}
             onChange={(e) => s.setSdrGateway(e.target.value)}
+            disabled={connectionLocked}
             spellCheck={false}
           />
         </label>
@@ -86,7 +88,7 @@ export function SdrPanel() {
             ЗАКРЫТЬ SDR
           </button>
         ) : (
-          <button className="btn-primary" onClick={() => s.openSdr()} disabled={s.fpgaArmed}>
+          <button className="btn-primary" onClick={() => s.openSdr()} disabled={connectionLocked}>
             ОТКРЫТЬ SDR
           </button>
         )}
