@@ -91,6 +91,8 @@ export class AttackSessionMemory {
    * Один замер на обход трекера. Пишет только то, что этот обход реально видел:
    * свежий хит, либо след в окне и промах. Старую мощность не повторяет.
    * Карточка, «взять» и разбор IQ сюда не входят — они не новый взгляд на эфир.
+   * ownTxMhz — частоты, которые этот обход сам вычеркнул из ленты (свой TX).
+   * По ним нет ни хита, ни промаха: энергия вырезана до трекера, полка не «села».
    */
   notePowers(
     ts: number,
@@ -98,6 +100,7 @@ export class AttackSessionMemory {
     sweep: number,
     centerMhz: number,
     spanMhz: number,
+    ownTxMhz?: (freqMhz: number) => boolean,
   ): void {
     if (!(sweep > this.lastPowerSweep)) return;
     this.lastPowerSweep = sweep;
@@ -105,6 +108,7 @@ export class AttackSessionMemory {
     const rows: AttackInfoSnap["rows"] = [];
     for (const t of tracks) {
       const measured = t.lastSweep === sweep && t.state !== "cooled";
+      if (!measured && ownTxMhz?.(t.freqMhz)) continue;
       const inView = half > 0 && Math.abs(t.freqMhz - centerMhz) <= half;
       if (!measured && !inView) continue;
       rows.push({

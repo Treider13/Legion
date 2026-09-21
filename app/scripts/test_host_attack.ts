@@ -502,6 +502,34 @@ async function main(): Promise<void> {
   const walked = readAttackInfo({ tracks: [room, hand], snaps: walkedAway });
   check("уход окна с полки — не тень", !walked.line.includes("тень"));
 
+  const txMem = new AttackSessionMemory();
+  const shelfAt = (lastSweep: number) =>
+    track({ id: 4, freqMhz: 5800, widthMhz: 20, duty: 0.9, powerDbm: -30, firstSweep: 1, lastSweep, streak: 6 });
+  const handAt = (lastSweep: number) =>
+    track({ id: 3, freqMhz: 915, widthMhz: 0.5, duty: 0.2, powerDbm: -55, firstSweep: 1, lastSweep, streak: 4 });
+  const roomAt = (lastSweep: number) =>
+    track({ id: 1, freqMhz: 2412, widthMhz: 0.4, duty: 0.95, powerDbm: -20, firstSweep: 1, lastSweep, streak: 8 });
+  for (let sweep = 1; sweep <= 4; sweep++) {
+    txMem.notePowers(sweep, [shelfAt(sweep), handAt(sweep), roomAt(sweep)], sweep, 5800, 40);
+  }
+  const ownTx = (mhz: number) => mhz >= 5790 && mhz <= 5810;
+  txMem.notePowers(5, [shelfAt(4), handAt(5), roomAt(4)], 5, 5800, 40, ownTx);
+  txMem.notePowers(6, [shelfAt(4), handAt(6), roomAt(4)], 6, 5800, 40, ownTx);
+  const duringTx = txMem.powerSnaps().at(-1)!;
+  check(
+    "свой TX не пишется промахом полки",
+    !duringTx.rows.some((r) => r.id === 4) && duringTx.rows.some((r) => r.id === 3 && r.measured === true),
+  );
+  const bareMiss = new AttackSessionMemory();
+  bareMiss.notePowers(1, [shelfAt(1)], 1, 5800, 40);
+  bareMiss.notePowers(2, [shelfAt(1)], 2, 5800, 40);
+  check(
+    "промах в окне без своего TX остаётся промахом",
+    bareMiss.powerSnaps().at(-1)!.rows.some((r) => r.id === 4 && r.measured === false),
+  );
+  const txInfo = readAttackInfo({ tracks: [roomAt(6), handAt(6)], snaps: txMem.powerSnaps() });
+  check("вырезанный свой TX — не тень", !txInfo.line.includes("тень"), txInfo.line);
+
   const breathe = [-40, -34, -42, -30, -38, -28];
   const lowCopy = track({ id: 5, freqMhz: 1280, widthMhz: 16, duty: 0.9, powerDbm: -22, streak: 8 });
   const highShelf = track({ id: 6, freqMhz: 5800, widthMhz: 16, duty: 0.9, powerDbm: -40, streak: 8 });
@@ -546,6 +574,32 @@ async function main(): Promise<void> {
     ])),
   });
   check("разный ход полок — не ретранслятор", !apart.line.includes("ретранслятор"));
+  const shifted = readAttackInfo({
+    tracks: [lowCopy, highShelf],
+    snaps: powerSnaps([
+      [
+        { id: 6, freqMhz: 5800, powerDbm: -40, widthMhz: 16, duty: 0.9 },
+        { id: 5, freqMhz: 1280, powerDbm: -22, widthMhz: 16, duty: 0.9 },
+      ],
+      [
+        { id: 6, freqMhz: 5800, powerDbm: -34, widthMhz: 16, duty: 0.9 },
+        { id: 5, freqMhz: 1280, powerDbm: -21.5, widthMhz: 16, duty: 0.9 },
+      ],
+      [
+        { id: 6, freqMhz: 5800, powerDbm: -33.5, widthMhz: 16, duty: 0.9 },
+        { id: 5, freqMhz: 1280, powerDbm: -16, widthMhz: 16, duty: 0.9 },
+      ],
+      [
+        { id: 6, freqMhz: 5800, powerDbm: -42, widthMhz: 16, duty: 0.9 },
+        { id: 5, freqMhz: 1280, powerDbm: -24, widthMhz: 16, duty: 0.9 },
+      ],
+    ]),
+  });
+  check(
+    "шаг вверх в разные моменты — не ретранслятор",
+    !shifted.line.includes("ретранслятор"),
+    shifted.line,
+  );
 
   const geminiAdvice = buildAttackAdvice({
     tracks: [

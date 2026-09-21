@@ -217,25 +217,40 @@ function diedInView(seen: Seen): boolean {
   return tail.every((p) => !p) && head.some((p) => p);
 }
 
-function trendSigns(powers: readonly number[]): number[] {
-  const signs: number[] = [];
-  for (let i = 1; i < powers.length; i++) {
-    const d = powers[i]! - powers[i - 1]!;
-    if (Math.abs(d) < 0.8) continue;
-    signs.push(Math.sign(d));
-  }
-  return signs;
-}
-
-/** Одинаковый ход двух рядов свежих хитов. Мало точек или ровные полки — свидетельства нет. */
-function trendsMatch(a: readonly number[], b: readonly number[]): boolean {
-  const sa = trendSigns(a);
-  const sb = trendSigns(b);
-  if (sa.length < 2 || sb.length < 2) return false;
-  const n = Math.min(sa.length, sb.length);
+/**
+ * Одинаковый ход двух полок на одном отрезке времени.
+ * Сравниваются наклоны двух половин общего окна хитов, а не сжатые знаки
+ * по порядку: шаг вверх у одной полки и шаг вверх у другой в другой момент
+ * — не один ход. Мало точек или ровная полка — свидетельства нет.
+ */
+function trendsMatch(a: Seen, b: Seen): boolean {
+  if (!timeOverlap(a.hitTs, b.hitTs)) return false;
+  const t0 = Math.max(a.hitTs[0]!, b.hitTs[0]!);
+  const t1 = Math.min(a.hitTs[a.hitTs.length - 1]!, b.hitTs[b.hitTs.length - 1]!);
+  if (!(t1 > t0)) return false;
+  const mid = (t0 + t1) / 2;
+  const slope = (seen: Seen, from: number, to: number): number | null => {
+    const samples = seen.hitTs
+      .map((ts, i) => ({ ts, p: seen.powers[i]! }))
+      .filter((s) => s.ts >= from && s.ts <= to)
+      .sort((x, y) => x.ts - y.ts);
+    if (samples.length < 2) return null;
+    return samples[samples.length - 1]!.p - samples[0]!.p;
+  };
   let same = 0;
-  for (let i = 0; i < n; i++) if (sa[i] === sb[i]) same += 1;
-  return same >= 2 && same >= n * 0.6;
+  let steps = 0;
+  for (const [from, to] of [
+    [t0, mid],
+    [mid, t1],
+  ] as const) {
+    const da = slope(a, from, to);
+    const db = slope(b, from, to);
+    if (da == null || db == null) continue;
+    if (Math.abs(da) < 0.8 || Math.abs(db) < 0.8) continue;
+    steps += 1;
+    if (da * db > 0) same += 1;
+  }
+  return steps >= 2 && same === steps;
 }
 
 function loudest(tracks: readonly AttackTrack[]): AttackTrack | null {
@@ -289,7 +304,7 @@ export function readAttackInfo(input: {
     const low = loudest(lowWides)!;
     const hs = seen.get(high.id);
     const ls = seen.get(low.id);
-    if (hs && ls && timeOverlap(hs.hitTs, ls.hitTs) && trendsMatch(hs.powers, ls.powers)) {
+    if (hs && ls && trendsMatch(hs, ls)) {
       repeater = true;
       repeaterLoud = high.powerDbm >= low.powerDbm ? high : low;
       repeaterOther = repeaterLoud.id === high.id ? low : high;

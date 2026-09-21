@@ -4522,15 +4522,16 @@ export const useLegion = create<LegionStore>((set, get) => {
             const paintTx = attackPaintOwnsTx(cur.scanPattern, paint, cur.transmitArmed);
             const guard = ownTxGuardMhz(cur.txWaveKind !== null);
             const fwd = cur.lastForwardMhz;
-            const feed = hits.filter((h) => {
-              if (paintTx && paint && h.freqMhz >= paint.f1Mhz && h.freqMhz <= paint.f2Mhz) return false;
-              if (fwd != null && Math.abs(h.freqMhz - fwd) <= guard) return false;
-              return true;
-            });
+            const blankedByOwnTx = (freqMhz: number): boolean => {
+              if (paintTx && paint && freqMhz >= paint.f1Mhz && freqMhz <= paint.f2Mhz) return true;
+              if (fwd != null && Math.abs(freqMhz - fwd) <= guard) return true;
+              return false;
+            };
+            const feed = hits.filter((h) => !blankedByOwnTx(h.freqMhz));
             gAttackTracker.update(feed, now);
             if (paintTx && paint) gAttackTracker.markHeld(paintCenterMhz(paint));
             const snap = gAttackTracker.snapshot();
-            gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz);
+            gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz, blankedByOwnTx);
             set(attackBrainPatch(cur, snap, bins, listen?.spanMhz ?? spanMhz));
             void thinkAttackLooks(snap, listen?.fsHz ?? 61_440_000, centerMhz, paintTx);
           }
