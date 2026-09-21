@@ -380,6 +380,7 @@ export function readAttackInfo(input: {
 
   let shadow = false;
   let shadowControl: AttackTrack | null = null;
+  const shadowHits: AttackTrack[] = [];
   let fade = false;
   let fadeKeep: AttackTrack | null = null;
   const controls = narrows.filter((t) => CONTROL_BANDS.includes(bandBucket(t.freqMhz)));
@@ -403,8 +404,7 @@ export function readAttackInfo(input: {
         const videoLive = live.find((t) => t.id === s.id) ?? null;
         fadeKeep = videoLive && videoLive.powerDbm >= c.powerDbm ? videoLive : c;
       } else if (videoGone && controlHolds && liveState(c.state)) {
-        shadow = true;
-        shadowControl = c;
+        shadowHits.push(c);
       }
     }
   }
@@ -433,8 +433,7 @@ export function readAttackInfo(input: {
   // Пульт, который был на каждом взгляде своего окна, имеет duty 1:
   // промахов нет, потому что слух ушёл, а не потому что голос пропал.
   // Порог duty < 0.45 его не видит, и тень молчит при уже измеренной посадке.
-  if (!fade && !shadow) {
-    const holders: AttackTrack[] = [];
+  if (!fade) {
     for (const t of live) {
       if (t.widthMhz > 2 || t.duty < 0.45) continue;
       if (!CONTROL_BANDS.includes(bandBucket(t.freqMhz))) continue;
@@ -449,9 +448,55 @@ export function readAttackInfo(input: {
         if (snaps.length > 0 && !timeOverlap(s.obsTs, cs.obsTs)) continue;
         if (powerFell(s)) videoGone = true;
       }
-      if (videoGone) holders.push(t);
+      if (videoGone) shadowHits.push(t);
     }
-    const pick = loudest(holders);
+    // Hop меняет частоту каждый взгляд: на одном id нет четырёх точек.
+    // Голос пульта — самый громкий узкий удар этой полосы за взгляд.
+    for (const band of CONTROL_BANDS) {
+      const voiceTs: number[] = [];
+      const voiceP: number[] = [];
+      for (const snap of snaps) {
+        let best: number | null = null;
+        for (const row of snap.rows) {
+          if (row.measured === false || row.state === "cooled" || row.widthMhz > 2) continue;
+          if (bandBucket(row.freqMhz) !== band) continue;
+          if (best == null || row.powerDbm > best) best = row.powerDbm;
+        }
+        if (best == null) continue;
+        voiceP.push(best);
+        voiceTs.push(snap.ts);
+      }
+      const voiceDrop = dropDb(voiceP);
+      if (!(voiceDrop != null && voiceDrop < CONTROL_HOLD_DB)) continue;
+      let videoGone = false;
+      for (const s of seen.values()) {
+        if (!videoLike(s) || !HIGH_VIDEO.includes(bandBucket(s.freqMhz))) continue;
+        if (snaps.length > 0 && !timeOverlap(s.obsTs, voiceTs)) continue;
+        if (powerFell(s)) videoGone = true;
+      }
+      if (!videoGone) continue;
+      const rows = tracks.filter(
+        (t) => t.state !== "cooled" && t.widthMhz <= 2 && bandBucket(t.freqMhz) === band && !roomIds.has(t.id),
+      );
+      const hoppy = rows.filter((t) => t.duty < 0.45);
+      const pool = hoppy.length ? hoppy : rows;
+      const anchor = pool.reduce<AttackTrack | null>((a, b) => (a == null || b.lastSweep > a.lastSweep ? b : a), null);
+      if (anchor) shadowHits.push(anchor);
+    }
+    const pick = shadowHits.reduce<AttackTrack | null>((a, b) => {
+      if (a == null) return b;
+      const rank = (t: AttackTrack): number => {
+        const low = bandBucket(t.freqMhz) === "p900" || bandBucket(t.freqMhz) === "uhf" || bandBucket(t.freqMhz) === "vhf";
+        if (low && t.duty < 0.45) return 0;
+        if (t.duty < 0.45) return 1;
+        if (low) return 2;
+        return 3;
+      };
+      const ra = rank(a);
+      const rb = rank(b);
+      if (ra !== rb) return ra < rb ? a : b;
+      return b.powerDbm > a.powerDbm ? b : a;
+    }, null);
     if (pick) {
       shadow = true;
       shadowControl = pick;
@@ -489,7 +534,10 @@ export function readAttackInfo(input: {
     const videoIds = new Set(
       [...seen.values()].filter((s) => videoLike(s) && HIGH_VIDEO.includes(bandBucket(s.freqMhz))).map((s) => s.id),
     );
-    if (top && top.id !== shadowControl.id && !videoIds.has(top.id)) redirectId = shadowControl.id;
+    // Пульт hop не входит в «живые»: на частоте один удар. Если он громче
+    // севшей полки, рамка его, хотя loudest(live) видит только полку.
+    const controlLouder = top != null && shadowControl.powerDbm > top.powerDbm;
+    if (top && top.id !== shadowControl.id && (controlLouder || !videoIds.has(top.id))) redirectId = shadowControl.id;
   }
   if (redirectId == null && flutterId != null) {
     const top = loudest(live);
@@ -533,6 +581,7 @@ export function readAttackInfo(input: {
     if (videoLike(t)) roleOf.set(t.id, "борт");
     else if (narrowLike(t)) roleOf.set(t.id, "пульт");
   }
+  if (shadowControl && !roleOf.has(shadowControl.id)) roleOf.set(shadowControl.id, "пульт");
 
   const bits: string[] = [];
   if (fade) bits.push("обе сели вместе — горизонт или тень");
@@ -547,7 +596,7 @@ export function readAttackInfo(input: {
   if (gemini) bits.push("две узкие частоты — одна радиосвязь");
   const listed = [...roleOf.entries()]
     .map(([id, role]) => {
-      const t = live.find((x) => x.id === id);
+      const t = tracks.find((x) => x.id === id);
       return t ? `${role} ${t.freqMhz.toFixed(2)} МГц` : "";
     })
     .filter((s) => s.length > 0);

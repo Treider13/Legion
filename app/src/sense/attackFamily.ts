@@ -87,6 +87,22 @@ export function stitchHopFamilies(
       hits: members.length + mem.length,
     });
   }
+  // Свежий удар на той же сетке ещё duty 1: двух промахов не было, hopLike молчит.
+  // Это уже увиденный канал, не следующий. Без него кнопка обводит одну вспышку,
+  // хотя семья 900…909 уже есть.
+  for (const fam of out) {
+    const centers = tracks.filter((t) => fam.members.includes(t.id)).map((t) => t.freqMhz);
+    const reach = Math.max(fam.gridMhz, 1) * 2;
+    const extra = tracks.filter((t) => {
+      if (t.state === "cooled" || fam.members.includes(t.id) || t.widthMhz > 2) return false;
+      if (bandBucket(t.freqMhz) !== fam.band) return false;
+      return centers.some((c) => Math.abs(t.freqMhz - c) <= reach);
+    });
+    if (extra.length === 0) continue;
+    fam.members = [...fam.members, ...extra.map((t) => t.id)];
+    fam.fLowMhz = Math.min(fam.fLowMhz, ...extra.map((t) => t.fLowMhz));
+    fam.fHighMhz = Math.max(fam.fHighMhz, ...extra.map((t) => t.fHighMhz));
+  }
   return out;
 }
 

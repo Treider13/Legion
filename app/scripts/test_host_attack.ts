@@ -800,6 +800,98 @@ async function main(): Promise<void> {
       `mid=${lateMid.toFixed(2)} ${late.scene}`,
     );
   }
+  // Канал меняется каждый взгляд. Семья уже есть, но свежий удар duty 1 в неё не входил,
+  // и после посадки 5.8 рамка оставалась на полке: у одного id нет четырёх точек.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    let ts = 1000;
+    const videoP = [-30, -30, -30, -50];
+    for (let i = 0; i < 8; i++) {
+      const hop = {
+        freqMhz: 900 + i, fLowMhz: 900 + i - 0.3, fHighMhz: 900 + i + 0.3,
+        widthMhz: 0.6, powerDbm: -40, noiseDbm: -90, snrDb: 50,
+      };
+      const snap = tr.update([hop], ts, { centerMhz: 915, spanMhz: 56 });
+      mem.notePowers(ts, snap, tr.currentSweep(), 915, 56);
+      mem.noteHops(snap, ts);
+      ts += 100;
+      if (i >= 4) {
+        const shelf = {
+          freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810,
+          widthMhz: 20, powerDbm: videoP[i - 4]!, noiseDbm: -90, snrDb: 40,
+        };
+        const seen = tr.update([shelf], ts, { centerMhz: 5800, spanMhz: 56 });
+        mem.notePowers(ts, seen, tr.currentSweep(), 5800, 56);
+        mem.noteHops(seen, ts);
+        ts += 100;
+      }
+    }
+    const hopped = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: [],
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const hopMid = mid(hopped.advice.suggestPaint);
+    const hopSpan = hopped.advice.suggestPaint ? paintSpanMhz(hopped.advice.suggestPaint) : 0;
+    check(
+      "hop-сетка держит тень, не севшая полка",
+      hopSpan > 2 && hopMid > 890 && hopMid < 920 && hopped.advice.scene.includes("тень") && hopped.advice.scene.includes("уже виденные"),
+      `mid=${hopMid.toFixed(2)} span=${hopSpan.toFixed(2)} ${hopped.advice.scene}`,
+    );
+  }
+  // Маяк 2412 громче ровного 915. Оба duty 1. Тень — пульт 915, не маяк.
+  {
+    const tr = new AttackTracker();
+    const mem = new AttackSessionMemory();
+    let ts = 1000;
+    const videoP = [-30, -30, -30, -50];
+    for (let i = 0; i < 4; i++) {
+      const a = tr.update(
+        [{ freqMhz: 915, fLowMhz: 914.75, fHighMhz: 915.25, widthMhz: 0.5, powerDbm: -40, noiseDbm: -90, snrDb: 50 }],
+        ts, { centerMhz: 915, spanMhz: 56 },
+      );
+      mem.notePowers(ts, a, tr.currentSweep(), 915, 56);
+      ts += 100;
+      const b = tr.update(
+        [{ freqMhz: 2412, fLowMhz: 2411.8, fHighMhz: 2412.2, widthMhz: 0.4, powerDbm: -20, noiseDbm: -90, snrDb: 70 }],
+        ts, { centerMhz: 2412, spanMhz: 56 },
+      );
+      mem.notePowers(ts, b, tr.currentSweep(), 2412, 56);
+      ts += 100;
+      const c = tr.update(
+        [{ freqMhz: 5800, fLowMhz: 5790, fHighMhz: 5810, widthMhz: 20, powerDbm: videoP[i]!, noiseDbm: -90, snrDb: 40 }],
+        ts, { centerMhz: 5800, spanMhz: 56 },
+      );
+      mem.notePowers(ts, c, tr.currentSweep(), 5800, 56);
+      ts += 100;
+    }
+    const beacon = buildAttackScene({
+      tracks: tr.snapshot(),
+      bins: [],
+      windowMhz: 56,
+      memory: mem,
+      paint: null,
+      wave: null,
+      holdMs: 3000,
+      bands: wideBands,
+      transmitArmed: false,
+      sweep: tr.currentSweep(),
+    });
+    const beaconMid = mid(beacon.advice.suggestPaint);
+    check(
+      "громкий маяк 2.4 не забирает тень у 915",
+      Math.abs(beaconMid - 915) < 2 && beacon.advice.scene.includes("пульт") && beacon.advice.scene.includes("915"),
+      `mid=${beaconMid.toFixed(2)} ${beacon.advice.scene}`,
+    );
+  }
 
   const txMem = new AttackSessionMemory();
   const shelfAt = (lastSweep: number) =>

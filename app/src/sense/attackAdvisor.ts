@@ -137,7 +137,10 @@ export function buildAttackAdvice(input: {
       snaps: input.snaps,
       sweep: input.sweep,
     });
-  const veto = info.redirectId != null ? live.find((t) => t.id === info.redirectId) ?? null : null;
+  // Тень может держать канал hop, который в «живые» не попал: один удар на частоте,
+  // окно уже на 5.8. Он не остыл — это увиденный пульт, не предсказанный канал.
+  const known = input.tracks.filter((t) => t.state !== "cooled");
+  const veto = info.redirectId != null ? known.find((t) => t.id === info.redirectId) ?? null : null;
   const prefer =
     veto == null && !floors && info.preferWideId != null
       ? live.find((t) => t.id === info.preferWideId) ?? null
