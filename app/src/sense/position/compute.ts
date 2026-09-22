@@ -561,7 +561,8 @@ function oppNeedsAim(input: PositionInput): boolean {
 }
 
 function antennaDb(kind: PositionInput["ourKind"], dbi: number, off: number, pattern: PositionInput["ourPattern"], daz: number, del: number): number {
-  if (pattern && (pattern.az.length > 0 || pattern.el.length > 0)) return patternGainDb(pattern, dbi, daz, del);
+  const directional = !whip(kind) && dbi >= 5;
+  if (directional && pattern && (pattern.az.length > 0 || pattern.el.length > 0)) return patternGainDb(pattern, dbi, daz, del);
   return gainTowardDb(kind, dbi, off);
 }
 

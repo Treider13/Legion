@@ -10,10 +10,14 @@ let tileTemplate: Promise<string | null> | null = null;
 
 function template(): Promise<string | null> {
   if (!tileTemplate) {
-    tileTemplate = fetch(PLANET)
+    const task = fetch(PLANET)
       .then((res) => res.json() as Promise<{ tiles?: string[] }>)
       .then((json) => json.tiles?.[0] ?? null)
       .catch(() => null);
+    tileTemplate = task;
+    void task.then((url) => {
+      if (!url) tileTemplate = null;
+    });
   }
   return tileTemplate;
 }

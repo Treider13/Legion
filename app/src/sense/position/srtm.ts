@@ -75,6 +75,9 @@ export function loadSrtmTile(name: string, swLat: number, swLon: number): Promis
     .then((raw) => parseSrtm1(raw, swLat, swLon))
     .catch(() => null);
   cache.set(name, task);
+  void task.then((grid) => {
+    if (!grid) cache.delete(name);
+  });
   return task;
 }
 

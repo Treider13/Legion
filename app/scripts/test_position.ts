@@ -576,6 +576,20 @@ test("диаграмма SPLAT на оси равна паспортным дБ�
   assert.ok(pattern);
   assert.ok(Math.abs(patternGainDb(pattern, 19, 0, 0) - 19) < 0.05);
   assert.ok(patternGainDb(pattern, 19, 180, 0) < 19);
+  const aimedAway = {
+    ...blocked(2400),
+    oppAimAzDeg: 0,
+    oppAimElDeg: 0,
+    ourAimAzDeg: 180,
+    ourAimElDeg: 0,
+    ourPattern: pattern,
+  };
+  const whipFile = computePosition({ ...aimedAway, ourKind: "whip", ourDbi: 2 }, false);
+  const whipPlain = computePosition({ ...aimedAway, ourKind: "whip", ourDbi: 2, ourPattern: null }, false);
+  assert.equal(whipFile.marginDb, whipPlain.marginDb);
+  const patchFile = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19 }, false);
+  const patchPlain = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19, ourPattern: null }, false);
+  assert.ok(patchFile.marginDb != null && patchPlain.marginDb != null && patchFile.marginDb < patchPlain.marginDb - 5);
 });
 
 test("тайл SRTM 1 секунда называется как у SPLAT и читает высоту", () => {
