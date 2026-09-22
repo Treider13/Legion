@@ -315,7 +315,7 @@ export function PositionPanel() {
           {result.map && result.map.length > 0 && (
             <>
               <p className="panel-note" style={{ marginTop: 12 }}>Карта в тех же градусах, что поля выше. Север сверху, шаг широты и долготы одинаковый. Зелёное — доходит, жёлтое — мешает земля, красное — не доходит. Место для нас ищется кнопкой в квадрате.</p>
-              <canvas ref={mapRef} className="pos-canvas" width={900} height={420} />
+              <canvas ref={mapRef} className="pos-canvas pos-map" width={900} height={420} />
             </>
           )}
         </div>
