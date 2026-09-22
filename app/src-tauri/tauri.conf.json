@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ws: wss: ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' ws: wss: ipc: http://ipc.localhost https://tiles.openfreemap.org https://tiles.maps.eox.at https://tiles.mapterhorn.com; img-src 'self' data: blob: https://tiles.openfreemap.org https://tiles.maps.eox.at https://tiles.mapterhorn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; font-src 'self' data:"
     }
   },
   "bundle": {
