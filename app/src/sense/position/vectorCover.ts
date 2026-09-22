@@ -12,13 +12,20 @@ let tileTemplate: Promise<string | null> | null = null;
 function template(): Promise<string | null> {
   if (!tileTemplate) {
     const task = fetch(PLANET)
-      .then((res) => res.json() as Promise<{ tiles?: string[] }>)
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json() as Promise<{ tiles?: string[] }>;
+      })
       .then((json) => json.tiles?.[0] ?? null)
-      .catch(() => null);
+      .then((url) => {
+        if (!url && tileTemplate === task) tileTemplate = null;
+        return url;
+      })
+      .catch(() => {
+        if (tileTemplate === task) tileTemplate = null;
+        return null;
+      });
     tileTemplate = task;
-    void task.then((url) => {
-      if (!url) tileTemplate = null;
-    });
   }
   return tileTemplate;
 }
@@ -102,33 +109,36 @@ export async function loadPathCover(lat1: number, lon1: number, lat2: number, lo
   await Promise.all(tiles.map(async (tile) => {
     if (signal?.aborted) return;
     const url = pattern.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
-    let res: Response;
     try {
-      res = await fetch(url, { signal });
-    } catch {
-      return;
-    }
-    if (!res.ok) return;
-    const vector = new VectorTile(new PbfReader(await res.arrayBuffer()));
-    for (const name of ["building", "landuse", "landcover"]) {
-      const layer = vector.layers[name];
-      if (!layer) continue;
-      const limit = Math.min(layer.length, 8000);
-      if (layer.length > limit) truncated = true;
-      for (let i = 0; i < limit; i++) {
-        const feature = layer.feature(i);
-        if (feature.type !== 3) continue;
-        const geo = feature.toGeoJSON(tile.x, tile.y, tile.z);
-        if (geo.geometry.type !== "Polygon" && geo.geometry.type !== "MultiPolygon") continue;
-        for (const rings of ringsOf(geo.geometry)) {
-          if (name === "building") {
-            const height = heightOf(feature.properties);
-            buildings.push({ rings, ...height });
-          } else if (isWood(name, feature.properties)) {
-            woods.push({ rings });
+      const res = await fetch(url, { signal });
+      if (signal?.aborted) return;
+      if (!res.ok) {
+        truncated = true;
+        return;
+      }
+      const vector = new VectorTile(new PbfReader(await res.arrayBuffer()));
+      for (const name of ["building", "landuse", "landcover"]) {
+        const layer = vector.layers[name];
+        if (!layer) continue;
+        const limit = Math.min(layer.length, 8000);
+        if (layer.length > limit) truncated = true;
+        for (let i = 0; i < limit; i++) {
+          const feature = layer.feature(i);
+          if (feature.type !== 3) continue;
+          const geo = feature.toGeoJSON(tile.x, tile.y, tile.z);
+          if (geo.geometry.type !== "Polygon" && geo.geometry.type !== "MultiPolygon") continue;
+          for (const rings of ringsOf(geo.geometry)) {
+            if (name === "building") {
+              const height = heightOf(feature.properties);
+              buildings.push({ rings, ...height });
+            } else if (isWood(name, feature.properties)) {
+              woods.push({ rings });
+            }
           }
         }
       }
+    } catch {
+      if (!signal?.aborted) truncated = true;
     }
   }));
   return { buildings, woods, truncated };

@@ -82,6 +82,7 @@ export function PositionPanel() {
   const [clutter, setClutter] = useState(false);
   const [tiles, setTiles] = useState<DemGrid[] | null>(null);
   const [cover, setCover] = useState<PathCover | null>(null);
+  const [pathKey, setPathKey] = useState("");
   const [pathNote, setPathNote] = useState("");
   const [ourPattern, setOurPattern] = useState<AntennaPattern | null>(null);
   const [oppPattern, setOppPattern] = useState<AntennaPattern | null>(null);
@@ -99,10 +100,17 @@ export function PositionPanel() {
   const [searching, setSearching] = useState(false);
   const fileGen = useRef(0);
   const searchGen = useRef(0);
+  const ourPatternGen = useRef(0);
+  const oppPatternGen = useRef(0);
+  const pointKey = `${ourLat}|${ourLon}|${oppLat}|${oppLon}`;
+  const coordsReady = [num(ourLat), num(ourLon), num(oppLat), num(oppLon)].every(Number.isFinite);
+  const pathReady = coordsReady && pathKey === pointKey;
+  const liveTiles = pathReady ? tiles : null;
+  const liveCover = pathReady ? cover : null;
 
   const activeGrid = grid ?? ukraine;
-  const ourFine = grid ? null : sampleTiles(tiles, num(ourLat), num(ourLon));
-  const oppFine = grid ? null : sampleTiles(tiles, num(oppLat), num(oppLon));
+  const ourFine = grid ? null : sampleTiles(liveTiles, num(ourLat), num(ourLon));
+  const oppFine = grid ? null : sampleTiles(liveTiles, num(oppLat), num(oppLon));
   const ourCoarse = activeGrid ? sampleDem(activeGrid, num(ourLat), num(ourLon)) : null;
   const oppCoarse = activeGrid ? sampleDem(activeGrid, num(oppLat), num(oppLon)) : null;
   const ourMapH = ourFine ?? ourCoarse;
@@ -135,12 +143,12 @@ export function PositionPanel() {
     clutter,
     rainMmH: optionalNum(rain),
     terrainPending: pending && grid == null,
-    tiles: grid ? null : tiles,
-    buildings: cover?.buildings ?? null,
-    woods: cover?.woods ?? null,
+    tiles: grid ? null : liveTiles,
+    buildings: liveCover?.buildings ?? null,
+    woods: liveCover?.woods ?? null,
     ourPattern,
     oppPattern,
-  }), [ourLat, ourLon, ourGround, ourMapH, ourAgl, oppLat, oppLon, oppGround, oppMapH, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid, tiles, cover, ourPattern, oppPattern]);
+  }), [ourLat, ourLon, ourGround, ourMapH, ourAgl, oppLat, oppLon, oppGround, oppMapH, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid, liveTiles, liveCover, ourPattern, oppPattern]);
 
   const result = useMemo(() => computePosition(input), [input]);
   const profileRef = useRef<HTMLCanvasElement>(null);
@@ -191,18 +199,21 @@ export function PositionPanel() {
     if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
       setTiles(null);
       setCover(null);
+      setPathKey("");
       setPathNote("");
       return;
     }
     const ac = new AbortController();
+    const key = `${ourLat}|${ourLon}|${oppLat}|${oppLon}`;
     setPathNote("Читаем рельеф 30 м и карту леса с домами…");
     void Promise.all([
       grid ? Promise.resolve([] as DemGrid[]) : loadSrtmPath(lat1, lon1, lat2, lon2).catch(() => [] as DemGrid[]),
-      loadPathCover(lat1, lon1, lat2, lon2, ac.signal).catch(() => ({ buildings: [], woods: [], truncated: false }) satisfies PathCover),
+      loadPathCover(lat1, lon1, lat2, lon2, ac.signal).catch(() => ({ buildings: [], woods: [], truncated: true }) satisfies PathCover),
     ]).then(([nextTiles, nextCover]) => {
       if (ac.signal.aborted) return;
       setTiles(nextTiles);
       setCover(nextCover);
+      setPathKey(key);
       const dem = grid
         ? "Свой файл высот ведёт землю."
         : nextTiles.length > 0 ? `Рельеф пути около ${nextTiles[0].cellM.toFixed(0)} м.` : "Тайл 30 м не открылся, в счёте файл Украины.";
@@ -214,12 +225,14 @@ export function PositionPanel() {
       if (ac.signal.aborted) return;
       setTiles(null);
       setCover(null);
+      setPathKey(key);
       setPathNote("Тайлы пути не открылись. В счёте файл Украины.");
     });
     return () => ac.abort();
   }, [ourLat, ourLon, oppLat, oppLon, grid]);
 
-  const onPattern = async (files: FileList | null, set: (pattern: AntennaPattern | null) => void) => {
+  const onPattern = async (files: FileList | null, set: (pattern: AntennaPattern | null) => void, gen: { current: number }) => {
+    const ticket = ++gen.current;
     if (!files || files.length === 0) {
       set(null);
       return;
@@ -229,9 +242,11 @@ export function PositionPanel() {
     for (const file of files) {
       const name = file.name.toLowerCase();
       const text = await file.text();
+      if (ticket !== gen.current) return;
       if (name.endsWith(".el")) el = text;
       else az = text;
     }
+    if (ticket !== gen.current) return;
     set(patternFromFiles(az, el));
   };
 
@@ -343,12 +358,12 @@ export function PositionPanel() {
           <label>Шаг карты, м<input value={cellM} onChange={(e) => setCellM(e.target.value)} placeholder="для файла можно пусто" /></label>
           <label>Дождь, мм/ч<input value={rain} onChange={(e) => setRain(e.target.value)} placeholder="пусто — сухой ответ" /></label>
           <label className="pos-wide">Диаграмма наша, .az и .el
-            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOurPattern)} />
+            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOurPattern, ourPatternGen)} />
           </label>
           <label className="pos-wide">Диаграмма противника, .az и .el
-            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOppPattern)} />
+            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOppPattern, oppPatternGen)} />
           </label>
-          <p className="panel-note pos-wide">{pathNote || "Рельеф 30 м, лес и дома подгрузятся, когда стоят обе точки. Свой файл высот их заменяет."}</p>
+          <p className="panel-note pos-wide">{(coordsReady && !pathReady ? "Читаем рельеф 30 м и карту леса с домами…" : pathNote) || "Рельеф 30 м, лес и дома подгрузятся, когда стоят обе точки. Свой файл высот их заменяет."}</p>
           <label className="pos-check">
             <input type="checkbox" checked={clutter} onChange={(e) => setClutter(e.target.checked)} />
             Считать, что весь путь закрыт лесом или домами

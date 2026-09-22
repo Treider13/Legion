@@ -63,9 +63,22 @@ export function parseSrtm1(buf: ArrayBuffer, swLat: number, swLon: number): DemG
 
 const cache = new Map<string, Promise<DemGrid | null>>();
 
+function retain(name: string, task: Promise<DemGrid | null>) {
+  cache.delete(name);
+  cache.set(name, task);
+  while (cache.size > TILE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined || oldest === name) break;
+    cache.delete(oldest);
+  }
+}
+
 export function loadSrtmTile(name: string, swLat: number, swLon: number): Promise<DemGrid | null> {
   const hit = cache.get(name);
-  if (hit) return hit;
+  if (hit) {
+    retain(name, hit);
+    return hit;
+  }
   const task = fetch(srtmTileUrl(name))
     .then((res) => {
       if (!res.ok) throw new Error(String(res.status));
@@ -73,11 +86,15 @@ export function loadSrtmTile(name: string, swLat: number, swLon: number): Promis
     })
     .then(ungzip)
     .then((raw) => parseSrtm1(raw, swLat, swLon))
-    .catch(() => null);
-  cache.set(name, task);
-  void task.then((grid) => {
-    if (!grid) cache.delete(name);
-  });
+    .then((grid) => {
+      if (!grid) cache.delete(name);
+      return grid;
+    })
+    .catch(() => {
+      cache.delete(name);
+      return null;
+    });
+  retain(name, task);
   return task;
 }
 
