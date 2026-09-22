@@ -8,6 +8,7 @@ import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree
 import { modeOf } from "../src/sense/modes";
 import { patternFromFiles, patternGainDb } from "../src/sense/position/pattern";
 import { buildingAt, vegetationDb } from "../src/sense/position/pathCover";
+import { coverTilesOnPath } from "../src/sense/position/vectorCover";
 import { parseSrtm1, sampleTiles, srtmTileName, tilesOnPath } from "../src/sense/position/srtm";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
 import type { DemGrid, PositionInput } from "../src/sense/position/types";
@@ -589,4 +590,25 @@ test("тайл SRTM 1 секунда называется как у SPLAT и ч�
   assert.ok(grid.cellM < 40);
   const north = sampleTiles([grid], 49, 37);
   assert.equal(north, 123);
+});
+
+test("клетки леса и домов идут по лучу и держат оба конца", () => {
+  const ourLat = 48.436446;
+  const ourLon = 37.198056;
+  const oppLat = 48.503238;
+  const oppLon = 37.094063;
+  const hit = coverTilesOnPath(ourLat, ourLon, oppLat, oppLon);
+  assert.equal(hit.truncated, false);
+  assert.ok(hit.tiles.length >= 2 && hit.tiles.length <= 16, String(hit.tiles.length));
+  const ours = coverTilesOnPath(ourLat, ourLon, ourLat, ourLon).tiles[0];
+  const opp = coverTilesOnPath(oppLat, oppLon, oppLat, oppLon).tiles[0];
+  assert.ok(hit.tiles.some((tile) => tile.x === ours.x && tile.y === ours.y));
+  assert.ok(hit.tiles.some((tile) => tile.x === opp.x && tile.y === opp.y));
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40;
+    const lat = ourLat + (oppLat - ourLat) * t;
+    const lon = ourLon + (oppLon - ourLon) * t;
+    const cell = coverTilesOnPath(lat, lon, lat, lon).tiles[0];
+    assert.ok(hit.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), String(i));
+  }
 });

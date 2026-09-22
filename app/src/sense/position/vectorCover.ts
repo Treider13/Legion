@@ -18,30 +18,83 @@ function template(): Promise<string | null> {
   return tileTemplate;
 }
 
-function tileRange(lat1: number, lon1: number, lat2: number, lon2: number, z: number): Array<{ x: number; y: number; z: number }> {
+export interface CoverTile {
+  x: number;
+  y: number;
+  z: number;
+}
+
+const COVER_Z = 14;
+const TILE_CAP = 48;
+
+function tileXY(lat: number, lon: number, z: number): { x: number; y: number } {
   const n = 2 ** z;
-  const xOf = (lon: number) => Math.floor(((lon + 180) / 360) * n);
-  const yOf = (lat: number) => {
-    const r = (lat * Math.PI) / 180;
-    return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n);
+  const latC = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const r = (latC * Math.PI) / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n);
+  return {
+    x: Math.max(0, Math.min(n - 1, x)),
+    y: Math.max(0, Math.min(n - 1, y)),
   };
-  const pad = 0.01;
-  let x0 = xOf(Math.min(lon1, lon2) - pad);
-  let x1 = xOf(Math.max(lon1, lon2) + pad);
-  let y0 = yOf(Math.max(lat1, lat2) + pad);
-  let y1 = yOf(Math.min(lat1, lat2) - pad);
-  x0 = Math.max(0, x0);
-  x1 = Math.min(n - 1, x1);
-  y0 = Math.max(0, y0);
-  y1 = Math.min(n - 1, y1);
-  const out: Array<{ x: number; y: number; z: number }> = [];
-  for (let x = x0; x <= x1; x++) {
-    for (let y = y0; y <= y1; y++) {
-      out.push({ x, y, z });
-      if (out.length >= 24) return out;
+}
+
+/** Клетки векторной карты, которые пересекает отрезок. Оба конца входят. */
+export function coverTilesOnPath(lat1: number, lon1: number, lat2: number, lon2: number, z = COVER_Z): { tiles: CoverTile[]; truncated: boolean } {
+  const a = tileXY(lat1, lon1, z);
+  const b = tileXY(lat2, lon2, z);
+  const tiles: CoverTile[] = [];
+  const seen = new Set<string>();
+  const push = (x: number, y: number) => {
+    const key = `${x},${y}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    tiles.push({ x, y, z });
+  };
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const nx = Math.abs(dx);
+  const ny = Math.abs(dy);
+  const sx = Math.sign(dx);
+  const sy = Math.sign(dy);
+  let x = a.x;
+  let y = a.y;
+  let ix = 0;
+  let iy = 0;
+  push(x, y);
+  while (ix < nx || iy < ny) {
+    const lhs = (0.5 + ix) * ny;
+    const rhs = (0.5 + iy) * nx;
+    if (lhs < rhs) {
+      x += sx;
+      ix += 1;
+    } else if (lhs > rhs) {
+      y += sy;
+      iy += 1;
+    } else {
+      push(x + sx, y);
+      push(x, y + sy);
+      x += sx;
+      y += sy;
+      ix += 1;
+      iy += 1;
     }
+    push(x, y);
   }
-  return out;
+  if (tiles.length <= TILE_CAP) return { tiles, truncated: false };
+  const kept: CoverTile[] = [];
+  const keep = new Set<string>();
+  const take = (tile: CoverTile) => {
+    const key = `${tile.x},${tile.y}`;
+    if (keep.has(key)) return;
+    keep.add(key);
+    kept.push(tile);
+  };
+  take(tiles[0]);
+  take(tiles[tiles.length - 1]);
+  const room = TILE_CAP - kept.length;
+  for (let i = 1; i <= room; i++) take(tiles[Math.round((i * (tiles.length - 1)) / (room + 1))]);
+  return { tiles: kept, truncated: true };
 }
 
 function ringsOf(geometry: { type: string; coordinates: number[][][] | number[][][][] }): number[][][][] {
@@ -73,10 +126,11 @@ export interface PathCover {
 export async function loadPathCover(lat1: number, lon1: number, lat2: number, lon2: number, signal?: AbortSignal): Promise<PathCover> {
   const pattern = await template();
   if (!pattern) return { buildings: [], woods: [], truncated: false };
-  const tiles = tileRange(lat1, lon1, lat2, lon2, 14);
+  const line = coverTilesOnPath(lat1, lon1, lat2, lon2);
+  const tiles = line.tiles;
   const buildings: PathBuilding[] = [];
   const woods: PathWood[] = [];
-  let truncated = tiles.length >= 24;
+  let truncated = line.truncated;
   await Promise.all(tiles.map(async (tile) => {
     if (signal?.aborted) return;
     const url = pattern.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
@@ -91,7 +145,7 @@ export async function loadPathCover(lat1: number, lon1: number, lat2: number, lo
     for (const name of ["building", "landuse", "landcover"]) {
       const layer = vector.layers[name];
       if (!layer) continue;
-      const limit = Math.min(layer.length, 2500);
+      const limit = Math.min(layer.length, 8000);
       if (layer.length > limit) truncated = true;
       for (let i = 0; i < limit; i++) {
         const feature = layer.feature(i);
