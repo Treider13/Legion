@@ -2,7 +2,7 @@ import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type R
 import { computePosition, searchSquare } from "../sense/position/compute";
 import { degreeFrame, formatDeg, xyOfDegree } from "../sense/position/geo";
 import { patternFromFiles, type AntennaPattern } from "../sense/position/pattern";
-import { loadSrtmPath } from "../sense/position/srtm";
+import { loadSrtmPath, sampleTiles } from "../sense/position/srtm";
 import { vegetationClamped } from "../sense/position/pathCover";
 import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
 import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
@@ -101,8 +101,12 @@ export function PositionPanel() {
   const searchGen = useRef(0);
 
   const activeGrid = grid ?? ukraine;
-  const ourMapH = activeGrid ? sampleDem(activeGrid, num(ourLat), num(ourLon)) : null;
-  const oppMapH = activeGrid ? sampleDem(activeGrid, num(oppLat), num(oppLon)) : null;
+  const ourFine = grid ? null : sampleTiles(tiles, num(ourLat), num(ourLon));
+  const oppFine = grid ? null : sampleTiles(tiles, num(oppLat), num(oppLon));
+  const ourCoarse = activeGrid ? sampleDem(activeGrid, num(ourLat), num(ourLon)) : null;
+  const oppCoarse = activeGrid ? sampleDem(activeGrid, num(oppLat), num(oppLon)) : null;
+  const ourMapH = ourFine ?? ourCoarse;
+  const oppMapH = oppFine ?? oppCoarse;
 
   const input = useMemo<PositionInput>(() => ({
     ourLat: num(ourLat),
