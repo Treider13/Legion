@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { computePosition, searchSquare } from "../sense/position/compute";
-import { formatDeg } from "../sense/position/geo";
+import { degreeFrame, formatDeg, xyOfDegree } from "../sense/position/geo";
 import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
 import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
 import { loadUkraineDem } from "../sense/position/ukraineDem";
@@ -106,8 +106,15 @@ export function PositionPanel() {
   }, [result]);
 
   useEffect(() => {
-    drawMap(mapRef.current, result);
-  }, [result]);
+    const south = num(boxSouth);
+    const north = num(boxNorth);
+    const west = num(boxWest);
+    const east = num(boxEast);
+    const box = [south, north, west, east].every(Number.isFinite) && south < north && west < east
+      ? { south, north, west, east }
+      : null;
+    drawMap(mapRef.current, result, input, box, picks);
+  }, [result, input, boxSouth, boxNorth, boxWest, boxEast, picks]);
 
   useEffect(() => {
     let live = true;
@@ -307,7 +314,7 @@ export function PositionPanel() {
           </div>
           {result.map && result.map.length > 0 && (
             <>
-              <p className="panel-note" style={{ marginTop: 12 }}>Карта вокруг поставленной точки. Зелёное — доходит, жёлтое — мешает земля, красное — не доходит. Место для нас ищется кнопкой в квадрате.</p>
+              <p className="panel-note" style={{ marginTop: 12 }}>Карта в тех же градусах, что поля выше. Север сверху, шаг широты и долготы одинаковый. Зелёное — доходит, жёлтое — мешает земля, красное — не доходит. Место для нас ищется кнопкой в квадрате.</p>
               <canvas ref={mapRef} className="pos-canvas" width={900} height={420} />
             </>
           )}
@@ -386,17 +393,97 @@ function drawProfile(canvas: HTMLCanvasElement | null, result: PositionResult) {
   ctx.fillText(`${minY.toFixed(0)} м`, 8, h - pad);
 }
 
-function drawMap(canvas: HTMLCanvasElement | null, result: PositionResult) {
+function tickStep(span: number): number {
+  if (!(span > 0)) return 1;
+  const raw = span / 4;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const n = raw / pow;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return nice * pow;
+}
+
+function tickLabel(value: number, step: number): string {
+  const digits = step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step)));
+  return `${value.toFixed(digits)}°`;
+}
+
+function drawMap(
+  canvas: HTMLCanvasElement | null,
+  result: PositionResult,
+  input: PositionInput,
+  box: { south: number; north: number; west: number; east: number } | null,
+  picks: SitePick[],
+) {
   if (!canvas || !result.map || result.map.length === 0) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const w = canvas.width;
   const h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  const cx = w / 2;
-  const cy = h / 2;
-  const maxKm = Math.max(...result.map.map((c) => c.km), 1);
-  const scale = (Math.min(w, h) / 2 - 28) / maxKm;
+  const points = [
+    ...result.map,
+    { lat: input.ourLat, lon: input.ourLon },
+    { lat: input.oppLat, lon: input.oppLon },
+    ...picks,
+  ];
+  if (box) {
+    points.push(
+      { lat: box.south, lon: box.west },
+      { lat: box.north, lon: box.east },
+    );
+  }
+  const frame = degreeFrame(points, w, h, 46);
+  if (!frame) return;
+  const place = (lat: number, lon: number) => xyOfDegree(frame, lat, lon);
+  ctx.strokeStyle = "rgba(139, 147, 167, 0.35)";
+  ctx.fillStyle = "#8b93a7";
+  ctx.font = "12px sans-serif";
+  ctx.lineWidth = 1;
+  const lonStep = tickStep(frame.east - frame.west);
+  const latStep = tickStep(frame.north - frame.south);
+  const lon0 = Math.ceil(frame.west / lonStep - 1e-9) * lonStep;
+  const lat0 = Math.ceil(frame.south / latStep - 1e-9) * latStep;
+  for (let i = 0; i < 12; i++) {
+    const lon = lon0 + i * lonStep;
+    if (lon > frame.east + lonStep * 1e-6) break;
+    const x = place(frame.north, lon).x;
+    if (x < 8 || x > w - 8) continue;
+    ctx.beginPath();
+    ctx.moveTo(x, 28);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.fillText(tickLabel(lon, lonStep), x + 4, h - 8);
+  }
+  for (let i = 0; i < 12; i++) {
+    const lat = lat0 + i * latStep;
+    if (lat > frame.north + latStep * 1e-6) break;
+    const y = place(lat, frame.west).y;
+    if (y < 16 || y > h - 16) continue;
+    ctx.beginPath();
+    ctx.moveTo(8, y);
+    ctx.lineTo(w - 8, y);
+    ctx.stroke();
+    ctx.fillText(tickLabel(lat, latStep), 8, y - 4);
+  }
+  if (box) {
+    const nw = place(box.north, box.west);
+    const se = place(box.south, box.east);
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = "#e8eefc";
+    ctx.strokeRect(nw.x, nw.y, se.x - nw.x, se.y - nw.y);
+    ctx.restore();
+  }
+  if ([input.ourLat, input.ourLon, input.oppLat, input.oppLon].every(Number.isFinite)) {
+    const us = place(input.ourLat, input.ourLon);
+    const them = place(input.oppLat, input.oppLon);
+    ctx.beginPath();
+    ctx.moveTo(us.x, us.y);
+    ctx.lineTo(them.x, them.y);
+    ctx.strokeStyle = "#5eead4";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
   const color: Record<VerdictKind, string> = {
     open: "#2dd4bf",
     ridge: "#f5d061",
@@ -404,14 +491,27 @@ function drawMap(canvas: HTMLCanvasElement | null, result: PositionResult) {
     insufficient: "#5c6570",
   };
   for (const cell of result.map) {
-    const rad = ((cell.azimuthDeg - 90) * Math.PI) / 180;
-    const x = cx + Math.cos(rad) * cell.km * scale;
-    const y = cy + Math.sin(rad) * cell.km * scale;
+    const p = place(cell.lat, cell.lon);
     ctx.fillStyle = color[cell.verdict];
-    ctx.fillRect(x - 4, y - 4, 8, 8);
+    ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
   }
-  ctx.fillStyle = "#e8eefc";
-  ctx.beginPath();
-  ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-  ctx.fill();
+  picks.forEach((pick, index) => {
+    const p = place(pick.lat, pick.lon);
+    ctx.fillStyle = "#e8eefc";
+    ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+    ctx.fillText(String(index + 1), p.x + 6, p.y - 6);
+  });
+  const mark = (lat: number, lon: number, title: string) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    const p = place(lat, lon);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#e8eefc";
+    ctx.fill();
+    ctx.fillStyle = "#8b93a7";
+    const label = `${title} ${formatDeg(lat)} ${formatDeg(lon)}`;
+    ctx.fillText(label, p.x + 160 > w ? p.x - 168 : p.x + 8, p.y < 24 ? p.y + 16 : p.y - 8);
+  };
+  mark(input.ourLat, input.ourLon, "мы");
+  mark(input.oppLat, input.oppLon, "противник");
 }

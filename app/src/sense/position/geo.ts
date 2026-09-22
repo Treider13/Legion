@@ -121,6 +121,72 @@ export function formatDeg(deg: number): string {
   return `${deg.toFixed(6)}°`;
 }
 
+/** Рамка холста в градусах WGS84. Север сверху.
+ *  Тот же аффинный пересчёт, что GeoTransform у GDAL и показ EPSG:4326 в QGIS:
+ *  x растёт с долготой, y падает с широтой, шаг по обеим осям один.
+ */
+export interface DegreeFrame {
+  west: number;
+  east: number;
+  south: number;
+  north: number;
+  scale: number;
+  x0: number;
+  y0: number;
+}
+
+export function degreeFrame(
+  points: Array<{ lat: number; lon: number }>,
+  width: number,
+  height: number,
+  pad: number,
+): DegreeFrame | null {
+  const ok = points.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  if (ok.length === 0 || !(width > pad * 2) || !(height > pad * 2)) return null;
+  let south = Infinity;
+  let north = -Infinity;
+  let west = Infinity;
+  let east = -Infinity;
+  for (const p of ok) {
+    south = Math.min(south, p.lat);
+    north = Math.max(north, p.lat);
+    west = Math.min(west, p.lon);
+    east = Math.max(east, p.lon);
+  }
+  const minSpan = 0.02;
+  if (north - south < minSpan) {
+    const mid = (north + south) / 2;
+    south = mid - minSpan / 2;
+    north = mid + minSpan / 2;
+  }
+  if (east - west < minSpan) {
+    const mid = (east + west) / 2;
+    west = mid - minSpan / 2;
+    east = mid + minSpan / 2;
+  }
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+  const scale = Math.min(innerW / (east - west), innerH / (north - south));
+  const usedW = (east - west) * scale;
+  const usedH = (north - south) * scale;
+  return {
+    west,
+    east,
+    south,
+    north,
+    scale,
+    x0: pad + (innerW - usedW) / 2,
+    y0: pad + (innerH - usedH) / 2,
+  };
+}
+
+export function xyOfDegree(frame: DegreeFrame, lat: number, lon: number): { x: number; y: number } {
+  return {
+    x: frame.x0 + (lon - frame.west) * frame.scale,
+    y: frame.y0 + (frame.north - lat) * frame.scale,
+  };
+}
+
 /** Прогиб радиолуча, k = 4/3. Метры. d1 и d2 — километры до концов. */
 export function earthBulgeM(d1Km: number, d2Km: number): number {
   return (d1Km * d2Km) / 16.989;
