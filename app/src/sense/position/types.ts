@@ -1,5 +1,8 @@
 // Вкладка «Позиция»: трасса до антенны противника. Дрона в модели нет.
 
+import type { AntennaPattern } from "./pattern";
+import type { PathBuilding, PathWood } from "./pathCover";
+
 export type AntennaKind = "whip" | "patch" | "dish" | "yagi";
 
 export type VerdictKind = "open" | "ridge" | "closed" | "insufficient";
@@ -54,6 +57,13 @@ export interface PositionInput {
   rainMmH: number | null;
   /** Рельеф Украины ещё читается. Пока его нет, не подменяем ответ фразой «нет земли». */
   terrainPending: boolean;
+  /** Тайлы SRTM 1″ на путь. Нет клетки — берётся grid. */
+  tiles?: DemGrid[] | null;
+  /** Дома на трассе. В веер вокруг нас не копируются. */
+  buildings?: PathBuilding[] | null;
+  woods?: PathWood[] | null;
+  ourPattern?: AntennaPattern | null;
+  oppPattern?: AntennaPattern | null;
 }
 
 export interface ProfileSample {
@@ -119,6 +129,10 @@ export interface PositionResult {
   fsplDb: number;
   diffractionDb: number;
   gasDb: number;
+  /** Лес по P.833. В дифракцию холма не входит. */
+  vegetationDb: number;
+  buildingsOnPath: number;
+  buildingsAssumed: number;
   rainDb: number | null;
   raiseGrazeM: number;
   raiseCleanM: number;

@@ -1,7 +1,11 @@
 // Трасса до антенны противника. Нормы P.530-19 и P.526, газ по порядку P.676.
 // Сеть не нужна: рельеф — отметки, ровная земля или файл на диске.
 
-import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM } from "./geo";
+import { gas676DbPerKm } from "./gas676";
+import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM, RAY_SAMPLES } from "./geo";
+import { buildingAt, vegetationDb, woodAt } from "./pathCover";
+import { patternGainDb } from "./pattern";
+import { sampleTiles } from "./srtm";
 import { inBounds, sampleDem } from "./terrain";
 import type {
   AntennaKind,
@@ -16,7 +20,7 @@ import type {
   VerdictKind,
 } from "./types";
 
-const SAMPLES = 201;
+const SAMPLES = RAY_SAMPLES;
 const RX1_MAX_MHZ = 6000;
 const FREQ_MIN = 100;
 const FREQ_MAX = 22000;
@@ -79,11 +83,7 @@ export function sideGainDb(kind: AntennaKind, peakDbi: number): number {
 
 /** Поглощение газа, дБ/км. Ниже 10 ГГц ноль. Пик водяного пара около 22 ГГц — порядка 0,2 дБ/км. */
 export function gasDbPerKm(freqMhz: number): number {
-  const f = freqMhz / 1000;
-  if (f < 10) return 0;
-  const vapor = 0.16 / (1 + ((f - 22.235) / 2.2) ** 2);
-  const tail = 0.012 * (f / 10) ** 2;
-  return vapor + tail;
+  return gas676DbPerKm(freqMhz);
 }
 
 // ITU-R P.838-3, горизонтальная поляризация. Дождь в сухой ответ не входит.
@@ -312,6 +312,9 @@ function empty(phrase: string, action: string): PositionResult {
     fsplDb: 0,
     diffractionDb: 0,
     gasDb: 0,
+    vegetationDb: 0,
+    buildingsOnPath: 0,
+    buildingsAssumed: 0,
     aim: "",
     rainDb: null,
     raiseGrazeM: 0,
@@ -332,11 +335,18 @@ function pickedGround(sample: number | null, typed: number): number | null {
   return finite(typed) ? typed : null;
 }
 
+function heightOf(input: PositionInput, grid: DemGrid | null, lat: number, lon: number): number | null {
+  const fine = sampleTiles(input.tiles, lat, lon);
+  if (fine != null) return fine;
+  if (grid && gridCovers(grid, lat, lon)) return sampleDem(grid, lat, lon);
+  return null;
+}
+
 function grounds(input: PositionInput, grid: DemGrid | null): { our: number; opp: number; missing: string | null; useGrid: boolean } {
   const ourIn = gridCovers(grid, input.ourLat, input.ourLon);
   const oppIn = gridCovers(grid, input.oppLat, input.oppLon);
-  const ourSample = ourIn ? sampleDem(grid, input.ourLat, input.ourLon) : null;
-  const oppSample = oppIn ? sampleDem(grid, input.oppLat, input.oppLon) : null;
+  const ourSample = heightOf(input, grid, input.ourLat, input.ourLon);
+  const oppSample = heightOf(input, grid, input.oppLat, input.oppLon);
   const our = pickedGround(ourSample, input.ourGroundM);
   const opp = pickedGround(oppSample, input.oppGroundM);
   if (our == null || opp == null) {
@@ -351,12 +361,19 @@ function grounds(input: PositionInput, grid: DemGrid | null): { our: number; opp
 }
 
 function hasTerrain(input: PositionInput, grid: DemGrid | null): boolean {
+  if (input.tiles && input.tiles.length > 0) return true;
   if (grid) return true;
   if (input.flatM != null && finite(input.flatM)) return true;
   return input.marks.some((m) => m.km > 0);
 }
 
 function terrainM(input: PositionInput, grid: DemGrid | null, km: number, dist: number, ourGround: number, oppGround: number, lat: number, lon: number): number | null {
+  const fine = sampleTiles(input.tiles, lat, lon);
+  if (fine != null) {
+    if (km <= 0) return ourGround;
+    if (km >= dist) return oppGround;
+    return fine;
+  }
   if (grid && gridCovers(grid, lat, lon)) {
     if (km <= 0) return ourGround;
     if (km >= dist) return oppGround;
@@ -399,6 +416,35 @@ function buildProfile(input: PositionInput, grid: DemGrid | null, ends: Ends, ex
     out.push({ km, terrainM: ground, rayM: ray, fresnelM: fresnel, clearanceM: ray - ground });
   }
   return out;
+}
+
+function applyCover(input: PositionInput, profile: ProfileSample[], ends: Ends): { vegetationDb: number; buildingsOnPath: number; buildingsAssumed: number } {
+  const buildings = input.buildings ?? [];
+  const woods = input.woods ?? [];
+  const seen = new Set<NonNullable<PositionInput["buildings"]>[number]>();
+  let buildingsOnPath = 0;
+  let buildingsAssumed = 0;
+  let forestM = 0;
+  const stepM = (ends.distanceKm * 1000) / Math.max(1, profile.length - 1);
+  for (let i = 0; i < profile.length; i++) {
+    const sample = profile[i];
+    const along = ends.distanceKm <= 0 ? 0 : sample.km / ends.distanceKm;
+    const pos = destination(input.ourLat, input.ourLon, ends.azimuthDeg, sample.km);
+    if (along > 0.02 && along < 0.98 && buildings.length > 0) {
+      const hit = buildingAt(pos.lon, pos.lat, buildings);
+      if (hit) {
+        sample.terrainM += hit.heightM;
+        sample.clearanceM = sample.rayM - sample.terrainM;
+        if (!seen.has(hit)) {
+          seen.add(hit);
+          buildingsOnPath += 1;
+          if (hit.assumed) buildingsAssumed += 1;
+        }
+      }
+    }
+    if (i > 0 && woods.length > 0 && woodAt(pos.lon, pos.lat, woods)) forestM += stepM;
+  }
+  return { vegetationDb: vegetationDb(input.freqMhz, forestM), buildingsOnPath, buildingsAssumed };
 }
 
 function raiseFor(profile: ProfileSample[], ends: Ends, needM: (s: ProfileSample) => number): number {
@@ -503,19 +549,27 @@ function rx1Line(freqMhz: number, verdict: VerdictKind, margin: number | null): 
   return "На приёмнике RX1 сигнала не хватит.";
 }
 
-function marginDb(input: PositionInput, ourDb: number, oppDb: number, fspl: number, diffraction: number, gas: number): number | null {
+function marginDb(input: PositionInput, ourDb: number, oppDb: number, fspl: number, diffraction: number, gas: number, vegetation: number): number | null {
   if (input.powerW == null || input.thresholdDbm == null) return null;
   if (!(input.powerW > 0) || !finite(input.thresholdDbm)) return null;
   const powerDbm = 10 * Math.log10(input.powerW * 1000);
-  return powerDbm + oppDb + ourDb - fspl - diffraction - gas - input.thresholdDbm;
+  return powerDbm + oppDb + ourDb - fspl - diffraction - gas - vegetation - input.thresholdDbm;
 }
 
 function oppNeedsAim(input: PositionInput): boolean {
   return !whip(input.oppKind) && input.oppDbi >= 5 && input.oppAimAzDeg == null && input.oppAimElDeg == null;
 }
 
-function linkGains(input: PositionInput, el: number, ourOff: number): { ourDb: number; oppDb: number; side: string | null; aimed: boolean } {
-  const ourDb = gainTowardDb(input.ourKind, input.ourDbi, ourOff);
+function antennaDb(kind: PositionInput["ourKind"], dbi: number, off: number, pattern: PositionInput["ourPattern"], daz: number, del: number): number {
+  const directional = !whip(kind) && dbi >= 5;
+  if (directional && pattern && (pattern.az.length > 0 || pattern.el.length > 0)) return patternGainDb(pattern, dbi, daz, del);
+  return gainTowardDb(kind, dbi, off);
+}
+
+function linkGains(input: PositionInput, el: number, azimuth: number, ourOff: number): { ourDb: number; oppDb: number; side: string | null; aimed: boolean } {
+  const ourAz = input.ourAimAzDeg ?? azimuth;
+  const ourEl = input.ourAimElDeg ?? 0;
+  const ourDb = antennaDb(input.ourKind, input.ourDbi, ourOff, input.ourPattern, azimuth - ourAz, el - ourEl);
   const round = whip(input.oppKind) || input.oppDbi < 5;
   if (round) {
     return { ourDb, oppDb: input.oppDbi, side: "Антенна противника почти круговая.", aimed: true };
@@ -524,12 +578,16 @@ function linkGains(input: PositionInput, el: number, ourOff: number): { ourDb: n
     return { ourDb, oppDb: 0, side: null, aimed: false };
   }
   const toUsAz = (azimuthDeg(input.oppLat, input.oppLon, input.ourLat, input.ourLon) + 360) % 360;
-  const off = angleOffDeg(input.oppAimAzDeg ?? toUsAz, input.oppAimElDeg ?? 0, toUsAz, -el);
+  const oppAz = input.oppAimAzDeg ?? toUsAz;
+  const oppEl = input.oppAimElDeg ?? 0;
+  const off = angleOffDeg(oppAz, oppEl, toUsAz, -el);
   const half = beamwidthDeg(input.oppDbi) / 2;
-  const side = off <= half
+  const oppDb = antennaDb(input.oppKind, input.oppDbi, off, input.oppPattern, toUsAz - oppAz, -el - oppEl);
+  const toward = input.oppPattern ? oppDb >= input.oppDbi - 3 : off <= half;
+  const side = toward
     ? "Антенна противника смотрит к нам."
     : "Антенна противника смотрит мимо нас. Сбоку сигнал слабее.";
-  return { ourDb, oppDb: gainTowardDb(input.oppKind, input.oppDbi, off), side, aimed: true };
+  return { ourDb, oppDb, side, aimed: true };
 }
 
 function buildMap(input: PositionInput, grid: DemGrid): MapCell[] {
@@ -551,6 +609,8 @@ function buildMap(input: PositionInput, grid: DemGrid): MapCell[] {
         grid,
         marks: [],
         flatM: null,
+        buildings: null,
+        woods: null,
       };
       const result = computePosition(trial, false);
       cells.push({ lat: pos.lat, lon: pos.lon, km, azimuthDeg: az, verdict: result.verdict });
@@ -587,7 +647,10 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const profile = buildProfile(input, base.useGrid ? grid : null, ends, 0);
   if (!profile) return empty("Мало данных.", "Рельеф по пути не читается.");
 
-  const cell = base.useGrid && grid ? grid.cellM : input.cellM;
+  const fineCell = sampleTiles(input.tiles, input.ourLat, input.ourLon) != null && sampleTiles(input.tiles, input.oppLat, input.oppLon) != null
+    ? input.tiles?.find((tile) => sampleDem(tile, input.ourLat, input.ourLon) != null)?.cellM ?? null
+    : null;
+  const cell = fineCell ?? (base.useGrid && grid ? grid.cellM : input.cellM);
   const minFresnel = profile.reduce((m, s) => {
     const f = s.km / dist;
     if (f <= 0.05 || f >= 0.95) return m;
@@ -608,6 +671,7 @@ export function computePosition(input: PositionInput, withAround = true): Positi
     };
   }
 
+  const cover = applyCover(input, profile, ends);
   const segs = segments(profile, input.freqMhz, dist);
   const extended = segs.some((s) => s.extended);
   const frac = normFraction(input.freqMhz, extended || segs.length === 0);
@@ -624,7 +688,7 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   const azimuth = (az + 360) % 360;
   const beam = whip(input.ourKind) ? null : beamwidthDeg(input.ourDbi);
   const aim = aimAction(input, azimuth, elevation, beam);
-  const linked = linkGains(input, elevation, aim.miss ? 0 : angleOffDeg(
+  const linked = linkGains(input, elevation, azimuth, aim.miss ? 0 : angleOffDeg(
     input.ourAimAzDeg ?? azimuth,
     input.ourAimElDeg ?? 0,
     azimuth,
@@ -637,10 +701,10 @@ export function computePosition(input: PositionInput, withAround = true): Positi
   };
 
   const diffraction = lossAt(0);
-  const margin = linked.aimed ? marginDb(input, linked.ourDb, linked.oppDb, fspl, diffraction, gas) : null;
+  const margin = linked.aimed ? marginDb(input, linked.ourDb, linked.oppDb, fspl, diffraction, gas, cover.vegetationDb) : null;
   const marginAt = (extraM: number): number | null => {
     if (!linked.aimed) return null;
-    return marginDb(input, linked.ourDb, linked.oppDb, fspl, lossAt(extraM), gas);
+    return marginDb(input, linked.ourDb, linked.oppDb, fspl, lossAt(extraM), gas, cover.vegetationDb);
   };
 
   let hearingExtra = 0;
@@ -709,6 +773,9 @@ export function computePosition(input: PositionInput, withAround = true): Positi
     fsplDb: fspl,
     diffractionDb: diffraction,
     gasDb: gas,
+    vegetationDb: cover.vegetationDb,
+    buildingsOnPath: cover.buildingsOnPath,
+    buildingsAssumed: cover.buildingsAssumed,
     rainDb: rain,
     raiseGrazeM,
     raiseCleanM,
@@ -811,6 +878,10 @@ export function searchSquare(input: PositionInput, box: SearchBox): SquareSearch
       ourGroundM: spot.h,
       marks: [],
       flatM: null,
+      // Складка выбрана по грубой решётке. Тайлы и полигоны прямого луча — про другую линию.
+      tiles: null,
+      buildings: null,
+      woods: null,
     };
     const result = computePosition(trial, false);
     if (result.verdict !== "open" && result.verdict !== "ridge") continue;

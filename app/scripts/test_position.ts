@@ -6,7 +6,11 @@ import { frameTarget, frameZoom, modePitch, scalePercent } from "../src/componen
 import { encodeRgbPng, fillTerrariumRgb, heightOfTerrarium, parseTerrainTileUrl, terrariumOf, webMercatorLat, webMercatorLon } from "../src/components/position/terrariumTile";
 import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
-import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
+import { patternFromFiles, patternGainDb } from "../src/sense/position/pattern";
+import { buildingAt, vegetationDb } from "../src/sense/position/pathCover";
+import { coverTilesOnPath } from "../src/sense/position/vectorCover";
+import { parseSrtm1, sampleTiles, srtmTileName, tilesOnPath } from "../src/sense/position/srtm";
+import { parseDemJson, parseSrtmHgt, parseTypedNumber, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
 import type { DemGrid, PositionInput } from "../src/sense/position/types";
 import { parseUkraineDemGz } from "../src/sense/position/ukraineDem";
 
@@ -238,6 +242,22 @@ test("квадрат предлагает складку, не вершину", 
   const plain = searchSquare({ ...spot, ourGroundM: 100, oppGroundM: 100, grid: flat }, { south: 0, north: 0.24, west: 0, east: 0.24 });
   assert.equal(plain.picks.length, 0);
   assert.match(plain.note, /складки нет/);
+  const fine: DemGrid = {
+    lat0: 0,
+    lon0: 0,
+    nlat: 2,
+    nlon: 2,
+    dlat: 1,
+    dlon: 1,
+    cellM: 30,
+    heights: new Float32Array([2000, 2000, 2000, 2000]),
+  };
+  const wood = { rings: [[[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]] };
+  const withTile = searchSquare({ ...spot, tiles: [fine] }, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  const withWood = searchSquare({ ...spot, woods: [wood] }, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  assert.deepEqual(withTile.picks.map((p) => p.marginDb), found.picks.map((p) => p.marginDb));
+  assert.deepEqual(withTile.picks.map((p) => p.groundM), found.picks.map((p) => p.groundM));
+  assert.deepEqual(withWood.picks.map((p) => p.marginDb), found.picks.map((p) => p.marginDb));
 });
 
 test("градусы WGS84 сходятся с известной геодезической задачей", () => {
@@ -540,4 +560,119 @@ test("плитка 3D хранит те же метры, что решётка",
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   assert.equal(view.getUint32(16), 1);
   assert.equal(view.getUint32(20), 1);
+});
+
+test("лес по таблице P.833 не растёт бесконечно, дом поднимает землю", () => {
+  const atTable = vegetationDb(2117.5, 100);
+  const am = 34.1;
+  const expect = am * (1 - Math.exp((-100 * 0.34) / am));
+  assert.ok(Math.abs(atTable - expect) < 1e-6, String(atTable));
+  assert.ok(vegetationDb(2117.5, 100000) < am + 0.01);
+  assert.equal(vegetationDb(2400, 0), 0);
+  const house = { rings: [[[36.99, 55.19], [37.01, 55.19], [37.01, 55.21], [36.99, 55.21], [36.99, 55.19]]], heightM: 3, assumed: true };
+  assert.equal(buildingAt(37, 55.2, [house])?.assumed, true);
+  assert.equal(buildingAt(30, 50, [house]), null);
+  const flat = computePosition({
+    ...blocked(2400),
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
+    marks: [],
+    flatM: 200,
+    ourGroundM: 200,
+    oppGroundM: 200,
+    buildings: [house],
+  }, false);
+  assert.ok(flat.buildingsOnPath > 0, `houses ${flat.buildingsOnPath}`);
+  assert.equal(flat.buildingsAssumed, flat.buildingsOnPath);
+  assert.ok(flat.profile.some((sample) => sample.terrainM >= 203), "дом не добавился к земле");
+});
+
+test("диаграмма SPLAT на оси равна паспортным дБи", () => {
+  const pattern = patternFromFiles("0\n0 1\n180 0.1\n", "-2 90\n0 1\n10 0.5\n");
+  assert.ok(pattern);
+  assert.ok(Math.abs(patternGainDb(pattern, 19, 0, 0) - 19) < 0.05);
+  assert.ok(patternGainDb(pattern, 19, 180, 0) < 19);
+  const aimedAway = {
+    ...blocked(2400),
+    oppAimAzDeg: 0,
+    oppAimElDeg: 0,
+    ourAimAzDeg: 180,
+    ourAimElDeg: 0,
+    ourPattern: pattern,
+  };
+  const whipFile = computePosition({ ...aimedAway, ourKind: "whip", ourDbi: 2 }, false);
+  const whipPlain = computePosition({ ...aimedAway, ourKind: "whip", ourDbi: 2, ourPattern: null }, false);
+  assert.equal(whipFile.marginDb, whipPlain.marginDb);
+  const patchFile = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19 }, false);
+  const patchPlain = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19, ourPattern: null }, false);
+  assert.ok(patchFile.marginDb != null && patchPlain.marginDb != null && patchFile.marginDb < patchPlain.marginDb - 5);
+  const wrapped = patternFromFiles("99\n10 1\n180 0.1\n350 0.5\n", null);
+  assert.ok(wrapped);
+  const throughNorth = patternGainDb(wrapped, 19, 0, 0);
+  assert.ok(throughNorth < 19, `above peak ${throughNorth}`);
+  assert.ok(Math.abs(throughNorth - (19 + 20 * Math.log10(0.75))) < 0.05, String(throughNorth));
+});
+
+test("пустое поле градусов не становится нулём", () => {
+  assert.ok(Number.isNaN(parseTypedNumber("")));
+  assert.ok(Number.isNaN(parseTypedNumber("  ")));
+  assert.equal(parseTypedNumber("0"), 0);
+  assert.equal(parseTypedNumber("48,5"), 48.5);
+});
+
+test("тайл SRTM 1 секунда называется как у SPLAT и читает высоту", () => {
+  assert.equal(srtmTileName(48.4, 37.2)?.name, "N48E037");
+  const short = tilesOnPath(48.1, 37.1, 48.2, 37.2);
+  assert.equal(short.truncated, false);
+  assert.equal(short.tiles.length, 1);
+  const diagonal = tilesOnPath(46.05, 30.05, 48.95, 34.95);
+  assert.equal(diagonal.truncated, true);
+  assert.deepEqual(diagonal.tiles.map((tile) => tile.name), ["N46E030", "N46E031", "N47E031", "N47E032", "N47E033", "N48E033"]);
+  const west = tilesOnPath(50.45, 30.52, 49.84, 24.03);
+  assert.equal(west.truncated, true);
+  assert.deepEqual(west.tiles.map((tile) => tile.name), ["N50E030", "N50E029", "N50E028", "N50E027", "N50E026", "N50E025"]);
+  assert.equal(tilesOnPath(48.436446, 37.198056, 48.503238, 37.094063).tiles[0]?.name, "N48E037");
+  const n = 3601;
+  const buf = new ArrayBuffer(n * n * 2);
+  const view = new DataView(buf);
+  view.setInt16(0, 123, false);
+  const grid = parseSrtm1(buf, 48, 37);
+  assert.ok(grid);
+  assert.ok(grid.cellM < 40);
+  const north = sampleTiles([grid], 49, 37);
+  assert.equal(north, 123);
+});
+
+test("клетки леса и домов идут по лучу и держат оба конца", () => {
+  const ourLat = 48.436446;
+  const ourLon = 37.198056;
+  const oppLat = 48.503238;
+  const oppLon = 37.094063;
+  const hit = coverTilesOnPath(ourLat, ourLon, oppLat, oppLon);
+  assert.equal(hit.truncated, false);
+  assert.ok(hit.tiles.length >= 2 && hit.tiles.length <= 16, String(hit.tiles.length));
+  const ours = coverTilesOnPath(ourLat, ourLon, ourLat, ourLon).tiles[0];
+  const opp = coverTilesOnPath(oppLat, oppLon, oppLat, oppLon).tiles[0];
+  assert.ok(hit.tiles.some((tile) => tile.x === ours.x && tile.y === ours.y));
+  assert.ok(hit.tiles.some((tile) => tile.x === opp.x && tile.y === opp.y));
+  const far = destination(48.4, 37.1, 45, 45);
+  const long = coverTilesOnPath(48.4, 37.1, far.lat, far.lon);
+  assert.equal(long.truncated, false);
+  const dist = distanceKm(48.4, 37.1, far.lat, far.lon);
+  const az = azimuthDeg(48.4, 37.1, far.lat, far.lon);
+  for (let i = 0; i <= 200; i++) {
+    const pos = destination(48.4, 37.1, az, (dist * i) / 200);
+    const cell = coverTilesOnPath(pos.lat, pos.lon, pos.lat, pos.lon).tiles[0];
+    assert.ok(long.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), String(i));
+  }
+  const shortEnd = destination(48.5, 37, 45, 1);
+  const short = coverTilesOnPath(48.5, 37, shortEnd.lat, shortEnd.lon);
+  assert.equal(short.truncated, false);
+  const shortDist = distanceKm(48.5, 37, shortEnd.lat, shortEnd.lon);
+  const shortAz = azimuthDeg(48.5, 37, shortEnd.lat, shortEnd.lon);
+  for (let i = 0; i <= 200; i++) {
+    const pos = i === 200 ? shortEnd : destination(48.5, 37, shortAz, (shortDist * i) / 200);
+    const cell = coverTilesOnPath(pos.lat, pos.lon, pos.lat, pos.lon).tiles[0];
+    assert.ok(short.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), `1 км ${i}`);
+  }
 });
