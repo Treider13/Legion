@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, searchSquare, sideGainDb, smoothEarthDb } from "../src/sense/position/compute";
-import { azimuthDeg, destination, distanceKm, formatDeg } from "../src/sense/position/geo";
+import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
 import type { DemGrid, PositionInput } from "../src/sense/position/types";
@@ -440,4 +440,32 @@ test("30 км в лоб слышно без мачты, на 45 км подъё�
   const bump = computePosition({ ...face, marks: [{ km: 15, m: 209 }] }, false);
   assert.ok(bump.diffractionDb > near.diffractionDb + 2, `bump ${bump.diffractionDb} flat ${near.diffractionDb}`);
   assert.ok((bump.marginDb ?? 0) < (near.marginDb ?? 0), `bump margin ${bump.marginDb} vs ${near.marginDb}`);
+});
+
+test("карта держит широту и долготу одним шагом, север сверху", () => {
+  const frame = degreeFrame(
+    [{ lat: 50, lon: 30 }, { lat: 51, lon: 32 }],
+    900,
+    420,
+    36,
+  );
+  assert.ok(frame);
+  if (!frame) return;
+  const nw = xyOfDegree(frame, frame.north, frame.west);
+  const ne = xyOfDegree(frame, frame.north, frame.east);
+  const sw = xyOfDegree(frame, frame.south, frame.west);
+  assert.ok(Math.abs(nw.x - frame.x0) < 1e-6);
+  assert.ok(Math.abs(nw.y - frame.y0) < 1e-6);
+  assert.ok(Math.abs((ne.x - nw.x) - (sw.y - nw.y) * 2) < 1e-6, "два градуса долготы = два шага широты");
+  assert.ok(Math.abs(ne.y - nw.y) < 1e-6);
+  assert.ok(Math.abs(sw.x - nw.x) < 1e-6);
+  assert.ok(sw.y > nw.y);
+  const north = destination(50.45, 30.52, 0, 10);
+  const local = degreeFrame([{ lat: 50.45, lon: 30.52 }, north], 400, 400, 20);
+  assert.ok(local);
+  if (!local) return;
+  const here = xyOfDegree(local, 50.45, 30.52);
+  const ahead = xyOfDegree(local, north.lat, north.lon);
+  assert.ok(ahead.y < here.y, "север выше на холсте");
+  assert.ok(Math.abs(ahead.x - here.x) < 1, `долгота уехала на ${ahead.x - here.x}px`);
 });
