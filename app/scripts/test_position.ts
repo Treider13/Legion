@@ -665,4 +665,14 @@ test("клетки леса и домов идут по лучу и держат
     const cell = coverTilesOnPath(pos.lat, pos.lon, pos.lat, pos.lon).tiles[0];
     assert.ok(long.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), String(i));
   }
+  const shortEnd = destination(48.5, 37, 45, 1);
+  const short = coverTilesOnPath(48.5, 37, shortEnd.lat, shortEnd.lon);
+  assert.equal(short.truncated, false);
+  const shortDist = distanceKm(48.5, 37, shortEnd.lat, shortEnd.lon);
+  const shortAz = azimuthDeg(48.5, 37, shortEnd.lat, shortEnd.lon);
+  for (let i = 0; i <= 200; i++) {
+    const pos = i === 200 ? shortEnd : destination(48.5, 37, shortAz, (shortDist * i) / 200);
+    const cell = coverTilesOnPath(pos.lat, pos.lon, pos.lat, pos.lon).tiles[0];
+    assert.ok(short.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), `1 км ${i}`);
+  }
 });

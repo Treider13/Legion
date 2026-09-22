@@ -3,7 +3,7 @@
 
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
-import { azimuthDeg, destination, distanceKm } from "./geo";
+import { azimuthDeg, destination, distanceKm, RAY_SAMPLES } from "./geo";
 import type { PathBuilding, PathWood } from "./pathCover";
 
 const PLANET = "https://tiles.openfreemap.org/planet";
@@ -52,16 +52,21 @@ function tileXY(lat: number, lon: number, z: number): { x: number; y: number } {
   };
 }
 
-/** Клетки векторной карты по геодезической луча. Оба конца входят. Шаг короче клетки. */
+/** Клетки векторной карты по геодезической луча. Оба конца входят. Шаг 0,2 км и каждая точка профиля. */
 export function coverTilesOnPath(lat1: number, lon1: number, lat2: number, lon2: number, z = COVER_Z): { tiles: CoverTile[]; truncated: boolean } {
   const dist = distanceKm(lat1, lon1, lat2, lon2);
   const az = azimuthDeg(lat1, lon1, lat2, lon2);
-  const steps = Math.max(1, Math.ceil(dist / STEP_KM));
+  const coverSteps = Math.max(1, Math.ceil(dist / STEP_KM));
+  const profileSteps = RAY_SAMPLES - 1;
+  const marks = new Set<number>();
+  for (let i = 0; i <= coverSteps; i++) marks.add(i / coverSteps);
+  for (let i = 0; i <= profileSteps; i++) marks.add(i / profileSteps);
+  const fractions = [...marks].sort((a, b) => a - b);
   const tiles: CoverTile[] = [];
   const seen = new Set<string>();
-  for (let i = 0; i <= steps; i++) {
-    const atEnd = i === steps;
-    const pos = atEnd ? { lat: lat2, lon: lon2 } : destination(lat1, lon1, az, (dist * i) / steps);
+  for (const fraction of fractions) {
+    const atEnd = fraction === 1;
+    const pos = atEnd ? { lat: lat2, lon: lon2 } : destination(lat1, lon1, az, dist * fraction);
     const cell = tileXY(pos.lat, pos.lon, z);
     const key = `${cell.x},${cell.y}`;
     if (seen.has(key)) continue;

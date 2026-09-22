@@ -2,7 +2,7 @@
 // Сеть не нужна: рельеф — отметки, ровная земля или файл на диске.
 
 import { gas676DbPerKm } from "./gas676";
-import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM } from "./geo";
+import { angleOffDeg, azimuthDeg, destination, distanceKm, earthBulgeM, RAY_SAMPLES } from "./geo";
 import { buildingAt, vegetationDb, woodAt } from "./pathCover";
 import { patternGainDb } from "./pattern";
 import { sampleTiles } from "./srtm";
@@ -20,7 +20,7 @@ import type {
   VerdictKind,
 } from "./types";
 
-const SAMPLES = 201;
+const SAMPLES = RAY_SAMPLES;
 const RX1_MAX_MHZ = 6000;
 const FREQ_MIN = 100;
 const FREQ_MAX = 22000;

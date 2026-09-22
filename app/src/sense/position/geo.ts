@@ -187,6 +187,9 @@ export function xyOfDegree(frame: DegreeFrame, lat: number, lon: number): { x: n
   };
 }
 
+/** Точек профиля луча. Клетки леса берутся и с этих точек, не только с шага 0,2 км. */
+export const RAY_SAMPLES = 201;
+
 /** Прогиб радиолуча, k = 4/3. Метры. d1 и d2 — километры до концов. */
 export function earthBulgeM(d1Km: number, d2Km: number): number {
   return (d1Km * d2Km) / 16.989;
