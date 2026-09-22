@@ -6,6 +6,9 @@ import { frameTarget, frameZoom, modePitch, scalePercent } from "../src/componen
 import { encodeRgbPng, fillTerrariumRgb, heightOfTerrarium, parseTerrainTileUrl, terrariumOf, webMercatorLat, webMercatorLon } from "../src/components/position/terrariumTile";
 import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
+import { patternFromFiles, patternGainDb } from "../src/sense/position/pattern";
+import { buildingAt, vegetationDb } from "../src/sense/position/pathCover";
+import { parseSrtm1, sampleTiles, srtmTileName, tilesOnPath } from "../src/sense/position/srtm";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
 import type { DemGrid, PositionInput } from "../src/sense/position/types";
 import { parseUkraineDemGz } from "../src/sense/position/ukraineDem";
@@ -540,4 +543,50 @@ test("плитка 3D хранит те же метры, что решётка",
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   assert.equal(view.getUint32(16), 1);
   assert.equal(view.getUint32(20), 1);
+});
+
+test("лес по таблице P.833 не растёт бесконечно, дом поднимает землю", () => {
+  const atTable = vegetationDb(2117.5, 100);
+  const am = 34.1;
+  const expect = am * (1 - Math.exp((-100 * 0.34) / am));
+  assert.ok(Math.abs(atTable - expect) < 1e-6, String(atTable));
+  assert.ok(vegetationDb(2117.5, 100000) < am + 0.01);
+  assert.equal(vegetationDb(2400, 0), 0);
+  const house = { rings: [[[36.99, 55.19], [37.01, 55.19], [37.01, 55.21], [36.99, 55.21], [36.99, 55.19]]], heightM: 3, assumed: true };
+  assert.equal(buildingAt(37, 55.2, [house])?.assumed, true);
+  assert.equal(buildingAt(30, 50, [house]), null);
+  const flat = computePosition({
+    ...blocked(2400),
+    oppAimAzDeg: 180,
+    oppAimElDeg: 0,
+    marks: [],
+    flatM: 200,
+    ourGroundM: 200,
+    oppGroundM: 200,
+    buildings: [house],
+  }, false);
+  assert.ok(flat.buildingsOnPath > 0, `houses ${flat.buildingsOnPath}`);
+  assert.equal(flat.buildingsAssumed, flat.buildingsOnPath);
+  assert.ok(flat.profile.some((sample) => sample.terrainM >= 203), "дом не добавился к земле");
+});
+
+test("диаграмма SPLAT на оси равна паспортным дБи", () => {
+  const pattern = patternFromFiles("0\n0 1\n180 0.1\n", "-2 90\n0 1\n10 0.5\n");
+  assert.ok(pattern);
+  assert.ok(Math.abs(patternGainDb(pattern, 19, 0, 0) - 19) < 0.05);
+  assert.ok(patternGainDb(pattern, 19, 180, 0) < 19);
+});
+
+test("тайл SRTM 1 секунда называется как у SPLAT и читает высоту", () => {
+  assert.equal(srtmTileName(48.4, 37.2)?.name, "N48E037");
+  assert.equal(tilesOnPath(48.1, 37.1, 48.2, 37.2).length, 1);
+  const n = 3601;
+  const buf = new ArrayBuffer(n * n * 2);
+  const view = new DataView(buf);
+  view.setInt16(0, 123, false);
+  const grid = parseSrtm1(buf, 48, 37);
+  assert.ok(grid);
+  assert.ok(grid.cellM < 40);
+  const north = sampleTiles([grid], 49, 37);
+  assert.equal(north, 123);
 });

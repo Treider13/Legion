@@ -1,8 +1,12 @@
 import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { computePosition, searchSquare } from "../sense/position/compute";
 import { degreeFrame, formatDeg, xyOfDegree } from "../sense/position/geo";
+import { patternFromFiles, type AntennaPattern } from "../sense/position/pattern";
+import { loadSrtmPath } from "../sense/position/srtm";
+import { vegetationClamped } from "../sense/position/pathCover";
 import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
 import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
+import { loadPathCover, type PathCover } from "../sense/position/vectorCover";
 import { loadUkraineDem } from "../sense/position/ukraineDem";
 import "./position.css";
 import "./position/positionMap.css";
@@ -76,6 +80,11 @@ export function PositionPanel() {
   const [flatM, setFlatM] = useState("");
   const [cellM, setCellM] = useState("");
   const [clutter, setClutter] = useState(false);
+  const [tiles, setTiles] = useState<DemGrid[] | null>(null);
+  const [cover, setCover] = useState<PathCover | null>(null);
+  const [pathNote, setPathNote] = useState("");
+  const [ourPattern, setOurPattern] = useState<AntennaPattern | null>(null);
+  const [oppPattern, setOppPattern] = useState<AntennaPattern | null>(null);
   const [rain, setRain] = useState("");
   const [grid, setGrid] = useState<DemGrid | null>(null);
   const [ukraine, setUkraine] = useState<DemGrid | null>(null);
@@ -122,7 +131,12 @@ export function PositionPanel() {
     clutter,
     rainMmH: optionalNum(rain),
     terrainPending: pending && grid == null,
-  }), [ourLat, ourLon, ourGround, ourMapH, ourAgl, oppLat, oppLon, oppGround, oppMapH, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid]);
+    tiles: grid ? null : tiles,
+    buildings: cover?.buildings ?? null,
+    woods: cover?.woods ?? null,
+    ourPattern,
+    oppPattern,
+  }), [ourLat, ourLon, ourGround, ourMapH, ourAgl, oppLat, oppLon, oppGround, oppMapH, oppAgl, freq, ourKind, ourDbi, oppKind, oppDbi, ourAimAz, ourAimEl, oppAimAz, oppAimEl, powerW, threshold, marksText, flat, flatM, cellM, clutter, rain, activeGrid, pending, grid, tiles, cover, ourPattern, oppPattern]);
 
   const result = useMemo(() => computePosition(input), [input]);
   const profileRef = useRef<HTMLCanvasElement>(null);
@@ -164,6 +178,58 @@ export function PositionPanel() {
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    const lat1 = num(ourLat);
+    const lon1 = num(ourLon);
+    const lat2 = num(oppLat);
+    const lon2 = num(oppLon);
+    if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
+      setTiles(null);
+      setCover(null);
+      setPathNote("");
+      return;
+    }
+    const ac = new AbortController();
+    setPathNote("Читаем рельеф 30 м и карту леса с домами…");
+    void Promise.all([
+      grid ? Promise.resolve([] as DemGrid[]) : loadSrtmPath(lat1, lon1, lat2, lon2),
+      loadPathCover(lat1, lon1, lat2, lon2, ac.signal),
+    ]).then(([nextTiles, nextCover]) => {
+      if (ac.signal.aborted) return;
+      setTiles(nextTiles);
+      setCover(nextCover);
+      const dem = grid
+        ? "Свой файл высот ведёт землю."
+        : nextTiles.length > 0 ? `Рельеф пути около ${nextTiles[0].cellM.toFixed(0)} м.` : "Тайл 30 м не открылся, в счёте файл Украины.";
+      const wood = nextCover.woods.length > 0 ? ` Лес на карте: ${nextCover.woods.length}.` : " Лес на карте не найден.";
+      const homes = nextCover.buildings.length > 0 ? ` Дома на карте: ${nextCover.buildings.length}.` : " Дома на карте не найдены.";
+      const cut = nextCover.truncated ? " Кусок карты обрезан по ближайшим тайлам." : "";
+      setPathNote(dem + wood + homes + cut);
+    }).catch(() => {
+      if (ac.signal.aborted) return;
+      setTiles(null);
+      setCover(null);
+      setPathNote("Тайлы пути не открылись. В счёте файл Украины.");
+    });
+    return () => ac.abort();
+  }, [ourLat, ourLon, oppLat, oppLon, grid]);
+
+  const onPattern = async (files: FileList | null, set: (pattern: AntennaPattern | null) => void) => {
+    if (!files || files.length === 0) {
+      set(null);
+      return;
+    }
+    let az: string | null = null;
+    let el: string | null = null;
+    for (const file of files) {
+      const name = file.name.toLowerCase();
+      const text = await file.text();
+      if (name.endsWith(".el")) el = text;
+      else az = text;
+    }
+    set(patternFromFiles(az, el));
+  };
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
@@ -272,9 +338,16 @@ export function PositionPanel() {
           )}
           <label>Шаг карты, м<input value={cellM} onChange={(e) => setCellM(e.target.value)} placeholder="для файла можно пусто" /></label>
           <label>Дождь, мм/ч<input value={rain} onChange={(e) => setRain(e.target.value)} placeholder="пусто — сухой ответ" /></label>
+          <label className="pos-wide">Диаграмма наша, .az и .el
+            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOurPattern)} />
+          </label>
+          <label className="pos-wide">Диаграмма противника, .az и .el
+            <input type="file" accept=".az,.el" multiple onChange={(e) => void onPattern(e.target.files, setOppPattern)} />
+          </label>
+          <p className="panel-note pos-wide">{pathNote || "Рельеф 30 м, лес и дома подгрузятся, когда стоят обе точки. Свой файл высот их заменяет."}</p>
           <label className="pos-check">
             <input type="checkbox" checked={clutter} onChange={(e) => setClutter(e.target.checked)} />
-            По пути лес или дома
+            Считать, что весь путь закрыт лесом или домами
           </label>
           <label className="pos-wide">Файл рельефа, JSON или SRTM .hgt
             <input type="file" accept=".json,.hgt,application/json" onChange={(e) => void onFile(e.target.files?.[0])} />
@@ -343,6 +416,8 @@ export function PositionPanel() {
             <span>Потери без земли {result.fsplDb.toFixed(1)} дБ</span>
             <span>Потеря на холме {result.diffractionDb.toFixed(1)} дБ</span>
             <span>Поглощение в воздухе {result.gasDb.toFixed(1)} дБ</span>
+            <span>Лес {result.vegetationDb.toFixed(1)} дБ{vegetationClamped(num(freq)) && result.vegetationDb > 0 ? ", край таблицы P.833" : ""}</span>
+            <span>{result.buildingsOnPath === 0 ? "Дома на луче не встали" : `Дома на луче ${result.buildingsOnPath}, из них без высоты в карте ${result.buildingsAssumed} (взято 3 м)`}</span>
             <span>{result.rainDb == null ? "Дождь не задан" : `Дождь ${result.rainDb.toFixed(1)} дБ, в сухой ответ не входит`}</span>
             <span>{result.marginDb == null || result.verdict === "closed" ? "Запас здесь не смотрим" : `Запас ${result.marginDb.toFixed(1)} дБ`}</span>
             <span>Для чистой трассы, не для слышимости: касание {result.raiseGrazeM.toFixed(0)} м, норма {result.raiseNormM.toFixed(0)} м, чистая {result.raiseCleanM.toFixed(0)} м</span>
