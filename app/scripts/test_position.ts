@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, searchSquare, sideGainDb, smoothEarthDb } from "../src/sense/position/compute";
+import { frameTarget, frameZoom, modePitch, scalePercent } from "../src/components/position/mapStage";
 import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
@@ -468,4 +469,28 @@ test("карта держит широту и долготу одним шаго
   const ahead = xyOfDegree(local, north.lat, north.lon);
   assert.ok(ahead.y < here.y, "север выше на холсте");
   assert.ok(Math.abs(ahead.x - here.x) < 1, `долгота уехала на ${ahead.x - here.x}px`);
+});
+
+test("масштаб карты удваивается на шаг зума, 2D остаётся видом сверху", () => {
+  assert.equal(scalePercent(14, 14), 100);
+  assert.equal(scalePercent(15, 14), 200);
+  assert.equal(scalePercent(13, 14), 50);
+  assert.equal(scalePercent(Number.NaN, 14), 100);
+  assert.equal(scalePercent(1, 14), 1);
+  assert.equal(modePitch("2d"), 0);
+  assert.equal(modePitch("3d"), 60);
+  assert.equal(frameTarget([]), null);
+  const one = frameTarget([{ lat: 48.53, lon: 37.05 }]);
+  assert.equal(one?.kind, "point");
+  if (one?.kind === "point") assert.equal(one.zoom, 14);
+  const span = frameTarget([{ lat: 50, lon: 30 }, { lat: 48, lon: 32 }]);
+  assert.equal(span?.kind, "bounds");
+  if (span?.kind === "bounds") {
+    assert.ok(span.south < 48 && span.north > 50 && span.west < 30 && span.east > 32);
+  }
+  assert.equal(frameZoom(13.6, 14.4), 14.4);
+  assert.equal(frameZoom(13.6, 13.8), 13.6);
+  assert.equal(frameZoom(11, 11.4), 11);
+  assert.equal(frameZoom(15, 16), 15);
+  assert.equal(frameZoom(Number.NaN, 14), 14);
 });

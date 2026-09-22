@@ -6,6 +6,14 @@ import { defineConfig } from "vite";
 // LEGION_LITE=1 → lite-сборка для ESP32 (без 3D/R3F — Canvas2D fallback).
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // Иначе Vite прячет worker MapLibre и в dev сыпется 404.
+    exclude: ["maplibre-gl"],
+  },
+  worker: {
+    // MapLibre грузит worker как ES-модуль. Сборка iife для него не подходит.
+    format: "es",
+  },
   define: {
     __LEGION_LITE__: JSON.stringify(process.env.LEGION_LITE === "1"),
   },

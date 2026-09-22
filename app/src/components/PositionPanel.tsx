@@ -1,10 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { computePosition, searchSquare } from "../sense/position/compute";
 import { degreeFrame, formatDeg, xyOfDegree } from "../sense/position/geo";
 import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
 import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
 import { loadUkraineDem } from "../sense/position/ukraineDem";
 import "./position.css";
+import "./position/positionMap.css";
+
+const PositionMap = lazy(() => import("./position/PositionMap"));
+
+class PositionMapBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <div className="pos-stage pos-stage-wait">Карта не открылась. Разрез и счёт ниже на месте.</div>;
+    }
+    return this.props.children;
+  }
+}
+
+function finitePoint(lat: string, lon: string): { lat: number; lon: number } | null {
+  if (lat.trim() === "" || lon.trim() === "") return null;
+  const la = num(lat);
+  const lo = num(lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+  return { lat: la, lon: lo };
+}
 
 const KINDS: Array<{ id: AntennaKind; title: string }> = [
   { id: "whip", title: "Штырь" },
@@ -105,16 +132,18 @@ export function PositionPanel() {
     drawProfile(profileRef.current, result);
   }, [result]);
 
-  useEffect(() => {
+  const searchBox = useMemo(() => {
     const south = num(boxSouth);
     const north = num(boxNorth);
     const west = num(boxWest);
     const east = num(boxEast);
-    const box = [south, north, west, east].every(Number.isFinite) && south < north && west < east
-      ? { south, north, west, east }
-      : null;
-    drawMap(mapRef.current, result, input, box, picks);
-  }, [result, input, boxSouth, boxNorth, boxWest, boxEast, picks]);
+    if (![south, north, west, east].every(Number.isFinite) || south >= north || west >= east) return null;
+    return { south, north, west, east };
+  }, [boxSouth, boxNorth, boxWest, boxEast]);
+
+  useEffect(() => {
+    drawMap(mapRef.current, result, input, searchBox, picks);
+  }, [result, input, searchBox, picks]);
 
   useEffect(() => {
     let live = true;
@@ -185,11 +214,22 @@ export function PositionPanel() {
     <section className="panel">
       <span className="panel-title">ПОЗИЦИЯ // ДОЙДЁТ ЛИ СИГНАЛ ДО СТАНЦИИ ПРОТИВНИКА</span>
       <p className="panel-note">
-        Считает на этом компьютере. Интернет не нужен. Широта и долгота — в градусах, как на карте.
+        Счёт на этом компьютере, сеть ему не нужна. Карта ниже берёт снимок и подписи по сети. Широта и долгота — в градусах, как на карте.
         Сначала поставьте свою точку и точку противника. Квадрат ниже ищет, куда встать вместо нашей точки, и сам её не переносит.
         Укажите, в какую сторону противник смотрит на свой борт. Передатчик отсюда не включается.
       </p>
       <p className="panel-note">{frame}</p>
+      <PositionMapBoundary>
+        <Suspense fallback={<div className="pos-stage pos-stage-wait">Карта открывается…</div>}>
+          <PositionMap
+            our={finitePoint(ourLat, ourLon)}
+            opp={finitePoint(oppLat, oppLon)}
+            cells={result.map}
+            box={searchBox}
+            picks={picks}
+          />
+        </Suspense>
+      </PositionMapBoundary>
       <div className="pos-wrap">
         <div className="pos-fields">
           <label>Наша широта, градусы<input value={ourLat} placeholder="50.450100" onChange={(e) => setOurLat(e.target.value)} onBlur={() => blurDeg(ourLat, setOurLat)} /></label>
