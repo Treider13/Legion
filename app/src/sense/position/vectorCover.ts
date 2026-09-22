@@ -100,7 +100,8 @@ export interface PathCover {
 
 export async function loadPathCover(lat1: number, lon1: number, lat2: number, lon2: number, signal?: AbortSignal): Promise<PathCover> {
   const pattern = await template();
-  if (!pattern) return { buildings: [], woods: [], truncated: false };
+  if (signal?.aborted) return { buildings: [], woods: [], truncated: false };
+  if (!pattern) return { buildings: [], woods: [], truncated: true };
   const line = coverTilesOnPath(lat1, lon1, lat2, lon2);
   const tiles = line.tiles;
   const buildings: PathBuilding[] = [];

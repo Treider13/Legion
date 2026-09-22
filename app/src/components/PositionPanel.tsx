@@ -2,9 +2,9 @@ import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type R
 import { computePosition, searchSquare } from "../sense/position/compute";
 import { degreeFrame, formatDeg, xyOfDegree } from "../sense/position/geo";
 import { patternFromFiles, type AntennaPattern } from "../sense/position/pattern";
-import { loadSrtmPath, sampleTiles } from "../sense/position/srtm";
+import { loadSrtmPath, sampleTiles, type SrtmPath } from "../sense/position/srtm";
 import { vegetationClamped } from "../sense/position/pathCover";
-import { parseDemJson, parsePathMarks, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
+import { parseDemJson, parsePathMarks, parseSrtmHgt, parseTypedNumber, sampleDem, swCornerFromHgtName } from "../sense/position/terrain";
 import type { AntennaKind, DemGrid, PositionInput, PositionResult, ProfileSample, SitePick, VerdictKind } from "../sense/position/types";
 import { loadPathCover, type PathCover } from "../sense/position/vectorCover";
 import { loadUkraineDem } from "../sense/position/ukraineDem";
@@ -45,8 +45,7 @@ const KINDS: Array<{ id: AntennaKind; title: string }> = [
 ];
 
 function num(text: string): number {
-  const v = Number(text.trim().replace(",", "."));
-  return Number.isFinite(v) ? v : Number.NaN;
+  return parseTypedNumber(text);
 }
 
 function optionalNum(text: string): number | null {
@@ -103,7 +102,7 @@ export function PositionPanel() {
   const ourPatternGen = useRef(0);
   const oppPatternGen = useRef(0);
   const pointKey = `${ourLat}|${ourLon}|${oppLat}|${oppLon}`;
-  const coordsReady = [num(ourLat), num(ourLon), num(oppLat), num(oppLon)].every(Number.isFinite);
+  const coordsReady = finitePoint(ourLat, ourLon) != null && finitePoint(oppLat, oppLon) != null;
   const pathReady = coordsReady && pathKey === pointKey;
   const liveTiles = pathReady ? tiles : null;
   const liveCover = pathReady ? cover : null;
@@ -192,11 +191,9 @@ export function PositionPanel() {
   }, []);
 
   useEffect(() => {
-    const lat1 = num(ourLat);
-    const lon1 = num(ourLon);
-    const lat2 = num(oppLat);
-    const lon2 = num(oppLon);
-    if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
+    const ours = finitePoint(ourLat, ourLon);
+    const opps = finitePoint(oppLat, oppLon);
+    if (!ours || !opps) {
       setTiles(null);
       setCover(null);
       setPathKey("");
@@ -206,20 +203,28 @@ export function PositionPanel() {
     const ac = new AbortController();
     const key = `${ourLat}|${ourLon}|${oppLat}|${oppLon}`;
     setPathNote("Читаем рельеф 30 м и карту леса с домами…");
+    const emptyDem: SrtmPath = { grids: [], incomplete: false };
     void Promise.all([
-      grid ? Promise.resolve([] as DemGrid[]) : loadSrtmPath(lat1, lon1, lat2, lon2).catch(() => [] as DemGrid[]),
-      loadPathCover(lat1, lon1, lat2, lon2, ac.signal).catch(() => ({ buildings: [], woods: [], truncated: true }) satisfies PathCover),
+      grid ? Promise.resolve(emptyDem) : loadSrtmPath(ours.lat, ours.lon, opps.lat, opps.lon).catch(() => ({ grids: [], incomplete: true }) satisfies SrtmPath),
+      loadPathCover(ours.lat, ours.lon, opps.lat, opps.lon, ac.signal).catch(() => ({ buildings: [], woods: [], truncated: true }) satisfies PathCover),
     ]).then(([nextTiles, nextCover]) => {
       if (ac.signal.aborted) return;
-      setTiles(nextTiles);
+      setTiles(nextTiles.grids);
       setCover(nextCover);
       setPathKey(key);
       const dem = grid
         ? "Свой файл высот ведёт землю."
-        : nextTiles.length > 0 ? `Рельеф пути около ${nextTiles[0].cellM.toFixed(0)} м.` : "Тайл 30 м не открылся, в счёте файл Украины.";
-      const wood = nextCover.woods.length > 0 ? ` Лес на карте: ${nextCover.woods.length}.` : " Лес на карте не найден.";
-      const homes = nextCover.buildings.length > 0 ? ` Дома на карте: ${nextCover.buildings.length}.` : " Дома на карте не найдены.";
-      const cut = nextCover.truncated ? " Кусок карты обрезан по ближайшим тайлам." : "";
+        : nextTiles.grids.length === 0
+          ? "Тайл 30 м не открылся, в счёте файл Украины."
+          : nextTiles.incomplete
+            ? `Рельеф 30 м около ${nextTiles.grids[0].cellM.toFixed(0)} м покрыл не весь путь, дальше файл Украины.`
+            : `Рельеф пути около ${nextTiles.grids[0].cellM.toFixed(0)} м.`;
+      const mapFailed = nextCover.truncated && nextCover.woods.length === 0 && nextCover.buildings.length === 0;
+      const wood = mapFailed ? "" : nextCover.woods.length > 0 ? ` Лес на карте: ${nextCover.woods.length}.` : " Лес на карте не найден.";
+      const homes = mapFailed ? "" : nextCover.buildings.length > 0 ? ` Дома на карте: ${nextCover.buildings.length}.` : " Дома на карте не найдены.";
+      const cut = mapFailed
+        ? " Карта леса и домов не открылась."
+        : nextCover.truncated ? " Кусок карты обрезан по ближайшим тайлам." : "";
       setPathNote(dem + wood + homes + cut);
     }).catch(() => {
       if (ac.signal.aborted) return;

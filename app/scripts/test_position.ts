@@ -10,7 +10,7 @@ import { patternFromFiles, patternGainDb } from "../src/sense/position/pattern";
 import { buildingAt, vegetationDb } from "../src/sense/position/pathCover";
 import { coverTilesOnPath } from "../src/sense/position/vectorCover";
 import { parseSrtm1, sampleTiles, srtmTileName, tilesOnPath } from "../src/sense/position/srtm";
-import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
+import { parseDemJson, parseSrtmHgt, parseTypedNumber, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
 import type { DemGrid, PositionInput } from "../src/sense/position/types";
 import { parseUkraineDemGz } from "../src/sense/position/ukraineDem";
 
@@ -242,6 +242,22 @@ test("квадрат предлагает складку, не вершину", 
   const plain = searchSquare({ ...spot, ourGroundM: 100, oppGroundM: 100, grid: flat }, { south: 0, north: 0.24, west: 0, east: 0.24 });
   assert.equal(plain.picks.length, 0);
   assert.match(plain.note, /складки нет/);
+  const fine: DemGrid = {
+    lat0: 0,
+    lon0: 0,
+    nlat: 2,
+    nlon: 2,
+    dlat: 1,
+    dlon: 1,
+    cellM: 30,
+    heights: new Float32Array([2000, 2000, 2000, 2000]),
+  };
+  const wood = { rings: [[[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]] };
+  const withTile = searchSquare({ ...spot, tiles: [fine] }, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  const withWood = searchSquare({ ...spot, woods: [wood] }, { south: 0, north: 0.24, west: 0, east: 0.24 });
+  assert.deepEqual(withTile.picks.map((p) => p.marginDb), found.picks.map((p) => p.marginDb));
+  assert.deepEqual(withTile.picks.map((p) => p.groundM), found.picks.map((p) => p.groundM));
+  assert.deepEqual(withWood.picks.map((p) => p.marginDb), found.picks.map((p) => p.marginDb));
 });
 
 test("градусы WGS84 сходятся с известной геодезической задачей", () => {
@@ -590,11 +606,32 @@ test("диаграмма SPLAT на оси равна паспортным дБ�
   const patchFile = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19 }, false);
   const patchPlain = computePosition({ ...aimedAway, ourKind: "patch", ourDbi: 19, ourPattern: null }, false);
   assert.ok(patchFile.marginDb != null && patchPlain.marginDb != null && patchFile.marginDb < patchPlain.marginDb - 5);
+  const wrapped = patternFromFiles("99\n10 1\n180 0.1\n350 0.5\n", null);
+  assert.ok(wrapped);
+  const throughNorth = patternGainDb(wrapped, 19, 0, 0);
+  assert.ok(throughNorth < 19, `above peak ${throughNorth}`);
+  assert.ok(Math.abs(throughNorth - (19 + 20 * Math.log10(0.75))) < 0.05, String(throughNorth));
+});
+
+test("пустое поле градусов не становится нулём", () => {
+  assert.ok(Number.isNaN(parseTypedNumber("")));
+  assert.ok(Number.isNaN(parseTypedNumber("  ")));
+  assert.equal(parseTypedNumber("0"), 0);
+  assert.equal(parseTypedNumber("48,5"), 48.5);
 });
 
 test("тайл SRTM 1 секунда называется как у SPLAT и читает высоту", () => {
   assert.equal(srtmTileName(48.4, 37.2)?.name, "N48E037");
-  assert.equal(tilesOnPath(48.1, 37.1, 48.2, 37.2).length, 1);
+  const short = tilesOnPath(48.1, 37.1, 48.2, 37.2);
+  assert.equal(short.truncated, false);
+  assert.equal(short.tiles.length, 1);
+  const diagonal = tilesOnPath(46.05, 30.05, 48.95, 34.95);
+  assert.equal(diagonal.truncated, true);
+  assert.deepEqual(diagonal.tiles.map((tile) => tile.name), ["N46E030", "N46E031", "N47E031", "N47E032", "N47E033", "N48E033"]);
+  const west = tilesOnPath(50.45, 30.52, 49.84, 24.03);
+  assert.equal(west.truncated, true);
+  assert.deepEqual(west.tiles.map((tile) => tile.name), ["N50E030", "N50E029", "N50E028", "N50E027", "N50E026", "N50E025"]);
+  assert.equal(tilesOnPath(48.436446, 37.198056, 48.503238, 37.094063).tiles[0]?.name, "N48E037");
   const n = 3601;
   const buf = new ArrayBuffer(n * n * 2);
   const view = new DataView(buf);

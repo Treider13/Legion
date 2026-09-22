@@ -1,6 +1,7 @@
 // Тайл SRTM 1″ (~30 м), тот же .hgt, что читает SPLAT.
-// Берём только клетки на пути. Нет тайла — остаётся файл Украины.
+// Клетки — по геодезической луча. Нет тайла — остаётся файл Украины.
 
+import { azimuthDeg, destination, distanceKm } from "./geo";
 import { cellSizeM, sampleDem } from "./terrain";
 import type { DemGrid } from "./types";
 
@@ -21,18 +22,28 @@ export function srtmTileUrl(name: string): string {
   return `https://elevation-tiles-prod.s3.amazonaws.com/skadi/${name.slice(0, 3)}/${name}.hgt.gz`;
 }
 
-export function tilesOnPath(lat1: number, lon1: number, lat2: number, lon2: number): Array<{ name: string; swLat: number; swLon: number }> {
-  const out: Array<{ name: string; swLat: number; swLon: number }> = [];
+export interface SrtmTiles {
+  tiles: Array<{ name: string; swLat: number; swLon: number }>;
+  truncated: boolean;
+}
+
+/** Клетки градуса по той же геодезической, что радиолуч. Больше шести — префикс без дыр. */
+export function tilesOnPath(lat1: number, lon1: number, lat2: number, lon2: number): SrtmTiles {
+  const dist = distanceKm(lat1, lon1, lat2, lon2);
+  const az = azimuthDeg(lat1, lon1, lat2, lon2);
+  const steps = Math.max(200, Math.ceil(dist));
+  const tiles: SrtmTiles["tiles"] = [];
   const seen = new Set<string>();
-  for (let i = 0; i < 8; i++) {
-    const t = i / 7;
-    const tile = srtmTileName(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t);
+  for (let i = 0; i <= steps; i++) {
+    const atEnd = i === steps;
+    const pos = atEnd ? { lat: lat2, lon: lon2 } : destination(lat1, lon1, az, (dist * i) / steps);
+    const tile = srtmTileName(pos.lat, pos.lon);
     if (!tile || seen.has(tile.name)) continue;
     seen.add(tile.name);
-    out.push(tile);
-    if (out.length >= TILE_CAP) break;
+    tiles.push(tile);
   }
-  return out;
+  if (tiles.length <= TILE_CAP) return { tiles, truncated: false };
+  return { tiles: tiles.slice(0, TILE_CAP), truncated: true };
 }
 
 async function ungzip(bytes: ArrayBuffer): Promise<ArrayBuffer> {
@@ -98,10 +109,16 @@ export function loadSrtmTile(name: string, swLat: number, swLon: number): Promis
   return task;
 }
 
-export async function loadSrtmPath(lat1: number, lon1: number, lat2: number, lon2: number): Promise<DemGrid[]> {
-  const tiles = tilesOnPath(lat1, lon1, lat2, lon2);
-  const grids = await Promise.all(tiles.map((tile) => loadSrtmTile(tile.name, tile.swLat, tile.swLon)));
-  return grids.filter((grid): grid is DemGrid => grid != null);
+export interface SrtmPath {
+  grids: DemGrid[];
+  incomplete: boolean;
+}
+
+export async function loadSrtmPath(lat1: number, lon1: number, lat2: number, lon2: number): Promise<SrtmPath> {
+  const line = tilesOnPath(lat1, lon1, lat2, lon2);
+  const grids = await Promise.all(line.tiles.map((tile) => loadSrtmTile(tile.name, tile.swLat, tile.swLon)));
+  const ok = grids.filter((grid): grid is DemGrid => grid != null);
+  return { grids: ok, incomplete: line.truncated || ok.length !== line.tiles.length };
 }
 
 export function sampleTiles(tiles: readonly DemGrid[] | null | undefined, lat: number, lon: number): number | null {

@@ -878,6 +878,10 @@ export function searchSquare(input: PositionInput, box: SearchBox): SquareSearch
       ourGroundM: spot.h,
       marks: [],
       flatM: null,
+      // Складка выбрана по грубой решётке. Тайлы и полигоны прямого луча — про другую линию.
+      tiles: null,
+      buildings: null,
+      woods: null,
     };
     const result = computePosition(trial, false);
     if (result.verdict !== "open" && result.verdict !== "ridge") continue;

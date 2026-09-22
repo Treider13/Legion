@@ -48,13 +48,22 @@ function fieldAtCircle(cut: PatternCut[], deg: number): number {
     .map((row) => ({ deg: ((row.deg % 360) + 360) % 360, field: row.field }))
     .sort((a, b) => a.deg - b.deg);
   const target = ((deg % 360) + 360) % 360;
-  const ring = rows.concat({ deg: rows[0].deg + 360, field: rows[0].field });
-  let hi = 1;
-  while (hi < ring.length && ring[hi].deg < target) hi += 1;
-  const a = ring[hi - 1];
-  const b = ring[Math.min(hi, ring.length - 1)];
-  const span = b.deg - a.deg;
-  const t = span === 0 ? 0 : (target - a.deg) / span;
+  const exact = rows.find((row) => row.deg === target);
+  if (exact) return exact.field;
+  let lo = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].deg < target) lo = i;
+  }
+  const a = lo === -1 ? rows[rows.length - 1] : rows[lo];
+  const b = lo === -1 || lo + 1 >= rows.length ? rows[0] : rows[lo + 1];
+  let bDeg = b.deg;
+  let at = target;
+  if (bDeg <= a.deg) {
+    bDeg += 360;
+    if (at < a.deg) at += 360;
+  }
+  const span = bDeg - a.deg;
+  const t = span === 0 ? 0 : (at - a.deg) / span;
   return a.field + (b.field - a.field) * t;
 }
 

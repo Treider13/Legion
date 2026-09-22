@@ -106,6 +106,14 @@ export function parseDemJson(text: string): DemGrid | null {
   return grid;
 }
 
+/** Число из поля. Пустая строка — не ноль: Number("") в JS равен 0. */
+export function parseTypedNumber(text: string): number {
+  const trimmed = text.trim().replace(",", ".");
+  if (trimmed === "") return Number.NaN;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : Number.NaN;
+}
+
 export function parsePathMarks(text: string): TerrainMark[] {
   const marks: TerrainMark[] = [];
   for (const line of text.split(/\r?\n/)) {
