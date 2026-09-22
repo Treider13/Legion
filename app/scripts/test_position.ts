@@ -618,11 +618,14 @@ test("клетки леса и домов идут по лучу и держат
   const opp = coverTilesOnPath(oppLat, oppLon, oppLat, oppLon).tiles[0];
   assert.ok(hit.tiles.some((tile) => tile.x === ours.x && tile.y === ours.y));
   assert.ok(hit.tiles.some((tile) => tile.x === opp.x && tile.y === opp.y));
-  for (let i = 0; i <= 40; i++) {
-    const t = i / 40;
-    const lat = ourLat + (oppLat - ourLat) * t;
-    const lon = ourLon + (oppLon - ourLon) * t;
-    const cell = coverTilesOnPath(lat, lon, lat, lon).tiles[0];
-    assert.ok(hit.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), String(i));
+  const far = destination(48.4, 37.1, 45, 45);
+  const long = coverTilesOnPath(48.4, 37.1, far.lat, far.lon);
+  assert.equal(long.truncated, false);
+  const dist = distanceKm(48.4, 37.1, far.lat, far.lon);
+  const az = azimuthDeg(48.4, 37.1, far.lat, far.lon);
+  for (let i = 0; i <= 200; i++) {
+    const pos = destination(48.4, 37.1, az, (dist * i) / 200);
+    const cell = coverTilesOnPath(pos.lat, pos.lon, pos.lat, pos.lon).tiles[0];
+    assert.ok(long.tiles.some((tile) => tile.x === cell.x && tile.y === cell.y), String(i));
   }
 });

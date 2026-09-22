@@ -3,6 +3,7 @@
 
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
+import { azimuthDeg, destination, distanceKm } from "./geo";
 import type { PathBuilding, PathWood } from "./pathCover";
 
 const PLANET = "https://tiles.openfreemap.org/planet";
@@ -29,7 +30,8 @@ export interface CoverTile {
 }
 
 const COVER_Z = 14;
-const TILE_CAP = 48;
+const TILE_CAP = 128;
+const STEP_KM = 0.2;
 
 function tileXY(lat: number, lon: number, z: number): { x: number; y: number } {
   const n = 2 ** z;
@@ -43,62 +45,24 @@ function tileXY(lat: number, lon: number, z: number): { x: number; y: number } {
   };
 }
 
-/** Клетки векторной карты, которые пересекает отрезок. Оба конца входят. */
+/** Клетки векторной карты по геодезической луча. Оба конца входят. Шаг короче клетки. */
 export function coverTilesOnPath(lat1: number, lon1: number, lat2: number, lon2: number, z = COVER_Z): { tiles: CoverTile[]; truncated: boolean } {
-  const a = tileXY(lat1, lon1, z);
-  const b = tileXY(lat2, lon2, z);
+  const dist = distanceKm(lat1, lon1, lat2, lon2);
+  const az = azimuthDeg(lat1, lon1, lat2, lon2);
+  const steps = Math.max(1, Math.ceil(dist / STEP_KM));
   const tiles: CoverTile[] = [];
   const seen = new Set<string>();
-  const push = (x: number, y: number) => {
-    const key = `${x},${y}`;
-    if (seen.has(key)) return;
+  for (let i = 0; i <= steps; i++) {
+    const atEnd = i === steps;
+    const pos = atEnd ? { lat: lat2, lon: lon2 } : destination(lat1, lon1, az, (dist * i) / steps);
+    const cell = tileXY(pos.lat, pos.lon, z);
+    const key = `${cell.x},${cell.y}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    tiles.push({ x, y, z });
-  };
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const nx = Math.abs(dx);
-  const ny = Math.abs(dy);
-  const sx = Math.sign(dx);
-  const sy = Math.sign(dy);
-  let x = a.x;
-  let y = a.y;
-  let ix = 0;
-  let iy = 0;
-  push(x, y);
-  while (ix < nx || iy < ny) {
-    const lhs = (0.5 + ix) * ny;
-    const rhs = (0.5 + iy) * nx;
-    if (lhs < rhs) {
-      x += sx;
-      ix += 1;
-    } else if (lhs > rhs) {
-      y += sy;
-      iy += 1;
-    } else {
-      push(x + sx, y);
-      push(x, y + sy);
-      x += sx;
-      y += sy;
-      ix += 1;
-      iy += 1;
-    }
-    push(x, y);
+    tiles.push({ x: cell.x, y: cell.y, z });
   }
   if (tiles.length <= TILE_CAP) return { tiles, truncated: false };
-  const kept: CoverTile[] = [];
-  const keep = new Set<string>();
-  const take = (tile: CoverTile) => {
-    const key = `${tile.x},${tile.y}`;
-    if (keep.has(key)) return;
-    keep.add(key);
-    kept.push(tile);
-  };
-  take(tiles[0]);
-  take(tiles[tiles.length - 1]);
-  const room = TILE_CAP - kept.length;
-  for (let i = 1; i <= room; i++) take(tiles[Math.round((i * (tiles.length - 1)) / (room + 1))]);
-  return { tiles: kept, truncated: true };
+  return { tiles: tiles.slice(0, TILE_CAP), truncated: true };
 }
 
 function ringsOf(geometry: { type: string; coordinates: number[][][] | number[][][][] }): number[][][][] {
