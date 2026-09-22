@@ -158,7 +158,8 @@ function App() {
             <LiteEye />
           ) : Scene ? (
             <SceneBoundary>
-              <Suspense fallback={null}>{mount3d && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
+              {/* Лист закрывает глаз. Его WebGL рядом с картой оставляет пустой холст. */}
+              <Suspense fallback={null}>{mount3d && !settings && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
             </SceneBoundary>
           ) : null}
         </div>

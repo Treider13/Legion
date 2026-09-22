@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import Map, { Layer, Marker, ScaleControl, Source, type MapRef } from "@vis.gl/react-maplibre";
 import type { FeatureCollection, GeoJsonProperties, Geometry } from "geojson";
-import { setWorkerUrl, type LngLatLike, type Map as MapLibreMap } from "maplibre-gl";
+import { setWorkerUrl, type LngLatLike, type Map as MapLibreMap, type MapSourceDataEvent } from "maplibre-gl";
 import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { formatDeg } from "../../sense/position/geo";
 import type { MapCell, SearchBox, SitePick } from "../../sense/position/types";
@@ -76,7 +76,13 @@ function lngLatPair(center: LngLatLike | undefined, fallback: [number, number]):
   return fallback;
 }
 
-function applyPhoto(map: MapLibreMap, on: boolean) {
+function underPhoto(map: MapLibreMap, hidden: boolean) {
+  for (const id of UNDER_PHOTO) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", show(!hidden));
+  }
+}
+
+function applyPhoto(map: MapLibreMap, on: boolean, cover: boolean) {
   if (!map.getSource("satellite")) {
     map.addSource("satellite", {
       type: "raster",
@@ -100,9 +106,8 @@ function applyPhoto(map: MapLibreMap, on: boolean) {
   }
   if (!map.getLayer("satellite")) throw new Error("слой снимка не встал");
   map.setLayoutProperty("satellite", "visibility", show(on));
-  for (const id of UNDER_PHOTO) {
-    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", show(!on));
-  }
+  // Пока снимок не пришёл, землю не прячем: иначе холст остаётся пустым.
+  underPhoto(map, on && cover);
 }
 
 function applyBuildings(map: MapLibreMap, on: boolean) {
@@ -116,6 +121,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const modeRef = useRef<MapViewMode>("3d");
   const photoRef = useRef(true);
+  const satelliteCover = useRef(false);
   const buildingsRef = useRef(true);
   const homeZoom = useRef(UKRAINE_VIEW.zoom);
   const framing = useRef(false);
@@ -256,10 +262,17 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
   useEffect(() => {
     let stop = false;
     let hooked: MapLibreMap | null = null;
+    const onSatellite = (event: MapSourceDataEvent) => {
+      if (stop || event.sourceId !== "satellite" || event.sourceDataType !== "content") return;
+      satelliteCover.current = true;
+      if (!photoRef.current || !hooked) return;
+      underPhoto(hooked, true);
+    };
     const onStyle = () => {
       if (stop || !hooked) return;
+      satelliteCover.current = false;
       try {
-        applyPhoto(hooked, photoRef.current);
+        applyPhoto(hooked, photoRef.current, false);
         applyBuildings(hooked, buildingsRef.current);
         setPhotoError("");
       } catch (err) {
@@ -278,13 +291,14 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
         if (stop || hooked) return;
         hooked = map;
         try {
-          applyPhoto(map, photoRef.current);
+          applyPhoto(map, photoRef.current, satelliteCover.current);
           applyBuildings(map, buildingsRef.current);
           setPhotoError("");
         } catch (err) {
           setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
         }
         setReady(true);
+        map.on("sourcedata", onSatellite);
         map.on("style.load", onStyle);
       };
       if (map.getStyle()?.layers?.length) arm();
@@ -294,6 +308,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
     return () => {
       stop = true;
       hooked?.off("style.load", onStyle);
+      hooked?.off("sourcedata", onSatellite);
     };
   }, []);
 
@@ -326,7 +341,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
     const map = mapRef.current?.getMap();
     if (!map || !ready) return;
     try {
-      applyPhoto(map, photo);
+      applyPhoto(map, photo, satelliteCover.current);
       setPhotoError("");
     } catch (err) {
       setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
@@ -408,7 +423,6 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
           dragRotate={mode === "3d"}
           touchPitch={mode === "3d"}
           pitchWithRotate
-          canvasContextAttributes={{ antialias: true }}
           terrain={(relief ? { source: "terrain-dem", exaggeration: 1 } : null) as unknown as { source: string; exaggeration: number }}
           sky={{ "sky-color": "#c5d5e4", "horizon-color": "#f3efe6", "fog-color": "#d5dde4", "atmosphere-blend": 0.6 }}
           style={{ width: "100%", height: "100%" }}
