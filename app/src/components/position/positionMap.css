@@ -97,9 +97,8 @@
   gap: 6px;
   padding: 4px;
   border-radius: 999px;
-  background: rgba(10, 12, 14, 0.72);
+  background: rgba(10, 12, 14, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(10px);
 }
 
 .pos-tools button,
@@ -125,9 +124,8 @@
   max-width: 240px;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(10, 12, 14, 0.72);
+  background: rgba(10, 12, 14, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(10px);
 }
 
 .pos-card p {
