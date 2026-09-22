@@ -193,8 +193,8 @@ export function PositionPanel() {
     const ac = new AbortController();
     setPathNote("Читаем рельеф 30 м и карту леса с домами…");
     void Promise.all([
-      grid ? Promise.resolve([] as DemGrid[]) : loadSrtmPath(lat1, lon1, lat2, lon2),
-      loadPathCover(lat1, lon1, lat2, lon2, ac.signal),
+      grid ? Promise.resolve([] as DemGrid[]) : loadSrtmPath(lat1, lon1, lat2, lon2).catch(() => [] as DemGrid[]),
+      loadPathCover(lat1, lon1, lat2, lon2, ac.signal).catch(() => ({ buildings: [], woods: [], truncated: false }) satisfies PathCover),
     ]).then(([nextTiles, nextCover]) => {
       if (ac.signal.aborted) return;
       setTiles(nextTiles);

@@ -80,7 +80,12 @@ export async function loadPathCover(lat1: number, lon1: number, lat2: number, lo
   await Promise.all(tiles.map(async (tile) => {
     if (signal?.aborted) return;
     const url = pattern.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
-    const res = await fetch(url, { signal });
+    let res: Response;
+    try {
+      res = await fetch(url, { signal });
+    } catch {
+      return;
+    }
     if (!res.ok) return;
     const vector = new VectorTile(new PbfReader(await res.arrayBuffer()));
     for (const name of ["building", "landuse", "landcover"]) {
