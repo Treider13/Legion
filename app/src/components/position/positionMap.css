@@ -1,0 +1,279 @@
+.pos-stage {
+  position: relative;
+  height: min(68vh, 640px);
+  min-height: 420px;
+  margin: 0 0 16px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #141611;
+}
+
+.pos-stage:focus {
+  outline: none;
+}
+
+.pos-stage:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline-offset: -2px;
+}
+
+.pos-stage:fullscreen {
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+  margin: 0;
+}
+
+.pos-stage-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.pos-stage-wait {
+  display: grid;
+  place-items: center;
+  color: var(--lg-dim);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.pos-chrome {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.pos-chrome button,
+.pos-card,
+.pos-layers {
+  pointer-events: auto;
+}
+
+.pos-top {
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pos-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pos-brand strong {
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  font-weight: 500;
+  color: #f4f1ea;
+}
+
+.pos-brand span,
+.pos-card p,
+.pos-foot span,
+.pos-zoom button,
+.pos-tools button,
+.pos-layers label {
+  color: rgba(244, 241, 234, 0.72);
+}
+
+.pos-brand span {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pos-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(10, 12, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.pos-tools button,
+.pos-zoom button,
+.pos-layers label {
+  font: 11px/1 var(--lg-font-mono);
+  letter-spacing: 0.08em;
+  color: #f4f1ea;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.pos-tools button[aria-pressed="true"] {
+  background: rgba(244, 241, 234, 0.16);
+}
+
+.pos-card {
+  top: 62px;
+  left: 10px;
+  max-width: 240px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.pos-card p {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.pos-card strong {
+  display: block;
+  margin: 4px 0;
+  color: #f4f1ea;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.pos-badge {
+  top: 62px;
+  right: 10px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(10, 12, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f4f1ea;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.pos-badge i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #d7c4a1;
+  vertical-align: middle;
+}
+
+.pos-zoom {
+  right: 12px;
+  bottom: 78px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pos-zoom button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  background: rgba(10, 12, 14, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.pos-layers {
+  top: 58px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(10, 12, 14, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pos-layers label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.pos-foot {
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.pos-foot span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.pos-pin {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(8, 10, 14, 0.86);
+  color: #f4f1ea;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  font: 10px/1 var(--lg-font-mono);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.pos-pin.opp {
+  color: #ffc1c4;
+}
+
+.pos-stage .maplibregl-ctrl-bottom-right,
+.pos-stage .maplibregl-ctrl-bottom-left {
+  bottom: 36px;
+}
+
+.pos-stage .maplibregl-ctrl-attrib,
+.pos-stage .maplibregl-ctrl-scale {
+  background: rgba(8, 10, 14, 0.72);
+  color: rgba(244, 241, 234, 0.78);
+  font-family: var(--lg-font-mono);
+  font-size: 10px;
+}
+
+.pos-stage .maplibregl-ctrl-attrib a {
+  color: rgba(244, 241, 234, 0.9);
+}
+
+@media (max-width: 720px) {
+  .pos-stage {
+    height: 70vh;
+    min-height: 360px;
+  }
+
+  .pos-top {
+    flex-wrap: wrap;
+  }
+
+  .pos-card {
+    max-width: 48vw;
+  }
+
+  .pos-foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
