@@ -4,7 +4,7 @@ import type { FeatureCollection, GeoJsonProperties, Geometry } from "geojson";
 import { setWorkerUrl, type LngLatLike, type Map as MapLibreMap, type MapSourceDataEvent } from "maplibre-gl";
 import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { formatDeg } from "../../sense/position/geo";
-import type { MapCell, SearchBox, SitePick } from "../../sense/position/types";
+import type { DemGrid, MapCell, SearchBox, SitePick } from "../../sense/position/types";
 import {
   frameTarget,
   frameZoom,
@@ -16,6 +16,8 @@ import {
   type FrameTarget,
   type MapViewMode,
 } from "./mapStage";
+import { bindTerrainGrid } from "./terrainProtocol";
+import { TERRAIN_EXAGGERATION, TERRAIN_MAX_ZOOM, TERRAIN_TILE_PX, terrainTileKey } from "./terrariumTile";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./positionMap.css";
 
@@ -25,7 +27,6 @@ setWorkerUrl(maplibreWorker);
 
 const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const SATELLITE = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/{z}/{y}/{x}.jpg";
-const TERRAIN = "https://tiles.mapterhorn.com/tilejson.json";
 
 const UNDER_PHOTO = [
   "background",
@@ -52,6 +53,7 @@ interface Props {
   cells: MapCell[] | null;
   box: SearchBox | null;
   picks: SitePick[];
+  grid: DemGrid | null;
 }
 
 function collection(features: FeatureCollection["features"]): FeatureCollection<Geometry, GeoJsonProperties> {
@@ -116,7 +118,8 @@ function applyBuildings(map: MapLibreMap, on: boolean) {
   }
 }
 
-export default function PositionMap({ our, opp, cells, box, picks }: Props) {
+export default function PositionMap({ our, opp, cells, box, picks, grid }: Props) {
+  bindTerrainGrid(grid);
   const mapRef = useRef<MapRef>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const modeRef = useRef<MapViewMode>("3d");
@@ -423,7 +426,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
           dragRotate={mode === "3d"}
           touchPitch={mode === "3d"}
           pitchWithRotate
-          terrain={(relief ? { source: "terrain-dem", exaggeration: 1 } : null) as unknown as { source: string; exaggeration: number }}
+          terrain={(relief && grid ? { source: "terrain-dem", exaggeration: TERRAIN_EXAGGERATION } : null) as unknown as { source: string; exaggeration: number }}
           sky={{ "sky-color": "#c5d5e4", "horizon-color": "#f3efe6", "fog-color": "#d5dde4", "atmosphere-blend": 0.6 }}
           style={{ width: "100%", height: "100%" }}
           onMove={() => {
@@ -433,7 +436,16 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
             if (!framing.current) readScale();
           }}
         >
-          <Source id="terrain-dem" type="raster-dem" url={TERRAIN} tileSize={512} encoding="terrarium" maxzoom={12} />
+          {grid && (
+            <Source
+              id="terrain-dem"
+              type="raster-dem"
+              tiles={[`uadem://${terrainTileKey(grid)}/{z}/{x}/{y}.png`]}
+              tileSize={TERRAIN_TILE_PX}
+              encoding="terrarium"
+              maxzoom={TERRAIN_MAX_ZOOM}
+            />
+          )}
           <Source id="pos-link" type="geojson" data={linkData}>
             <Layer id="pos-link-line" type="line" layout={{ visibility: show(pathOn) }} paint={{ "line-color": "#5eead4", "line-width": 2 }} />
           </Source>

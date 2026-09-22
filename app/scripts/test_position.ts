@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, searchSquare, sideGainDb, smoothEarthDb } from "../src/sense/position/compute";
 import { frameTarget, frameZoom, modePitch, scalePercent } from "../src/components/position/mapStage";
+import { encodeRgbPng, fillTerrariumRgb, heightOfTerrarium, parseTerrainTileUrl, terrariumOf, webMercatorLat, webMercatorLon } from "../src/components/position/terrariumTile";
 import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
@@ -493,4 +494,50 @@ test("масштаб карты удваивается на шаг зума, 2D 
   assert.equal(frameZoom(11, 11.4), 11);
   assert.equal(frameZoom(15, 16), 15);
   assert.equal(frameZoom(Number.NaN, 14), 14);
+});
+
+test("плитка 3D хранит те же метры, что решётка", async () => {
+  const [r, g, b] = terrariumOf(250);
+  assert.ok(Math.abs(heightOfTerrarium(r, g, b) - 250) < 1e-6);
+  const flat: DemGrid = {
+    lat0: -80,
+    lon0: -180,
+    nlat: 2,
+    nlon: 2,
+    dlat: 160,
+    dlon: 360,
+    cellM: 1,
+    heights: [250, 250, 250, 250],
+  };
+  const rgb = fillTerrariumRgb(flat, 0, 0, 0, 2);
+  for (let i = 0; i < rgb.length; i += 3) {
+    assert.ok(Math.abs(heightOfTerrarium(rgb[i], rgb[i + 1], rgb[i + 2]) - 250) < 0.01);
+  }
+  const ridge: DemGrid = {
+    lat0: 0,
+    lon0: 0,
+    nlat: 4,
+    nlon: 2,
+    dlat: 20,
+    dlon: 40,
+    cellM: 1,
+    heights: [10, 10, 10, 10, 90, 90, 90, 90],
+  };
+  const southTile = fillTerrariumRgb(ridge, 5, 18, 14, 4);
+  const northTile = fillTerrariumRgb(ridge, 5, 18, 10, 4);
+  const southLat = webMercatorLat(14 + 3.5 / 4, 5);
+  const northLat = webMercatorLat(10 + 0.5 / 4, 5);
+  const lon = webMercatorLon(18 + 0.5 / 4, 5);
+  assert.ok(southLat > 0 && southLat < 20 && lon > 0 && lon < 40);
+  assert.ok(northLat > 40 && northLat < 60);
+  const southPx = (3 * 4 + 0) * 3;
+  assert.ok(Math.abs(heightOfTerrarium(southTile[southPx], southTile[southPx + 1], southTile[southPx + 2]) - 10) < 0.2);
+  assert.ok(Math.abs(heightOfTerrarium(northTile[0], northTile[1], northTile[2]) - 90) < 0.2);
+  assert.deepEqual(parseTerrainTileUrl("uadem://44_22_3_3/5/18/10.png"), { z: 5, x: 18, y: 10 });
+  const png = new Uint8Array(await encodeRgbPng(Uint8Array.of(1, 2, 3), 1, 1));
+  assert.equal(png[0], 137);
+  assert.equal(String.fromCharCode(png[12], png[13], png[14], png[15]), "IHDR");
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  assert.equal(view.getUint32(16), 1);
+  assert.equal(view.getUint32(20), 1);
 });
