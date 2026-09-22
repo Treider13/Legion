@@ -27,6 +27,20 @@ export function scalePercent(zoom: number, homeZoom: number): number {
   return Math.max(1, Math.round(100 * 2 ** (zoom - homeZoom)));
 }
 
+/**
+ * Зум кадра по двум расчётам MapLibre: свободный и более тесный.
+ * Объём домов в стиле начинается с 14. Поднимаем кадр только если точки
+ * всё ещё влезают в тесный расчёт, иначе оставляем тот зум, где видны оба конца.
+ */
+export function frameZoom(fitted: number, tight: number | null): number {
+  if (!Number.isFinite(fitted)) return 14;
+  const capped = Math.min(Math.max(fitted, 0), 16);
+  if (capped >= 13.2 && capped < 14 && tight != null && Number.isFinite(tight) && tight >= 14) {
+    return Math.min(tight, 15.2);
+  }
+  return capped;
+}
+
 export function motionMs(): number {
   if (typeof matchMedia !== "function") return 700;
   return matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 700;

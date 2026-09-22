@@ -45,8 +45,8 @@
 }
 
 .pos-chrome button,
-.pos-card,
-.pos-layers {
+.pos-layers,
+.pos-layers label {
   pointer-events: auto;
 }
 

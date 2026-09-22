@@ -10,6 +10,10 @@ export default defineConfig({
     // Иначе Vite прячет worker MapLibre и в dev сыпется 404.
     exclude: ["maplibre-gl"],
   },
+  worker: {
+    // MapLibre грузит worker как ES-модуль. Сборка iife для него не подходит.
+    format: "es",
+  },
   define: {
     __LEGION_LITE__: JSON.stringify(process.env.LEGION_LITE === "1"),
   },

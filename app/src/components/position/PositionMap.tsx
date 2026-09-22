@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import Map, { Layer, Marker, ScaleControl, Source, type MapRef } from "@vis.gl/react-maplibre";
 import type { FeatureCollection, GeoJsonProperties, Geometry } from "geojson";
-import type { Map as MapLibreMap } from "maplibre-gl";
+import { setWorkerUrl, type LngLatLike, type Map as MapLibreMap } from "maplibre-gl";
+import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { formatDeg } from "../../sense/position/geo";
 import type { MapCell, SearchBox, SitePick } from "../../sense/position/types";
 import {
   frameTarget,
+  frameZoom,
   MAX_PITCH,
   modePitch,
   motionMs,
@@ -16,6 +18,10 @@ import {
 } from "./mapStage";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./positionMap.css";
+
+// Сборка кладёт код MapLibre в свой чанк. Рядом с ним файла worker нет,
+// поэтому адрес задаём сами: Vite упаковывает worker вместе с приложением.
+setWorkerUrl(maplibreWorker);
 
 const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const SATELLITE = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/{z}/{y}/{x}.jpg";
@@ -36,6 +42,7 @@ const UNDER_PHOTO = [
   "landuse_hospital",
   "landuse_school",
   "landcover_sand",
+  "park_outline",
   "water",
 ];
 
@@ -53,6 +60,20 @@ function collection(features: FeatureCollection["features"]): FeatureCollection<
 
 function show(on: boolean): "visible" | "none" {
   return on ? "visible" : "none";
+}
+
+function lngLatPair(center: LngLatLike | undefined, fallback: [number, number]): [number, number] {
+  if (Array.isArray(center) && center.length >= 2) {
+    const lon = Number(center[0]);
+    const lat = Number(center[1]);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) return [lon, lat];
+  }
+  if (center && typeof center === "object" && "lng" in center && "lat" in center) {
+    const lon = Number(center.lng);
+    const lat = Number(center.lat);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) return [lon, lat];
+  }
+  return fallback;
 }
 
 function applyPhoto(map: MapLibreMap, on: boolean) {
@@ -98,6 +119,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
   const buildingsRef = useRef(true);
   const homeZoom = useRef(UKRAINE_VIEW.zoom);
   const framing = useRef(false);
+  const frameToken = useRef(0);
   const frameEnd = useRef<(() => void) | null>(null);
   const [mode, setMode] = useState<MapViewMode>("3d");
   const [ready, setReady] = useState(false);
@@ -162,6 +184,17 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
     const zoom = mapRef.current?.getZoom();
     if (zoom == null) return;
     setPercent(scalePercent(zoom, homeZoom.current));
+    const raw = mapRef.current?.getMap();
+    const el = stageRef.current;
+    if (!raw || !el) return;
+    el.dataset.posZoom = raw.getZoom().toFixed(2);
+    el.dataset.posPitch = raw.getPitch().toFixed(1);
+    el.dataset.posBearing = raw.getBearing().toFixed(1);
+    el.dataset.posTerrain = raw.getTerrain() ? "on" : "off";
+    const sat = raw.getLayer("satellite");
+    el.dataset.posSat = sat ? String(raw.getLayoutProperty("satellite", "visibility") ?? "visible") : "missing";
+    const buildingsLayer = raw.getLayer("building-3d");
+    el.dataset.posBuildings = buildingsLayer ? String(raw.getLayoutProperty("building-3d", "visibility") ?? "visible") : "missing";
   };
 
   const goFrame = (target: FrameTarget | null) => {
@@ -171,36 +204,53 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
     const pitch = modePitch(modeRef.current);
     const bearing = modeRef.current === "2d" ? 0 : raw.getBearing();
     const duration = motionMs();
+    const token = ++frameToken.current;
     if (frameEnd.current) {
       raw.off("moveend", frameEnd.current);
       frameEnd.current = null;
     }
+    // stop() сам шлёт moveend прошлой анимации. Слушатель снимаем до него,
+    // иначе конец старого кадра запишет масштаб нового.
     raw.stop();
+
+    const fallback: [number, number] = [UKRAINE_VIEW.longitude, UKRAINE_VIEW.latitude];
+    let center = fallback;
+    let zoom = UKRAINE_VIEW.zoom;
+    let nextBearing = 0;
+    if (target?.kind === "point") {
+      center = [target.longitude, target.latitude];
+      zoom = target.zoom;
+      nextBearing = bearing;
+    } else if (target?.kind === "bounds") {
+      const bounds: [[number, number], [number, number]] = [
+        [target.west, target.south],
+        [target.east, target.north],
+      ];
+      const fitted = raw.cameraForBounds(bounds, { padding: 72, maxZoom: 16, bearing, pitch });
+      const tight = raw.cameraForBounds(bounds, { padding: 36, maxZoom: 16, bearing, pitch });
+      const fittedZoom = fitted?.zoom ?? raw.getZoom();
+      zoom = frameZoom(fittedZoom, tight?.zoom ?? null);
+      const chosen = zoom === fittedZoom ? fitted : tight;
+      center = lngLatPair(chosen?.center, [(target.west + target.east) / 2, (target.south + target.north) / 2]);
+      nextBearing = bearing;
+    }
+    // 100% — этот кадр, а не то место, где камера оказалась по дороге.
+    homeZoom.current = zoom;
     framing.current = true;
-    const onEnd = () => {
+    const finish = () => {
+      if (token !== frameToken.current) return;
       frameEnd.current = null;
       framing.current = false;
-      homeZoom.current = raw.getZoom();
-      setPercent(100);
+      const actual = raw.getZoom();
+      readScale();
+      setPercent(Math.abs(actual - zoom) < 0.08 ? 100 : scalePercent(actual, zoom));
     };
-    frameEnd.current = onEnd;
-    if (!target) {
-      map.easeTo({
-        center: [UKRAINE_VIEW.longitude, UKRAINE_VIEW.latitude],
-        zoom: UKRAINE_VIEW.zoom,
-        bearing: 0,
-        pitch,
-        duration,
-      });
-    } else if (target.kind === "point") {
-      map.easeTo({ center: [target.longitude, target.latitude], zoom: target.zoom, bearing, pitch, duration });
-    } else {
-      map.fitBounds(
-        [[target.west, target.south], [target.east, target.north]],
-        { padding: 80, maxZoom: 15.5, bearing, pitch, duration },
-      );
-    }
-    window.requestAnimationFrame(() => raw.once("moveend", onEnd));
+    frameEnd.current = finish;
+    map.easeTo({ center, zoom, bearing: nextBearing, pitch, duration, essential: true });
+    // duration 0 (в том числе «меньше движения») кончает полёт внутри easeTo,
+    // раньше любого requestAnimationFrame. Иначе флаг кадра залипает и масштаб молчит.
+    if (!raw.isMoving()) finish();
+    else raw.once("moveend", finish);
   };
 
   useEffect(() => {
@@ -210,28 +260,35 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
       if (stop || !hooked) return;
       try {
         applyPhoto(hooked, photoRef.current);
+        applyBuildings(hooked, buildingsRef.current);
         setPhotoError("");
       } catch (err) {
         setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
       }
     };
+    let frames = 0;
     const watch = () => {
       if (stop) return;
       const map = mapRef.current?.getMap();
-      if (!map || !map.getStyle()?.layers?.length) {
-        window.requestAnimationFrame(watch);
+      if (!map) {
+        if (++frames < 180) window.requestAnimationFrame(watch);
         return;
       }
-      hooked = map;
-      try {
-        applyPhoto(map, photoRef.current);
-        applyBuildings(map, buildingsRef.current);
-        setPhotoError("");
-      } catch (err) {
-        setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
-      }
-      setReady(true);
-      map.on("style.load", onStyle);
+      const arm = () => {
+        if (stop || hooked) return;
+        hooked = map;
+        try {
+          applyPhoto(map, photoRef.current);
+          applyBuildings(map, buildingsRef.current);
+          setPhotoError("");
+        } catch (err) {
+          setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
+        }
+        setReady(true);
+        map.on("style.load", onStyle);
+      };
+      if (map.getStyle()?.layers?.length) arm();
+      else map.once("style.load", arm);
     };
     watch();
     return () => {
@@ -254,6 +311,7 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
       pitch: modePitch(mode),
       bearing: mode === "2d" ? 0 : map.getBearing(),
       duration: motionMs(),
+      essential: true,
     });
   }, [mode, ready]);
 
@@ -267,19 +325,12 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map || !ready) return;
-    const apply = () => {
-      try {
-        applyPhoto(map, photoRef.current);
-        setPhotoError("");
-      } catch (err) {
-        setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
-      }
-    };
-    apply();
-    map.on("style.load", apply);
-    return () => {
-      map.off("style.load", apply);
-    };
+    try {
+      applyPhoto(map, photo);
+      setPhotoError("");
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : "снимок не открылся");
+    }
   }, [photo, ready]);
 
   useEffect(() => {
@@ -299,8 +350,21 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select")) return;
+      event.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const onKey = (e: ReactKeyboardEvent) => {
-    const tag = (e.target as HTMLElement | null)?.tagName;
+    const target = e.target as HTMLElement | null;
+    const tag = target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.key === "2") setMode("2d");
     if (e.key === "3") setMode("3d");
@@ -308,6 +372,8 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
       e.stopPropagation();
       setLayersOpen(false);
     }
+    // На холсте те же клавиши уже ловит MapLibre. Второй zoomIn удваивал бы шаг.
+    if (target?.closest(".maplibregl-canvas, .maplibregl-map")) return;
     if (e.key === "+" || e.key === "=") {
       e.preventDefault();
       mapRef.current?.zoomIn({ duration: motionMs() });
@@ -347,6 +413,9 @@ export default function PositionMap({ our, opp, cells, box, picks }: Props) {
           sky={{ "sky-color": "#c5d5e4", "horizon-color": "#f3efe6", "fog-color": "#d5dde4", "atmosphere-blend": 0.6 }}
           style={{ width: "100%", height: "100%" }}
           onMove={() => {
+            if (!framing.current) readScale();
+          }}
+          onIdle={() => {
             if (!framing.current) readScale();
           }}
         >

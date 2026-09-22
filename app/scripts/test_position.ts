@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { computePosition, fresnelRadiusM, gasDbPerKm, knifeEdgeDb, rainDbPerKm, searchSquare, sideGainDb, smoothEarthDb } from "../src/sense/position/compute";
-import { frameTarget, modePitch, scalePercent } from "../src/components/position/mapStage";
+import { frameTarget, frameZoom, modePitch, scalePercent } from "../src/components/position/mapStage";
 import { azimuthDeg, degreeFrame, destination, distanceKm, formatDeg, xyOfDegree } from "../src/sense/position/geo";
 import { modeOf } from "../src/sense/modes";
 import { parseDemJson, parseSrtmHgt, sampleDem, swCornerFromHgtName } from "../src/sense/position/terrain";
@@ -488,4 +488,9 @@ test("масштаб карты удваивается на шаг зума, 2D 
   if (span?.kind === "bounds") {
     assert.ok(span.south < 48 && span.north > 50 && span.west < 30 && span.east > 32);
   }
+  assert.equal(frameZoom(13.6, 14.4), 14.4);
+  assert.equal(frameZoom(13.6, 13.8), 13.6);
+  assert.equal(frameZoom(11, 11.4), 11);
+  assert.equal(frameZoom(15, 16), 15);
+  assert.equal(frameZoom(Number.NaN, 14), 14);
 });
