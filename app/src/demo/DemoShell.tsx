@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from "react";
 
 import "../App.css";
 import "../components/cinema/cinema.css";
@@ -23,6 +23,29 @@ import { useCue } from "./useCue";
 import { DEMO_ESP_DRAW_MS, DEMO_LOOK_MHZ, espSweepNext, hostTxWalker, isOpenLoop } from "./walk";
 
 const Scene = lazy(() => import("../three/Scene").then((m) => ({ default: m.Scene })));
+
+const DemoSky = memo(function DemoSky({
+  mount,
+  settings,
+  tier,
+  motion,
+}: {
+  mount: boolean;
+  settings: boolean;
+  tier: "low" | "high";
+  motion: boolean;
+}) {
+  if (!mount || settings) return null;
+  return (
+    <SceneBoundary>
+      <Suspense fallback={null}>
+        <Scene tier={tier} graphite={{ motion }} />
+      </Suspense>
+    </SceneBoundary>
+  );
+});
+
+const PAINT_MS = 200;
 
 const ESP32_TABS = new Set(["synth", "corridor", "pa", "esp32Flash"]);
 
@@ -91,8 +114,12 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     if (corridorDraw && bandOk) {
       let cur = lo;
       setWalkMhz(cur);
+      let last = performance.now();
       const id = window.setInterval(() => {
         cur = espSweepNext(cur, lo, hi);
+        const now = performance.now();
+        if (now - last < PAINT_MS) return;
+        last = now;
         setWalkMhz(cur);
       }, DEMO_ESP_DRAW_MS);
       return () => window.clearInterval(id);
@@ -111,23 +138,33 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
         return;
       }
       const walker = makeSoloWalker(plan, 1);
-      const step = () => {
+      let last = 0;
+      const step = (force: boolean) => {
         const next = walker.next().centerMhz;
-        if (next) setWalkMhz(next);
+        if (!next) return;
+        const now = performance.now();
+        if (!force && now - last < PAINT_MS) return;
+        last = now;
+        setWalkMhz(next);
       };
-      step();
+      step(true);
       if (!plan.hop) return;
-      const id = window.setInterval(step, plan.dwellMs);
+      const id = window.setInterval(() => step(false), plan.dwellMs);
       return () => window.clearInterval(id);
     }
     if (openLoop && bandOk && isOpenLoop(pattern)) {
       const walker = hostTxWalker(pattern, lo, hi, lookMhz, analog);
-      const step = () => {
+      let last = 0;
+      const step = (force: boolean) => {
         const next = walker.next().centerMhz;
-        if (next) setWalkMhz(next);
+        if (!next) return;
+        const now = performance.now();
+        if (!force && now - last < PAINT_MS) return;
+        last = now;
+        setWalkMhz(next);
       };
-      step();
-      const id = window.setInterval(step, walker.tickMs);
+      step(true);
+      const id = window.setInterval(() => step(false), walker.tickMs);
       return () => window.clearInterval(id);
     }
     setWalkMhz(null);
@@ -229,9 +266,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
       <section className="hero" id="graphite-overview">
         <div className="graphite-backdrop" aria-hidden="true" />
         <div className="hero-canvas">
-          <SceneBoundary>
-            <Suspense fallback={null}>{mount3d && !settings && <Scene tier={tier} graphite={{ motion }} />}</Suspense>
-          </SceneBoundary>
+          <DemoSky mount={mount3d} settings={settings} tier={tier} motion={motion} />
         </div>
         <div className="hero-overlay">
           <header className="hero-header">
