@@ -49,6 +49,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     if (!capture) return;
     setF1(String(capture.loHz / 1e6));
     setF2(String(capture.hiHz / 1e6));
+    setScanning(true);
   }, [capture]);
 
   useEffect(() => {
@@ -67,23 +68,25 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
   const hi = parseFloat(f2);
   const range = Number.isFinite(lo) && Number.isFinite(hi) ? { f1: lo, f2: hi } : null;
   const center = range ? (range.f1 + range.f2) / 2 : 100;
-  const showTrace = Boolean(capture && scanning && pattern === "auto" && mode === "sdr" && !fpgaArmed);
+  const hostRx = Boolean(capture && pattern === "auto" && mode === "sdr" && !fpgaArmed && (scanning || transmitArmed));
+  const showTrace = hostRx;
+  const rxMhz = hostRx && capture ? capture.peakHz / 1e6 : null;
   const live = scanning || transmitArmed || corridorRunning || fpgaArmed;
 
   const hero = heroStatusLine({
-    scanRunning: scanning && pattern === "auto" && !fpgaArmed,
-    transmitArmed,
+    scanRunning: hostRx && !transmitArmed,
+    transmitArmed: transmitArmed && !fpgaArmed,
     corridorRunning,
     signalTxActive: false,
     fpgaArmed,
     fpgaBusy: false,
     fpgaMode,
     fpgaStatus: null,
-    lastForwardMhz: transmitArmed ? center : null,
-    lastInterceptMhz: showTrace && capture ? capture.peakHz / 1e6 : null,
-    scanCenterMhz: scanning ? center : null,
+    lastForwardMhz: transmitArmed ? (rxMhz ?? center) : null,
+    lastInterceptMhz: rxMhz,
+    scanCenterMhz: hostRx ? center : null,
     telemFreq: null,
-    freqMhz: String(center),
+    freqMhz: String(rxMhz ?? center),
   });
 
   const attackSlides = useMemo(() => {
@@ -114,8 +117,8 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
   const cue = useCue(attackSlides, cuePaused, showTrace ? "attack" : "wait");
   const slide = attackSlides.find((item) => item.key === cue.key) ?? attackSlides[0];
 
-  const read = showTrace && capture
-    ? `${(capture.peakHz / 1e6).toFixed(3)} МГц · водопад · слушает`
+  const read = showTrace && rxMhz != null
+    ? `${rxMhz.toFixed(3)} МГц · ${transmitArmed ? "RX → TX · на усилитель" : "водопад · слушает"}`
     : fpgaArmed && fpgaMode === "nco"
       ? `${center.toFixed(3)} МГц · FPGA`
       : fpgaArmed
@@ -128,9 +131,11 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
 
   const whisper = fpgaArmed
     ? "Умная атака / FPGA: хост-сканер не в круге. Плата в демо не подключена."
-    : scanning
-      ? "Атака: сканер крутит снимок. Передача включается кнопкой «Передать» и на плату не уходит."
-      : "Запустить → коридор → умная атака, эфир+FPGA или только FPGA.";
+    : hostRx && transmitArmed && rxMhz != null
+      ? `RX поймал ${rxMhz.toFixed(3)} МГц в снимке. TX несёт эту частоту.`
+      : hostRx && rxMhz != null
+        ? `Снимок уже на сканере. RX видит ${rxMhz.toFixed(3)} МГц. «Передать» ставит её на TX.`
+        : "Запустить → коридор → умная атака, эфир+FPGA или только FPGA.";
 
   const openWorkspace = (id: DemoWorkspace) => {
     setWorkspace(id);

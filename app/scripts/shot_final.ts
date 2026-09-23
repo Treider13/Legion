@@ -8,10 +8,7 @@ async function main(): Promise<void> {
   });
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 900 });
-  await page.evaluateOnNewDocument(() => {
-    sessionStorage.setItem("legion_booted", "1");
-    sessionStorage.setItem("legion_contour", "live");
-  });
+  await page.evaluateOnNewDocument(() => sessionStorage.setItem("legion_booted", "1"));
   await page.goto("http://localhost:5173/?tier=high", { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".hero", { timeout: 20000 });
   await new Promise((r) => setTimeout(r, 2500));

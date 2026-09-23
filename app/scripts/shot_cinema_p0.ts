@@ -8,10 +8,7 @@ async function main(): Promise<void> {
   });
   const p = await b.newPage();
   await p.setViewport({ width: 1440, height: 900 });
-  await p.evaluateOnNewDocument(() => {
-    sessionStorage.setItem("legion_booted", "1");
-    sessionStorage.setItem("legion_contour", "live");
-  });
+  await p.evaluateOnNewDocument(() => sessionStorage.setItem("legion_booted", "1"));
   await p.goto("http://localhost:5173", { waitUntil: "domcontentloaded" });
   await new Promise((r) => setTimeout(r, 2500));
   await p.screenshot({ path: "/tmp/legion_shots/p0_hero_status.png" });
