@@ -174,6 +174,34 @@ export function DemoWaterfall({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const frame = useRef(0);
+  const sheet = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!capture) {
+      sheet.current = null;
+      return;
+    }
+    const bmp = document.createElement("canvas");
+    bmp.width = capture.fftSize;
+    bmp.height = capture.frameCount;
+    const btx = bmp.getContext("2d");
+    if (!btx) return;
+    const img = btx.createImageData(bmp.width, bmp.height);
+    for (let row = 0; row < capture.frameCount; row++) {
+      for (let i = 0; i < capture.fftSize; i++) {
+        const db = capture.frames[row * capture.fftSize + i];
+        const t = Math.max(0, Math.min(1, (db + 2) / 28));
+        const p = (row * bmp.width + i) * 4;
+        img.data[p] = Math.round(8 + t * 210);
+        img.data[p + 1] = Math.round(16 + t * 200);
+        img.data[p + 2] = Math.round(22 + t * 190);
+        img.data[p + 3] = 255;
+      }
+    }
+    btx.putImageData(img, 0, 0);
+    sheet.current = bmp;
+  }, [capture]);
+
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
@@ -189,24 +217,28 @@ export function DemoWaterfall({
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = canvas.clientWidth || 600;
       const cssH = canvas.clientHeight || 116;
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
+      const w = Math.floor(cssW * dpr);
+      const h = Math.floor(cssH * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = "#07080c";
       ctx.fillRect(0, 0, cssW, cssH);
-      if (showTrace && capture) {
-        const rows = Math.max(1, Math.floor(cssH));
-        for (let y = 0; y < rows; y++) {
-          const src = (frame.current + y) % capture.frameCount;
-          for (let x = 0; x < cssW; x += 2) {
-            const mhz = f1 + (x / cssW) * (f2 - f1);
-            const bin = Math.round(((mhz * 1e6 - capture.meta.centerHz) / capture.meta.sampleRate) * capture.fftSize + capture.fftSize / 2);
-            const db = bin >= 0 && bin < capture.fftSize ? capture.frames[src * capture.fftSize + bin] : -8;
-            const t = Math.max(0, Math.min(1, (db + 2) / 28));
-            ctx.fillStyle = `rgb(${Math.round(8 + t * 210)}, ${Math.round(16 + t * 200)}, ${Math.round(22 + t * 190)})`;
-            ctx.fillRect(x, y, 2, 1);
-          }
-        }
+      const bmp = sheet.current;
+      if (showTrace && capture && bmp) {
+        const span = Math.max(1e-6, f2 - f1);
+        const x0 = ((capture.loHz / 1e6 - f1) / span) * cssW;
+        const x1 = ((capture.hiHz / 1e6 - f1) / span) * cssW;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(bmp, x0, 0, Math.max(1, x1 - x0), cssH);
+        const y = ((frame.current + 0.5) / capture.frameCount) * cssH;
+        ctx.strokeStyle = "#e9eef7";
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(cssW, y);
+        ctx.stroke();
       }
       raf = requestAnimationFrame(draw);
     };
