@@ -365,12 +365,28 @@
 
   .demo-nav {
     flex-direction: row;
+    flex-wrap: nowrap;
     overflow-x: auto;
-    gap: 18px;
+    gap: 14px;
+    padding-bottom: 4px;
   }
 
   .demo-nav > div {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
     min-width: max-content;
+  }
+
+  .demo-nav .demo-kicker {
+    margin: 0 4px 0 0;
+  }
+
+  .demo-nav button {
+    width: auto;
+    margin-top: 0;
+    white-space: nowrap;
   }
 
   .demo-big {
@@ -379,5 +395,9 @@
 
   .demo-root {
     padding: 16px;
+  }
+
+  .demo-stage {
+    min-height: 220px;
   }
 }
