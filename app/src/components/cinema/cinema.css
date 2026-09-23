@@ -190,12 +190,18 @@ button.cinema-mode {
   cursor: not-allowed;
 }
 
+.cinema-go-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
 button.cinema-go {
   appearance: none;
   cursor: pointer;
-  min-width: 168px;
+  min-width: 148px;
   min-height: 52px;
-  padding: 0 28px;
+  padding: 0 22px;
   border: 1px solid #efe8dc;
   background: #efe8dc;
   color: #111318;
@@ -515,7 +521,12 @@ button.cinema-wave.on:hover:not(:disabled) {
     justify-content: space-between;
   }
 
-  .cinema-go {
+  .cinema-go-row {
+    flex-direction: column;
+  }
+
+  .cinema-go,
+  .cinema-go-row > button.cinema-go {
     width: 100%;
   }
 

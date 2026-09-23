@@ -8,7 +8,10 @@ import "./App.css";
 import "./components/cinema/cinema.css";
 import "./components/graphite/graphite.css";
 import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChrome";
+import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
+import { cinemaIsLive, runCinemaStop } from "./components/cinema/run";
+import { catalogById } from "./sdr/catalog";
 import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
@@ -62,6 +65,17 @@ function App() {
   const setWorkspace = useLegion((s) => s.setWorkspace);
   const transportKind = useLegion((s) => s.transportKind);
   const sl22 = transportKind === "htool-sl22";
+  const sdrId = useLegion((s) => s.sdrId);
+  const openedIface = useLegion((s) => s.sdrOpened?.iface);
+  const link = connectionLabel(openedIface ?? catalogById(sdrId)?.iface);
+  const connection =
+    mode === "sdr"
+      ? sl22
+        ? { value: "SDR", note: "подключение" }
+        : link
+      : sl22
+        ? { value: "HTOOL SL22", note: "подключение" }
+        : { value: "USB", note: "ESP32 · подключение USB" };
 
   useEffect(() => {
     if (!booted) return;
@@ -166,16 +180,27 @@ function App() {
         <div className="hero-overlay">
           <header className="hero-header">
             <span className="hero-logo">ЛЕГИОН</span>
-            <GraphiteNav onSettings={() => setSettings(true)} motion={motion} reduced={reduced} onMotion={toggleMotion} />
-            <span className="hero-sub">
-              {mode === "sdr"
-                ? sl22
-                  ? "SDR"
-                  : "SDR · Ethernet"
-                : sl22
-                  ? "HTOOL SL22"
-                  : "ESP32 · USB"}
-            </span>
+            <GraphiteNav
+              onSettings={() => setSettings(true)}
+              motion={motion}
+              reduced={reduced}
+              onMotion={toggleMotion}
+              live={cinemaIsLive({
+                scanRunning,
+                transmitArmed,
+                corridorRunning,
+                signalTxActive,
+                fpgaArmed,
+                fpgaBusy,
+                fpgaStopPending,
+              })}
+              onStart={() => setGate(true)}
+              onStop={() => void runCinemaStop()}
+              transmitting={transmitArmed}
+              onTransmit={() => void useLegion.getState().startTransmit()}
+              onTransmitStop={() => void useLegion.getState().stopTransmit()}
+            />
+            <span className="hero-sub">{connection.value}</span>
           </header>
           <div className="graphite-hero-caption" aria-hidden="true">РАДИО<br/>ТЕХНОЛОГИИ<br/>НАБЛЮДЕНИЕ<br/>АНАЛИЗ</div>
           <div className={`hero-status st-${hero.kind}`} role="status" aria-live="polite">
@@ -186,11 +211,10 @@ function App() {
       </section>
 
       <GraphiteConsole
-        source={mode === "sdr" ? (sl22 ? "SDR" : "SDR · Ethernet") : (sl22 ? "HTOOL SL22" : "ESP32 · USB")}
+        source={connection.value}
+        sourceNote={connection.note}
         range={formatDisplayRange(range)}
         rangeNote={rangeBandCount ? `границы из списка (${rangeBandCount})` : "границы F1–F2"}
-        motion={motion}
-        lite={__LEGION_LITE__}
         spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
         history={<FrequencyField />}
       />
