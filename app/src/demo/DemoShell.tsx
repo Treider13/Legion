@@ -12,13 +12,15 @@ import { formatDisplayRange } from "../components/displayRange";
 import { heroStatusLine } from "../components/cinema/status";
 import { useDeviceTier } from "../hooks/useDeviceTier";
 import { catalogById } from "../sdr/catalog";
-import type { SdrWalkPattern } from "../sense/modes";
+import { makeSoloWalker, planFpgaSoloWalk } from "../sense/fpgaSoloWalk";
+import { modeConflict, patternLabelRu, type SdrWalkPattern } from "../sense/modes";
 import { DemoGate } from "./DemoGate";
 import { DemoScope, DemoWaterfall } from "./DemoScope";
 import { DemoSettings, type DemoWorkspace } from "./DemoSettings";
-import { slidesFor } from "./modes";
+import { slidesFor, type DemoModeId } from "./modes";
 import type { CaptureView } from "./recording";
 import { useCue } from "./useCue";
+import { DEMO_ESP_DRAW_MS, DEMO_LOOK_MHZ, espSweepNext, hostTxWalker, isOpenLoop } from "./walk";
 
 const Scene = lazy(() => import("../three/Scene").then((m) => ({ default: m.Scene })));
 
@@ -44,6 +46,10 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
   const [corridorRunning, setCorridorRunning] = useState(false);
   const [f1, setF1] = useState(capture ? String(capture.loHz / 1e6) : "96");
   const [f2, setF2] = useState(capture ? String(capture.hiHz / 1e6) : "104");
+  const [lookText, setLookText] = useState(String(DEMO_LOOK_MHZ));
+  const [walkMhz, setWalkMhz] = useState<number | null>(null);
+  const [startPath, setStartPath] = useState<"auto" | "air" | "solo" | "esp32" | null>(null);
+  const [refuse, setRefuse] = useState("");
 
   useEffect(() => {
     if (!capture) return;
@@ -62,17 +68,72 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     return () => clearTimeout(t);
   }, [booted]);
 
-  const link = connectionLabel(catalogById("bladerf-micro-xa4")?.iface);
+  const board = catalogById("bladerf-micro-xa4");
+  const link = connectionLabel(board?.iface);
+  const analog = board?.analogBwMhz ?? 56;
   const connection = mode === "sdr" ? link : { value: "USB", note: "ESP32 · подключение USB" };
   const lo = parseFloat(f1);
   const hi = parseFloat(f2);
+  const lookRaw = parseFloat(lookText);
+  const lookMhz = Number.isFinite(lookRaw) && lookRaw > 0 ? lookRaw : DEMO_LOOK_MHZ;
   const range = Number.isFinite(lo) && Number.isFinite(hi) ? { f1: lo, f2: hi } : null;
   const center = range ? (range.f1 + range.f2) / 2 : 100;
   const hostRx = Boolean(capture && pattern === "auto" && mode === "sdr" && !fpgaArmed && (scanning || transmitArmed));
   const showTrace = hostRx;
   const rxMhz = hostRx && capture ? capture.peakHz / 1e6 : null;
+  const openLoop = mode === "sdr" && !fpgaArmed && transmitArmed && isOpenLoop(pattern);
+  const solo = mode === "sdr" && fpgaArmed && fpgaMode === "nco";
+  const corridorDraw = mode === "esp32" && corridorRunning;
   const live = scanning || transmitArmed || corridorRunning || fpgaArmed;
 
+  useEffect(() => {
+    const bandOk = Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo && lo > 0;
+    if (corridorDraw && bandOk) {
+      let cur = lo;
+      setWalkMhz(cur);
+      const id = window.setInterval(() => {
+        cur = espSweepNext(cur, lo, hi);
+        setWalkMhz(cur);
+      }, DEMO_ESP_DRAW_MS);
+      return () => window.clearInterval(id);
+    }
+    if (solo && bandOk) {
+      const plan = planFpgaSoloWalk({
+        f1Mhz: lo,
+        f2Mhz: hi,
+        windowMhz: lookMhz,
+        analogMaxMhz: analog,
+        pattern: "sweep",
+        wave: "tone",
+      });
+      if (!plan.ok || plan.centers.length === 0) {
+        setWalkMhz(null);
+        return;
+      }
+      const walker = makeSoloWalker(plan, 1);
+      const step = () => {
+        const next = walker.next().centerMhz;
+        if (next) setWalkMhz(next);
+      };
+      step();
+      if (!plan.hop) return;
+      const id = window.setInterval(step, plan.dwellMs);
+      return () => window.clearInterval(id);
+    }
+    if (openLoop && bandOk && isOpenLoop(pattern)) {
+      const walker = hostTxWalker(pattern, lo, hi, lookMhz, analog);
+      const step = () => {
+        const next = walker.next().centerMhz;
+        if (next) setWalkMhz(next);
+      };
+      step();
+      const id = window.setInterval(step, walker.tickMs);
+      return () => window.clearInterval(id);
+    }
+    setWalkMhz(null);
+  }, [analog, corridorDraw, hi, lo, lookMhz, openLoop, pattern, solo]);
+
+  const moving = openLoop || solo || corridorDraw ? walkMhz : null;
   const hero = heroStatusLine({
     scanRunning: hostRx && !transmitArmed,
     transmitArmed: transmitArmed && !fpgaArmed,
@@ -82,60 +143,79 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     fpgaBusy: false,
     fpgaMode,
     fpgaStatus: null,
-    lastForwardMhz: transmitArmed ? (rxMhz ?? center) : null,
+    lastForwardMhz: solo || openLoop ? (moving ?? center) : transmitArmed ? (rxMhz ?? center) : null,
     lastInterceptMhz: rxMhz,
     scanCenterMhz: hostRx ? center : null,
-    telemFreq: null,
-    freqMhz: String(rxMhz ?? center),
+    telemFreq: corridorDraw ? moving : null,
+    freqMhz: String(moving ?? rxMhz ?? center),
   });
 
+  const cueId: DemoModeId | "wait" = showTrace
+    ? "attack"
+    : openLoop && isOpenLoop(pattern)
+      ? pattern
+      : solo
+        ? "solo"
+        : corridorDraw
+          ? "esp32"
+          : fpgaArmed
+            ? startPath === "air" ? "air" : "fpga"
+            : "wait";
+
   const attackSlides = useMemo(() => {
-    if (!capture || !showTrace) {
-      return [{
-        key: "wait",
-        kicker: "Помощник",
-        title: "Ждёт сигнал",
-        text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 4 секунды.",
-        why: "",
-        freqMhz: null as number | null,
-        typeLabel: null as string | null,
-      }];
-    }
+    const wait = [{
+      key: "wait",
+      kicker: "Помощник",
+      title: "Ждёт сигнал",
+      text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 4 секунды.",
+      why: "",
+      freqMhz: null as number | null,
+      typeLabel: null as string | null,
+    }];
+    if (!capture || cueId === "wait") return wait;
     const peak = capture.peakHz / 1e6;
-    return slidesFor("attack", capture).map((slide) => ({
+    return slidesFor(cueId, capture).map((slide) => ({
       key: slide.key,
       kicker: slide.kicker,
       title: slide.title,
       text: slide.text,
       why: "",
-      freqMhz: peak,
-      typeLabel: "энергия",
+      freqMhz: cueId === "attack" ? peak : null,
+      typeLabel: cueId === "attack" ? "энергия" : null,
     }));
-  }, [capture, showTrace]);
+  }, [capture, cueId]);
 
   const [cuePaused, setCuePaused] = useState(false);
-  const cue = useCue(attackSlides, cuePaused, showTrace ? "attack" : "wait");
+  const cue = useCue(attackSlides, cuePaused, cueId);
   const slide = attackSlides.find((item) => item.key === cue.key) ?? attackSlides[0];
 
   const read = showTrace && rxMhz != null
     ? `${rxMhz.toFixed(3)} МГц · ${transmitArmed ? "RX → TX · на усилитель" : "водопад · слушает"}`
-    : fpgaArmed && fpgaMode === "nco"
-      ? `${center.toFixed(3)} МГц · FPGA`
-      : fpgaArmed
-        ? `${center.toFixed(3)} МГц · взгляд+гейт, не спектр`
-        : corridorRunning
-          ? `${center.toFixed(3)} МГц · коридор`
-          : transmitArmed
-            ? `${center.toFixed(3)} МГц · на усилитель`
+    : moving != null && solo
+      ? `${moving.toFixed(3)} МГц · FPGA · тон`
+      : moving != null && corridorDraw
+        ? `${moving.toFixed(3)} МГц · коридор`
+        : moving != null && openLoop
+          ? `${moving.toFixed(3)} МГц · на усилитель`
+          : fpgaArmed
+            ? `${center.toFixed(3)} МГц · нет телеметрии гейта`
             : "—";
 
-  const whisper = fpgaArmed
-    ? "Умная атака / FPGA: хост-сканер не в круге. Плата в демо не подключена."
-    : hostRx && transmitArmed && rxMhz != null
-      ? `RX поймал ${rxMhz.toFixed(3)} МГц в снимке. TX несёт эту частоту.`
-      : hostRx && rxMhz != null
-        ? `Снимок уже на сканере. RX видит ${rxMhz.toFixed(3)} МГц. «Передать» ставит её на TX.`
-        : "Запустить → коридор → умная атака, эфир+FPGA или только FPGA.";
+  const whisper = refuse
+    ? refuse
+    : solo && moving != null
+      ? `Только FPGA: тон ${moving.toFixed(3)} МГц по сетке. На плату команда не уходит.`
+      : fpgaArmed
+        ? "Умная атака / эфир: хост-сканер не в круге. Платы нет — гейт без телеметрии, ретрансляцию не рисуем."
+        : hostRx && transmitArmed && rxMhz != null
+          ? `RX поймал ${rxMhz.toFixed(3)} МГц в снимке. TX несёт эту частоту.`
+          : hostRx && rxMhz != null
+            ? `Снимок уже на сканере. RX видит ${rxMhz.toFixed(3)} МГц. «Передать» ставит её на TX.`
+            : openLoop && moving != null && isOpenLoop(pattern)
+              ? `${patternLabelRu(pattern)}: TX ${moving.toFixed(3)} МГц, шаг ${lookMhz} МГц. Сканер не участвует. На плату команда не уходит.`
+              : corridorDraw && moving != null
+                ? `ESP32: синтезатор ${moving.toFixed(3)} МГц, шаг 1 МГц. На рисунке шаг 200 мс (в прошивке 10 мс). По USB команда не уходит.`
+                : "Запустить → коридор → умная атака, эфир+FPGA или только FPGA.";
 
   const openWorkspace = (id: DemoWorkspace) => {
     setWorkspace(id);
@@ -241,14 +321,14 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
           {attackSlides.length > 1 && <span key={`meter-${slide.key}`} className="graphite-assist-meter" aria-hidden="true" />}
         </section>
         <div className="graphite-spectrum">
-          <DemoScope f1={lo} f2={hi} capture={capture} showTrace={showTrace} scanning={showTrace} />
+          <DemoScope f1={lo} f2={hi} capture={capture} showTrace={showTrace} scanning={showTrace} markerMhz={showTrace ? null : moving} />
         </div>
         <section className="graphite-history" id="graphite-history" aria-label="История спектра">
           <header>
             <span>История спектра</span>
             <small>Штатное отображение данных</small>
           </header>
-          <DemoWaterfall f1={lo} f2={hi} capture={capture} showTrace={showTrace} read={read} live={live} />
+          <DemoWaterfall f1={lo} f2={hi} capture={capture} showTrace={showTrace} read={read} live={live} markerMhz={showTrace ? null : moving} />
         </section>
       </section>
 
@@ -277,14 +357,26 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
         </div>
         <div className="cinema-go-row">
           {live ? (
-            <button type="button" className="cinema-go stop" onClick={() => { setScanning(false); setFpgaArmed(false); setCorridorRunning(false); setTransmitArmed(false); }}>Стоп</button>
+            <button type="button" className="cinema-go stop" onClick={() => { setScanning(false); setFpgaArmed(false); setCorridorRunning(false); setTransmitArmed(false); setRefuse(""); }}>Стоп</button>
           ) : (
             <button type="button" className="cinema-go" onClick={() => setGate(true)}>Запустить</button>
           )}
           {transmitArmed ? (
-            <button type="button" className="cinema-go stop" onClick={() => setTransmitArmed(false)}>Стоп передачу</button>
+            <button type="button" className="cinema-go stop" onClick={() => { setTransmitArmed(false); setRefuse(""); }}>Стоп передачу</button>
           ) : (
-            <button type="button" className="cinema-go" onClick={() => setTransmitArmed(true)}>Передать</button>
+            <button type="button" className="cinema-go" onClick={() => {
+              const blocked = modeConflict("sdr", corridorRunning, false, fpgaArmed);
+              if (fpgaArmed) {
+                setRefuse("ПЕРЕДАТЬ: FPGA ARM занял USB — сначала Стоп. Это хост-путь, не круг платы.");
+                return;
+              }
+              if (blocked) {
+                setRefuse(blocked);
+                return;
+              }
+              setRefuse("");
+              setTransmitArmed(true);
+            }}>Передать</button>
           )}
         </div>
         <div className="cinema-dock-end">
@@ -305,6 +397,8 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
             setF2(run.f2);
             setGate(false);
             setTransmitArmed(false);
+            setRefuse("");
+            setStartPath(run.path);
             if (run.path === "esp32") {
               setCorridorRunning(true);
               setScanning(false);
@@ -330,7 +424,14 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
           pattern={pattern}
           scanning={scanning}
           onWorkspace={openWorkspace}
-          onPattern={(next) => { setPattern(next); setScanning(false); }}
+          lookText={lookText}
+          busy={live}
+          onLook={setLookText}
+          onPattern={(next) => {
+            setPattern(next);
+            setScanning(false);
+            if (next === "fpga") setTransmitArmed(false);
+          }}
           onScan={() => setScanning((value) => !value)}
           onClose={() => setSettings(false)}
         />

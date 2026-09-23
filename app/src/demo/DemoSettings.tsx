@@ -26,8 +26,11 @@ export function DemoSettings({
   workspace,
   pattern,
   scanning,
+  lookText,
+  busy,
   onWorkspace,
   onPattern,
+  onLook,
   onScan,
   onClose,
 }: {
@@ -35,8 +38,11 @@ export function DemoSettings({
   workspace: DemoWorkspace;
   pattern: SdrWalkPattern;
   scanning: boolean;
+  lookText: string;
+  busy: boolean;
   onWorkspace: (id: DemoWorkspace) => void;
   onPattern: (pattern: SdrWalkPattern) => void;
+  onLook: (value: string) => void;
   onScan: () => void;
   onClose: () => void;
 }) {
@@ -100,7 +106,7 @@ export function DemoSettings({
                 <div className="corr-grid">
                   <label>
                     РЕЖИМ
-                    <select aria-label="Режим работы SDR" value={pattern} onChange={(e) => onPattern(e.target.value as SdrWalkPattern)}>
+                    <select aria-label="Режим работы SDR" value={pattern} disabled={busy} onChange={(e) => onPattern(e.target.value as SdrWalkPattern)}>
                       <option value="auto">{patternOptionRu("auto")}</option>
                       <option value="fpga">{patternOptionRu("fpga")}</option>
                       <option value="sweep">{patternOptionRu("sweep")}</option>
@@ -109,6 +115,14 @@ export function DemoSettings({
                     </select>
                   </label>
                 </div>
+                {(pattern === "sweep" || pattern === "band" || pattern === "hop") && (
+                  <div className="corr-grid">
+                    <label>
+                      ШАГ TX МГц
+                      <input aria-label="Шаг TX" inputMode="decimal" value={lookText} disabled={busy} onChange={(e) => onLook(e.target.value)} />
+                    </label>
+                  </div>
+                )}
                 {pattern === "auto" && (
                   <button type="button" className={scanning ? "btn-danger" : "btn-primary"} onClick={onScan}>
                     {scanning ? "СТОП СКАН" : "СКАНИРОВАТЬ"}

@@ -8,14 +8,18 @@ export function DemoScope({
   capture,
   showTrace,
   scanning,
+  markerMhz,
 }: {
   f1: number;
   f2: number;
   capture: CaptureView | null;
   showTrace: boolean;
   scanning: boolean;
+  markerMhz?: number | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const markerRef = useRef(markerMhz);
+  markerRef.current = markerMhz;
   const [readout, setReadout] = useState("наведите — частота и относительный уровень");
   const [peakOn, setPeakOn] = useState(true);
   const [minOn, setMinOn] = useState(false);
@@ -107,6 +111,17 @@ export function DemoScope({
           ctx.stroke();
         }
       }
+      const mark = markerRef.current;
+      if (!showTrace && mark != null && Number.isFinite(mark) && mark >= f1 && mark <= f2) {
+        const px = padL + ((mark - f1) / span) * plotW;
+        ctx.strokeStyle = "#f5c16c";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(px, padT);
+        ctx.lineTo(px, padT + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -125,7 +140,7 @@ export function DemoScope({
 
   const peak =
     showTrace && capture
-      ? `пик ${ (capture.peakHz / 1e6).toFixed(3) } · ${capture.peakDb.toFixed(1)} дБ (отн.) · 3дБ ${(capture.widthHz / 1e6).toFixed(2)} МГц`
+      ? `пик ${ (capture.peakHz / 1e6).toFixed(3) } · ${capture.peakDb.toFixed(1)} дБ (отн.) · −6 дБ ${(capture.widthHz / 1e6).toFixed(2)} МГц`
       : "пик —";
 
   return (
@@ -164,6 +179,7 @@ export function DemoWaterfall({
   showTrace,
   read,
   live,
+  markerMhz,
 }: {
   f1: number;
   f2: number;
@@ -171,10 +187,13 @@ export function DemoWaterfall({
   showTrace: boolean;
   read: string;
   live: boolean;
+  markerMhz?: number | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const frame = useRef(0);
   const sheet = useRef<HTMLCanvasElement | null>(null);
+  const markerRef = useRef(markerMhz);
+  markerRef.current = markerMhz;
 
   useEffect(() => {
     if (!capture) {
@@ -238,6 +257,16 @@ export function DemoWaterfall({
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(cssW, y);
+        ctx.stroke();
+      }
+      const mark = markerRef.current;
+      if (!showTrace && mark != null && Number.isFinite(mark)) {
+        const span = Math.max(1e-6, f2 - f1);
+        const x = ((mark - f1) / span) * cssW;
+        ctx.strokeStyle = "#f5c16c";
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, cssH);
         ctx.stroke();
       }
       raf = requestAnimationFrame(draw);
