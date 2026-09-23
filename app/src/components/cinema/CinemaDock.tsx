@@ -1,5 +1,7 @@
+import { catalogById } from "../../sdr/catalog";
 import { modeOf } from "../../sense/modes";
 import { useLegion } from "../../state/store";
+import { connectionLabel } from "../graphite/connectionLabel";
 import { cinemaIsLive, type CinemaMode, runCinemaStop } from "./run";
 
 interface Props {
@@ -22,6 +24,10 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const lastCue = useLegion((s) => s.lastCueReason);
   const lastLog = useLegion((s) => s.log[s.log.length - 1]?.text ?? "");
   const workspace = useLegion((s) => s.workspace);
+  const sdrId = useLegion((s) => s.sdrId);
+  const openedIface = useLegion((s) => s.sdrOpened?.iface);
+  const sl22 = useLegion((s) => s.transportKind === "htool-sl22");
+  const sdrLink = sl22 ? "SDR" : connectionLabel(openedIface ?? catalogById(sdrId)?.iface).value;
   const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending });
   const message = fpgaStopPending
     ? fpgaReleasing
@@ -39,7 +45,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
           disabled={live && modeOf(workspace) === "esp32"}
         >
           Умный
-          <span>SDR · Ethernet</span>
+          <span>{sdrLink}</span>
         </button>
         <button
           type="button"
@@ -52,15 +58,26 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
         </button>
       </div>
 
-      {live ? (
-        <button type="button" className="cinema-go stop" onClick={() => void runCinemaStop()}>
-          Стоп
-        </button>
-      ) : (
-        <button type="button" className="cinema-go" onClick={onStart}>
-          Запустить
-        </button>
-      )}
+      <div className="cinema-go-row">
+        {live ? (
+          <button type="button" className="cinema-go stop" onClick={() => void runCinemaStop()}>
+            Стоп
+          </button>
+        ) : (
+          <button type="button" className="cinema-go" onClick={onStart}>
+            Запустить
+          </button>
+        )}
+        {transmitArmed ? (
+          <button type="button" className="cinema-go stop" onClick={() => void useLegion.getState().stopTransmit()}>
+            Стоп передачу
+          </button>
+        ) : (
+          <button type="button" className="cinema-go" onClick={() => void useLegion.getState().startTransmit()}>
+            Передать
+          </button>
+        )}
+      </div>
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>

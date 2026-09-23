@@ -127,13 +127,92 @@
 .graphite-console-heading h1 { margin: 0; font-size: 25px; line-height: 1; letter-spacing: .27em; font-weight: 700; color: #edf1f3; text-shadow: 0 1px 8px #fff1; }
 .graphite-console-heading > span { font-size: 9px; color: #8f9ba4; letter-spacing: .14em; border-left: 1px solid #b0bec94d; padding-left: 24px; }
 .graphite-console-heading .graphite-console-source { margin-left: auto; border: 0; }
-.graphite-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 10px; }
+.graphite-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 10px; }
 .graphite-stat { min-height: 63px; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: 1px solid var(--graphite-line); border-radius: 3px; background: linear-gradient(115deg, #ffffff05, transparent 58%), #0b0e10; box-shadow: inset 0 1px 0 #ffffff0b; min-width: 0; }
 .graphite-stat > svg { width: 25px; height: 25px; flex: 0 0 auto; color: #cbd4da; }
 .graphite-stat > div { min-width: 0; border-left: 1px solid var(--graphite-line); padding-left: 15px; }
 .graphite-stat-label { display: block; color: #adb7bf; font-size: 9px; letter-spacing: .05em; margin-bottom: 7px; }
 .graphite-stat-value { display: block; color: #dce3e8; font-size: clamp(9px, .83vw, 13px); line-height: 1.4; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .graphite-stat small { margin-left: auto; max-width: 82px; font-size: 8px; color: #7d8993; line-height: 1.5; }
+.graphite-assist {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 18px;
+  align-items: center;
+  min-height: 96px;
+  margin: 0 0 10px;
+  padding: 12px 16px 16px;
+  overflow: hidden;
+  border: 1px solid var(--graphite-line);
+  border-radius: 3px;
+  background: linear-gradient(115deg, #ffffff08, transparent 46%), #0b0e10;
+  box-shadow: inset 0 1px 0 #ffffff0b;
+}
+.graphite-assist-kicker {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #adb7bf;
+  font-size: 9px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.graphite-assist-kicker span:last-child {
+  letter-spacing: .04em;
+  text-transform: none;
+  color: #c5ced6;
+  text-align: right;
+}
+.graphite-assist-body h2 {
+  margin: 0 0 4px;
+  color: #edf1f3;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  line-height: 1.3;
+}
+.graphite-assist-body p { margin: 0; max-width: 78ch; color: #c5ced4; font-size: 13px; line-height: 1.45; }
+.graphite-assist-body small { display: block; margin-top: 6px; color: #8d99a3; font-size: 10px; letter-spacing: .03em; }
+.graphite-assist-body { animation: graphite-cue-in 480ms ease; }
+@keyframes graphite-cue-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.graphite-assist-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; gap: 10px; min-width: 18px; }
+.graphite-assist-dots { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; max-width: 92px; }
+.graphite-assist-dots button {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #66727a;
+}
+.graphite-assist-dots button.on { background: #e7eef2; box-shadow: 0 0 8px #ffffff44; }
+.graphite-assist-apply {
+  border: 1px solid #c5d0d6;
+  background: #101418;
+  color: #e7eef2;
+  font-size: 10px;
+  letter-spacing: .03em;
+  padding: 7px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  max-width: 180px;
+  text-align: right;
+}
+.graphite-assist-apply:hover:not(:disabled) { background: #1a2126; color: #fff; }
+.graphite-assist-apply:disabled { opacity: .4; cursor: not-allowed; }
+.graphite-assist-meter {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 0;
+  background: linear-gradient(90deg, transparent, #d5e0e6);
+  animation: graphite-cue-meter 4s linear forwards;
+}
+.graphite-assist.is-paused .graphite-assist-meter { animation-play-state: paused; }
+@keyframes graphite-cue-meter { from { width: 0; } to { width: 100%; } }
 .graphite-spectrum .scope-wrap { margin: 0; border: 1px solid var(--graphite-line); border-radius: 3px; background: #0a0d0f; }
 .graphite-spectrum .scope-toolbar { min-height: 39px; padding: 6px 15px; color: #aab5bd; background: linear-gradient(#ffffff04, transparent); border-bottom: 1px solid var(--graphite-hairline); gap: 6px 17px; font-size: 10px; }
 .graphite-spectrum .scope-toolbar input { accent-color: #c9d2d8; width: 12px; height: 12px; }
@@ -184,7 +263,7 @@
   .legion-root.cinema.graphite .hero-overlay { padding: 12px 16px; }
   .graphite .hero-header { gap: 10px; }
   .legion-root.cinema.graphite .hero-logo { font-size: 19px; }
-  .graphite-nav { order: 3; width: 100%; border-left: 0; padding-left: 0; justify-content: space-between; background: #080b0d66; border-bottom: 1px solid #ffffff13; }
+  .graphite-nav { order: 3; width: 100%; border-left: 0; padding-left: 0; flex-wrap: wrap; justify-content: flex-start; row-gap: 2px; background: #080b0d66; border-bottom: 1px solid #ffffff13; }
   .graphite-edition { margin-left: auto; }
   .graphite .graphite-hero-caption { left: 16px; font-size: 8px; letter-spacing: .08em; }
   .graphite .hero-sub { top: 58%; right: 16px; font-size: 8px; max-width: 100px; text-align: right; }
@@ -199,6 +278,9 @@
   .graphite-stat { padding: 9px; gap: 9px; min-height: 60px; }
   .graphite-stat > div { padding-left: 9px; }
   .graphite-stat > svg { width: 21px; }
+  .graphite-assist { grid-template-columns: 1fr; padding: 10px 12px 14px; }
+  .graphite-assist-side { flex-direction: row; align-items: center; justify-content: space-between; }
+  .graphite-assist-kicker span:last-child { max-width: 58%; }
   .graphite-spectrum .scope-toolbar { padding: 9px; gap: 9px 12px; }
   .graphite-spectrum .scope-canvas { height: 255px; }
   .graphite-spectrum .scope-meta { flex-wrap: wrap; overflow-wrap: anywhere; }
@@ -211,5 +293,12 @@
   .graphite .cinema-dock-end { justify-content: space-between; }
   .graphite .cinema-accept { margin: 10px 14px 0; flex-wrap: wrap; }
 }
-@media (prefers-reduced-motion: reduce) { .graphite .hero::before, .graphite-backdrop { animation: none; } .graphite :is(button, a) { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .graphite .hero::before, .graphite-backdrop, .graphite-assist-body, .graphite-assist-meter { animation: none; }
+  .graphite :is(button, a) { transition: none; }
+  .graphite-assist-meter { width: 100%; }
+}
+.graphite[data-motion="off"] .graphite-assist-body,
+.graphite[data-motion="off"] .graphite-assist-meter { animation: none; }
+.graphite[data-motion="off"] .graphite-assist-meter { width: 100%; }
 @media print { .graphite .hero { height: 180px !important; min-height: 180px !important; } .graphite .cinema-dock, .graphite-edition button { display: none; } }
