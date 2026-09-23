@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AttackAdvice, AttackHintKind } from "../../sense/attackAdvisor";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
@@ -129,19 +129,48 @@ function useAssistantCue() {
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const applyAttackHint = useLegion((s) => s.applyAttackHint);
   const slides = useMemo(() => buildAssistantSlides(rows, advice), [rows, advice]);
-  const count = slides.length;
-  const [index, setIndex] = useState(0);
+  const slidesRef = useRef(slides);
+  slidesRef.current = slides;
+  const dueRef = useRef(Date.now() + STEP_MS);
+  const [stepKey, setStepKey] = useState<string | null>(null);
+  const stepKeyRef = useRef<string | null>(null);
   const [paused, setPaused] = useState(false);
 
+  // Четыре секунды — только сколько один текст остаётся на экране.
+  // Новый разбор обновляет этот текст и не перелистывает его раньше срока.
   useEffect(() => {
-    if (count < 2 || paused) return;
-    const id = window.setTimeout(() => setIndex((n) => (n + 1) % count), STEP_MS);
-    return () => window.clearTimeout(id);
-  }, [count, index, paused]);
+    if (paused) return;
+    dueRef.current = Date.now() + STEP_MS;
+    const id = window.setInterval(() => {
+      const list = slidesRef.current;
+      if (list.length < 2) {
+        dueRef.current = Date.now() + STEP_MS;
+        return;
+      }
+      const at = list.findIndex((item) => item.key === stepKeyRef.current);
+      if (at < 0) {
+        stepKeyRef.current = list[0].key;
+        setStepKey(list[0].key);
+        dueRef.current = Date.now() + STEP_MS;
+        return;
+      }
+      if (Date.now() < dueRef.current) return;
+      dueRef.current = Date.now() + STEP_MS;
+      const next = list[(at + 1) % list.length].key;
+      stepKeyRef.current = next;
+      setStepKey(next);
+    }, 200);
+    return () => window.clearInterval(id);
+  }, [paused]);
 
-  const safeIndex = count === 0 ? 0 : index % count;
-  const slide = slides[safeIndex] ?? slides[0];
-  return { slide, slides, index: safeIndex, count, paused, setPaused, setIndex, transmitArmed, applyAttackHint };
+  const showKey = (key: string) => {
+    dueRef.current = Date.now() + STEP_MS;
+    stepKeyRef.current = key;
+    setStepKey(key);
+  };
+
+  const slide = slides.find((item) => item.key === stepKey) ?? slides[0];
+  return { slide, slides, paused, setPaused, showKey, transmitArmed, applyAttackHint };
 }
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
@@ -211,7 +240,7 @@ export function GraphiteFacts({
             <span>Помощник</span>
             <span>{slide.kicker}</span>
           </div>
-          <div key={`${cue.index}-${slide.key}`} className="graphite-assist-body">
+          <div key={slide.key} className="graphite-assist-body">
             <h2>{slide.title}</h2>
             <p>{slide.text}</p>
             {slide.why && <small>{slide.why}</small>}
@@ -229,22 +258,22 @@ export function GraphiteFacts({
                 {slide.applyLabel}
               </button>
             )}
-            {cue.count > 1 && (
+            {cue.slides.length > 1 && (
               <div className="graphite-assist-dots">
                 {cue.slides.map((item, n) => (
                   <button
                     key={item.key}
                     type="button"
-                    className={n === cue.index ? "on" : ""}
+                    className={item.key === slide.key ? "on" : ""}
                     aria-label={`Шаг ${n + 1}: ${item.title}`}
-                    aria-current={n === cue.index ? "step" : undefined}
-                    onClick={() => cue.setIndex(n)}
+                    aria-current={item.key === slide.key ? "step" : undefined}
+                    onClick={() => cue.showKey(item.key)}
                   />
                 ))}
               </div>
             )}
           </div>
-          {cue.count > 1 && <span key={`meter-${cue.index}`} className="graphite-assist-meter" aria-hidden="true" />}
+          {cue.slides.length > 1 && <span key={`meter-${slide.key}`} className="graphite-assist-meter" aria-hidden="true" />}
         </section>
       )}
     </>
