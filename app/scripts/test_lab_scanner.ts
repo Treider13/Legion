@@ -139,6 +139,12 @@ async function main(): Promise<void> {
   const mask = occupancyMask(occWin, occBase, LAB_OCCUPANCY_MARGIN_DB);
   check("занятость +12 дБ: один бин из четырёх", mask.filter(Boolean).length === 1 && occupancyCoverage(mask) === 0.25);
   check("poc 40 % — метрика, не зашитая цель", occupancyCoverage(mask) !== 0.4);
+  const emptyShelf = occWin.map((b) => ({ freqMhz: b.freqMhz, powerDbm: Number.NaN }));
+  const emptyMask = occupancyMask(occWin, emptyShelf, LAB_OCCUPANCY_MARGIN_DB);
+  check("пустая полка: тот же один бин +12 дБ", emptyMask.length === 4 && emptyMask[2] === true && emptyMask.filter(Boolean).length === 1);
+  const partialShelf = occBase.map((b, i) => ({ freqMhz: b.freqMhz, powerDbm: i === 2 ? Number.NaN : b.powerDbm }));
+  const partialMask = occupancyMask(occWin, partialShelf, LAB_OCCUPANCY_MARGIN_DB);
+  check("дырка в полке берёт ту же медиану", partialMask[2] === true && partialMask.filter(Boolean).length === 1);
 
   const wide = toneWindow(1000, 10, 101, 1000, -30, -80);
   for (let i = 40; i <= 60; i++) wide[i].powerDbm = -30;

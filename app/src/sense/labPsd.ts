@@ -175,27 +175,30 @@ export function subtractBaseline(current: readonly ScanBin[], baseline: readonly
 }
 
 /**
- * Poc +12 дБ над полкой. Если полки нет — медиана нижних 60 % текущего кадра
- * (тот же estimate_noise_floor, что DIO-sys / sdr_worker).
+ * Poc +12 дБ над полкой. Полка есть — порог по точке, как CGurity detector.py
+ * `psd > baseline + POWER_THRESHOLD_DB`. Полки нет — одна медиана нижних 60 %
+ * на кадр, как DIO-sys psd_plot.py: один estimate_noise_floor, затем сравнение.
  */
 export function occupancyMask(
   current: readonly ScanBin[],
   baseline: readonly ScanBin[],
   marginDb = LAB_OCCUPANCY_MARGIN_DB,
 ): boolean[] {
-  const floor =
-    baseline.some((b) => finiteDbm(b.powerDbm))
-      ? baseline
-      : current.map((b) => ({
-          freqMhz: b.freqMhz,
-          powerDbm: estimateNoiseFloor(current.filter((x) => finiteDbm(x.powerDbm))),
-        }));
-  return current.map((b, i) => {
-    if (!finiteDbm(b.powerDbm)) return false;
-    const base = floor[i]?.powerDbm;
-    const ref = finiteDbm(base) ? base : estimateNoiseFloor(current.filter((x) => finiteDbm(x.powerDbm)));
-    return b.powerDbm >= ref + marginDb;
-  });
+  const painted = current.filter((b) => finiteDbm(b.powerDbm));
+  const global = painted.length > 0 ? estimateNoiseFloor(painted) : Number.NaN;
+  const hasBase = baseline.some((b) => finiteDbm(b.powerDbm));
+  const out: boolean[] = [];
+  for (let i = 0; i < current.length; i++) {
+    const power = current[i].powerDbm;
+    if (!finiteDbm(power)) {
+      out.push(false);
+      continue;
+    }
+    const base = hasBase ? baseline[i]?.powerDbm : global;
+    const ref = finiteDbm(base) ? base : global;
+    out.push(power >= ref + marginDb);
+  }
+  return out;
 }
 
 /** Доля оси выше полки+margin. Poc писали 40 % как цель TX — мы только считаем. */
