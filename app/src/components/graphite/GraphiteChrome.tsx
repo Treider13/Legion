@@ -3,41 +3,24 @@ import { GraphiteFacts } from "./GraphiteInsight";
 
 export function GraphiteNav({
   onSettings,
+  onPosition,
   motion,
   reduced,
   onMotion,
-  live,
-  onStart,
-  onStop,
-  transmitting,
-  onTransmit,
-  onTransmitStop,
 }: {
   onSettings: () => void;
+  onPosition: () => void;
   motion: boolean;
   reduced: boolean;
   onMotion: () => void;
-  live: boolean;
-  onStart: () => void;
-  onStop: () => void;
-  transmitting: boolean;
-  onTransmit: () => void;
-  onTransmitStop: () => void;
 }) {
   return (
     <>
       <nav className="graphite-nav" aria-label="Главная навигация">
         <a href="#graphite-overview">Обзор</a>
         <a href="#graphite-spectrum">Спектр</a>
-        <button type="button" className={live ? "graphite-nav-go stop" : "graphite-nav-go"} onClick={live ? onStop : onStart}>
-          {live ? "Стоп" : "Запустить"}
-        </button>
-        <button
-          type="button"
-          className={transmitting ? "graphite-nav-go stop" : "graphite-nav-go"}
-          onClick={transmitting ? onTransmitStop : onTransmit}
-        >
-          {transmitting ? "Стоп передачу" : "Передать"}
+        <button type="button" onClick={onPosition}>
+          Позиция
         </button>
         <button type="button" onClick={onSettings}>
           Настройки

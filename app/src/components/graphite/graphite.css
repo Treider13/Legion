@@ -104,27 +104,6 @@
 }
 .graphite-nav a:first-child { color: #f0f2f4; border-bottom-color: #c5cdd2; background: #ffffff04; }
 .graphite-nav :is(a,button):hover { background: #ffffff08; color: #fff; border-bottom-color: #b5bdc4; }
-.graphite-nav .graphite-nav-go {
-  align-self: center;
-  margin: 0 3px;
-  min-height: 30px;
-  padding: 0 12px;
-  border: 1px solid #edf3f6;
-  border-radius: 3px;
-  background: linear-gradient(#e7edf1, #b8c3cb);
-  color: #0a0e11;
-  font-size: 11px;
-  letter-spacing: .04em;
-  box-shadow: inset 0 1px 0 #fff;
-}
-.graphite-nav .graphite-nav-go:hover { background: #f4f7f8; color: #0a0e11; border-color: #fff; }
-.graphite-nav .graphite-nav-go.stop,
-.graphite-nav .graphite-nav-go.stop:hover {
-  background: transparent;
-  color: #ffb4a8;
-  border-color: rgb(255 180 168 / 70%);
-  box-shadow: none;
-}
 .graphite-edition { margin-left: auto; display: flex; align-items: center; gap: 20px; white-space: nowrap; font-size: 10px; color: #a5aeb7; letter-spacing: .17em; }
 .graphite-edition button { border: 1px solid #9aa4ad66; padding: 6px 12px; font-size: 9px; letter-spacing: .13em; border-radius: 1px; background: #0a0d10aa; color: #bac3cb; }
 .graphite .hero-sub { position: absolute; right: 30px; top: 48%; color: #929da6; }
@@ -277,7 +256,6 @@
   .graphite-edition > span { display: none; }
   .graphite-nav { gap: 0; padding-left: 10px; }
   .graphite-nav :is(a,button) { padding: 0 10px; min-height: 40px; }
-  .graphite-nav .graphite-nav-go { min-height: 30px; padding: 0 10px; }
   .graphite-stat small { display: none; }
   .graphite-stat-value { font-size: 10px; }
 }
@@ -286,7 +264,6 @@
   .graphite .hero-header { gap: 10px; }
   .legion-root.cinema.graphite .hero-logo { font-size: 19px; }
   .graphite-nav { order: 3; width: 100%; border-left: 0; padding-left: 0; flex-wrap: wrap; justify-content: flex-start; row-gap: 2px; background: #080b0d66; border-bottom: 1px solid #ffffff13; }
-  .graphite-nav .graphite-nav-go { margin: 4px 4px 4px 0; font-size: 10px; }
   .graphite-edition { margin-left: auto; }
   .graphite .graphite-hero-caption { left: 16px; font-size: 8px; letter-spacing: .08em; }
   .graphite .hero-sub { top: 58%; right: 16px; font-size: 8px; max-width: 100px; text-align: right; }

@@ -10,7 +10,6 @@ import "./components/graphite/graphite.css";
 import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChrome";
 import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
-import { cinemaIsLive, runCinemaStop } from "./components/cinema/run";
 import { catalogById } from "./sdr/catalog";
 import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
@@ -182,23 +181,13 @@ function App() {
             <span className="hero-logo">ЛЕГИОН</span>
             <GraphiteNav
               onSettings={() => setSettings(true)}
+              onPosition={() => {
+                setWorkspace("position");
+                setSettings(true);
+              }}
               motion={motion}
               reduced={reduced}
               onMotion={toggleMotion}
-              live={cinemaIsLive({
-                scanRunning,
-                transmitArmed,
-                corridorRunning,
-                signalTxActive,
-                fpgaArmed,
-                fpgaBusy,
-                fpgaStopPending,
-              })}
-              onStart={() => setGate(true)}
-              onStop={() => void runCinemaStop()}
-              transmitting={transmitArmed}
-              onTransmit={() => void useLegion.getState().startTransmit()}
-              onTransmitStop={() => void useLegion.getState().stopTransmit()}
             />
             <span className="hero-sub">{connection.value}</span>
           </header>
