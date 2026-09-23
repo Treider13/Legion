@@ -21,7 +21,10 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 await page.setViewport({ width: 1440, height: 900 });
-await page.evaluateOnNewDocument(() => sessionStorage.setItem("legion_booted", "1"));
+await page.evaluateOnNewDocument(() => {
+  sessionStorage.setItem("legion_booted", "1");
+  sessionStorage.setItem("legion_contour", "live");
+});
 await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 25000 });
 await waitFor(page, `!!document.querySelector(".hero")`);
 await new Promise((r) => setTimeout(r, 1500));

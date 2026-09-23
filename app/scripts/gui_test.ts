@@ -35,6 +35,7 @@ async function main(): Promise<void> {
 
   await page.evaluateOnNewDocument(() => {
     sessionStorage.setItem("legion_booted", "1");
+    sessionStorage.setItem("legion_contour", "live");
   });
 
   await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 25000 });

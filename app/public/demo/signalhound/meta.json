@@ -1,0 +1,12 @@
+{
+  "sourceRepo": "https://github.com/sigmf/example_nonsigmf_recordings",
+  "sourceCommit": "0555f71ea9ee4fe3a06515b232b08a43860762d6",
+  "sourcePath": "signal_hound/IQREC-11-13-25-17h31m10s877.iq",
+  "sourceMeta": "signal_hound/IQREC-11-13-25-17h31m10s877.xml",
+  "device": "Signal Hound BB60C",
+  "dataType": "Complex Short",
+  "centerHz": 100000000,
+  "sampleRate": 10000000,
+  "ifBandwidthHz": 8000000,
+  "decimation": 4
+}
