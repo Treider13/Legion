@@ -2057,8 +2057,19 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
 
 def _setup_front_end(dev: Any, can_tx: bool) -> None:
     """Антенна/gain/DC как DIO-sys capture.cpp. AGC не включаем — на антенне качает пол.
-    Каждый шаг best-effort (не все платы/драйверы всё умеют), но отказ — в лог:
+    Bias-T micro обязательно OFF; остальные шаги best-effort, но отказ — в лог:
     молчаливый пропуск setGain оставлял бы тракт на неизвестном усилении."""
+    if soapy_hw_snapshot(dev)["class"] == "ad9361":
+        # Оба питания OFF даже при can_tx=False. readSetting у SoapyBladeRF
+        # возвращает константу false, поэтому не выдаём его за readback.
+        errors = []
+        for key in ("biastee_rx", "biastee_tx"):
+            try:
+                dev.writeSetting(key, "false")
+            except Exception as e:
+                errors.append(f"{key}: {e}")
+        if errors:
+            raise RuntimeError("Bias-T OFF не выполнен: " + "; ".join(errors))
     try:
         rx_ants = list(dev.listAntennas(SOAPY_SDR_RX, 0) or [])
         pick = next((a for a in rx_ants if str(a).upper() in ("RX", "RX1", "RX2", "LNAL", "LNAH")), None)
