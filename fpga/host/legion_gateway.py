@@ -221,12 +221,32 @@ class UsbTransport:
                 self._find()
                 if not self._fpga_configured():
                     raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+            if self.board == "bladerf2":
+                self._disable_bias_tee()
         except Exception:
             # Полуоткрытый handle не оставляем: иначе следующий acquire()
             # сочтётся no-op «успехом» по непустому _dev (плата найдена,
             # но FPGA пуста и LEGION_FPGA_RBF не задан — тот случай).
             self._dev = None
             raise
+
+    def _disable_bias_tee(self) -> None:
+        """hosted/legion: очистить только RX/TX Bias-T и проверить RFFE."""
+        mask = (1 << 5) | (1 << 10)  # bladerf2_common.h: RX/TX_BIAS_EN
+
+        def access(write: bool, value: int = 0) -> int:
+            req = lf.pack_8x32(0x03, write, 0, value)  # TARGET_RFFE_CSR
+            # Здесь нельзя xfer(): его USB retry снова вызывает _acquire().
+            self._dev.write(EP_OUT, req, timeout=TIMEOUT_MS)
+            resp = bytes(self._dev.read(EP_IN, lf.NIOS_PKT_LEN, timeout=TIMEOUT_MS))
+            ok, data = lf.unpack_8x32_resp(resp)
+            if not ok or resp[1] != req[1] or resp[4] != req[4]:
+                raise RuntimeError("Bias-T OFF: RFFE не подтвердил команду")
+            return data
+
+        access(True, access(False) & ~mask)
+        if access(False) & mask:
+            raise RuntimeError("Bias-T OFF: питание RX/TX осталось включено")
 
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
