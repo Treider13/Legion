@@ -1050,11 +1050,11 @@ gw_m.fpga._t.fail_ctrl_write = False
 rpcm({"op": "disarm"})
 
 # Solo: fs/BW окна до AIR_PREP. Без полей — пишется ЯВНЫЙ дефолт (0 = NIOS
-# 2 МГц, WD_LIMIT от 2e6 на micro = 61 ≈ 2 с): статики/регистры переживают сессии.
+# 2 МГц, WD_LIMIT от 2e6 на micro = 122 ≈ 2 с при tx_clock=2×fs): статики/регистры переживают сессии.
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM player без fs_hz → ok (дефолт NIOS 2 МГц)", r.get("ok") is True)
 check("micro: без fs_hz AIR_FS = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
-check("micro: без fs_hz WD_LIMIT от 2e6 (=61 ≈ 2 с)",
+check("micro: без fs_hz WD_LIMIT от 2e6 (=122 ≈ 2 с)",
       gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
 check("micro: без bw_mhz AIR_BW = дефолт 0 явно", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
 rpcm({"op": "disarm"})
@@ -1066,16 +1066,16 @@ check("micro: эфир без bw_mhz пишет AIR_BW=0", gw_m.fpga._t.regs.get
 rpcm({"op": "disarm"})
 
 check("wd limit x40 2 МГц ≈ 2 с", lf.watchdog_limit_for_fs(2_000_000, "bladerf1") == 122)
-check("wd limit micro 2 МГц ≈ 2 с (tx_clock=fs)", lf.watchdog_limit_for_fs(2_000_000, "bladerf2") == 61)
-check("wd limit micro 10 МГц ≈ 2 с", lf.watchdog_limit_for_fs(10_000_000, "bladerf2") == 305)
-check("wd limit micro 20 МГц ≈ 2 с", lf.watchdog_limit_for_fs(20_000_000, "bladerf2") == 610)
-check("wd limit micro 56 МГц ≈ 2 с", lf.watchdog_limit_for_fs(56_000_000, "bladerf2") == 1709)
-# 305×65536/10e6 ≈ 2.0 с > 0.5 с kick; дефолт прошивки 61×65536/10e6 = 0.400 с.
+check("wd limit micro 2 МГц ≈ 2 с (tx_clock=2×fs)", lf.watchdog_limit_for_fs(2_000_000, "bladerf2") == 122)
+check("wd limit micro 10 МГц ≈ 2 с", lf.watchdog_limit_for_fs(10_000_000, "bladerf2") == 610)
+check("wd limit micro 20 МГц ≈ 2 с", lf.watchdog_limit_for_fs(20_000_000, "bladerf2") == 1221)
+check("wd limit micro 56 МГц ≈ 2 с", lf.watchdog_limit_for_fs(56_000_000, "bladerf2") == 3418)
+# 610×65536/(2×10e6) ≈ 2.0 с > 0.5 с kick; дефолт прошивки 61×65536/(2×10e6) = 0.200 с.
 
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2425.0, "fs_hz": 20_000_000, "bw_mhz": 20})
 check("micro: ARM player с fs_hz=20e6 → ok", r.get("ok") is True)
 check("micro: AIR_FS_HZ = 20e6", gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 20_000_000)
-check("micro: ARM 20e6 пишет WD_LIMIT=610", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 610)
+check("micro: ARM 20e6 пишет WD_LIMIT=1221", gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 1221)
 check("micro: AIR_BW_HZ = 20e6 (из bw_mhz)", gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 20_000_000)
 check("micro: AIR_FREQ_KHZ = 2425000", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ) == 2_425_000)
 ctrl_before_tune = gw_m.fpga._t.regs.get(lf.REG_CTRL)
@@ -1100,14 +1100,14 @@ rpcm({"op": "disarm"})
 # Регресс порядка сессий: статики fs/bw и WD_LIMIT переживают DISARM.
 # ARM без fs_hz после 20-МГц сессии обязан получить дефолты явно — иначе
 # волна, снятая на 2 MSPS, игралась бы на 20 MSPS, а deadman растянулся
-# бы с ~2 с до ~20 с (610×65536/2e6).
+# бы с ~2 с до ~20 с (1221×65536/(2×2e6)).
 r = rpcm({"op": "arm", "mode": "player", "freq_mhz": 2450.0})
 check("micro: ARM без fs после 20-МГц сессии → ok", r.get("ok") is True)
 check("micro: AIR_FS_HZ сброшен в дефолт после 20-МГц сессии",
       gw_m.fpga._t.regs.get(lf.REG_AIR_FS_HZ) == 0)
 check("micro: AIR_BW_HZ сброшен в дефолт после 20-МГц сессии",
       gw_m.fpga._t.regs.get(lf.REG_AIR_BW_HZ) == 0)
-check("micro: WD_LIMIT сброшен от 2e6 (61 ≈ 2 с), не 610 прошлой сессии",
+check("micro: WD_LIMIT сброшен от 2e6 (122 ≈ 2 с), не 1221 прошлой сессии",
       gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
 rpcm({"op": "disarm"})
 r = rpcm({"op": "tune", "freq_mhz": 2475.0})
@@ -1335,18 +1335,18 @@ check("U5: read SCAN_F2 по проводу", ok_s2 and f2 == 2_455_000)
 check("U5: read SCAN_DWELL 400", ok_sd and dwell == 400)
 check("U5: read SCAN_CTRL не STATUS",
       ok_sc and sctrl == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
-check("T1: 10e6 micro WD_LIMIT=305",
+check("T1: 10e6 micro WD_LIMIT=610",
       gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(10_000_000, "bladerf2"))
 rpcm({"op": "disarm"})
 
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000,
           "freq_mhz": 2450.0, "fs_hz": 520834, "bw_mhz": 0.2})
-check("T1: ARM 520834 micro WD_LIMIT=16",
+check("T1: ARM 520834 micro WD_LIMIT=32",
       r.get("ok") is True and
-      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 16)
+      gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == 32)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2440.0})
-check("T1: ARM без fs_hz — WD от дефолта 2e6 (61 ≈ 2 с)",
+check("T1: ARM без fs_hz — WD от дефолта 2e6 (122 ≈ 2 с)",
       r.get("ok") is True and
       gw_m.fpga._t.regs.get(lf.REG_WD_LIMIT) == lf.watchdog_limit_for_fs(2_000_000, "bladerf2"))
 rpcm({"op": "disarm"})

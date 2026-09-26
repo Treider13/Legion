@@ -924,13 +924,12 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
-            # Solo fs > 2 МГц: дефолт прошивки WD_LIMIT=61 короче kick 500 мс
-            # (61×65536/10e6 ≈ 0.40 с на micro). Без fs_hz дефолт пишем ЯВНО:
-            # регистр переживает сессии (сброс только по nios_reset) — иначе
-            # ARM наследовал бы limit прошлого fs. Хост ставит ≈2 с
-            # (WD_TIMEOUT_S): один опоздавший kick не гасит умную атаку,
-            # но короче сторожа kick_age 2.5 с — мёртвый канал всё ещё
-            # гаснет платой первой. На micro 61×65536/10e6 < kick 500 мс.
+            # Дефолт прошивки WD_LIMIT=61 при tx_clock=2×fs: на 10 МГц это
+            # 61×65536/20e6 ≈ 0.20 с, короче kick 500 мс. Без fs_hz пишем
+            # ЯВНО limit от 2e6: регистр переживает сессии (сброс только по
+            # nios_reset). Хост ставит ≈2 с (WD_TIMEOUT_S) на такте 2×fs:
+            # один опоздавший kick не гасит умную атаку, и это короче
+            # сторожа kick_age 2.5 с — мёртвый канал гаснет платой первой.
             fs_wd = msg.get("fs_hz")
             fs_for_wd = int(fs_wd) if fs_wd is not None else 2_000_000
             limit = lf.watchdog_limit_for_fs(fs_for_wd, self.board)
