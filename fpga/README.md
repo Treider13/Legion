@@ -100,12 +100,10 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
    which the bladeRF project files are based upon»; пакеты Cyclone IV для
    bladeRF 1 / Cyclone V для micro ставятся отдельно, NIOS II там же —
    `~/intelFPGA_lite/23.1std/nios2eds/`).
-2. Сборка (из nios2_command_shell):
-   ```bash
-   cd fpga/vendor/bladerf/hdl/quartus
-   ./build_bladerf.sh -b bladeRF -s 40 -r legion        # bladeRF 1 x40
-   ./build_bladerf.sh -b bladeRF-micro -s A4 -r legion  # bladeRF 2.0 micro xA4
-   ```
+2. Сборка micro xA4 — скрипт из `INSTALL.md` §5.
+   `nios2_command_shell.sh` нельзя вызывать через `source`: он делает `exec`
+   и закрывает терминал. Команда внутри: `build_bladerf.sh -k -b bladeRF-micro -s A4 -r legion`.
+   `-k` не стирает уже собранный BSP. Кроме Quartus нужны пакеты `cmake` и `patch`.
 3. Загрузка **в RAM** (разработка, ноль риска): `bladeRF-cli -l legionx40.rbf`.
    После приёмки — во flash: `bladeRF-cli -L legionx40.rbf` (autoload).
    Откат: питание off/on (при `-l`) или прошить официальный `hostedx40.rbf`.
