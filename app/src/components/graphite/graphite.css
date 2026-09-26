@@ -209,7 +209,7 @@
   height: 2px;
   width: 0;
   background: linear-gradient(90deg, transparent, #d5e0e6);
-  animation: graphite-cue-meter 4s linear forwards;
+  animation: graphite-cue-meter var(--graphite-cue-ms, 4s) linear forwards;
 }
 .graphite-assist.is-paused .graphite-assist-meter { animation-play-state: paused; }
 @keyframes graphite-cue-meter { from { width: 0; } to { width: 100%; } }

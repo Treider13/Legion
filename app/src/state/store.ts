@@ -906,12 +906,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     return s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending;
   };
 
-  const ingestHostLab = (bins: ScanBin[], now: number): void => {
+  const ingestHostLab = (bins: ScanBin[], now: number) => {
     const s = get();
     const filtered = s.labSpurOn ? gLabSpur.filter(bins) : bins;
-    if (s.labSpurOn !== false && s.labSpurReady !== gLabSpur.isCalibrated()) {
-      set({ labSpurReady: gLabSpur.isCalibrated() });
-    }
     const { f1, f2 } = labCorridor(get());
     const next = ingestLabFrame(get().labPsd, filtered, f1, f2, now);
     const peaks = hostPeaksForJournal(filtered, get().scanThresholdDb, get().labMinWidthMhz);
@@ -929,11 +926,14 @@ export const useLegion = create<LegionStore>((set, get) => {
       }));
     const closed = gLabHost.ingest(live, now, s.labMinDurationSec);
     const mask = occupancyMask(next.composite, next.baseline);
-    set({
+    return {
+      ...(s.labSpurOn !== false && s.labSpurReady !== gLabSpur.isCalibrated()
+        ? { labSpurReady: gLabSpur.isCalibrated() }
+        : {}),
       labPsd: next,
       labEvents: closed.length ? [...s.labEvents, ...closed].slice(-200) : s.labEvents,
       labCoverage: occupancyCoverage(mask),
-    });
+    };
   };
 
   const ingestFpgaLab = (freqMhz: number | null, detActive: boolean, now: number): void => {
@@ -4571,27 +4571,29 @@ export const useLegion = create<LegionStore>((set, get) => {
             ts: now,
           }));
           detections = withoutOwnTx(raw, get().lastForwardMhz, ownTxGuardMhz(get().txWaveKind !== null));
-          if (centerMhz) set({ scanCenterMhz: centerMhz });
+          const frame: Partial<LegionStore> = {};
+          if (centerMhz) frame.scanCenterMhz = centerMhz;
           if (detections.length > 0) {
             const dets = mergeDetections(get().detections, detections);
             const hit = pickStrongest(detections);
-            set({
-              detections: dets,
-              lastInterceptMhz: hit?.freqMhz ?? get().lastInterceptMhz,
-            });
+            frame.detections = dets;
+            frame.lastInterceptMhz = hit?.freqMhz ?? get().lastInterceptMhz;
           }
           if (bins.length > 0) {
-            set({ scanBins: bins });
-            ingestHostLab(bins, now);
+            frame.scanBins = bins;
+            Object.assign(frame, ingestHostLab(bins, now));
           }
           const cur = get();
           if (isFpgaAirPattern(cur.scanPattern)) {
             // Fail-closed: Старт перехвата не ставит scanRunning и не отдаёт
             // пик хост-FFT на USB-handoff. Живой таймер (остаток USB-цикла)
             // не должен снова вставить ноутбук в круг «увидел → усилитель».
+            if (Object.keys(frame).length > 0) set(frame);
             get().stopScan();
             return;
           }
+          let think: { snap: ReturnType<AttackTracker["snapshot"]>; fsHz: number; span: number; paintTx: boolean } | null =
+            null;
           if (cur.scanPattern === "auto" && bins.length > 0) {
             const hits = detectAttackHits(bins, cur.scanThresholdDb, listen?.spanMhz).filter((h) =>
               cur.sdrBands.length === 0 ? true : cueFreqAllowed(h.freqMhz, cur.sdrBands),
@@ -4610,9 +4612,11 @@ export const useLegion = create<LegionStore>((set, get) => {
             if (paintTx && paint) gAttackTracker.markHeld(paintCenterMhz(paint));
             const snap = gAttackTracker.snapshot();
             gAttackMemory.notePowers(now, snap, gAttackTracker.currentSweep(), centerMhz, spanMhz, blankedByOwnTx);
-            set(attackBrainPatch(cur, snap, bins, listen?.spanMhz ?? spanMhz));
-            void thinkAttackLooks(snap, listen?.fsHz ?? 61_440_000, centerMhz, listen?.spanMhz ?? spanMhz, paintTx);
+            Object.assign(frame, attackBrainPatch(cur, snap, bins, listen?.spanMhz ?? spanMhz));
+            think = { snap, fsHz: listen?.fsHz ?? 61_440_000, span: listen?.spanMhz ?? spanMhz, paintTx };
           }
+          if (Object.keys(frame).length > 0) set(frame);
+          if (think) void thinkAttackLooks(think.snap, think.fsHz, centerMhz, think.span, think.paintTx);
           if (!cur.transmitArmed || !scannerParticipates(cur.scanPattern)) return;
           if (attackPaintOwnsTx(cur.scanPattern, cur.attackPaint, cur.transmitArmed)) return;
           gSkipMhz = refreshSkipMhz(gSkipMhz, detections, centerMhz, spanMhz, bins.length > 0);

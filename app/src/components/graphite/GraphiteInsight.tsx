@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AttackAdvice, AttackHintKind } from "../../sense/attackAdvisor";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
 
-const STEP_MS = 4000;
+const STEP_MS = 12000;
 
 interface Slide {
   key: string;
@@ -28,12 +28,12 @@ function liveRows(rows: readonly AttackRow[]): AttackRow[] {
     .sort((a, b) => b.powerDbm - a.powerDbm);
 }
 
-function signalSlide(row: AttackRow): Slide {
+function signalSlide(row: AttackRow, key: string): Slide {
   const type = typeOf(row);
   const role = row.infoRu ? ` · ${row.infoRu}` : "";
   const family = row.atlas.label !== type ? `${row.atlas.label}. ` : "";
   return {
-    key: `sig-${row.id}`,
+    key,
     kicker: "Сигнал",
     title: type,
     text: `${row.freqMhz.toFixed(3)} МГц${role}. ${family}${row.atlas.hint}`,
@@ -54,7 +54,7 @@ function buildAssistantSlides(rows: readonly AttackRow[], advice: AttackAdvice):
         key: "wait",
         kicker: "Помощник",
         title: "Ждёт сигнал",
-        text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 4 секунды.",
+        text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 12 секунд.",
         why: "",
         freqMhz: null,
         typeLabel: null,
@@ -66,10 +66,23 @@ function buildAssistantSlides(rows: readonly AttackRow[], advice: AttackAdvice):
 
   const slides: Slide[] = [];
   if (primary) {
-    slides.push(signalSlide(primary));
+    slides.push(signalSlide(primary, "signal"));
+    if (advice.scene) {
+      slides.push({
+        key: "scene",
+        kicker: `${primary.freqMhz.toFixed(3)} МГц · ${typeOf(primary)}`,
+        title: "Эфир",
+        text: advice.scene,
+        why: "",
+        freqMhz: primary.freqMhz,
+        typeLabel: typeOf(primary),
+        applyKind: null,
+        applyLabel: null,
+      });
+    }
     for (const hint of advice.hints) {
       slides.push({
-        key: `hint-${primary.id}-${hint.kind}`,
+        key: `hint-${hint.kind}`,
         kicker: `${primary.freqMhz.toFixed(3)} МГц · ${typeOf(primary)}`,
         title: hint.title,
         text: hint.text,
@@ -80,7 +93,7 @@ function buildAssistantSlides(rows: readonly AttackRow[], advice: AttackAdvice):
         applyLabel: hint.applyLabel,
       });
     }
-    for (const row of live.slice(1, 5)) slides.push(signalSlide(row));
+    live.slice(1, 5).forEach((row, index) => slides.push(signalSlide(row, `signal-${index + 2}`)));
   } else {
     slides.push({
       key: "scene",
@@ -134,10 +147,11 @@ function useAssistantCue() {
   const dueRef = useRef(Date.now() + STEP_MS);
   const [stepKey, setStepKey] = useState<string | null>(null);
   const stepKeyRef = useRef<string | null>(null);
+  const heldRef = useRef<Slide | null>(null);
   const [paused, setPaused] = useState(false);
 
-  // Четыре секунды — только сколько один текст остаётся на экране.
-  // Новый разбор обновляет этот текст и не перелистывает его раньше срока.
+  // Двенадцать секунд — сколько одна карточка остаётся на экране.
+  // Смена самого громкого следа обновляет текст и не перелистывает раньше срока.
   useEffect(() => {
     if (paused) return;
     dueRef.current = Date.now() + STEP_MS;
@@ -149,9 +163,15 @@ function useAssistantCue() {
       }
       const at = list.findIndex((item) => item.key === stepKeyRef.current);
       if (at < 0) {
+        if (stepKeyRef.current == null) {
+          stepKeyRef.current = list[0].key;
+          setStepKey(list[0].key);
+          return;
+        }
+        if (Date.now() < dueRef.current) return;
+        dueRef.current = Date.now() + STEP_MS;
         stepKeyRef.current = list[0].key;
         setStepKey(list[0].key);
-        dueRef.current = Date.now() + STEP_MS;
         return;
       }
       if (Date.now() < dueRef.current) return;
@@ -169,7 +189,9 @@ function useAssistantCue() {
     setStepKey(key);
   };
 
-  const slide = slides.find((item) => item.key === stepKey) ?? slides[0];
+  const matched = stepKey ? slides.find((item) => item.key === stepKey) : undefined;
+  if (matched) heldRef.current = matched;
+  const slide = matched ?? heldRef.current ?? slides[0];
   return { slide, slides, paused, setPaused, showKey, transmitArmed, applyAttackHint };
 }
 
@@ -230,6 +252,7 @@ export function GraphiteFacts({
       {slide && (
         <section
           className={cue.paused ? "graphite-assist is-paused" : "graphite-assist"}
+          style={{ "--graphite-cue-ms": `${STEP_MS}ms` } as CSSProperties}
           aria-live="polite"
           aria-atomic="true"
           aria-label="Советы помощника"

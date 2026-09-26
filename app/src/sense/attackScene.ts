@@ -9,6 +9,7 @@ import { stitchHopFamilies, type AttackHopFamily } from "./attackFamily";
 import { lookFromBins, type AttackLook } from "./attackLook";
 import { measureHitWidths, spectrumCoversMhz, type AttackWidths } from "./attackMeasure";
 import { memoryLineRu, type AttackSessionMemory } from "./attackMemory";
+import { estimateNoiseFloor } from "../sdr/backend";
 import type { AttackPaint } from "./attackPaint";
 import type { AttackTrack } from "./attackTracks";
 import type { AllowBand } from "../policy/allowlist";
@@ -48,18 +49,33 @@ export function buildAttackScene(input: {
 }): AttackSceneView {
   const widths = new Map<number, AttackWidths>();
   const looks = new Map<number, AttackLook>();
+  // Спектр этого обхода чужую частоту не содержит. Ширина хита — та,
+  // что трекер записал, когда частота была в окне. Разбор чужого окна
+  // к этому следу не приписываем.
+  const seenIds = new Set<number>();
   for (const t of input.tracks) {
-    // Спектр этого обхода чужую частоту не содержит. Ширина хита — та,
-    // что трекер записал, когда частота была в окне. Разбор чужого окна
-    // к этому следу не приписываем.
-    const seenHere = spectrumCoversMhz(input.bins, t.freqMhz);
+    if (spectrumCoversMhz(input.bins, t.freqMhz)) seenIds.add(t.id);
+  }
+  const floor = seenIds.size > 0 ? estimateNoiseFloor(input.bins) : Number.NaN;
+  // Цепстр по бинам — только у двух-трёх самых сильных в этом окне.
+  // Уже записанный разбор IQ не пересчитываем.
+  const freshLook = new Set(
+    input.tracks
+      .filter((t) => seenIds.has(t.id))
+      .sort((a, b) => b.powerDbm - a.powerDbm)
+      .slice(0, 3)
+      .filter((t) => !input.memory.looks.has(t.id))
+      .map((t) => t.id),
+  );
+  for (const t of input.tracks) {
+    const seenHere = seenIds.has(t.id);
     const w: AttackWidths = seenHere
-      ? measureHitWidths(input.bins, t.freqMhz)
+      ? measureHitWidths(input.bins, t.freqMhz, floor)
       : { width3Mhz: t.widthMhz, width26Mhz: t.widthMhz, occ99Mhz: t.widthMhz };
     widths.set(t.id, w);
     const remembered = input.memory.looks.get(t.id);
     if (remembered) looks.set(t.id, remembered);
-    else if (seenHere) looks.set(t.id, lookFromBins(input.bins, t.freqMhz, w));
+    else if (freshLook.has(t.id)) looks.set(t.id, lookFromBins(input.bins, t.freqMhz, w));
   }
   const families = stitchHopFamilies(input.tracks, input.memory.hopMhz());
   const famOf = new Map<number, string>();

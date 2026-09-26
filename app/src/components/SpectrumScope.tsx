@@ -40,6 +40,10 @@ export function SpectrumScope() {
     const rtsaImg = rtsaCtx ? rtsaCtx.createImageData(rtsa.width, rtsa.height) : null;
     let lastRtsaSrc: readonly { freqMhz: number; powerDbm: number }[] | null = null;
     let lastAxisKey = "";
+    const persistCanvas = document.createElement("canvas");
+    const persistCtx = persistCanvas.getContext("2d");
+    let lastPersist: readonly { freqMhz: number; powerDbm: number }[] | null = null;
+    let lastPersistGeom = "";
 
     const draw = () => {
       if (!alive) return;
@@ -130,17 +134,34 @@ export function SpectrumScope() {
         ctx.globalAlpha = 1;
       }
 
-      if (st.labShowPersistence && persist.length) {
-        for (let i = 0; i < persist.length; i++) {
-          if (!finiteDbm(persist[i].powerDbm)) continue;
-          const x0 = i === 0 ? xOf(persist[i].freqMhz) : xOf((persist[i - 1].freqMhz + persist[i].freqMhz) / 2);
-          const x1 =
-            i + 1 < persist.length ? xOf((persist[i].freqMhz + persist[i + 1].freqMhz) / 2) : xOf(persist[i].freqMhz);
-          const [cr, cg, cb] = heatRgb(dbmToUnit(persist[i].powerDbm));
-          ctx.fillStyle = `rgba(${cr},${cg},${cb},0.38)`;
-          const y = yOf(persist[i].powerDbm, dbLo, dbHi, padT, plotH);
-          ctx.fillRect(x0, y, Math.max(x1 - x0, 1), padT + plotH - y);
+      if (st.labShowPersistence && persist.length && persistCtx) {
+        const pw = Math.max(1, Math.floor(plotW * dpr));
+        const ph = Math.max(1, Math.floor(plotH * dpr));
+        const geom = `${loF}:${hiF}:${pw}:${ph}:${dbLo}:${dbHi}`;
+        if (persist !== lastPersist || geom !== lastPersistGeom) {
+          if (persistCanvas.width !== pw || persistCanvas.height !== ph) {
+            persistCanvas.width = pw;
+            persistCanvas.height = ph;
+          }
+          persistCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          persistCtx.clearRect(0, 0, plotW, plotH);
+          const xLocal = (mhz: number) => ((mhz - loF) / span) * plotW;
+          for (let i = 0; i < persist.length; i++) {
+            if (!finiteDbm(persist[i].powerDbm)) continue;
+            const x0 = i === 0 ? xLocal(persist[i].freqMhz) : xLocal((persist[i - 1].freqMhz + persist[i].freqMhz) / 2);
+            const x1 =
+              i + 1 < persist.length
+                ? xLocal((persist[i].freqMhz + persist[i + 1].freqMhz) / 2)
+                : xLocal(persist[i].freqMhz);
+            const [cr, cg, cb] = heatRgb(dbmToUnit(persist[i].powerDbm));
+            persistCtx.fillStyle = `rgba(${cr},${cg},${cb},0.38)`;
+            const y = yOf(persist[i].powerDbm, dbLo, dbHi, 0, plotH);
+            persistCtx.fillRect(x0, y, Math.max(x1 - x0, 1), Math.max(plotH - y, 0));
+          }
+          lastPersist = persist;
+          lastPersistGeom = geom;
         }
+        ctx.drawImage(persistCanvas, padL, padT, plotW, plotH);
       }
 
       const gridDb = 10;
