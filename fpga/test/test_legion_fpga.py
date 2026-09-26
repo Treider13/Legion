@@ -139,6 +139,7 @@ py_map = {
     "LEGION_REG_SETTLE_N": lf.REG_SETTLE_N,
     "LEGION_REG_SCAN_SURVEY_US": lf.REG_SCAN_SURVEY_US,
     "LEGION_REG_SCAN_EVENT": lf.REG_SCAN_EVENT,
+    "LEGION_REG_AIR_TX_GAIN_DB": lf.REG_AIR_TX_GAIN_DB,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -884,6 +885,10 @@ check("x40: re-arm при живом ARM — сбой CTRL → отказ", r.ge
 check("x40: эфир предыдущего ARM жив (bit2 не откачен)", bool(gw.fpga._t.control & 0x4))
 gw.fpga._t.fail_ctrl_write = False
 rpc({"op": "disarm"})
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000, "tx_gain_db": 60})
+check("x40: tx_gain_db не пишет регистр micro",
+      r.get("ok") is True and lf.REG_AIR_TX_GAIN_DB not in gw.fpga._t.regs)
+rpc({"op": "disarm"})
 
 r = rpc({"op": "tune", "freq_mhz": 2475.0})
 check("x40: tune → отказ (нет AIR, hop только Soapy)", r.get("ok") is False)
@@ -921,6 +926,8 @@ check("micro: AIR_FREQ_KHZ = 2442500", gw_m.fpga._t.regs.get(lf.REG_AIR_FREQ_KHZ
 check("micro: AIR_GAIN_DB = 1042 (код = gain + 1000, сентинел не сталкивается)",
       gw_m.fpga._t.regs.get(lf.REG_AIR_GAIN_DB) == 1042)
 check("micro: AIR_PREP up+RX+TX (0x7)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x7)
+check("micro: без tx_gain_db регистр TX не пишется",
+      lf.REG_AIR_TX_GAIN_DB not in gw_m.fpga._t.regs)
 st_m = rpcm({"op": "status"})
 check("micro: status несёт readback эфира (air_up)",
       st_m.get("ok") is True and st_m.get("air_up") is True and st_m.get("air_freq_set") is True)
@@ -932,6 +939,24 @@ r = rpcm({"op": "rx", "on": True})
 check("micro: op rx → честный отказ (нет CONTROL)", r.get("ok") is False)
 r = rpcm({"op": "disarm"})
 check("micro: disarm ok, CONTROL по-прежнему 0", r.get("ok") is True and gw_m.fpga._t.control == 0)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2442.5, "tx_gain_db": 30})
+check("micro: ARM с tx_gain_db → ok", r.get("ok") is True)
+check("micro: AIR_TX_GAIN_DB = 1030 (код = gain + 1000)",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1030)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2442.5, "tx_gain_db": 60})
+check("micro xA4: 60 дБ → код 1060", r.get("ok") is True
+      and gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1060)
+rpcm({"op": "disarm"})
+gw_m.fpga._t.reject_reg = lf.REG_AIR_TX_GAIN_DB
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2442.5, "tx_gain_db": 12})
+check("micro: старый образ без регистра TX — ARM всё равно ok", r.get("ok") is True)
+check("micro: отказ регистра не затирает прошлый код",
+      gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1060)
+gw_m.fpga._t.reject_reg = None
+rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2450.0})
 check("micro: ARM nco с freq_mhz → ok", r.get("ok") is True)
 check("micro: AIR_PREP для nco = up+TX (0x5)", gw_m.fpga._t.regs.get(lf.REG_AIR_PREP) == 0x5)

@@ -40,6 +40,7 @@ import {
   hostAttackScan,
   hostAttackThink,
   hostTx,
+  hostTxGain,
   hostTxOff,
   hostTxWave,
   hostFpga,
@@ -92,6 +93,7 @@ import {
   detCountStagnant,
   detCaptureWindows,
   fpgaAirSupported,
+  attachTxGainDb,
   fpgaArmCmd,
   fpgaObserveLine,
   parseLocaleNumber,
@@ -288,6 +290,10 @@ interface LegionStore {
   scanThresholdDb: number;
   /** 0 = все подряд, 100 = только сильные. */
   scanSensitivity: number;
+  /** Усиление тракта TX, дБ. null — 40% диапазона платы, как раньше. */
+  txGainDb: number | null;
+  txGainMin: number;
+  txGainMax: number;
   scanPattern: ScanPattern;
   /** Атака: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
@@ -416,6 +422,7 @@ interface LegionStore {
   setSdrImageFile(name: string, byteLength: number, path?: string): void;
   setScanThreshold(db: number): void;
   setScanSensitivity(sens: number): void;
+  setTxGain(db: number): Promise<void>;
   setScanPattern(p: ScanPattern): void;
   setAutoDispatch(d: AutoDispatch): void;
   setScanWindowMhz(v: string): void;
@@ -1716,7 +1723,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       if (gFpgaAirGen !== airGen) return;
       const r = await gw(
-        fpgaArmCmd("lb_gated", {
+        attachTxGainDb(fpgaArmCmd("lb_gated", {
           detThr: plan.detThr,
           detShift: plan.detShift,
           token: get().fpgaToken,
@@ -1735,7 +1742,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
           scanBands: bands,
-        }),
+        }), get().txGainDb),
       );
       if (gFpgaAirGen !== airGen) {
         // ARM уже отправлен. Отрицательный ответ может означать потерю
@@ -1903,6 +1910,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanRunning: false,
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
+    txGainDb: null,
+    txGainMin: -23.75,
+    txGainMax: 66,
     scanPattern: "auto",
     autoDispatch: "park",
     scanWindowMhz: "20",
@@ -2101,6 +2111,28 @@ export const useLegion = create<LegionStore>((set, get) => {
       const s = Math.min(100, Math.max(0, Number.isFinite(sens) ? sens : 0));
       const thr = sensitivityToThresholdDb(s);
       set({ scanSensitivity: s, scanThresholdDb: thr });
+    },
+    setTxGain: async (db) => {
+      const min = get().txGainMin;
+      const max = get().txGainMax;
+      /* xA4: overall −23.75…66 (Nuand). Сначала округление, потом зажим,
+       * иначе Math.round(−23.75) = −24 и уезжает ниже пола DSA. */
+      const lo = Math.ceil(min);
+      const hi = Math.max(lo, Math.floor(max));
+      const g = Math.min(hi, Math.max(lo, Math.round(Number.isFinite(db) ? db : lo)));
+      set({ txGainDb: g });
+      if (!gLive || get().sdrEmulation) return;
+      const r = await hostTxGain(g);
+      if (!r.ok) {
+        pushLog("sys", r.reason || "TX gain не записался");
+        return;
+      }
+      set({
+        txGainDb: r.txGainDb != null && Number.isFinite(r.txGainDb) ? Math.round(r.txGainDb) : g,
+        ...(r.txGainMin != null && Number.isFinite(r.txGainMin) ? { txGainMin: r.txGainMin } : {}),
+        ...(r.txGainMax != null && Number.isFinite(r.txGainMax) ? { txGainMax: r.txGainMax } : {}),
+      });
+      pushLog("sys", r.reason);
     },
     setScanPattern: (p) => {
       if (p === "auto") {
@@ -3108,14 +3140,14 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", "FPGA ARM: без park LO не включаем — иначе IQ уйдёт на чужую частоту");
           return;
         }
-        const cmd = fpgaArmCmd(mode, {
+        const cmd = attachTxGainDb(fpgaArmCmd(mode, {
           detThr: get().fpgaDetThr,
           detShift: get().fpgaDetShift,
           token: get().fpgaToken,
           ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
           freqMhz: mid,
           ...(tract ? { fsHz: tract.fsHz, bwMhz: tract.bwMhz } : {}),
-        });
+        }), get().txGainDb);
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (armRevoked()) {
@@ -3476,14 +3508,14 @@ export const useLegion = create<LegionStore>((set, get) => {
             set({ fpgaPath: null });
             return false;
           }
-          const armCmd = fpgaArmCmd("lb_gated", {
+          const armCmd = attachTxGainDb(fpgaArmCmd("lb_gated", {
             detThr: thrTable[firstIdx],
             detShift: tract.detShift,
             token: get().fpgaToken,
             freqMhz: first,
             fsHz: tract.fsHz,
             bwMhz: tract.bwMhz,
-          });
+          }), get().txGainDb);
           if (gainDb !== undefined && Number.isFinite(gainDb)) {
             armCmd.gain_db = Math.round(gainDb);
           }
@@ -3556,7 +3588,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             return false;
           }
           const ftw = ncoFtwFromFrac(Number(get().signalParams.fj));
-          const cmd = fpgaArmCmd("nco", {
+          const cmd = attachTxGainDb(fpgaArmCmd("nco", {
             detThr: get().fpgaDetThr,
             detShift: get().fpgaDetShift,
             token: get().fpgaToken,
@@ -3564,7 +3596,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             freqMhz: mhz,
             fsHz: walk.fsHz,
             bwMhz: walk.analogMhz,
-          });
+          }), get().txGainDb);
           const r = await gw(cmd);
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
           if (await abortSoloIfRevoked(true)) return false;
@@ -3673,14 +3705,14 @@ export const useLegion = create<LegionStore>((set, get) => {
           return false;
         }
         const r = await gw(
-          fpgaArmCmd("player", {
+          attachTxGainDb(fpgaArmCmd("player", {
             detThr: get().fpgaDetThr,
             detShift: get().fpgaDetShift,
             token: get().fpgaToken,
             freqMhz: mhz,
             fsHz: walk.fsHz,
             bwMhz: walk.analogMhz,
-          }),
+          }), get().txGainDb),
         );
         pushLog("sys", `FPGA ARM (player): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
         if (await abortSoloIfRevoked(true)) return false;
@@ -3960,7 +3992,14 @@ export const useLegion = create<LegionStore>((set, get) => {
         return;
       }
       const caps = catalogCaps(s.sdrId);
-      const r = await hostOpen(remote, caps.analogBwMhz, caps.canTx, caps.fullDuplex, opts?.requireHw);
+      const r = await hostOpen(
+        remote,
+        caps.analogBwMhz,
+        caps.canTx,
+        caps.fullDuplex,
+        opts?.requireHw,
+        s.txGainDb,
+      );
       if (!r.ok) {
         pushLog("sys", r.reason);
         return;
@@ -3979,6 +4018,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         sdrRemote: remote,
         sdrHostReady: true,
         sdrHostDetail: r.reason,
+        ...(typeof r.txGainMin === "number" && Number.isFinite(r.txGainMin) ? { txGainMin: r.txGainMin } : {}),
+        ...(typeof r.txGainMax === "number" && Number.isFinite(r.txGainMax) ? { txGainMax: r.txGainMax } : {}),
       });
       pushLog("sys", r.reason);
       pushLog("sys", plan.cableText);

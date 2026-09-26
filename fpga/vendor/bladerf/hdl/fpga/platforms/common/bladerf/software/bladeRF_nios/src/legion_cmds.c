@@ -56,6 +56,7 @@
  * сентинелом. */
 static uint32_t legion_air_freq_khz;
 static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
+static uint32_t legion_air_tx_gain_db = 0xFFFFFFFFU;
 static uint32_t legion_air_fs_hz;
 static uint32_t legion_air_bw_hz;
 static uint32_t legion_air_fs_actual; /* прочитанный с чипа fs; 0 = нет факта */
@@ -213,6 +214,7 @@ static bool legion_rfic_standby(void)
     legion_air_dirty = false;
     legion_air_fs_actual = 0;
     legion_air_gain_db = 0xFFFFFFFFU;
+    legion_air_tx_gain_db = 0xFFFFFFFFU;
     DBG("LEGION: эфир в standby\n");
     return true;
 }
@@ -405,6 +407,38 @@ bool legion_air_up(bool rx, bool tx)
         }
         if (legion_air_fs_actual == 0) {
             legion_air_fs_actual = fs_got;
+        }
+        /* TX ещё заглушён: GAIN уходит в кэш mute и встаёт на unmute.
+         * Регистр — дБ тракта (как Soapy/libbladeRF), код +1000.
+         * Команда RFIC на TX — не эти дБ: devices_rfic_cmds.c пишет
+         * ad9361_set_tx_attenuation, единица — мдБ затухания DSA
+         * (10000 → −10 дБ). bladerf2_tx_gain_ranges.offset = 66 дБ,
+         * xA4 и xA9 — одна ступень dsa (wiki Nuand): overall = DSA + 66.
+         * set gain tx1 60 → dsa −6 дБ = 6000 мдБ (≈0 дБм). Пол 89750 мдБ, шаг 250. */
+        if (legion_air_tx_gain_db != 0xFFFFFFFFU) {
+            int32_t g = (int32_t)(legion_air_tx_gain_db - 1000U);
+            int32_t atten_mdb;
+            if (g > 66) {
+                g = 66;
+            }
+            if (g < -23) {
+                g = -23;
+            }
+            atten_mdb = (66 - g) * 1000;
+            if (atten_mdb < 0) {
+                atten_mdb = 0;
+            }
+            if (atten_mdb > 89750) {
+                atten_mdb = 89750;
+            }
+            atten_mdb -= atten_mdb % 250;
+            if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAIN,
+                                          BLADERF_CHANNEL_TX(0),
+                                          (uint32_t)atten_mdb)) {
+                DBG("LEGION: RFIC TX gain — отказ\n");
+                legion_air_fail_rollback();
+                return false;
+            }
         }
     }
 
@@ -1868,6 +1902,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
         case LEGION_REG_SCAN_EVENT:
             return true;
 
+        case LEGION_REG_AIR_TX_GAIN_DB:
+            legion_air_tx_gain_db = data;
+            return true;
+
         case LEGION_REG_AIR_PREP:
             if (data & 0x1) {
                 return legion_air_up((data & 0x2) != 0, (data & 0x4) != 0);
@@ -2002,6 +2040,10 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_SCAN_EVENT) {
         *data = legion_scan_event;
+        return true;
+    }
+    if (addr == LEGION_REG_AIR_TX_GAIN_DB) {
+        *data = legion_air_tx_gain_db;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

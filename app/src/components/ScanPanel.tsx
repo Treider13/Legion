@@ -32,6 +32,7 @@ import {
   paintSpanMhz,
   paintWaveHint,
 } from "../sense/attackPaint";
+import { TxGainControl } from "./TxGainControl";
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
 import { SpectrumScope } from "./SpectrumScope";
@@ -383,6 +384,10 @@ export function ScanPanel() {
           <p className="sens-hint">низкая = все подряд · высокая = только сильные</p>
         </>
       )}
+      <TxGainControl />
+      <p className="sens-hint">
+        дБ тракта TX, не дБи антенны. На bladeRF 60 дБ ≈ 0 дБм на SMA. Авто — 40% диапазона, как раньше.
+      </p>
       <label className="check-row">
         <input
           type="checkbox"

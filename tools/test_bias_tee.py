@@ -212,5 +212,66 @@ class UsbBiasTeeTests(unittest.TestCase):
         self.assertEqual(len(dev.requests), 3)
 
 
+class TxGainTests(unittest.TestCase):
+    def device(self):
+        dev = Mock()
+        dev.getHardwareKey.return_value = "bladerf2"
+        dev.getHardwareInfo.return_value = {}
+        dev.listAntennas.return_value = []
+        dev.getGainRange.return_value = types.SimpleNamespace(
+            minimum=lambda: 0, maximum=lambda: 50)
+        dev.getGain.side_effect = RuntimeError("no readback")
+        return dev
+
+    def tx_sets(self, dev):
+        return [c.args[2] for c in dev.setGain.call_args_list
+                if c.args and c.args[0] == worker.SOAPY_SDR_TX]
+
+    def test_default_is_forty_percent_of_range(self):
+        dev = self.device()
+        info = worker._setup_front_end(dev, True)
+        self.assertEqual(self.tx_sets(dev), [20.0])
+        self.assertEqual(info["txGainDb"], 20.0)
+        self.assertEqual((info["txGainMin"], info["txGainMax"]), (0.0, 50.0))
+
+    def test_xa4_published_range_passes_overall_db(self):
+        """xA4/xA9: Soapy toRange = millidB × 0.001 → −23.75…66.
+        bladerf_set_gain получает дБ тракта. 60 дБ — точка ≈0 дБм (Nuand)."""
+        dev = self.device()
+        dev.getGainRange.return_value = types.SimpleNamespace(
+            minimum=lambda: -23.75, maximum=lambda: 66)
+        info = worker._setup_front_end(dev, True, 60)
+        self.assertEqual(self.tx_sets(dev), [60.0])
+        self.assertEqual(info["txGainDb"], 60.0)
+        self.assertEqual((info["txGainMin"], info["txGainMax"]), (-23.75, 66.0))
+        low = self.device()
+        low.getGainRange.return_value = types.SimpleNamespace(
+            minimum=lambda: -23.75, maximum=lambda: 66)
+        low.getGain.side_effect = RuntimeError("no readback")
+        self.assertEqual(worker._setup_front_end(low, True, -24)["txGainDb"], -23.75)
+        self.assertEqual(self.tx_sets(low), [-23.75])
+
+    def test_requested_gain_is_clamped(self):
+        high = self.device()
+        self.assertEqual(worker._setup_front_end(high, True, 80)["txGainDb"], 50.0)
+        self.assertEqual(self.tx_sets(high), [50.0])
+        low = self.device()
+        self.assertEqual(worker._setup_front_end(low, True, -5)["txGainDb"], 0.0)
+        self.assertEqual(self.tx_sets(low), [0.0])
+
+    def test_rx_only_does_not_set_tx_gain(self):
+        dev = self.device()
+        self.assertIsNone(worker._setup_front_end(dev, False, 30))
+        self.assertEqual(self.tx_sets(dev), [])
+
+    def test_fake_radio_remembers_operator_gain(self):
+        radio = worker.Radio()
+        radio.fake = True
+        result = radio.set_tx_gain(33)
+        self.assertTrue(result["ok"])
+        self.assertEqual(radio.tx_gain_db, 33.0)
+        self.assertFalse(radio.set_tx_gain(float("nan"))["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

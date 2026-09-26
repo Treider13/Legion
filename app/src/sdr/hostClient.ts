@@ -95,7 +95,16 @@ export async function hostOpen(
   canTx: boolean,
   fullDuplex: boolean,
   requireHw?: string,
-): Promise<{ ok: boolean; reason: string; fake?: boolean; hardwareKey?: string }> {
+  txGainDb?: number | null,
+): Promise<{
+  ok: boolean;
+  reason: string;
+  fake?: boolean;
+  hardwareKey?: string;
+  txGainDb?: number;
+  txGainMin?: number;
+  txGainMax?: number;
+}> {
   return hostRpc({
     op: "open",
     args,
@@ -103,7 +112,31 @@ export async function hostOpen(
     canTx,
     fullDuplex,
     ...(requireHw ? { requireHw } : {}),
+    ...(txGainDb != null && Number.isFinite(txGainDb) ? { txGainDb } : {}),
   });
+}
+
+export async function hostTxGain(db: number): Promise<{
+  ok: boolean;
+  reason: string;
+  txGainDb?: number;
+  txGainMin?: number;
+  txGainMax?: number;
+}> {
+  const r = await hostRpc<{
+    ok?: boolean;
+    reason?: string;
+    txGainDb?: number;
+    txGainMin?: number;
+    txGainMax?: number;
+  }>({ op: "tx_gain", db });
+  return {
+    ok: !!r.ok,
+    reason: r.reason ?? "",
+    txGainDb: r.txGainDb,
+    txGainMin: r.txGainMin,
+    txGainMax: r.txGainMax,
+  };
 }
 
 export async function hostIperf3(opts: {

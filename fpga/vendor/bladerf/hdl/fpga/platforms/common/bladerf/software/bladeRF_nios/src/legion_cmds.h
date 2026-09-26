@@ -56,6 +56,7 @@
 #define LEGION_REG_SETTLE_N       0x1B  /* сэмплы после hop; 0 = 4096 */
 #define LEGION_REG_SCAN_SURVEY_US 0x1C  /* период глухого прохода, мкс; 0 = 5e6 */
 #define LEGION_REG_SCAN_EVENT     0x1D  /* [7:0] код, [31:8] seq — лог хоста */
+#define LEGION_REG_AIR_TX_GAIN_DB 0x1E  /* ручной TX gain, дБ; код = gain+1000; 0xFFFFFFFF = не задан */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -74,7 +75,7 @@
 #define LEGION_EVT_LOCK           3u
 #define LEGION_EVT_SWITCH         4u
 #define LEGION_EVT_RESURVEY       5u
-#define LEGION_REG_MAX            LEGION_REG_SCAN_EVENT
+#define LEGION_REG_MAX            LEGION_REG_AIR_TX_GAIN_DB
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */

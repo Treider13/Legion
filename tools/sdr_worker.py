@@ -972,6 +972,8 @@ class Radio:
         self.tx_error: str | None = None
         self.tx_fail = 0
         self.hardware_key = ""
+        # None = 40% диапазона платы. Число — дБ тракта TX, не дБи антенны.
+        self.tx_gain_db: float | None = None
 
     def tx_live(self) -> bool:
         if self.tx_mhz is None or self.tx_error:
@@ -1107,7 +1109,7 @@ class Radio:
             for _ in range(4):
                 try:
                     self.dev = SoapySDR.Device(kwargs_str(cand))
-                    _setup_front_end(self.dev, self.can_tx)
+                    gain_info = _setup_front_end(self.dev, self.can_tx, self.tx_gain_db)
                     last_err = None
                     break
                 except Exception as e:
@@ -1127,13 +1129,18 @@ class Radio:
                 )
                 self._unmake()
                 continue
-            return {
+            opened: dict[str, Any] = {
                 "ok": True,
                 "reason": f"открыт Soapy {cand}"
                 + (f" · {self.hardware_key}" if self.hardware_key else ""),
                 "fake": False,
                 "hardwareKey": self.hardware_key,
             }
+            if gain_info:
+                opened.update(gain_info)
+                if "txGainDb" in gain_info:
+                    opened["reason"] += f" · TX {gain_info['txGainDb']:.1f} дБ"
+            return opened
         return {
             "ok": False,
             "reason": f"Soapy Device(): {last_err}",
@@ -1731,6 +1738,8 @@ class Radio:
                         return _fail(
                             f"park: TX fs {tx_fs / 1e6:.1f} MSPS ≠ запрошенные {fs / 1e6:.1f}"
                         )
+                    # То же усиление, что на хостовом TX: до отдачи USB в FPGA.
+                    _apply_tx_gain(self.dev, self.tx_gain_db)
                     if not rx:
                         got = tx_fs
                 if rx and tx and rx_fs and tx_fs:
@@ -1857,6 +1866,7 @@ class Radio:
                         self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(tx_fs, self.analog_bw * 1e6))
                     except Exception:
                         pass
+                    _apply_tx_gain(self.dev, self.tx_gain_db)
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
                     if self.tx is None:
                         self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
@@ -2024,6 +2034,29 @@ class Radio:
         self._thr = threading.Thread(target=loop, name="legion-sdr-tx", daemon=True)
         self._thr.start()
 
+    def set_tx_gain(self, db: float) -> dict[str, Any]:
+        """Усиление тракта TX, дБ. None больше не используется: оператор задал число."""
+        try:
+            gain = float(db)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "tx_gain: не число"}
+        if not math.isfinite(gain):
+            return {"ok": False, "reason": "tx_gain: не число"}
+        self.tx_gain_db = gain
+        if self.fake or self.dev is None:
+            return {
+                "ok": True,
+                "reason": f"TX {gain:.1f} дБ — применится при открытии SDR",
+                "txGainDb": gain,
+            }
+        if not self.can_tx:
+            return {"ok": False, "reason": "нет TX — усилитель подключать некуда"}
+        info = _apply_tx_gain(self.dev, self.tx_gain_db)
+        if not info or "txGainDb" not in info:
+            return {"ok": False, "reason": "TX gain не записался"}
+        self.tx_gain_db = float(info["txGainDb"])
+        return {"ok": True, "reason": f"TX {self.tx_gain_db:.1f} дБ", **info}
+
     def tx_off(self) -> None:
         self._stop.set()
         if self._thr:
@@ -2055,10 +2088,46 @@ def _fake_bins(center: float, bw: float, n: int) -> list[dict[str, float]]:
     return out
 
 
-def _setup_front_end(dev: Any, can_tx: bool) -> None:
+def _clamp_tx_gain(lo: float, hi: float, requested: float | None) -> float:
+    """None — прежние 40% диапазона. Иначе запрошенные дБ, зажатые в диапазон платы."""
+    if requested is None or not math.isfinite(float(requested)):
+        return lo + 0.4 * (hi - lo)
+    return min(hi, max(lo, float(requested)))
+
+
+def _apply_tx_gain(dev: Any, requested: float | None) -> dict[str, float] | None:
+    """Усиление TX в дБ (Soapy setGain). Не дБи антенны.
+    bladeRF: libbladeRF — 60 дБ ≈ 0 дБм, без калибровки. Отказ не валит открытие."""
+    try:
+        rng = dev.getGainRange(SOAPY_SDR_TX, 0)
+        lo, hi = float(rng.minimum()), float(rng.maximum())
+    except Exception as e:
+        _log(f"setup: диапазон TX gain недоступен ({e}) — пробую 20 дБ")
+        try:
+            dev.setGain(SOAPY_SDR_TX, 0, 20 if requested is None else float(requested))
+        except Exception as e2:
+            _log(f"setup: TX gain не выставлен: {e2}")
+            return None
+        return {"txGainDb": 20.0 if requested is None else float(requested)}
+    target = _clamp_tx_gain(lo, hi, requested)
+    try:
+        dev.setGain(SOAPY_SDR_TX, 0, target)
+    except Exception as e:
+        _log(f"setup: TX gain {target:.2f} дБ не выставлен: {e}")
+        return None
+    applied = target
+    try:
+        applied = float(dev.getGain(SOAPY_SDR_TX, 0))
+    except Exception as e:
+        _log(f"setup: readback TX gain не ответил ({e}) — оставляю запрошенные {target:.2f} дБ")
+    return {"txGainDb": applied, "txGainMin": lo, "txGainMax": hi}
+
+
+def _setup_front_end(dev: Any, can_tx: bool, tx_gain_db: float | None = None) -> dict[str, float] | None:
     """Антенна/gain/DC как DIO-sys capture.cpp. AGC не включаем — на антенне качает пол.
     Bias-T micro обязательно OFF; остальные шаги best-effort, но отказ — в лог:
-    молчаливый пропуск setGain оставлял бы тракт на неизвестном усилении."""
+    молчаливый пропуск setGain оставлял бы тракт на неизвестном усилении.
+    tx_gain_db=None — прежние 40% диапазона TX."""
     if soapy_hw_snapshot(dev)["class"] == "ad9361":
         # Оба питания OFF даже при can_tx=False. readSetting у SoapyBladeRF
         # возвращает константу false, поэтому не выдаём его за readback.
@@ -2103,16 +2172,7 @@ def _setup_front_end(dev: Any, can_tx: bool) -> None:
             dev.setAntenna(SOAPY_SDR_TX, 0, pick or tx_ants[0])
     except Exception as e:
         _log(f"setup: TX-антенна не выставлена: {e}")
-    try:
-        rng = dev.getGainRange(SOAPY_SDR_TX, 0)
-        lo, hi = float(rng.minimum()), float(rng.maximum())
-        dev.setGain(SOAPY_SDR_TX, 0, lo + 0.4 * (hi - lo))
-    except Exception as e:
-        _log(f"setup: TX gain из диапазона не выставлен ({e}) — пробую 20 дБ")
-        try:
-            dev.setGain(SOAPY_SDR_TX, 0, 20)
-        except Exception as e2:
-            _log(f"setup: TX gain 20 дБ тоже не выставлен: {e2}")
+    return _apply_tx_gain(dev, tx_gain_db)
 
 
 def _pick_fft_size(n: int) -> int:
@@ -2337,6 +2397,12 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
     if op == "probe":
         return probe(str(msg.get("args") or ""))
     if op == "open":
+        raw_gain = msg.get("txGainDb")
+        if raw_gain is not None and raw_gain != "":
+            try:
+                radio.tx_gain_db = float(raw_gain)
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "txGainDb: не число"}
         return radio.open(
             str(msg.get("args") or ""),
             float(msg.get("analogBwMhz") or 20),
@@ -2344,6 +2410,8 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             bool(msg.get("fullDuplex", True)),
             str(msg.get("requireHw") or ""),
         )
+    if op == "tx_gain":
+        return radio.set_tx_gain(msg.get("db"))
     if op == "scan":
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
     if op == "attack_scan":
