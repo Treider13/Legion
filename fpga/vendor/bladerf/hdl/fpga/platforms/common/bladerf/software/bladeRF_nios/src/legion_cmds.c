@@ -513,11 +513,6 @@ static uint32_t legion_search_bw(void)
     return legion_look_hz();
 }
 
-static uint32_t legion_fire_bw(void)
-{
-    return legion_fire_bw_hz ? legion_fire_bw_hz : LEGION_FIRE_BW_DEFAULT_HZ;
-}
-
 static uint32_t legion_settle_samples(void)
 {
     return legion_settle_n ? legion_settle_n : LEGION_SETTLE_N_DEFAULT;
