@@ -408,13 +408,32 @@ bool legion_air_up(bool rx, bool tx)
         if (legion_air_fs_actual == 0) {
             legion_air_fs_actual = fs_got;
         }
-        /* TX ещё заглушён. Код как у RX: +1000, сентинел 0xFFFFFFFF = init AD9361.
-         * Старый образ без регистра сюда не доходит — хост не валит ARM. */
+        /* TX ещё заглушён: GAIN уходит в кэш mute и встаёт на unmute.
+         * Регистр — дБ тракта (как Soapy/libbladeRF), код +1000.
+         * Команда RFIC на TX — не эти дБ: devices_rfic_cmds.c пишет
+         * ad9361_set_tx_attenuation, единица — мдБ затухания DSA
+         * (10000 → −10 дБ). bladerf2_tx_gain_ranges.offset = 66 дБ:
+         * overall = DSA + 66, потолок затухания 89750 мдБ, шаг 250. */
         if (legion_air_tx_gain_db != 0xFFFFFFFFU) {
-            int32_t const tx_gain_db = (int32_t)(legion_air_tx_gain_db - 1000U);
+            int32_t g = (int32_t)(legion_air_tx_gain_db - 1000U);
+            int32_t atten_mdb;
+            if (g > 66) {
+                g = 66;
+            }
+            if (g < -23) {
+                g = -23;
+            }
+            atten_mdb = (66 - g) * 1000;
+            if (atten_mdb < 0) {
+                atten_mdb = 0;
+            }
+            if (atten_mdb > 89750) {
+                atten_mdb = 89750;
+            }
+            atten_mdb -= atten_mdb % 250;
             if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAIN,
                                           BLADERF_CHANNEL_TX(0),
-                                          (uint32_t)tx_gain_db)) {
+                                          (uint32_t)atten_mdb)) {
                 DBG("LEGION: RFIC TX gain — отказ\n");
                 legion_air_fail_rollback();
                 return false;

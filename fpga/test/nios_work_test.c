@@ -257,10 +257,13 @@ int main(void)
                            2442500ULL * 1000ULL);
     int i_txen  = rfic_idx(BLADERF_RFIC_COMMAND_ENABLE, BLADERF_CHANNEL_TX(0), 1);
     int i_unmut = rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0);
-    int i_txg = rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 30);
+    /* 30 дБ тракта → (66−30)×1000 = 36000 мдБ затухания DSA, не «30» в команду. */
+    int i_txg = rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 36000);
     CHECK("B3: INIT ON есть", i_init >= 0);
-    CHECK("B3: TX gain 30 дБ после mute и до unmute",
-          i_txg > i_mute && i_txg < i_unmut);
+    CHECK("B3: TX 30 дБ → 36000 мдБ затухания после mute и до unmute",
+          i_txg > i_mute && i_unmut > i_txg);
+    CHECK("B3: сырые 30 дБ в TX GAIN не пишутся",
+          rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 30) < 0);
     CHECK("B3: TXMUTE(1) после INIT и раньше TX FREQUENCY",
           i_mute > i_init && i_txfrq > i_mute);
     CHECK("B3: TXMUTE(0) после ENABLE TX (unmute последним)",

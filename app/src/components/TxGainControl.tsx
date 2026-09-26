@@ -16,7 +16,9 @@ export function TxGainControl({ tone = "lab" }: { tone?: "lab" | "cinema" }) {
   const max = useLegion((s) => s.txGainMax);
   const sdrId = useLegion((s) => s.sdrId);
   const setTxGain = useLegion((s) => s.setTxGain);
-  const shown = txGainDb ?? autoDb(min, max);
+  const lo = Math.round(min);
+  const hi = Math.max(lo, Math.round(max));
+  const shown = Math.min(hi, Math.max(lo, txGainDb ?? autoDb(min, max)));
   const dbm = bladeTxDbm(shown, sdrId);
   const value = `${shown} дБ${txGainDb == null ? " · авто" : ""}${
     dbm == null ? "" : ` · ≈ ${dbm > 0 ? "+" : ""}${dbm} дБм`
@@ -32,8 +34,8 @@ export function TxGainControl({ tone = "lab" }: { tone?: "lab" | "cinema" }) {
         Мощность TX, дБ
         <input
           type="range"
-          min={Math.round(min)}
-          max={Math.round(max)}
+          min={lo}
+          max={hi}
           step={1}
           value={shown}
           aria-label="Мощность TX, дБ"
@@ -50,8 +52,8 @@ export function TxGainControl({ tone = "lab" }: { tone?: "lab" | "cinema" }) {
       <input
         className="att-slider"
         type="range"
-        min={Math.round(min)}
-        max={Math.round(max)}
+        min={lo}
+        max={hi}
         step={1}
         value={shown}
         aria-label="Мощность TX, дБ"
