@@ -87,6 +87,10 @@ BLADERF_PIDS = {0x5246: "bladerf1", 0x5250: "bladerf2"}  # PID → класс п
 EP_OUT = 0x02  # PERIPHERAL_EP_OUT
 EP_IN = 0x82   # PERIPHERAL_EP_IN
 TIMEOUT_MS = 250  # PERIPHERAL_TIMEOUT_MS (как у Nuand)
+# firmware_common/bladeRF.h: NIOS bulk 0x02/0x82 есть только в RF altsetting.
+# После bladeRF-cli интерфейс остаётся NULL — запись в EP даёт EIO (errno 5).
+USB_IF_NULL = 0
+USB_IF_RF_LINK = 1
 
 
 # Пол порога детектора: lb_gated с det_thr ниже floor = гейт на шум.
@@ -184,6 +188,26 @@ class UsbTransport:
         except self._usb.core.USBError:
             self._dev.set_configuration()
 
+    def _arm_nios_interface(self) -> None:
+        """Altsetting RF до любого bulk на PERIPHERAL_EP. libbladeRF делает
+        то же через lusb_change_setting(USB_IF_RF_LINK) перед доступом к NIOS."""
+        dev = self._dev
+        try:
+            if dev.is_kernel_driver_active(0):
+                dev.detach_kernel_driver(0)
+        except Exception:
+            # Нет драйвера ядра или бэкенд не умеет detach — не мешает claim.
+            pass
+        try:
+            self._usb.util.claim_interface(dev, 0)
+        except self._usb.core.USBError as e:
+            if getattr(e, "errno", None) == 16:
+                raise RuntimeError(
+                    "USB занят: закройте SDR в приложении LEGION и запустите агент снова"
+                ) from e
+            raise
+        dev.set_interface_altsetting(interface=0, alternate_setting=USB_IF_RF_LINK)
+
     def _fpga_configured(self) -> bool:
         raw = self._dev.ctrl_transfer(self.USB_TYPE_IN,
                                       self.USB_CMD_QUERY_FPGA_STATUS,
@@ -221,13 +245,25 @@ class UsbTransport:
                 self._find()
                 if not self._fpga_configured():
                     raise RuntimeError("FPGA не поднялась после bladeRF-cli -l")
+            # До bladeRF-cli интерфейс не занимаем: -l тоже хочет USB.
+            self._arm_nios_interface()
             if self.board == "bladerf2":
                 self._disable_bias_tee()
         except Exception:
             # Полуоткрытый handle не оставляем: иначе следующий acquire()
             # сочтётся no-op «успехом» по непустому _dev (плата найдена,
             # но FPGA пуста и LEGION_FPGA_RBF не задан — тот случай).
+            dev = self._dev
             self._dev = None
+            if dev is not None:
+                try:
+                    dev.set_interface_altsetting(interface=0, alternate_setting=USB_IF_NULL)
+                except Exception:
+                    pass
+                try:
+                    self._usb.util.dispose_resources(dev)
+                except Exception:
+                    pass
             raise
 
     def _disable_bias_tee(self) -> None:
@@ -251,6 +287,12 @@ class UsbTransport:
     def release(self) -> None:
         """Отпустить USB (передать владение стрим-серверу — один владелец!)."""
         if self._dev is not None:
+            try:
+                # NULL, как libbladeRF при закрытии: висящий RF altsetting
+                # на Intel XHCI роняет контроллер.
+                self._dev.set_interface_altsetting(interface=0, alternate_setting=USB_IF_NULL)
+            except Exception as e:
+                print(f"legion-gateway: altsetting NULL: {e}", flush=True)
             self._usb.util.dispose_resources(self._dev)
             self._dev = None
 
