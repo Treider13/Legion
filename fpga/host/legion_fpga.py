@@ -58,6 +58,7 @@ REG_BAND_COUNT = 0x1A  # 0 = один коридор SCAN_F1/F2
 REG_SETTLE_N = 0x1B  # сэмплы после hop; 0 = 4096
 REG_SCAN_SURVEY_US = 0x1C  # период глухого прохода, мкс; 0 = 5e6
 REG_SCAN_EVENT = 0x1D  # [7:0] код, [31:8] seq
+REG_AIR_TX_GAIN_DB = 0x1E  # ручной TX gain, дБ; код = gain+1000; только NIOS
 
 SCAN_CTRL_EN = 1 << 0
 SCAN_CTRL_TURN = 1 << 1
@@ -265,6 +266,10 @@ class LegionFpga:
         Код = gain + 1000 (смещение): сентинел «не задан» в NIOS = 0xFFFFFFFF,
         а легальные 0/−1 дБ не должны с ним сталкиваться."""
         return self.write_reg(REG_AIR_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
+
+    def set_air_tx_gain_db(self, gain_db: int) -> bool:
+        """Ручной TX gain, дБ. Тот же код +1000, что у RX: сентинел NIOS не задан."""
+        return self.write_reg(REG_AIR_TX_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
 
     def set_air_fs_hz(self, fs_hz: int) -> bool:
         """Sample rate AD9361, Гц. 0 = дефолт NIOS 2 МГц (эфир lb_gated)."""

@@ -56,6 +56,7 @@
  * сентинелом. */
 static uint32_t legion_air_freq_khz;
 static uint32_t legion_air_gain_db = 0xFFFFFFFFU;
+static uint32_t legion_air_tx_gain_db = 0xFFFFFFFFU;
 static uint32_t legion_air_fs_hz;
 static uint32_t legion_air_bw_hz;
 static uint32_t legion_air_fs_actual; /* прочитанный с чипа fs; 0 = нет факта */
@@ -213,6 +214,7 @@ static bool legion_rfic_standby(void)
     legion_air_dirty = false;
     legion_air_fs_actual = 0;
     legion_air_gain_db = 0xFFFFFFFFU;
+    legion_air_tx_gain_db = 0xFFFFFFFFU;
     DBG("LEGION: эфир в standby\n");
     return true;
 }
@@ -405,6 +407,18 @@ bool legion_air_up(bool rx, bool tx)
         }
         if (legion_air_fs_actual == 0) {
             legion_air_fs_actual = fs_got;
+        }
+        /* TX ещё заглушён. Код как у RX: +1000, сентинел 0xFFFFFFFF = init AD9361.
+         * Старый образ без регистра сюда не доходит — хост не валит ARM. */
+        if (legion_air_tx_gain_db != 0xFFFFFFFFU) {
+            int32_t const tx_gain_db = (int32_t)(legion_air_tx_gain_db - 1000U);
+            if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_GAIN,
+                                          BLADERF_CHANNEL_TX(0),
+                                          (uint32_t)tx_gain_db)) {
+                DBG("LEGION: RFIC TX gain — отказ\n");
+                legion_air_fail_rollback();
+                return false;
+            }
         }
     }
 
@@ -1868,6 +1882,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
         case LEGION_REG_SCAN_EVENT:
             return true;
 
+        case LEGION_REG_AIR_TX_GAIN_DB:
+            legion_air_tx_gain_db = data;
+            return true;
+
         case LEGION_REG_AIR_PREP:
             if (data & 0x1) {
                 return legion_air_up((data & 0x2) != 0, (data & 0x4) != 0);
@@ -2002,6 +2020,10 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_SCAN_EVENT) {
         *data = legion_scan_event;
+        return true;
+    }
+    if (addr == LEGION_REG_AIR_TX_GAIN_DB) {
+        *data = legion_air_tx_gain_db;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

@@ -368,6 +368,29 @@ button.cinema-path:hover:not(:disabled) {
   border-color: rgba(232, 228, 220, 0.35);
 }
 
+.cinema-tx-gain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 18px;
+  font-size: 11px;
+  color: rgba(232, 228, 220, 0.5);
+}
+
+.cinema-tx-gain input[type="range"] {
+  width: 100%;
+  accent-color: #efe8dc;
+  background: transparent;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cinema-tx-gain span {
+  font-variant-numeric: tabular-nums;
+  color: #efe8dc;
+}
+
 .cinema-gate-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -384,7 +407,7 @@ button.cinema-path:hover:not(:disabled) {
 }
 
 .cinema-gate-card input[type="text"],
-.cinema-gate-card input:not([type="checkbox"]) {
+.cinema-gate-card input:not([type="checkbox"]):not([type="range"]) {
   background: #07080c;
   border: 1px solid rgba(232, 228, 220, 0.16);
   color: #efe8dc;

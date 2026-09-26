@@ -247,6 +247,7 @@ int main(void)
     rfic_read_value = BLADERF_GAIN_MGC;
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2442500);
     legion_reg_write(LEGION_REG_AIR_GAIN_DB, 42 + 1000);
+    legion_reg_write(LEGION_REG_AIR_TX_GAIN_DB, 30 + 1000);
     CHECK("AIR_PREP up ok", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
 
     int i_init  = rfic_idx(BLADERF_RFIC_COMMAND_INIT, RFIC_SYSTEM_CHANNEL,
@@ -256,7 +257,10 @@ int main(void)
                            2442500ULL * 1000ULL);
     int i_txen  = rfic_idx(BLADERF_RFIC_COMMAND_ENABLE, BLADERF_CHANNEL_TX(0), 1);
     int i_unmut = rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0);
+    int i_txg = rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 30);
     CHECK("B3: INIT ON есть", i_init >= 0);
+    CHECK("B3: TX gain 30 дБ после mute и до unmute",
+          i_txg > i_mute && i_txg < i_unmut);
     CHECK("B3: TXMUTE(1) после INIT и раньше TX FREQUENCY",
           i_mute > i_init && i_txfrq > i_mute);
     CHECK("B3: TXMUTE(0) после ENABLE TX (unmute последним)",

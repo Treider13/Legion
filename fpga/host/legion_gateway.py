@@ -299,6 +299,7 @@ class FakeTransport:
         self.fail_control_read = False
         self.fail_ctrl_write = False  # сбой записи REG_CTRL (откат эфира в ARM)
         self.fail_kick = False  # ответ без SUCCESS на запись WD_KICK
+        self.reject_reg = None  # адрес, на запись которого нет SUCCESS (старый образ)
         self.board = board  # bladerf1 | bladerf2 — ветка эфира в ARM
         # Модель липкого латча NIOS (bit4 STATUS): deadman сработал —
         # после автономного DISARM HDL-бит wd_fired (bit3) гаснет за мкс.
@@ -326,6 +327,9 @@ class FakeTransport:
         resp[0] = lf.NIOS_PKT_8x32_MAGIC
         resp[1] = req[1]
         resp[2] = lf.NIOS_PKT_8x32_FLAG_SUCCESS
+        if write and self.reject_reg is not None and addr == self.reject_reg:
+            resp[2] = 0
+            return bytes(resp)
         if target == 0x01:
             # Штатный CONTROL: readback = текущее значение (control_reg_read)
             if not write and self.fail_control_read:
@@ -540,6 +544,20 @@ class LegionGateway:
             gain = msg.get("gain_db")
             if gain is not None and not self.fpga.set_air_gain_db(int(gain)):
                 return False, "micro: запись AIR_GAIN_DB не удалась"
+            tx_gain = msg.get("tx_gain_db")
+            if tx_gain is not None:
+                try:
+                    tx_gain_i = int(tx_gain)
+                except (TypeError, ValueError):
+                    return False, "micro: tx_gain_db не число"
+                # Старый legion без 0x1E отвечает отказом. ARM не рвём:
+                # Bias-T и остальной подъём как раньше, TX остаётся из init.
+                if not self.fpga.set_air_tx_gain_db(tx_gain_i):
+                    print(
+                        "legion-gateway: AIR_TX_GAIN_DB не принят — образ без "
+                        "регистра TX (пересоберите КАСТОМ FPGA); ARM продолжается",
+                        flush=True,
+                    )
             # Первый подъём — полный ad9361_init на NIOS (сотни мс, длинный
             # таймаут внутри air_prepare); дальше — тёплый рестор из standby.
             if not self.fpga.air_prepare(True, rx=rx, tx=True):
@@ -777,6 +795,8 @@ class LegionGateway:
                 log = "bladeRF-cli: timeout 180 с"
             time.sleep(0.5)  # re-enumerate после -l (как в _load_fpga)
             try:
+                # Тот же acquire, что при старте: на micro снова гасит Bias-T
+                # RX/TX. Кастомный legionx*.rbf эти биты сам не включает.
                 if hasattr(t, "acquire"):
                     t.acquire()
                 self._detect_legion()  # после -l в FPGA новая ревизия

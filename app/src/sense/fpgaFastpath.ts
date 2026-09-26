@@ -494,6 +494,15 @@ export function ncoFtwFromFrac(fj: number): number {
   return Math.round(frac * 2 ** 32) >>> 0;
 }
 
+/** Дописывает усиление TX (дБ тракта) в команду ARM. null — не трогаем init AD9361. */
+export function attachTxGainDb(
+  cmd: Record<string, unknown>,
+  txGainDb: number | null,
+): Record<string, unknown> {
+  if (txGainDb != null && Number.isFinite(txGainDb)) cmd.tx_gain_db = Math.round(txGainDb);
+  return cmd;
+}
+
 /** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco.
  *  freq_mhz — LO парковки: на micro без неё шлюз честно отказывает (AD9361
  *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */

@@ -5,6 +5,7 @@ import { catalogCaps } from "../../sdr/hostClient";
 import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaSurveyPeriodClamp, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { autoDispatchOptionRu, FPGA_AI_OPTION_RU, FPGA_AIR_MODE_RU, fpgaInnerDispatch, type AutoDispatch } from "../../sense/modes";
+import { TxGainControl } from "../TxGainControl";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
 
@@ -475,6 +476,8 @@ export function StartGate({ mode, onClose }: Props) {
             </label>
           </>
         )}
+
+        {mode === "sdr" ? <TxGainControl tone="cinema" /> : null}
 
         {err ? <p className="cinema-gate-err">{err}</p> : null}
 
