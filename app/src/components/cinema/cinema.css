@@ -398,6 +398,10 @@ button.cinema-path:hover:not(:disabled) {
   margin-bottom: 18px;
 }
 
+.cinema-gate-row-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .cinema-gate-card label {
   display: flex;
   flex-direction: column;
