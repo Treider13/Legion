@@ -52,9 +52,11 @@ export function StartGate({ mode, onClose }: Props) {
   const [path, setPath] = useState<FpgaStartPath>("auto");
   const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
+  const storedSoloStep = useLegion((s) => s.fpgaSoloStepMhz);
   const [windowMhz, setWindowMhz] = useState(
     path === "solo" ? storedWindow : storedAirBw,
   );
+  const [soloStepMhz, setSoloStepMhz] = useState(storedSoloStep);
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
@@ -75,12 +77,13 @@ export function StartGate({ mode, onClose }: Props) {
         // Эфир: предпросмотр сетки по реальному каналу (урезан фильтром платы),
         // чтобы совпасть с тем, что посчитает startFpgaPath.
         windowMhz: path === "air" ? clampAirBwMhz(parseFloat(windowMhz), analogMax) : parseFloat(windowMhz),
+        stepMhz: path === "solo" ? parseLocaleNumber(soloStepMhz) : undefined,
         analogMaxMhz: analogMax,
         dwellMs: parseFloat(dwellMs),
         pattern,
         wave,
       }),
-    [f1, f2, windowMhz, dwellMs, pattern, wave, analogMax, path],
+    [f1, f2, windowMhz, soloStepMhz, dwellMs, pattern, wave, analogMax, path],
   );
   const hopNo = walkPlan.ok
     ? path === "air"
@@ -138,6 +141,7 @@ export function StartGate({ mode, onClose }: Props) {
         pattern,
         dispatch,
         detThr,
+        stepMhz: path === "solo" ? soloStepMhz : undefined,
       });
       if (!ok) {
         setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
@@ -314,7 +318,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-gate-lead">
               {path === "air"
                 ? "Канал — ширина ретрансляции на стоянке: вся мощность усилителя идёт в него. Коридор ÷ канал = стоянки. На каждой детектор и RX→TX по энергии; пороги меряются калибровкой при старте."
-                : "Число — ширина пятна на усилителе. Коридор ÷ окно = стоянки. Окно ≥ коридора — одна точка, без прыжков. Тон остаётся палочкой."}
+                : "Окно — полка на усилителе: часы и фильтр. Шум занимает её целиком, тон остаётся палочкой. Пустой шаг равен полке. Свой шаг только двигает центр."}
             </p>
             <div className="cinema-gate-row">
               <label title={path === "air"
@@ -323,6 +327,18 @@ export function StartGate({ mode, onClose }: Props) {
                 {path === "air" ? "Канал, МГц" : "Окно, МГц"}
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
+              {path === "solo" && (
+                <label title="На сколько мегагерц прыгает центр. Пусто — шаг равен полке, куски стыкуются.">
+                  Шаг, МГц
+                  <input
+                    aria-label="Шаг стоянок solo"
+                    value={soloStepMhz}
+                    onChange={(e) => setSoloStepMhz(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="как полка"
+                  />
+                </label>
+              )}
               <label title="Сколько миллисекунд стоять на каждой точке перед переходом к следующей.">
                 Задержка, мс
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />

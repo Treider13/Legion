@@ -503,6 +503,33 @@ def stream_kind(ret: int) -> str:
     return "error"
 
 
+def write_stream_all(dev: Any, stream: Any, buf: Any, timeout_us: int, underflow_limit: int = 8) -> tuple[int, str]:
+    """Дописывает буфер кусками. SoapySDR writeStream имеет право вернуть меньше,
+    чем просили: короткий ret>0 — не отказ (пачка 4096 из 65536). Ошибка — ret≤0.
+    """
+    total = int(len(buf))
+    if total <= 0:
+        return 0, "empty"
+    off = 0
+    underflows = 0
+    while off < total:
+        view = buf[off:]
+        sr = dev.writeStream(stream, [view], int(len(view)), timeoutUs=timeout_us)
+        ret = stream_ret(sr)
+        if ret > 0:
+            off += min(int(ret), total - off)
+            underflows = 0
+            continue
+        kind = stream_kind(ret)
+        if kind == "underflow":
+            underflows += 1
+            if underflows >= underflow_limit:
+                return off, "underflow"
+            continue
+        return off, kind
+    return total, "ok"
+
+
 def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.25):
     """Непрерывный синус, не DC. DC на LMS/AD9361 часто давит IQ-коррекция.
     Источник: Deepwave transmit_tone + пример SoapySDR writeStream CF32."""
@@ -2000,11 +2027,9 @@ class Radio:
                         self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
                         self.dev.activateStream(self.tx)
                         created = True
-                    # MeasureDelay: if status.ret != len(tx_pulse): raise
-                    sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
-                    ret = stream_ret(sr)
-                    kind = stream_kind(ret)
-                    if ret != len(buf):
+                    # Soapy: один writeStream часто отдаёт MTU (4096), не весь буфер.
+                    written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
+                    if kind != "ok" or written != len(buf):
                         if prev_mhz is not None:
                             self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, prev_fs))
                         elif created and self.tx is not None:
@@ -2016,7 +2041,7 @@ class Radio:
                             self.tx = None
                         return {
                             "ok": False,
-                            "reason": f"writeStream {kind} ret={ret} (ждали {len(buf)}) — сигнала на RF out нет",
+                            "reason": f"writeStream {kind} ret={written} (ждали {len(buf)}) — сигнала на RF out нет",
                             "latencyUs": 0,
                         }
                     self._tone = buf
@@ -2139,12 +2164,10 @@ class Radio:
                         break
                     timeout = stream_timeout_us(len(buf), self._tx_fs if self._tx_fs > 0 else TX_FS)
                     try:
-                        sr = self.dev.writeStream(self.tx, [buf], len(buf), timeoutUs=timeout)
+                        _written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
                     except Exception as e:
                         self.tx_error = f"writeStream exception: {e}"
                         break
-                    ret = stream_ret(sr)
-                    kind = stream_kind(ret)
                     if kind == "ok":
                         self.tx_fail = 0
                         continue
@@ -2152,7 +2175,7 @@ class Radio:
                         # не хватило сэмплов вовремя — пишем снова, это не «нет RF»
                         continue
                     if kind == "error":
-                        self.tx_error = f"writeStream {kind} ret={ret}"
+                        self.tx_error = f"writeStream {kind} ret={_written}"
                         break
                     self.tx_fail += 1
                     if self.tx_fail >= TX_FAIL_LIMIT:

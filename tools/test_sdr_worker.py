@@ -740,6 +740,43 @@ def main() -> int:
         check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
         check("AD9361: _tx_fs берёт часы RX", abs(rt._tx_fs - 10e6) < 1)
 
+        class _ChunkTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.got = 0
+
+            def writeStream(self, _stream, buffs, n, **_k):
+                take = min(4096, int(n))
+                self.got += take
+                return type("S", (), {"ret": take})()
+
+        chunk = w.Radio()
+        chunk.fake = False
+        chunk.hardware_key = "bladerf2"
+        chunk._tx_fs = 2e6
+        chunk.dev = _ChunkTx()
+        big = np_bbpll.zeros(65536, dtype=np_bbpll.complex64)
+        chunked = chunk._tx_prime(big, 2442e6, None, 2e6)
+        check(
+            "writeStream 4096 из 65536 дописывается, TX не гасится",
+            chunked is None and chunk.dev.got == 65536,
+        )
+
+        class _FailTx(_TxClk):
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": -1})()
+
+        bad = w.Radio()
+        bad.fake = False
+        bad.hardware_key = "bladerf2"
+        bad._tx_fs = 2e6
+        bad.dev = _FailTx()
+        refused = bad._tx_prime(big, 2442e6, None, 2e6)
+        check(
+            "writeStream timeout гасит TX",
+            isinstance(refused, dict) and refused.get("ok") is False and "сигнала на RF out нет" in str(refused.get("reason")),
+        )
+
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading
     gw_env = os.environ.copy()

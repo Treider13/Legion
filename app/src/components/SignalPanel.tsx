@@ -16,6 +16,7 @@ import {
   waveMeta,
   type WaveKind,
 } from "../sdr/waveforms";
+import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { isFpgaAirLive } from "../sense/modes";
 import { useLegion } from "../state/store";
 
@@ -144,10 +145,11 @@ export function SignalPanel() {
     <section className="panel">
       <span className="panel-title">ТИП СИГНАЛА // BASEBAND → SDR</span>
       <p className="panel-note">
-        Волна синтезируется на ноутбуке (fs {WAVE_FS / 1e6} МГц, буфер 65536 I/Q) и
-        непрерывно стримится в SDR по USB/Ethernet: SDR — это ЦАП + RF-тракт, он волну
-        НЕ хранит. Отключили ноутбук/программу — TX остановился (буфер SDR пустеет за
-        миллисекунды). «Зашить» = выбрать контент потока, а не прошить FPGA.
+        Волна синтезируется на ноутбуке (полка {s.txShelfMhz} МГц — часы и фильтр, буфер 65536 I/Q) и
+        непрерывно стримится в SDR: плата волну не хранит. Выбор типа вшивает его во все
+        режимы передачи, кроме умной атаки. Гауссов шум занимает полку целиком
+        {waveFillsSoloWindow(s.signalKind) ? "— эта волна её заполнит" : "— эта волна останется уже полки"}.
+        «Зашить» ставит её на одну частоту, не прошивает FPGA.
         Предпросмотр — точная модель спектра. ЗАШИТЬ — только при подтверждённой
         нагрузке 50 Ом (вкладка СКАН + TX SDR) и полосе allowlist.
         ESP32 в этом тракте не участвует.
@@ -167,6 +169,16 @@ export function SignalPanel() {
               </option>
             ))}
           </select>
+        </label>
+        <label title="Ширина горба: часы выборки и фильтр TX. Шум занимает это число. Тон и QPSK — нет.">
+          ПОЛКА МГц
+          <input
+            aria-label="Полка передачи, МГц"
+            value={s.txShelfMhz}
+            onChange={(e) => s.setTxShelfMhz(e.target.value)}
+            disabled={busy}
+            inputMode="decimal"
+          />
         </label>
         <label>
           ЧАСТОТА RF МГц

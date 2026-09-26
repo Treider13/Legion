@@ -15,6 +15,8 @@ export async function runSmartStart(opts: {
   loadOk: boolean;
   path: FpgaStartPath;
   windowMhz?: string;
+  /** Solo: шаг стоянок. Пусто — равен окну (полке). */
+  stepMhz?: string;
   dwellMs?: string;
   surveyPeriodMs?: string;
   pattern?: FpgaSoloPattern;
@@ -58,6 +60,7 @@ export async function runSmartStart(opts: {
     if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
   } else {
     if (opts.windowMhz !== undefined) s.setFpgaSoloWindowMhz(opts.windowMhz);
+    if (opts.stepMhz !== undefined) s.setFpgaSoloStepMhz(opts.stepMhz);
     if (opts.dwellMs !== undefined) s.setFpgaSoloDwellMs(opts.dwellMs);
     if (opts.pattern !== undefined) s.setFpgaSoloPattern(opts.pattern);
   }
