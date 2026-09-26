@@ -16,6 +16,13 @@ commit 35174c30b009cdb335800c411f3c14d45283f12b
   fpga_common, firmware_common      — форматы NIOS-пакетов, USB ID
   host/libraries/libbladeRF/include — libbladeRF.h (золотой тест)
   host/libraries/libbladeRF/src/backend/usb — usb.h (константы EP для теста)
+  host/cmake/modules            — FindPatcher.cmake (libad936x ищет patch или git)
+  thirdparty/analogdevicesinc/no-OS_local — патчи Nuand и platform_bladerf2_headless
+  thirdparty/analogdevicesinc/no-OS/ad9361/sw — драйвер AD9361
+      analogdevicesinc/no-OS commit 0bba46e6f6f75785a65d425ece37d0a04daf6157
+      (gitlink в bladeRF 35174c30). Лицензия — BSD-текст в заголовках ad9361.h.
+      Без этого каталога NIOS-make micro падает:
+      No rule to make target .../no-OS/ad9361/sw/*
 
 Обновление: fpga/vendor/sync_vendor.sh <git-ref> (по умолчанию — коммит выше),
 затем интеграция legion применяется заново (она уже в дереве — см. ниже).
