@@ -101,6 +101,7 @@ import {
   planFpgaAir,
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
+import { shelfFsHz } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
   airHopBlockedReason,
@@ -298,6 +299,8 @@ interface LegionStore {
   /** Атака: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
+  /** Полка TX, МГц: часы и фильтр. Шаг (scanWindowMhz) её не задаёт. */
+  txShelfMhz: string;
   scanDwellMs: string;
   sdrHoldSince: number | null;
   scanCenterMhz: number | null;
@@ -390,8 +393,10 @@ interface LegionStore {
   fpgaAirWalkPattern: FpgaSoloPattern;
   /** Главный старт: только FPGA или эфир+FPGA. null — не с главного кадра. */
   fpgaPath: "solo" | "air" | null;
-  /** Solo: ширина окна на усилитель, МГц (не analog-потолок). */
+  /** Solo: ширина окна на усилитель, МГц (не analog-потолок). Полка. */
   fpgaSoloWindowMhz: string;
+  /** Solo: шаг стоянок. Пусто — равен окну. */
+  fpgaSoloStepMhz: string;
   fpgaSoloDwellMs: string;
   fpgaSoloPattern: FpgaSoloPattern;
   // журнал
@@ -426,6 +431,7 @@ interface LegionStore {
   setScanPattern(p: ScanPattern): void;
   setAutoDispatch(d: AutoDispatch): void;
   setScanWindowMhz(v: string): void;
+  setTxShelfMhz(v: string): void;
   setScanDwellMs(v: string): void;
   setAttackPaint(p: AttackPaint | null): void;
   setAttackPaintDraft(p: AttackPaint | null): void;
@@ -489,6 +495,7 @@ interface LegionStore {
   setFpgaAirDwellMs(v: string): void;
   setFpgaAirWalkPattern(p: FpgaSoloPattern): void;
   setFpgaSoloWindowMhz(v: string): void;
+  setFpgaSoloStepMhz(v: string): void;
   setFpgaSoloDwellMs(v: string): void;
   setFpgaSoloPattern(p: FpgaSoloPattern): void;
   fpgaArm(): Promise<void>;
@@ -1097,6 +1104,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     void runHandoffAsync(mhz, powerDbm);
   };
 
+  /** Часы и фильтр TX = полка. Шаг сюда не входит. */
+  const shelfFsNow = (): number =>
+    shelfFsHz(parseLocaleNumber(get().txShelfMhz), catalogCaps(get().sdrId).analogBwMhz);
+
   const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
     const st = get();
     const caps = catalogCaps(st.sdrId);
@@ -1119,7 +1130,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         const armed = get().txWaveKind;
         const tx = gLive
           ? armed
-            ? await hostTxWave(plan.freqMhz, armed, get().txWaveParams)
+            ? await hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())
             : await hostTx(plan.freqMhz)
           : armed
             ? gSdr.txWave(plan.freqMhz, armed)
@@ -1164,7 +1175,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     const armed = get().txWaveKind;
     const tx = gLive
       ? armed
-        ? await hostTxWave(mhz, armed, get().txWaveParams)
+        ? await hostTxWave(mhz, armed, get().txWaveParams, shelfFsNow())
         : await hostTx(mhz)
       : armed
         ? gSdr.txWave(mhz, armed)
@@ -1916,6 +1927,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanPattern: "auto",
     autoDispatch: "park",
     scanWindowMhz: "20",
+    txShelfMhz: "2",
     scanDwellMs: "40",
     scanCenterMhz: null,
     scanBins: [],
@@ -1986,6 +1998,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaAirWalkPattern: "sweep",
     fpgaPath: null,
     fpgaSoloWindowMhz: "10",
+    fpgaSoloStepMhz: "",
     fpgaSoloDwellMs: "500",
     fpgaSoloPattern: "sweep",
     log: [],
@@ -2212,6 +2225,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
     setAutoDispatch: (d) => set({ autoDispatch: d }),
     setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
+    setTxShelfMhz: (v) => set({ txShelfMhz: v }),
     setScanDwellMs: (v) => set({ scanDwellMs: v }),
     clearLog: () => set({ log: [] }),
     startLabBaseline: () => {
@@ -2885,7 +2899,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       await runHandoff(mhz);
     },
 
-    setSignalKind: (k) => set({ signalKind: k, signalParams: defaultParams(k) }),
+    setSignalKind: (k) => {
+      const params = defaultParams(k);
+      // Выбор типа и есть вшивание: качание, атака и одна частота берут его.
+      set({ signalKind: k, signalParams: params, txWaveKind: k, txWaveParams: params });
+    },
 
     armTxWave: (kind) => {
       if (get().signalTxActive) {
@@ -2899,11 +2917,16 @@ export const useLegion = create<LegionStore>((set, get) => {
         txWaveKind: kind,
         txWaveParams: params,
       });
-      pushLog("sys", `TX-волна выбрана: ${kind} (в эфир не уходит до ПЕРЕДАТЬ)`);
+      pushLog("sys", `тип помехи вшит: ${kind}. В эфир — по ПЕРЕДАТЬ. Полка задаёт ширину шума, не тона`);
     },
 
     setSignalParam: (key, v) =>
-      set((s) => ({ signalParams: { ...s.signalParams, [key]: v } })),
+      set((s) => {
+        const signalParams = { ...s.signalParams, [key]: v };
+        // Вшитая волна и предпросмотр — одни параметры. CW (не вшито) не трогаем.
+        if (s.txWaveKind === null) return { signalParams };
+        return { signalParams, txWaveParams: { ...s.txWaveParams, [key]: v } };
+      }),
 
     setSignalFreqMhz: (v) => set({ signalFreqMhz: v }),
 
@@ -2968,7 +2991,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       let tx;
       try {
         tx = gLive
-          ? await hostTxWave(mhz, kind, get().signalParams)
+          ? await hostTxWave(mhz, kind, get().signalParams, shelfFsNow())
           : gSdr.txWave(mhz, kind);
       } finally {
         gSignalBusy = false;
@@ -2984,7 +3007,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastForwardMhz: mhz,
         lastSdrTxUs: tx.latencyUs || null,
         sdrHoldSince: Date.now(),
-        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
+        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · полка ${get().txShelfMhz} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
       });
     },
 
@@ -3023,6 +3046,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaAirDwellMs: (v) => set({ fpgaAirDwellMs: v }),
     setFpgaAirWalkPattern: (p) => set({ fpgaAirWalkPattern: p === "hop" ? "hop" : "sweep" }),
     setFpgaSoloWindowMhz: (v) => set({ fpgaSoloWindowMhz: v }),
+    setFpgaSoloStepMhz: (v) => set({ fpgaSoloStepMhz: v }),
     setFpgaSoloDwellMs: (v) => set({ fpgaSoloDwellMs: v }),
     setFpgaSoloPattern: (p) => set({ fpgaSoloPattern: p === "hop" ? "hop" : "sweep" }),
 
@@ -3544,10 +3568,12 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
 
         const kind = get().txWaveKind ?? get().signalKind;
+        const soloStep = parseLocaleNumber(get().fpgaSoloStepMhz);
         const walk = planFpgaSoloWalk({
           f1Mhz: f1,
           f2Mhz: f2,
           windowMhz: parseFloat(get().fpgaSoloWindowMhz),
+          stepMhz: Number.isFinite(soloStep) && soloStep > 0 ? soloStep : undefined,
           analogMaxMhz: analog,
           dwellMs: parseFloat(get().fpgaSoloDwellMs),
           pattern: get().fpgaSoloPattern,

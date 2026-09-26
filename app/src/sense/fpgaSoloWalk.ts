@@ -1,8 +1,9 @@
 // ============================================================================
 // LEGION — FPGA без сканера: сетка стоянок.
-// Коридор ÷ окно (вверх). Окно ≥ коридора → одна стоянка, без прыжков.
-// analog на чипе = min(окно, analog платы). Сетка hop считает окно
-// оператора, не потолок фильтра: «100 без прыжков» остаётся одной точкой.
+// Коридор ÷ шаг (вверх). Шаг пуст — сетка равна окну. Окно ≥ коридора и
+// шаг не уже окна → одна стоянка, без прыжков.
+// analog и fs = окно, не шаг. Сетка не сжимается к потолку фильтра:
+// «100 без прыжков» остаётся одной точкой, пока шаг не задан отдельно.
 // fs = max(analog×1e6, 520834): BW min 200 кГц ≠ sample-rate min AD9361.
 // Эфир + сканер сюда не входят.
 // ============================================================================
@@ -64,7 +65,10 @@ export function waveFillsSoloWindow(kind: string): boolean {
 export interface FpgaSoloWalkInput {
   f1Mhz: number;
   f2Mhz: number;
+  /** Полка: часы и фильтр. Гауссов шум занимает её целиком. */
   windowMhz: number;
+  /** Шаг стоянок. Пусто — равен полке, как раньше. */
+  stepMhz?: number;
   analogMaxMhz?: number;
   dwellMs?: number;
   pattern?: FpgaSoloPattern;
@@ -131,7 +135,11 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     return empty("FPGA solo: задайте окно на усилитель > 0 МГц");
   }
   const spanMhz = Math.round((band.f2Mhz - band.f1Mhz) * 1000) / 1000;
-  const centers = planCenters([band], hopWindowMhz);
+  const gridMhz =
+    i.stepMhz !== undefined && Number.isFinite(i.stepMhz) && i.stepMhz > 0
+      ? clampSoloHopWindowMhz(i.stepMhz)
+      : hopWindowMhz;
+  const centers = planCenters([band], gridMhz);
   const hops = centers.length;
   const hop = hops > 1;
   const how = hop ? (pattern === "hop" ? "случайно" : "туда-сюда") : "без прыжков";
@@ -143,7 +151,9 @@ export function planFpgaSoloWalk(i: FpgaSoloWalkInput): FpgaSoloWalkPlan {
     : "";
   return {
     ok: true,
-    reason: `коридор ${spanMhz} МГц · окно ${hopWindowMhz} МГц → ${hops} ${standingWordRu(hops)} · ${how}${clampHint} · ${fillHint}`,
+    reason: `коридор ${spanMhz} МГц · окно ${hopWindowMhz} МГц${
+      Math.abs(gridMhz - hopWindowMhz) > 1e-6 ? ` · шаг ${gridMhz} МГц` : ""
+    } → ${hops} ${standingWordRu(hops)} · ${how}${clampHint} · ${fillHint}`,
     spanMhz,
     hopWindowMhz,
     analogMhz,

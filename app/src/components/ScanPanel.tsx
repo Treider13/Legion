@@ -19,6 +19,7 @@ import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
+import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
 import { lookRu } from "../sense/attackLook";
@@ -282,7 +283,38 @@ export function ScanPanel() {
                 disabled={busy}
               />
             </label>
+            <label title="Ширина горба на анализаторе: часы и фильтр TX одним числом. Гауссов шум занимает полку целиком. QPSK и тон остаются узкими. Шаг только переносит центр.">
+              ПОЛКА МГц
+              <input
+                aria-label="Полка передачи, МГц"
+                value={s.txShelfMhz}
+                onChange={(e) => s.setTxShelfMhz(e.target.value)}
+                disabled={busy}
+              />
+            </label>
           </>
+        )}
+        {!fpgaAir && !taskLive && !auto && (
+          <label title="Вшивается во все режимы передачи, кроме умной атаки. В эфир уходит по ПЕРЕДАТЬ.">
+            ТИП ПОМЕХИ
+            <select
+              aria-label="Тип помехи"
+              value={s.txWaveKind ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) s.disarmTxWave();
+                else s.armTxWave(v as WaveKind);
+              }}
+              disabled={busy}
+            >
+              <option value="">CW тон</option>
+              {WAVE_CATALOG.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.title}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         {auto && (
           <>
@@ -339,7 +371,11 @@ export function ScanPanel() {
               : s.autoDispatch === "park"
                 ? "рамки нет: стоянка в узком коридоре. Широкий линк обведите мышкой сами."
                 : "рамки нет: очередь засечек. Широкий линк обведите мышкой сами."
-            : "без сканера: ноутбук по Ethernet ставит TX LO до стопа (качание / сплошная / случайная)"}
+            : `без сканера: ноутбук ставит TX до стопа. Шаг двигает центр. Полка ${s.txShelfMhz} МГц — ширина горба${
+                s.txWaveKind && waveFillsSoloWindow(s.txWaveKind)
+                  ? ", шум займёт её целиком"
+                  : ". Тон и QPSK уже полки — горб останется узким"
+              }`}
       </p>
       {!fpgaAir && !taskLive && (
         <p className="sens-hint">

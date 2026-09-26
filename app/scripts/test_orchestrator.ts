@@ -89,6 +89,7 @@ import {
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
+import { shelfFsHz } from "../src/sense/txShelf";
 import {
   applyLook,
   colOfMhz,
@@ -1600,6 +1601,11 @@ async function main(): Promise<void> {
   check("план 5 пишет стоянок, не стоянки", w20.reason.includes("5 стоянок"));
   const w10 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 10 });
   check("10 МГц на 100 → 10 стоянок", w10.hops === 10);
+  const split = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 30, stepMhz: 10, wave: "awgn" });
+  check("solo: полка 30, шаг 10 — 10 стоянок, fs 30 МГц", split.ok && split.hops === 10 && split.fsHz === 30e6 && split.analogMhz === 30);
+  check("полка 30 на micro = 30 Мвыб/с", shelfFsHz(30, 56) === 30e6);
+  check("полка 30 на x40 режется фильтром 28", shelfFsHz(30, 28) === 28e6);
+  check("полка по умолчанию 2 МГц", shelfFsHz(Number.NaN, 56) === 2e6);
   const w2 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 2, pattern: "hop" });
   check("2 МГц: много стоянок и hop", w2.hops === 50 && w2.pattern === "hop");
   const w3 = planFpgaSoloWalk({ f1Mhz: 2400, f2Mhz: 2500, windowMhz: 3, pattern: "sweep" });
@@ -1997,6 +2003,8 @@ async function main(): Promise<void> {
   check("отзыв после попытки ARM требует DISARM даже при потерянном ответе", storeSrc.includes("abortAirIfRevoked(true)") && storeSrc.includes("abortSoloIfRevoked(true)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
+  check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())"));
+  check("зашить передаёт полку в часы TX", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, shelfFsNow())"));
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
   check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
   const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат «энергия"));
