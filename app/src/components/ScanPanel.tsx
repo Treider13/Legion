@@ -59,6 +59,21 @@ export function ScanPanel() {
   const fpgaSpan = parkSpanMhz(fpgaBands);
   const tract = airTractParams(parseLocaleNumber(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
   const fpgaWindowUs = tract.windowUs;
+  const shelfByGlance = fpgaAir && !taskLive;
+  const shelfField = (
+    <label
+      className="shelf-mark"
+      title="Ширина горба на анализаторе: часы и фильтр TX одним числом. Гауссов шум занимает полку целиком. QPSK и тон остаются узкими. Шаг только переносит центр. Умная атака и эфир копируют антенну — их ширину задаёт ВЗГЛЯД или канал, не это поле."
+    >
+      ПОЛКА МГц
+      <input
+        aria-label="Полка передачи, МГц"
+        value={s.txShelfMhz}
+        onChange={(e) => s.setTxShelfMhz(e.target.value)}
+        disabled={busy}
+      />
+    </label>
+  );
 
   return (
     <section className="panel">
@@ -179,6 +194,7 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
+            {shelfField}
             <label title="Лабораторный параметр: за какое окно сэмплов детектор усредняет энергию (2^N сэмплов). Больше окно — стабильнее порог, но медленнее реакция. Обычно менять не нужно.">
               УСРЕДНЕНИЕ ДЕТЕКТОРА
               <input
@@ -265,17 +281,7 @@ export function ScanPanel() {
             disabled={busy}
           />
         </label>
-        {!fpgaAir && !taskLive && (
-          <label title="Ширина горба на анализаторе: часы и фильтр TX одним числом. Гауссов шум занимает полку целиком. QPSK и тон остаются узкими. Шаг только переносит центр.">
-            ПОЛКА МГц
-            <input
-              aria-label="Полка передачи, МГц"
-              value={s.txShelfMhz}
-              onChange={(e) => s.setTxShelfMhz(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-        )}
+        {!shelfByGlance && shelfField}
         {!fpgaAir && !taskLive && (
           <>
             <label>

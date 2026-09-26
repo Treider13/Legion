@@ -998,6 +998,15 @@ button:disabled {
   letter-spacing: 0.2em;
 }
 
+.corr-grid label.shelf-mark {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: #efe8dc;
+  border: 1px solid rgba(239, 232, 220, 0.55);
+  padding: 8px;
+  background: rgba(239, 232, 220, 0.06);
+}
+
 /* --- range gate (S4) --- */
 .range-gate {
   position: relative;

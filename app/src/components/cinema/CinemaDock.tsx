@@ -27,6 +27,8 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const sdrId = useLegion((s) => s.sdrId);
   const openedIface = useLegion((s) => s.sdrOpened?.iface);
   const sl22 = useLegion((s) => s.transportKind === "htool-sl22");
+  const txShelfMhz = useLegion((s) => s.txShelfMhz);
+  const setTxShelfMhz = useLegion((s) => s.setTxShelfMhz);
   const sdrLink = sl22 ? "SDR" : connectionLabel(openedIface ?? catalogById(sdrId)?.iface).value;
   const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending });
   const message = fpgaStopPending
@@ -37,6 +39,22 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
   return (
     <footer className="cinema-dock">
+      {mode === "sdr" && (
+        <label
+          className="cinema-shelf"
+          title="Ширина горба на анализаторе: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр. Умная атака и эфир копируют антенну — полка их не расширяет."
+        >
+          <span>ПОЛКА, МГц</span>
+          <input
+            aria-label="Полка передачи, МГц"
+            value={txShelfMhz}
+            onChange={(e) => setTxShelfMhz(e.target.value)}
+            inputMode="decimal"
+          />
+          <small>ширина горба. Шум занимает её целиком. Шаг только двигает центр.</small>
+        </label>
+      )}
+      <div className="cinema-dock-bar">
       <div className="cinema-modes" role="group" aria-label="Режим">
         <button
           type="button"
@@ -86,6 +104,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки
         </button>
+      </div>
       </div>
     </footer>
   );
