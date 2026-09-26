@@ -42,8 +42,18 @@ function dbmToLin(dbm: number): number {
   return Math.pow(10, dbm / 10);
 }
 
+/** Уже посчитанный пол кадра. Без него — та же медиана нижних 60%. */
+function floorOf(bins: readonly ScanBin[], floorDbm?: number): number {
+  return floorDbm != null && Number.isFinite(floorDbm) ? floorDbm : estimateNoiseFloor(bins);
+}
+
 /** x дБ ниже пика, непрерывный проход влево/вправо. */
-export function widthXdBMhz(bins: readonly ScanBin[], peakMhz: number, xDb: number): number {
+export function widthXdBMhz(
+  bins: readonly ScanBin[],
+  peakMhz: number,
+  xDb: number,
+  floorDbm?: number,
+): number {
   if (bins.length === 0 || !spectrumCoversMhz(bins, peakMhz)) return 0;
   const i = peakIndex(bins, peakMhz);
   const peak = bins[i].powerDbm;
@@ -51,7 +61,7 @@ export function widthXdBMhz(bins: readonly ScanBin[], peakMhz: number, xDb: numb
   // Контур на уровне шума — уже не ширина сигнала. Пол 60% тот же, что у
   // детектора. Иначе −26 дБ при SNR ≤ 26 обходит всё окно, и рамка становится
   // рукой 40 МГц вокруг узкого пульта.
-  const floor = estimateNoiseFloor(bins);
+  const floor = floorOf(bins, floorDbm);
   if (!(peak - xDb > floor)) return 0;
   const thr = peak - xDb;
   let lo = i;
@@ -70,11 +80,12 @@ export function width26dbMhz(bins: readonly ScanBin[], peakMhz: number): number 
 }
 
 /** ITU-R SM.443 §3: span ≈ 1.5× ожидаемой полосы вокруг пика, затем β/2 = 0.5%. */
-export function occupied99Mhz(bins: readonly ScanBin[], peakMhz: number): number {
+export function occupied99Mhz(bins: readonly ScanBin[], peakMhz: number, floorDbm?: number): number {
   if (bins.length < 4 || !spectrumCoversMhz(bins, peakMhz)) return 0;
   const i = peakIndex(bins, peakMhz);
-  const w26 = widthXdBMhz(bins, peakMhz, 26);
-  const w3 = widthXdBMhz(bins, peakMhz, 3);
+  const floor = floorOf(bins, floorDbm);
+  const w26 = widthXdBMhz(bins, peakMhz, 26, floor);
+  const w3 = widthXdBMhz(bins, peakMhz, 3, floor);
   let expected = Math.max(w26, w3);
   const df = bins.length > 1 ? Math.abs(bins[1]!.freqMhz - bins[0]!.freqMhz) : 0;
   if (expected < df * 2) expected = Math.max(df * 4, expected);
@@ -203,11 +214,12 @@ export interface AttackWidths {
   occ99Mhz: number;
 }
 
-export function measureHitWidths(bins: readonly ScanBin[], peakMhz: number): AttackWidths {
+export function measureHitWidths(bins: readonly ScanBin[], peakMhz: number, floorDbm?: number): AttackWidths {
+  const floor = floorOf(bins, floorDbm);
   return {
-    width3Mhz: width3dbMhzAttack(bins, peakMhz),
-    width26Mhz: width26dbMhz(bins, peakMhz),
-    occ99Mhz: occupied99Mhz(bins, peakMhz),
+    width3Mhz: widthXdBMhz(bins, peakMhz, 3, floor),
+    width26Mhz: widthXdBMhz(bins, peakMhz, 26, floor),
+    occ99Mhz: occupied99Mhz(bins, peakMhz, floor),
   };
 }
 
