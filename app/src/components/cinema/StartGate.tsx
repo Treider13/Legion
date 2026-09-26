@@ -53,6 +53,8 @@ export function StartGate({ mode, onClose }: Props) {
   const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
   const storedSoloStep = useLegion((s) => s.fpgaSoloStepMhz);
+  const txShelfMhz = useLegion((s) => s.txShelfMhz);
+  const setTxShelfMhz = useLegion((s) => s.setTxShelfMhz);
   const [windowMhz, setWindowMhz] = useState(
     path === "solo" ? storedWindow : storedAirBw,
   );
@@ -454,7 +456,7 @@ export function StartGate({ mode, onClose }: Props) {
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 
-            <div className="cinema-gate-row">
+            <div className={mode === "sdr" ? "cinema-gate-row cinema-gate-row-3" : "cinema-gate-row"}>
               <label title="Начало рабочего коридора в мегагерцах.">
                 F1, МГц
                 <input ref={firstRef} value={f1} onChange={(e) => setF1(e.target.value)} inputMode="decimal" />
@@ -463,6 +465,17 @@ export function StartGate({ mode, onClose }: Props) {
                 F2, МГц
                 <input value={f2} onChange={(e) => setF2(e.target.value)} inputMode="decimal" />
               </label>
+              {mode === "sdr" && (
+                <label title="Ширина горба: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр.">
+                  Полка, МГц
+                  <input
+                    aria-label="Полка передачи, МГц"
+                    value={txShelfMhz}
+                    onChange={(e) => setTxShelfMhz(e.target.value)}
+                    inputMode="decimal"
+                  />
+                </label>
+              )}
             </div>
 
             {mode === "sdr" && (

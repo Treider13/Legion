@@ -266,6 +266,17 @@ export function ScanPanel() {
           />
         </label>
         {!fpgaAir && !taskLive && (
+          <label title="Ширина горба на анализаторе: часы и фильтр TX одним числом. Гауссов шум занимает полку целиком. QPSK и тон остаются узкими. Шаг только переносит центр.">
+            ПОЛКА МГц
+            <input
+              aria-label="Полка передачи, МГц"
+              value={s.txShelfMhz}
+              onChange={(e) => s.setTxShelfMhz(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+        )}
+        {!fpgaAir && !taskLive && (
           <>
             <label>
               {auto ? "ОКНО RX МГц" : "ШАГ TX МГц"}
@@ -280,15 +291,6 @@ export function ScanPanel() {
               <input
                 value={s.scanDwellMs}
                 onChange={(e) => s.setScanDwellMs(e.target.value)}
-                disabled={busy}
-              />
-            </label>
-            <label title="Ширина горба на анализаторе: часы и фильтр TX одним числом. Гауссов шум занимает полку целиком. QPSK и тон остаются узкими. Шаг только переносит центр.">
-              ПОЛКА МГц
-              <input
-                aria-label="Полка передачи, МГц"
-                value={s.txShelfMhz}
-                onChange={(e) => s.setTxShelfMhz(e.target.value)}
                 disabled={busy}
               />
             </label>
