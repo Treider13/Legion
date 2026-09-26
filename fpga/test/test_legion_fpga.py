@@ -190,6 +190,63 @@ if os.path.isfile(usb_h) and os.path.isfile(brf_h):
           define_val(brf_src, "USB_NUAND_BLADERF_PRODUCT_ID") in lg2.BLADERF_PIDS)
     check("PID micro в списке (bladeRF.h)",
           define_val(brf_src, "USB_NUAND_BLADERF2_PRODUCT_ID") in lg2.BLADERF_PIDS)
+    check("USB_IF_RF_LINK == bladeRF.h",
+          lg2.USB_IF_RF_LINK == define_val(brf_src, "USB_IF_RF_LINK"))
+    check("USB_IF_NULL == bladeRF.h",
+          lg2.USB_IF_NULL == define_val(brf_src, "USB_IF_NULL"))
+
+    class _AltDev:
+        def __init__(self) -> None:
+            self.alts: list[tuple[int, int]] = []
+            self.kernel = False
+            self.detached = False
+
+        def is_kernel_driver_active(self, _intf: int) -> bool:
+            return self.kernel
+
+        def detach_kernel_driver(self, _intf: int) -> None:
+            self.detached = True
+            self.kernel = False
+
+        def set_interface_altsetting(self, interface: int, alternate_setting: int) -> None:
+            self.alts.append((interface, alternate_setting))
+
+    class _UsbErr(Exception):
+        def __init__(self, errno: int) -> None:
+            self.errno = errno
+
+    class _FakeUsb:
+        class core:
+            USBError = _UsbErr
+
+        class util:
+            claimed: list[int] = []
+
+            @staticmethod
+            def claim_interface(_dev: object, intf: int) -> None:
+                _FakeUsb.util.claimed.append(intf)
+
+    dev = _AltDev()
+    dev.kernel = True
+    tr = lg2.UsbTransport.__new__(lg2.UsbTransport)
+    tr._usb = _FakeUsb
+    tr._dev = dev
+    tr._arm_nios_interface()
+    check("NIOS: kernel driver снят", dev.detached and not dev.kernel)
+    check("NIOS: интерфейс 0 занят", _FakeUsb.util.claimed == [0])
+    check("NIOS: altsetting RF до bulk", dev.alts == [(0, lg2.USB_IF_RF_LINK)])
+    busy = _AltDev()
+    tr._dev = busy
+
+    def _busy(_dev: object, _intf: int) -> None:
+        raise _UsbErr(16)
+
+    _FakeUsb.util.claim_interface = staticmethod(_busy)  # type: ignore[method-assign]
+    try:
+        tr._arm_nios_interface()
+        check("NIOS: USB busy — понятный отказ", False, "исключения не было")
+    except RuntimeError as e:
+        check("NIOS: USB busy — понятный отказ", "USB занят" in str(e), str(e))
 else:
     check("заголовки Nuand для USB-констант", False, f"нет {usb_h} / {brf_h}")
 
@@ -726,6 +783,12 @@ class _FakeUsbDev:
     def set_configuration(self):
         pass
 
+    def is_kernel_driver_active(self, _intf):
+        return False
+
+    def set_interface_altsetting(self, interface, alternate_setting):
+        self.alt = (interface, alternate_setting)
+
     def ctrl_transfer(self, bm, req, wv, wi, n, timeout=None):
         assert bm == 0xC0 and req == 1 and n == 4, (bm, req, n)
         return self.configured.to_bytes(4, "little", signed=True)
@@ -751,6 +814,7 @@ def _stub_usb(dev):
 
     fake_core.find = _find
     fake_util.dispose_resources = lambda d: setattr(dev, "disposed", dev.disposed + 1)
+    fake_util.claim_interface = lambda d, i: None
     fake_usb.core = fake_core
     fake_usb.util = fake_util
     old = {k: sys.modules.get(k) for k in ("usb", "usb.core", "usb.util")}
@@ -774,6 +838,7 @@ try:
     t_usb = lg.UsbTransport()
     check("d1: FPGA загружена → acquire ok (board bladerf1)",
           t_usb._dev is _dev and t_usb.board == "bladerf1")
+    check("d1: NIOS altsetting RF до bulk", _dev.alt == (0, lg.USB_IF_RF_LINK))
     # D2: один USBError → re-acquire + повтор успешен
     _dev.write_fails = 1
     resp = t_usb.xfer(lf.pack_8x32(lf.LEGION_TARGET, False, 0, 0))
