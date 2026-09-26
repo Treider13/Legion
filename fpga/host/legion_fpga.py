@@ -81,11 +81,14 @@ MODE_LB_ALWAYS = 0x4
 CTRL_ARM = 1 << 0
 CTRL_WD_EN = 1 << 4
 
-# VHDL: timeout = limit × 2^16 тактов tx_clock. Дефолт 0x3D=61 ≈ 1 с при
-# tx_clock=4 МГц (x40 @ 2 MSPS). Kick хоста = 500 мс. На micro
-# tx_clock = ad9361.clock = fs — при окне ≥8 МГц 61 тика < 500 мс.
+# VHDL: timeout = limit × 2^16 тактов tx_clock. Дефолт прошивки 0x3D=61 ≈ 1 с
+# при tx_clock=4 МГц (x40 @ 2 MSPS). Хост при ARM пишет дольше: первый kick
+# уходит сразу, дальше каждые 500 мс, а опрос STATUS делит тот же USB.
+# 2 с переживает один опоздавший пульс и короче сторожа шлюза (2.5 с).
+# На micro tx_clock = ad9361.clock = fs (Nuand мерил DATA_CLK = sample rate).
 WD_TICK = 65536
 WD_LIMIT_DEFAULT = 61
+WD_TIMEOUT_S = 2.0
 
 
 def settle_n_for_fs(fs_hz: int) -> int:
@@ -97,12 +100,12 @@ def settle_n_for_fs(fs_hz: int) -> int:
 
 
 def watchdog_limit_for_fs(fs_hz: int, board: str) -> int:
-    """limit, чтобы limit×65536/tx_clock ≈ 1 с. Clamp 1..65535."""
+    """limit, чтобы limit×65536/tx_clock ≈ WD_TIMEOUT_S. Clamp 1..65535."""
     fs = int(fs_hz) if fs_hz else 2_000_000
     tx_clk = fs if board == "bladerf2" else fs * 2
     if tx_clk <= 0:
         return WD_LIMIT_DEFAULT
-    return max(1, min(0xFFFF, int(round(tx_clk / WD_TICK))))
+    return max(1, min(0xFFFF, int(round(tx_clk * WD_TIMEOUT_S / WD_TICK))))
 
 
 def pack_8x32(target: int, write: bool, addr: int, data: int) -> bytes:

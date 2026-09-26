@@ -33,7 +33,7 @@ bit1/2, bladerf_p.vhd), 0x5250 = micro (эфир через AIR-регистры
 AD9361 поднимает прошивка — хост при close гасит RFIC, факт из
 libbladeRF rfic_host.c/bladerf2.c).
 
-Deadman слои: FPGA гасит цифру (~1 с без kick) → NIOS (legion_work)
+Deadman слои: FPGA гасит цифру (~2 с без kick, WD_LIMIT с хоста) → NIOS (legion_work)
 снимает ARM и эфир → сторож kick_age шлюза делает DISARM → USB release.
 SIGTERM/SIGINT/atexit → DISARM + release (wiki Nuand: kill без
 libusb_close роняет Intel XHCI).
@@ -138,7 +138,7 @@ def _probe_fpga_size_key() -> "str | None":
 # Сторож heartbeat шлюза: ARM жив, а kicks пропали дольше этого срока →
 # сам DISARM → USB release (именно в этом порядке: release без DISARM
 # отдал бы плату Soapy с живым ARM и поднятым аналогом). Дефолт 2.5 с:
-# дольше FPGA-сторожа (~1 с, WD_LIMIT) — первичное гашение цифрой делает
+# дольше FPGA-сторожа (~2 с, WD_LIMIT с хоста) — первичное гашение цифрой делает
 # железо, затем NIOS (legion_work), шлюз убирает USB последним слоем.
 # 0 = выключить (не рекомендуется). Kick приложения = 500 мс.
 KICK_TIMEOUT_S = float(os.environ.get("LEGION_KICK_TIMEOUT_S", "2.5"))
@@ -476,7 +476,7 @@ class LegionGateway:
     def _kick_watchdog(self) -> None:
         """Heartbeat пропал при живом ARM → сам DISARM → USB release.
 
-        Последний софт-слой deadman: FPGA гасит цифру (~1 с), NIOS
+        Последний софт-слой deadman: FPGA гасит цифру (~2 с), NIOS
         (legion_work) снимает ARM и эфир, шлюз отпускает USB, чтобы сканер
         или ожившая панель снова открыли Soapy. wd=false при ARM — отказ
         оператора от deadman, сторож молчит. Опорная точка — ПОЗДНЯЯ из
@@ -924,13 +924,13 @@ class LegionGateway:
                 if not self.fpga.set_detector(int(msg["det_thr"]), int(msg.get("det_shift", 8))):
                     return {"ok": False, "reason": "запись DET_THR не удалась"}
                 self.det_thr_set = True
-            # Solo fs > 2 МГц: дефолт WD_LIMIT=61 короче kick 500 мс
+            # Solo fs > 2 МГц: дефолт прошивки WD_LIMIT=61 короче kick 500 мс
             # (61×65536/10e6 ≈ 0.40 с на micro). Без fs_hz дефолт пишем ЯВНО:
             # регистр переживает сессии (сброс только по nios_reset) — иначе
-            # ARM наследовал бы limit прошлого fs (limit=854 от 56 МГц на
-            # тракте 2 МГц растянул бы deadman до ~28 с вместо ~1–2 с).
-            # WD от запрошенного fs; нет поля → дефолт тракта 2 МГц, не
-            # зашитый 61 (на micro 61×65536/10e6 < kick 500 мс).
+            # ARM наследовал бы limit прошлого fs. Хост ставит ≈2 с
+            # (WD_TIMEOUT_S): один опоздавший kick не гасит умную атаку,
+            # но короче сторожа kick_age 2.5 с — мёртвый канал всё ещё
+            # гаснет платой первой. На micro 61×65536/10e6 < kick 500 мс.
             fs_wd = msg.get("fs_hz")
             fs_for_wd = int(fs_wd) if fs_wd is not None else 2_000_000
             limit = lf.watchdog_limit_for_fs(fs_for_wd, self.board)
