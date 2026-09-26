@@ -1582,8 +1582,8 @@ async function main(): Promise<void> {
   check("Nuand sample-rate min = 520834", FPGA_SOLO_FS_MIN_HZ === 520834);
   // WD_LIMIT считает только шлюз (watchdog_limit_for_fs, Python) — TS-дубль
   // удалён: два авторитета молча расходятся. Контракт пиннит test_legion_fpga.
-  check("wd 10 МГц ×65536/fs > 500 мс kick", (153 * 65536) / 10e6 > 0.5);
-  check("дефолт 61 @ 10 МГц < kick", (61 * 65536) / 10e6 < 0.5);
+  check("wd 10 МГц ×65536/(2×fs) ≈ 2 с (> 1.5 с)", (610 * 65536) / 20e6 > 1.5);
+  check("дефолт 61 @ 10 МГц < kick", (61 * 65536) / 20e6 < 0.5);
   check("hint analog не врёт «micro»", w100.reason.includes("фильтр платы") && !w100.reason.includes("фильтр micro"));
   check("soloFsHz(10) = 10e6 (выше пола)", soloFsHz(10) === 10e6);
   check("soloFsHz(0.2) = пол AD9361, не 200000", soloFsHz(0.2) === FPGA_SOLO_FS_MIN_HZ);

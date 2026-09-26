@@ -32,8 +32,9 @@ board в ping (bladerf1 = x40, bladerf2 = micro). Отличия micro (AD9361):
   E3 плеер: capture_arm → стрим волны (воркер через SoapyRemote) →
      capture_done → arm player → playing=1
   E4 детектор: det_thr → стрим тона → det_count вырос (гейт — по HDL-симу)
-  E5 watchdog: перестали слать kick → wd_fired=1 (латентность меряется:
-     x40 ~1.0 с, micro ~2.0 с при дефолтном WD_LIMIT=61 — tx_clock=fs)
+  E5 watchdog: перестали слать kick → wd_fired=1 (латентность меряется.
+     ARM без fs_hz пишет limit от 2 МГц ≈ 2 с: tx_clock = 2×fs и на x40,
+     и на micro)
   E6 канал после ручного power cycle; autoload остаётся UNKNOWN, пока
      шлюз не предоставляет измеренный источник загрузки и идентичность образа
 
@@ -304,10 +305,9 @@ def main() -> int:
         check("ARM для watchdog-теста", r.get("ok") is True, str(r))
         print("  … heartbeat останавливаем — ждём срабатывания")
         kick_stop.set()  # имитация смерти ноутбука/сети
-        # Не спим фиксированные 1.6 с: дефолт WD_LIMIT=61 даёт на x40 ~1.0 с
-        # (tx_clock = 2×fs), на micro ~2.0 с (tx_clock = fs — см.
-        # watchdog_limit_for_fs). Опросом меряем фактическую латентность — заодно
-        # это и есть стендовое число для сверки модели тактирования watchdog.
+        # Не спим фиксированные 1.6 с. ARM без fs_hz пишет WD_LIMIT от 2 МГц
+        # (watchdog_limit_for_fs, tx_clock = 2×fs на обеих платах) ≈ 2 с.
+        # Опросом меряем фактическую латентность — стендовое число для сверки.
         t0 = time.monotonic()
         fired_after: float | None = None
         st: dict = {}

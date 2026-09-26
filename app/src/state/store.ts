@@ -645,8 +645,8 @@ function stopFpgaKick(): void {
     gFpgaKick = null;
   }
   gFpgaKickGen += 1;
-  // Иначе старый RPC держит inflight: тик 500 мс новой сессии skip,
-  // первый kick только через 1 с — край WD_LIMIT после ARM.
+  // Иначе старый RPC держит inflight: и немедленный kick, и тик 500 мс
+  // новой сессии skip — сторож после ARM не получает пульс.
   gFpgaKickInflight = false;
 }
 
@@ -1042,7 +1042,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     // счётчик watchdog в железе — это точка отсчёта deadman-доказательства.
     gLastKickOkMs = performance.now();
     const kickGen = gFpgaKickGen;
-    gFpgaKick = setInterval(() => {
+    const sendKick = (): void => {
       if (kickGen !== gFpgaKickGen) return;
       if (gFpgaKickInflight) return;
       gFpgaKickInflight = true;
@@ -1064,7 +1064,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         .finally(() => {
           if (kickGen === gFpgaKickGen) gFpgaKickInflight = false;
         });
-    }, 500); // 2 Гц. Solo fs>2 МГц: шлюз ставит WD_LIMIT ≈ 1 с (не дефолт 61).
+    };
+    // Сразу, не через 500 мс: сторож платы ≈ 2 с, а опрос STATUS делит USB.
+    sendKick();
+    gFpgaKick = setInterval(sendKick, 500);
     gFpgaObserve = setInterval(() => {
       void get().fpgaPollStatus();
     }, FPGA_OBSERVE_MS);
