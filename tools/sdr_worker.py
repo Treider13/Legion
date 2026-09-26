@@ -85,6 +85,9 @@ SoapySDR = _import_soapy()
 if SoapySDR is not None:
     from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_RX, SOAPY_SDR_TX
 
+    # Строка, как SOAPY_SDR_CF32. Нативный формат bladeRF — CS16 (fullScale 2048).
+    SOAPY_SDR_CS16 = getattr(SoapySDR, "SOAPY_SDR_CS16", "CS16")
+
     SOAPY = True
     SOAPY_SDR_TIMEOUT = int(getattr(SoapySDR, "SOAPY_SDR_TIMEOUT", SOAPY_SDR_TIMEOUT))
     SOAPY_SDR_STREAM_ERROR = int(getattr(SoapySDR, "SOAPY_SDR_STREAM_ERROR", SOAPY_SDR_STREAM_ERROR))
@@ -95,6 +98,7 @@ else:
     # Constants.h: TX=0 RX=1 — те же числа без модуля, чтобы park() и тесты
     # с mock-Device не сравнивали направление с None.
     SOAPY_SDR_CF32 = "CF32"
+    SOAPY_SDR_CS16 = "CS16"
     SOAPY_SDR_TX = 0
     SOAPY_SDR_RX = 1
     SOAPY = False
@@ -207,8 +211,21 @@ ATTACK_FD_FS_HZ = 40_000_000
 ATTACK_FFT_N = 4096
 ATTACK_FFT_N_FULL = 8192
 ATTACK_EDGE_CROP = 0.05
+# Водопад. FFT слуха остаётся 8192; в окно уходит не больше этого.
+# ~7500 dict на каждый тик 40 мс забивает разбор JSON и перерисовку.
+ATTACK_DISPLAY_BINS = 2048
 TRANSFER_SAMPLES = 4096
 USB_RX_BUFFERS = 32
+# SoapyBladeRF bladeRF_Streaming.cpp: DEF_BUFF_LEN 4096 уходит в
+# bladerf_sync_config() как buffer_size в сэмплах (подпись ArgInfo «bytes» врёт).
+# 4096 @ 61.44 MSPS ≈ 15 тысяч USB-передач/с, очередь из 32 буферов ≈ 2 мс.
+# Пока GIL держит FFT, шина переполняется и xHCI сажает машину.
+# Шаг 2048 сэмплов = 8192 байт SC16 (минимум libbladeRF). Потолок 8 мс на
+# буфер, чтобы парковка 2 MSPS не копила сотни миллисекунд.
+RX_STREAM_ALIGN = 2048
+RX_STREAM_MAX = 32768
+RX_STREAM_TARGET_XFERS = 2000.0
+RX_STREAM_MAX_BUF_S = 0.008
 RING_CAP = 1 << 18
 RX_GAIN_DB = 30
 _TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -225,6 +242,47 @@ from attack_dsp import (  # noqa: E402
     spectral_flatness,
     synth_look_iq,
 )
+
+
+def rx_stream_samples(fs: float) -> int:
+    """Сэмплов в одном USB-буфере SoapyBladeRF (ключ buflen).
+
+    Около 2000 передач/с вместо 15 тысяч на 61.44 MSPS. Не длиннее 8 мс
+    и не больше 32768: на 2 MSPS остаётся 2048, на 61.44 — 30720.
+    """
+    rate = float(fs) if fs and fs > 0 else float(DIO_SAMPLE_RATE_HZ)
+    want = int(rate / RX_STREAM_TARGET_XFERS)
+    lat_cap = int(rate * RX_STREAM_MAX_BUF_S)
+    n = min(want, lat_cap, RX_STREAM_MAX)
+    if n < RX_STREAM_ALIGN:
+        n = RX_STREAM_ALIGN
+    n = ((n + RX_STREAM_ALIGN - 1) // RX_STREAM_ALIGN) * RX_STREAM_ALIGN
+    if n > RX_STREAM_MAX:
+        n = RX_STREAM_MAX
+    return int(n)
+
+
+def rx_stream_kwargs(samples: int) -> dict[str, str]:
+    """buflen — сэмплы, не байты (см. bladerf_sync_config в драйвере)."""
+    return {
+        "buflen": str(int(samples)),
+        "buffers": str(USB_RX_BUFFERS),
+        "transfers": "16",
+    }
+
+
+def cs16_q11_to_cf32(buf_i16: Any, n: int) -> Any:
+    """То же, что скалярный цикл SoapyBladeRF для CF32: int16 / 2048.
+
+    Нативный CS16 пишет USB прямо в буфер. Деление на 2048 делает numpy,
+    без 15 тысяч скалярных проходов драйвера в секунду.
+    """
+    if not NUMPY:
+        raise RuntimeError("numpy required")
+    count = int(n)
+    raw = np.asarray(buf_i16[: count * 2], dtype=np.int16).astype(np.float32)
+    raw *= np.float32(1.0 / 2048.0)
+    return raw.view(np.complex64)
 
 
 def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
@@ -955,6 +1013,8 @@ class Radio:
         self._rx_hz: float | None = None
         self._rx_fs: float | None = None
         self._rx_bw: float | None = None
+        self._rx_cs16 = False
+        self._rx_stream_samples = TRANSFER_SAMPLES
         self._rx_cap_stop = threading.Event()
         self._rx_cap_stop.set()
         self._rx_pause = threading.Event()
@@ -1147,6 +1207,53 @@ class Radio:
             "hardwareKey": last_hw,
         }
 
+    def _setup_rx_call(self, fmt: str, kwargs: dict[str, str]) -> Any:
+        assert self.dev is not None
+        try:
+            return self.dev.setupStream(SOAPY_SDR_RX, fmt, [0], kwargs)
+        except TypeError:
+            # Старый биндинг или mock без kwargs.
+            return self.dev.setupStream(SOAPY_SDR_RX, fmt)
+
+    def _open_rx_stream(self, fs: float) -> Any:
+        """RX-стрим. bladeRF — CS16 и buflen под частоту, иначе CF32.
+
+        CF32 в SoapyBladeRF конвертирует каждый сэмпл скалярным циклом в
+        потоке захвата. На 61.44 MSPS это и есть зависшая машина.
+        """
+        samples = rx_stream_samples(fs)
+        kwargs = rx_stream_kwargs(samples)
+        cs16 = classify_bladerf_hw(self.hardware_key) in ("lms", "ad9361")
+        if cs16:
+            try:
+                stream = self._setup_rx_call(SOAPY_SDR_CS16, kwargs)
+                self._rx_cs16 = True
+                self._rx_stream_samples = samples
+                return stream
+            except Exception as e:
+                _log(f"RX CS16 не открылся ({e}) — запасной CF32")
+        stream = self._setup_rx_call(SOAPY_SDR_CF32, kwargs)
+        self._rx_cs16 = False
+        self._rx_stream_samples = samples
+        return stream
+
+    def _drop_rx_stream(self) -> None:
+        if self.dev is None or self.rx is None:
+            self.rx = None
+            self._rx_on = False
+            return
+        try:
+            if self._rx_on:
+                self.dev.deactivateStream(self.rx)
+        except Exception:
+            pass
+        try:
+            self.dev.closeStream(self.rx)
+        except Exception:
+            pass
+        self.rx = None
+        self._rx_on = False
+
     def _stop_rx_capture(self) -> None:
         self._rx_cap_stop.set()
         self._rx_pause.set()
@@ -1175,19 +1282,28 @@ class Radio:
         """DIO-sys CaptureThread: непрерывный readStream в кольцо — иначе overflow."""
         if not NUMPY:
             return
-        buf = np.zeros(TRANSFER_SAMPLES, dtype=np.complex64)
+        buf_cf32 = np.zeros(RX_STREAM_MAX, dtype=np.complex64)
+        buf_cs16 = np.zeros(RX_STREAM_MAX * 2, dtype=np.int16)
         last_err_log = 0.0
         while not self._rx_cap_stop.is_set():
             if self._rx_pause.is_set() or not self._rx_on or self.dev is None or self.rx is None:
                 time.sleep(0.0002)
                 continue
             fs = self._rx_fs or float(DIO_SAMPLE_RATE_HZ)
-            timeout = max(50_000, int(8.0 * TRANSFER_SAMPLES / max(fs, 1.0) * 1e6))
+            nreq = int(self._rx_stream_samples or TRANSFER_SAMPLES)
+            if nreq < RX_STREAM_ALIGN:
+                nreq = RX_STREAM_ALIGN
+            if nreq > RX_STREAM_MAX:
+                nreq = RX_STREAM_MAX
+            timeout = max(50_000, int(8.0 * nreq / max(fs, 1.0) * 1e6))
             with self._rx_io:
                 if self._rx_pause.is_set() or not self._rx_on or self.dev is None or self.rx is None:
                     continue
                 try:
-                    sr = self.dev.readStream(self.rx, [buf], TRANSFER_SAMPLES, timeoutUs=timeout)
+                    if self._rx_cs16:
+                        sr = self.dev.readStream(self.rx, [buf_cs16], nreq, timeoutUs=timeout)
+                    else:
+                        sr = self.dev.readStream(self.rx, [buf_cf32], nreq, timeoutUs=timeout)
                 except Exception as e:
                     # Ретрай осознанный (краткий сбой шины), но молчание при
                     # мёртвой плате — было слепым пятном: лог не чаще раза в 5 с.
@@ -1206,7 +1322,12 @@ class Radio:
                     continue
                 if ret <= 0:
                     continue
-                chunk = buf[:ret]
+                if ret > nreq:
+                    ret = nreq
+                if self._rx_cs16:
+                    chunk = cs16_q11_to_cf32(buf_cs16, ret)
+                else:
+                    chunk = buf_cf32[:ret]
                 left = self._discard_left
                 if left > 0:
                     take = min(left, ret)
@@ -1274,10 +1395,15 @@ class Radio:
                     self._rx_on = False
                 if rate_changed:
                     fs = self._apply_rx_clock(fs, want_bw)
+                want_samples = rx_stream_samples(fs)
+                if self.rx is not None and self._rx_stream_samples != want_samples:
+                    # Буфер USB выбирается при setupStream. 4096, открытый на
+                    # парковке 2 MSPS, нельзя оставлять на 61.44.
+                    self._drop_rx_stream()
                 if self._rx_hz != center_hz:
                     self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
                 if self.rx is None:
-                    self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
+                    self.rx = self._open_rx_stream(fs)
                     self.dev.activateStream(self.rx)
                     self._rx_on = True
                 elif not self._rx_on:
@@ -1694,8 +1820,10 @@ class Radio:
                             rx_gain_db = None
                     # Стрим нужен det_capture (и уже жил у сканера): поднять,
                     # кольцо сбросить, дискард = settle — дальше IQ чистый.
+                    if self.rx is not None and self._rx_stream_samples != rx_stream_samples(fs):
+                        self._drop_rx_stream()
                     if self.rx is None:
-                        self.rx = self.dev.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
+                        self.rx = self._open_rx_stream(fs)
                         self.dev.activateStream(self.rx)
                         self._rx_on = True
                     elif not self._rx_on:
@@ -2323,8 +2451,15 @@ def _psd_from_iq(
     db = multitaper_dbm(x)
     span = fs / 1e6
     freqs = (center_mhz - span / 2.0) + np.arange(size, dtype=np.float64) * (span / size)
-    raw = [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
-    return crop_psd_bins(raw, crop)
+    n = int(len(db))
+    if crop > 0 and n >= 4:
+        half = int(round((float(crop) * n) / 2.0))
+        if 0 < half and 2 * half < n:
+            freqs = freqs[half : n - half]
+            db = db[half : n - half]
+    if len(db) > ATTACK_DISPLAY_BINS:
+        return _pool_bins(freqs, db, ATTACK_DISPLAY_BINS)
+    return [{"freqMhz": float(f), "powerDbm": float(p)} for f, p in zip(freqs, db)]
 
 
 FPGA_GW_PORT = int(os.environ.get("LEGION_FPGA_PORT", "5531"))

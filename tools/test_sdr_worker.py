@@ -298,6 +298,29 @@ def main() -> int:
         w.attack_pick_fft_n(8192, w.welch_need_samples(8192)) == 8192,
     )
     check("attack FFT без available — ждём 8192", w.attack_pick_fft_n(8192) == 8192)
+    check("USB 61.44 — буфер 30720, не дефолт 4096", w.rx_stream_samples(61.44e6) == 30720)
+    check("USB 40 MSPS — буфер 20480", w.rx_stream_samples(40e6) == 20480)
+    check("USB 2 MSPS — буфер 2048, парковка не копится", w.rx_stream_samples(2e6) == 2048)
+    check(
+        "USB buflen кратен 2048 сэмплам",
+        all(w.rx_stream_samples(fs) % 2048 == 0 for fs in (2e6, 10e6, 40e6, 61.44e6)),
+    )
+    check("Soapy buflen — число сэмплов строкой", w.rx_stream_kwargs(30720)["buflen"] == "30720")
+    if w.NUMPY:
+        import numpy as np_rx
+
+        raw_i16 = np_rx.array([2048, 0, 0, -2048], dtype=np_rx.int16)
+        z16 = w.cs16_q11_to_cf32(raw_i16, 2)
+        check(
+            "CS16/2048 совпадает со скаляром Soapy CF32",
+            abs(z16[0] - (1 + 0j)) < 1e-6 and abs(z16[1] - (0 - 1j)) < 1e-6,
+        )
+        quiet = np_rx.full(8192, 0.05, dtype=np_rx.complex64)
+        shown = w._psd_from_iq(quiet, 61.44e6, 2440.0, w.attack_crop_factor(61.44e6, 56e6), 8192)
+        check(
+            "слух в UI не толще 2048 бинов",
+            100 < len(shown) <= w.ATTACK_DISPLAY_BINS,
+        )
     check(
         "attack_scan не режет FFT по пустому кольцу после hop",
         "fft_n = attack_pick_fft_n(hint)" in open(WORKER).read()

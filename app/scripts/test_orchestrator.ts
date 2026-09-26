@@ -2281,6 +2281,11 @@ async function main(): Promise<void> {
   const toolchainSrc = readFileSync(join(here, "../../fpga/check_toolchain.sh"), "utf8");
   check("preflight и сборка выбирают shell одинаково (пин 23.1 сначала)",
     toolchainSrc.includes("intelFPGA_lite/23.1*/nios2eds") && legionRust.includes('contains("intelFPGA_lite/23.1")'));
+  check("preflight: quartus_sh рядом с NIOS, не только PATH",
+    toolchainSrc.includes("quartus/bin/quartus_sh") && toolchainSrc.includes("nios2_command_shell.sh не нужен"));
+  check("preflight: pyusb — apt python3-usb в /usr/bin/python3, не pip",
+    toolchainSrc.includes("/usr/bin/python3") && toolchainSrc.includes("sudo apt install python3-usb")
+    && !toolchainSrc.includes("pip install -r fpga/requirements.txt"));
   check("store: ARM проверяет legion до парковки", storeSrc.includes("fpgaLegionMissing(ping)"));
   check("store: статус обновляет fpgaLegion", storeSrc.includes("fpgaLegion: r.legion"));
   check("store: fpgaLegion из ping на всех трёх точках ARM/скан",
