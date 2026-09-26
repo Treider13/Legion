@@ -264,6 +264,14 @@ int main(void)
           i_txg > i_mute && i_unmut > i_txg);
     CHECK("B3: сырые 30 дБ в TX GAIN не пишутся",
           rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 30) < 0);
+    /* Wiki Nuand, xA4/xA9: set gain tx1 60 → overall 60, dsa −6 дБ. */
+    legion_reg_write(LEGION_REG_AIR_PREP, 0x0);
+    legion_reg_write(LEGION_REG_AIR_TX_GAIN_DB, 60 + 1000);
+    CHECK("xA4: AIR_PREP на 60 дБ", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("xA4: 60 дБ → 6000 мдБ (dsa −6, ≈0 дБм)",
+          rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 6000) >= 0);
+    CHECK("xA4: сырые 60 дБ в TX GAIN не пишутся",
+          rfic_idx(BLADERF_RFIC_COMMAND_GAIN, BLADERF_CHANNEL_TX(0), 60) < 0);
     CHECK("B3: TXMUTE(1) после INIT и раньше TX FREQUENCY",
           i_mute > i_init && i_txfrq > i_mute);
     CHECK("B3: TXMUTE(0) после ENABLE TX (unmute последним)",

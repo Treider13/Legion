@@ -234,6 +234,23 @@ class TxGainTests(unittest.TestCase):
         self.assertEqual(info["txGainDb"], 20.0)
         self.assertEqual((info["txGainMin"], info["txGainMax"]), (0.0, 50.0))
 
+    def test_xa4_published_range_passes_overall_db(self):
+        """xA4/xA9: Soapy toRange = millidB × 0.001 → −23.75…66.
+        bladerf_set_gain получает дБ тракта. 60 дБ — точка ≈0 дБм (Nuand)."""
+        dev = self.device()
+        dev.getGainRange.return_value = types.SimpleNamespace(
+            minimum=lambda: -23.75, maximum=lambda: 66)
+        info = worker._setup_front_end(dev, True, 60)
+        self.assertEqual(self.tx_sets(dev), [60.0])
+        self.assertEqual(info["txGainDb"], 60.0)
+        self.assertEqual((info["txGainMin"], info["txGainMax"]), (-23.75, 66.0))
+        low = self.device()
+        low.getGainRange.return_value = types.SimpleNamespace(
+            minimum=lambda: -23.75, maximum=lambda: 66)
+        low.getGain.side_effect = RuntimeError("no readback")
+        self.assertEqual(worker._setup_front_end(low, True, -24)["txGainDb"], -23.75)
+        self.assertEqual(self.tx_sets(low), [-23.75])
+
     def test_requested_gain_is_clamped(self):
         high = self.device()
         self.assertEqual(worker._setup_front_end(high, True, 80)["txGainDb"], 50.0)

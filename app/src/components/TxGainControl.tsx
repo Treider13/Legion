@@ -16,8 +16,10 @@ export function TxGainControl({ tone = "lab" }: { tone?: "lab" | "cinema" }) {
   const max = useLegion((s) => s.txGainMax);
   const sdrId = useLegion((s) => s.sdrId);
   const setTxGain = useLegion((s) => s.setTxGain);
-  const lo = Math.round(min);
-  const hi = Math.max(lo, Math.round(max));
+  /* Целые дБ внутри диапазона платы. У xA4 min = −23.75: Math.round даёт −24,
+   * а это уже за пределом bladerf2_tx_gain_ranges. */
+  const lo = Math.ceil(min);
+  const hi = Math.max(lo, Math.floor(max));
   const shown = Math.min(hi, Math.max(lo, txGainDb ?? autoDb(min, max)));
   const dbm = bladeTxDbm(shown, sdrId);
   const value = `${shown} дБ${txGainDb == null ? " · авто" : ""}${

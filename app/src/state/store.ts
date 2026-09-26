@@ -1911,7 +1911,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanThresholdDb: 12,
     scanSensitivity: thresholdToSensitivity(12),
     txGainDb: null,
-    txGainMin: -24,
+    txGainMin: -23.75,
     txGainMax: 66,
     scanPattern: "auto",
     autoDispatch: "park",
@@ -2115,7 +2115,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     setTxGain: async (db) => {
       const min = get().txGainMin;
       const max = get().txGainMax;
-      const g = Math.round(Math.min(max, Math.max(min, Number.isFinite(db) ? db : min)));
+      /* xA4: overall −23.75…66 (Nuand). Сначала округление, потом зажим,
+       * иначе Math.round(−23.75) = −24 и уезжает ниже пола DSA. */
+      const lo = Math.ceil(min);
+      const hi = Math.max(lo, Math.floor(max));
+      const g = Math.min(hi, Math.max(lo, Math.round(Number.isFinite(db) ? db : lo)));
       set({ txGainDb: g });
       if (!gLive || get().sdrEmulation) return;
       const r = await hostTxGain(g);

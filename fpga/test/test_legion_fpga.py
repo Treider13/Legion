@@ -885,6 +885,10 @@ check("x40: re-arm при живом ARM — сбой CTRL → отказ", r.ge
 check("x40: эфир предыдущего ARM жив (bit2 не откачен)", bool(gw.fpga._t.control & 0x4))
 gw.fpga._t.fail_ctrl_write = False
 rpc({"op": "disarm"})
+r = rpc({"op": "arm", "mode": "nco", "nco_ftw": 0x20000000, "tx_gain_db": 60})
+check("x40: tx_gain_db не пишет регистр micro",
+      r.get("ok") is True and lf.REG_AIR_TX_GAIN_DB not in gw.fpga._t.regs)
+rpc({"op": "disarm"})
 
 r = rpc({"op": "tune", "freq_mhz": 2475.0})
 check("x40: tune → отказ (нет AIR, hop только Soapy)", r.get("ok") is False)
@@ -940,13 +944,17 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
 check("micro: ARM с tx_gain_db → ok", r.get("ok") is True)
 check("micro: AIR_TX_GAIN_DB = 1030 (код = gain + 1000)",
       gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1030)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2442.5, "tx_gain_db": 60})
+check("micro xA4: 60 дБ → код 1060", r.get("ok") is True
+      and gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1060)
 rpcm({"op": "disarm"})
 gw_m.fpga._t.reject_reg = lf.REG_AIR_TX_GAIN_DB
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2442.5, "tx_gain_db": 12})
 check("micro: старый образ без регистра TX — ARM всё равно ok", r.get("ok") is True)
 check("micro: отказ регистра не затирает прошлый код",
-      gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1030)
+      gw_m.fpga._t.regs.get(lf.REG_AIR_TX_GAIN_DB) == 1060)
 gw_m.fpga._t.reject_reg = None
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "nco", "freq_mhz": 2450.0})

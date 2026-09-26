@@ -412,8 +412,9 @@ bool legion_air_up(bool rx, bool tx)
          * Регистр — дБ тракта (как Soapy/libbladeRF), код +1000.
          * Команда RFIC на TX — не эти дБ: devices_rfic_cmds.c пишет
          * ad9361_set_tx_attenuation, единица — мдБ затухания DSA
-         * (10000 → −10 дБ). bladerf2_tx_gain_ranges.offset = 66 дБ:
-         * overall = DSA + 66, потолок затухания 89750 мдБ, шаг 250. */
+         * (10000 → −10 дБ). bladerf2_tx_gain_ranges.offset = 66 дБ,
+         * xA4 и xA9 — одна ступень dsa (wiki Nuand): overall = DSA + 66.
+         * set gain tx1 60 → dsa −6 дБ = 6000 мдБ (≈0 дБм). Пол 89750 мдБ, шаг 250. */
         if (legion_air_tx_gain_db != 0xFFFFFFFFU) {
             int32_t g = (int32_t)(legion_air_tx_gain_db - 1000U);
             int32_t atten_mdb;
