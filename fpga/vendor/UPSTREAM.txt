@@ -16,6 +16,8 @@ commit 35174c30b009cdb335800c411f3c14d45283f12b
   fpga_common, firmware_common      — форматы NIOS-пакетов, USB ID
   host/libraries/libbladeRF/include — libbladeRF.h (золотой тест)
   host/libraries/libbladeRF/src/backend/usb — usb.h (константы EP для теста)
+  host/common                   — range.c и range.h: NIOS micro компилирует этот файл.
+      Без него make падает на .../host/common/src/range.c. Лицензия файла — LGPLv2.1.
   host/cmake/modules            — FindPatcher.cmake (libad936x ищет patch или git)
   thirdparty/analogdevicesinc/no-OS_local — патчи Nuand и platform_bladerf2_headless
   thirdparty/analogdevicesinc/no-OS/ad9361/sw — драйвер AD9361

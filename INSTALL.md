@@ -158,14 +158,25 @@ systemctl status legion-gateway   # active (running), порт 5531
 NIOS II EDS входит в установку.
 
 ```bash
-fpga/check_toolchain.sh   # проверка тулчейна до сборки
-# Сборка — из nios2_command_shell (NIOS II EDS входит в Quartus Lite):
-source ~/intelFPGA_lite/23.1std/nios2eds/nios2_command_shell.sh
-cd fpga/vendor/bladerf/hdl/quartus
-./build_bladerf.sh -b bladeRF-micro -s A4 -r legion   # → legionxA4.rbf (micro xA4)
-./build_bladerf.sh -b bladeRF-micro -s A9 -r legion   # → legionxA9.rbf (micro xA9)
-./build_bladerf.sh -b bladeRF -s 40 -r legion         # → legionx40.rbf (bladeRF 1 x40)
+# Из корня репозитория. nios2_command_shell.sh нельзя source: он делает
+# exec и закрывает терминал. Ему передаётся файл, а путь внутри — абсолютный.
+fpga/check_toolchain.sh
+sudo apt install -y cmake patch
+REPO="$(pwd)"
+cat > "$HOME/legion-build.sh" << EOF
+#!/bin/bash
+set -euo pipefail
+cd "$REPO/fpga/vendor/bladerf/hdl/quartus"
+exec ./build_bladerf.sh -k -b bladeRF-micro -s A4 -r legion
+EOF
+chmod +x "$HOME/legion-build.sh"
+~/intelFPGA_lite/23.1std/nios2eds/nios2_command_shell.sh "$HOME/legion-build.sh"
 ```
+
+`-k` продолжает уже созданный каталог `work` (qsys и BSP). Без `-k` сборка
+стирает его и начинает сначала. Образ: `hdl/quartus/legionxA4-<дата>/legionxA4.rbf`.
+xA4 теряет образ в RAM при отключении USB. `-l` поднимает его сразу, `-L`
+кладёт в autoload.
 
 Запись в плату — из **desktop** LEGION (Tauri: `npm run tauri dev` / собранное
 приложение), вкладка **КАСТОМ FPGA**: СОБРАТЬ (Quartus на этом ПК) → ПРОШИТЬ
