@@ -269,6 +269,18 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
               </label>
             </div>
+            <label
+              className="cinema-shelf-line"
+              title="Ширина горба с ноутбука: Передать, качание, случайная. Умная атака её не ставит — ширину тракта задаёт Взгляд выше."
+            >
+              Полка, МГц
+              <input
+                aria-label="Полка передачи, МГц"
+                value={txShelfMhz}
+                onChange={(e) => setTxShelfMhz(e.target.value)}
+                inputMode="decimal"
+              />
+            </label>
             <div className="cinema-gate-row">
               <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
                 Сканирование, мс
@@ -316,17 +328,17 @@ export function StartGate({ mode, onClose }: Props) {
         ) : mode === "sdr" && step === "walk" ? (
           <>
             <p className="cinema-kicker">{path === "air" ? "Умный · Эфир + FPGA" : "Умный · Только FPGA"}</p>
-            <h2 id={titleId}>{path === "air" ? "Канал и обход" : "Окно на усилитель"}</h2>
+            <h2 id={titleId}>{path === "air" ? "Канал и обход" : "Полка на усилитель"}</h2>
             <p className="cinema-gate-lead">
               {path === "air"
                 ? "Канал — ширина ретрансляции на стоянке: вся мощность усилителя идёт в него. Коридор ÷ канал = стоянки. На каждой детектор и RX→TX по энергии; пороги меряются калибровкой при старте."
-                : "Окно — полка на усилителе: часы и фильтр. Шум занимает её целиком, тон остаётся палочкой. Пустой шаг равен полке. Свой шаг только двигает центр."}
+                : "Полка — часы и фильтр на усилителе. Шум занимает её целиком, тон остаётся палочкой. Пустой шаг равен полке. Свой шаг только двигает центр."}
             </p>
             <div className="cinema-gate-row">
               <label title={path === "air"
                 ? "Ширина полосы ретрансляции на каждой стоянке. Коридор делится на стоянки шириной канала."
-                : "Ширина пятна сигнала на усилителе. Окно больше коридора — одна стоянка без прыжков."}>
-                {path === "air" ? "Канал, МГц" : "Окно, МГц"}
+                : "Окно, МГц — полка на усилителе: часы и фильтр. Шум занимает её целиком. Окно больше коридора — одна стоянка без прыжков."}>
+                {path === "air" ? "Канал, МГц" : "Полка, МГц"}
                 <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
               </label>
               {path === "solo" && (
@@ -346,6 +358,20 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
               </label>
             </div>
+            {path === "air" && (
+              <label
+                className="cinema-shelf-line"
+                title="Ширина горба с ноутбука: Передать, качание, случайная. Эфир копирует антенну в канале — это поле канал не расширяет."
+              >
+                Полка, МГц
+                <input
+                  aria-label="Полка передачи, МГц"
+                  value={txShelfMhz}
+                  onChange={(e) => setTxShelfMhz(e.target.value)}
+                  inputMode="decimal"
+                />
+              </label>
+            )}
             {path === "air" && (
               <div className="cinema-gate-row">
                 <label title="Минимальная энергия сигнала, при которой открывается ретрансляция. Больше — только сильные сигналы, меньше — чувствительнее к слабым. При обходе коридора (несколько стоянок) пороги измеряются калибровкой автоматически.">
@@ -456,7 +482,7 @@ export function StartGate({ mode, onClose }: Props) {
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 
-            <div className={mode === "sdr" ? "cinema-gate-row cinema-gate-row-3" : "cinema-gate-row"}>
+            <div className="cinema-gate-row">
               <label title="Начало рабочего коридора в мегагерцах.">
                 F1, МГц
                 <input ref={firstRef} value={f1} onChange={(e) => setF1(e.target.value)} inputMode="decimal" />
@@ -465,18 +491,21 @@ export function StartGate({ mode, onClose }: Props) {
                 F2, МГц
                 <input value={f2} onChange={(e) => setF2(e.target.value)} inputMode="decimal" />
               </label>
-              {mode === "sdr" && (
-                <label title="Ширина горба: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр.">
-                  Полка, МГц
-                  <input
-                    aria-label="Полка передачи, МГц"
-                    value={txShelfMhz}
-                    onChange={(e) => setTxShelfMhz(e.target.value)}
-                    inputMode="decimal"
-                  />
-                </label>
-              )}
             </div>
+            {mode === "sdr" && (
+              <label
+                className="cinema-shelf-line"
+                title="Ширина горба: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр."
+              >
+                Полка, МГц
+                <input
+                  aria-label="Полка передачи, МГц"
+                  value={txShelfMhz}
+                  onChange={(e) => setTxShelfMhz(e.target.value)}
+                  inputMode="decimal"
+                />
+              </label>
+            )}
 
             {mode === "sdr" && (
               <div className="cinema-waves">

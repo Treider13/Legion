@@ -19,12 +19,22 @@
   --lg-blur: blur(12px);
   --graphite-line: rgb(195 207 214 / 30%);
   --graphite-hairline: rgb(200 211 218 / 12%);
-  height: auto;
-  min-height: 100dvh;
-  overflow: clip;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   background: #080a0c;
   color: var(--lg-text);
   isolation: isolate;
+}
+
+.legion-root.cinema.graphite .hero {
+  flex: 0 1 220px;
+  min-height: 56px;
+}
+.legion-root.cinema.graphite .graphite-console {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .graphite * { box-sizing: border-box; }
@@ -226,7 +236,11 @@
 .graphite-history .cinema-field-canvas { height: 116px; border: 1px solid #a7b7c022; border-radius: 0; }
 .graphite-history .cinema-field-meta { color: #95a2ad; font-size: 9px; min-height: 15px; }
 .graphite-history .cinema-field-read { color: #a5b2bc; }
-.graphite .cinema-dock { padding: 16px 24px 20px; grid-template-columns: 1fr auto 1fr; }
+.graphite .cinema-dock { padding: 16px 24px 20px; }
+.graphite .cinema-dock-bar { grid-template-columns: 1fr auto 1fr; }
+.graphite .cinema-shelf { background: #101416; border-color: #aebac580; color: #edf2f4; }
+.graphite .cinema-shelf input { background: #0a0d0f; border-color: #aebac580; color: #edf2f4; }
+.graphite .cinema-shelf small { color: #98a4af; }
 .graphite :is(.cinema-mode, .cinema-btn.ghost) { color: #bdc7ce; border-color: #adbcc53b; background: #101416; border-radius: 3px; }
 .graphite .cinema-mode.on { background: linear-gradient(#343b41, #151a1e); border-color: #aebac580; color: #edf2f4; box-shadow: inset 0 1px 0 #ffffff13; }
 .graphite .cinema-mode span { color: #8c9aa5; }
@@ -287,7 +301,8 @@
   .graphite-history { padding: 0 7px 7px; }
   .graphite-history > header small { display: none; }
   .graphite-history .cinema-field-meta { font-size: 8px; gap: 8px; }
-  .graphite .cinema-dock { grid-template-columns: 1fr; gap: 12px; padding: 14px; }
+  .graphite .cinema-dock { gap: 12px; padding: 14px; }
+  .graphite .cinema-dock-bar { grid-template-columns: 1fr; }
   .graphite .cinema-modes > button { flex: 1; }
   .graphite .cinema-go { width: 100%; }
   .graphite .cinema-dock-end { justify-content: space-between; }
