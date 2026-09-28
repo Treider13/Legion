@@ -95,4 +95,9 @@ export interface TxCueResult {
   latencyUs: number;
   path: "sdr-tx" | "none";
   fake?: boolean;
+  digitalHop?: boolean;
+  loMhz?: number;
+  mixHz?: number;
+  fsHz?: number;
+  designFsHz?: number;
 }

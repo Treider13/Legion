@@ -164,6 +164,41 @@ def main() -> int:
     check("analyze_iq несёт analogKind", pal_look.get("analogKind") == "pal", str(pal_look))
     dec, dfs = d.channelize_decim(pal_native, native, 5800.0, 5800.0, 2e6)
     check("channelize_decim fs ~2e6", 1.5e6 <= dfs <= 2.5e6 and dec.size > 100, f"fs={dfs} n={dec.size}")
+    x = np.ones(64, dtype=np.complex64)
+    rot = d.rotator_shift(x, 1e6, 8e6)
+    expect = np.exp(1j * 2.0 * np.pi * (1e6 / 8e6) * np.arange(64)).astype(np.complex64)
+    check("rotator как GNU Radio exp(j2π f/fs n)", float(np.max(np.abs(rot - expect))) < 1e-5)
+    check("rotator 0 Гц — копия", float(np.max(np.abs(d.rotator_shift(x, 0, 8e6) - x))) < 1e-7)
+    a, p1 = d.rotator_apply(x[:32], 1e6, 8e6, 0.0)
+    b, _p2 = d.rotator_apply(x[32:], 1e6, 8e6, p1)
+    check(
+        "rotator_apply стык как один проход",
+        float(np.max(np.abs(np.concatenate([a, b]) - rot))) < 1e-5,
+    )
+    check(
+        "окно кроет hop внутри 0.45 fs",
+        d.analog_window_covers(2445e6, 2437e6, 40e6, 56e6, 2e6) is True,
+    )
+    check(
+        "окно не кроет hop за 0.45 fs",
+        d.analog_window_covers(2500e6, 2437e6, 40e6, 56e6, 2e6) is False,
+    )
+    check(
+        "окно не кроет hop на LO (утечка DC / UG-570)",
+        d.analog_window_covers(2437e6, 2437e6, 40e6, 56e6, 2e6) is False,
+    )
+    tone_in = (0.5 * np.exp(1j * 2.0 * np.pi * 0.1e6 * np.arange(256) / 2e6)).astype(np.complex64)
+    up = d.resample_iq(tone_in, 2e6, 8e6)
+    check("resample длина ×4", int(up.size) == 1024)
+    spec_up = np.abs(np.fft.fft(up))
+    bin_up = int(np.argmax(spec_up[: up.size // 2]))
+    check("resample тон остаётся 100 кГц", abs(bin_up * 8e6 / up.size - 0.1e6) < 8e6 / up.size * 2)
+    up40 = d.resample_iq(tone_in, 2e6, 40e6)
+    freqs40 = np.fft.fftfreq(int(up40.size), d=1.0 / 40e6)
+    spec40 = np.abs(np.fft.fft(up40)) ** 2
+    in_band = float(np.sum(spec40[np.abs(freqs40) <= 1.0e6]))
+    check("resample не растягивает полку на Nyquist 40", in_band / (float(np.sum(spec40)) + 1e-20) > 0.9)
+
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

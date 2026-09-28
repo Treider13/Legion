@@ -715,11 +715,12 @@ int main(void)
     CHECK("FFT: без энергии шумовой bin не шагает", rfic_n == 0);
     t_status = LEGION_STATUS_DET_ACTIVE;
     t_peak_word = mk_peak(1, 0, 0x2000, 16); /* frame=0 валиден (обёртка 7 бит) */
-    legion_work(); /* запомнить кадр */
-    CHECK("FFT: ждём новый кадр (в т.ч. после frame=0)", rfic_n == 0);
-    t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
-    legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → PEAK 2453.5, LO 2450 */
+    legion_work(); /* первый новый valid+энергия → FIRE */
+    CHECK("FFT: первый новый кадр (в т.ч. frame=0) целит",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    legion_work(); /* HOLD: тот же прицел */
     CHECK("FFT n==1: FIRE без hop PLL на пик",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
                    2453500ULL * 1000ULL) < 0);
@@ -747,6 +748,44 @@ int main(void)
     t_tamer += (uint64_t)56000000 * 6 / 1000;
     legion_work();
     CHECK("FFT n==1 тишина: не mute/SETTLE на том же LO", rfic_n == 0);
+
+    /* SETTLE снимает кадр из регистра: тот же frame не целит, первый новый — да. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_FIRE_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2436000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2464000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    CHECK("FFT stale: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("FFT stale: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    rfic_n = 0;
+    legion_work(); /* SEARCH */
+    t_peak_word = mk_peak(1, 5, 0x2000, 16);
+    t_tamer += 8;
+    legion_work(); /* SETTLE → FRAME, snap frame 5 */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    {
+        uint32_t before = 0;
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &before);
+        legion_work(); /* тот же frame 5 — не FIRE */
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT: stale кадр SETTLE не целит", khz == before);
+    }
+    t_peak_word = mk_peak(1, 6, 0x2000, 16);
+    legion_work(); /* новый кадр → FIRE */
+    {
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("FFT: первый новый кадр после stale целит", khz == 2453500);
+    }
 
     /* xA4 края каталога: hop uint64 на 5.8 ГГц; clip RX 70–6000. */
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 5800000);
@@ -891,15 +930,15 @@ int main(void)
     legion_work(); /* FRAME */
     t_status = LEGION_STATUS_DET_ACTIVE;
     t_peak_word = mk_peak(1, 0, 0x2000, 73);
-    legion_work(); /* snap frame */
-    t_peak_word = mk_peak(1, 1, 0x2000, 73);
     rfic_n = 0;
-    legion_work(); /* FIRE ~2444 цифрой, LO 2428 */
+    legion_work(); /* первый valid+энергия → FIRE ~2444 цифрой, LO 2428 */
     CHECK("FFT TURN: FIRE без hop PLL на ~2444",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
                    2443969ULL * 1000ULL) < 0);
     CHECK("FFT TURN: FIRE unmute",
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
+    t_peak_word = mk_peak(1, 1, 0x2000, 73);
+    legion_work(); /* HOLD */
     {
         uint32_t khz = 0;
         legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);

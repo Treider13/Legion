@@ -24,6 +24,7 @@ import {
   ATTACK_LISTEN_FS_HZ,
   attackCropFactor,
   attackListenPlan,
+  attackTxClockHz,
 } from "../src/sense/attackListen";
 import {
   ATTACK_COOLDOWN_MS,
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
     resenseSrc.includes("runAttackShelfTx") &&
       resenseSrc.includes("listenWhileTx") &&
       resenseSrc.includes("holdMasked: listenWhileTx") &&
+      resenseSrc.includes("autoTxLive") &&
       !resenseSrc.includes("shelfFsNow"),
   );
   check(
@@ -182,14 +184,27 @@ async function main(): Promise<void> {
       handoffSrc.includes("hostTxWave") &&
       handoffSrc.includes("shelf.fsHz") &&
       handoffSrc.includes("shelf.filterMhz") &&
+      handoffSrc.includes("shelf.designFsHz") &&
+      storeSrc.includes("txLive: true") &&
       !handoffSrc.includes("hostTx(") &&
       !handoffSrc.includes("shelfFsNow"),
   );
+  {
+    const liveFn = storeSrc.slice(storeSrc.indexOf("const autoTxLive"), storeSrc.indexOf("const runHandoffAsync"));
+    check(
+      "ПЕРЕДАТЬ в Атаке сразу часы FD, не ждать first hit",
+      liveFn.includes('st.scanPattern === "auto"') &&
+        liveFn.includes("st.transmitArmed") &&
+        !liveFn.includes("lastForwardMhz") &&
+        !liveFn.includes("attackPaintOwnsTx"),
+    );
+  }
   check(
     "restore без рамки не схлопывает BBPLL полкой",
-    restoreSrc.includes("attackNoPaintShelf") &&
+      restoreSrc.includes("attackNoPaintShelf") &&
       restoreSrc.includes("shelf.fsHz") &&
       restoreSrc.includes("shelf.filterMhz") &&
+      restoreSrc.includes("shelf.designFsHz") &&
       !restoreSrc.includes("shelfFsNow") &&
       !restoreSrc.includes("hostTx("),
   );
@@ -617,6 +632,10 @@ async function main(): Promise<void> {
   check("окно слуха 50/56 = 40", attackListenWindowMhz(50, 56) === 40);
   const x40 = attackListenPlan({ analogMhz: 28, paintOwnsTx: false, paint: null });
   check("x40 слух не 61.44", x40.fsHz === 28e6 && x40.filterMhz === 28);
+  const liveFd = attackListenPlan({ analogMhz: 56, paintOwnsTx: false, paint: null, txLive: true });
+  check("TX live xA4 — USB FD 40, не 61.44", liveFd.fsHz === ATTACK_FD_FS_HZ);
+  check("TX live x40 — analog 28", attackListenPlan({ analogMhz: 28, paintOwnsTx: false, paint: null, txLive: true }).fsHz === 28e6);
+  check("часы Атаки без рамки = FD 40", attackTxClockHz({ analogMhz: 56 }) === ATTACK_FD_FS_HZ);
   check("потолок хита не 22", ATTACK_MAX_BW_MHZ === 56);
 
   function brickBins(center: number, span: number, n: number, lo: number, hi: number, dbm: number) {

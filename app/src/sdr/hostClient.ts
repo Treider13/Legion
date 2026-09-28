@@ -348,16 +348,23 @@ export async function hostTxWave(
   params: Record<string, number>,
   fsHz?: number,
   txBwMhz?: number,
+  designFsHz?: number,
 ): Promise<TxCueResult> {
   const payload: Record<string, unknown> = { op: "tx_wave", freqMhz, wave, params };
   if (fsHz != null && Number.isFinite(fsHz) && fsHz > 0) payload.fsHz = fsHz;
   if (txBwMhz != null && Number.isFinite(txBwMhz) && txBwMhz > 0) payload.txBwMhz = txBwMhz;
+  if (designFsHz != null && Number.isFinite(designFsHz) && designFsHz > 0) payload.designFsHz = designFsHz;
   const r = await hostRpc<{
     ok?: boolean;
     reason?: string;
     latencyUs?: number;
     freqMhz?: number;
     fake?: boolean;
+    digitalHop?: boolean;
+    loMhz?: number;
+    mixHz?: number;
+    fsHz?: number;
+    designFsHz?: number;
   }>(payload);
   return {
     ok: !!r.ok,
@@ -366,6 +373,11 @@ export async function hostTxWave(
     latencyUs: r.latencyUs ?? 0,
     path: r.ok ? "sdr-tx" : "none",
     fake: !!r.fake,
+    digitalHop: r.digitalHop,
+    loMhz: r.loMhz,
+    mixHz: r.mixHz,
+    fsHz: r.fsHz,
+    designFsHz: r.designFsHz,
   };
 }
 
