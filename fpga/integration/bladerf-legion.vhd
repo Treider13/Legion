@@ -1714,6 +1714,7 @@ begin
         play_i     => lg_play_i,
         play_q     => lg_play_q,
         play_valid => lg_play_valid,
+        play_en    => lg_play_en,
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,

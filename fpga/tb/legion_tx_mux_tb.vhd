@@ -22,6 +22,7 @@ architecture tb of legion_tx_mux_tb is
     signal play_i     : signed(15 downto 0) := to_signed(333, 16);
     signal play_q     : signed(15 downto 0) := to_signed(444, 16);
     signal play_valid : std_logic := '0';
+    signal play_en    : std_logic := '0';
     signal nco_i      : signed(15 downto 0) := to_signed(555, 16);
     signal nco_q      : signed(15 downto 0) := to_signed(666, 16);
     signal nco_valid  : std_logic := '0';
@@ -42,6 +43,7 @@ begin
             lb_shift => lb_shift,
             host_i => host_i, host_q => host_q, host_valid => host_valid,
             play_i => play_i, play_q => play_q, play_valid => play_valid,
+            play_en => play_en,
             nco_i => nco_i, nco_q => nco_q, nco_valid => nco_valid,
             lb_data => lb_data, lb_empty => lb_empty, lb_rd_en => lb_rd_en,
             out_i => out_i, out_q => out_q, out_valid => out_valid
@@ -82,14 +84,17 @@ begin
 
         -- 3) PLAYER с ARM: данные плеера сквозь
         arm <= '1';
+        play_en <= '1';
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         assert out_valid = '1' and out_i = 333 and out_q = 444
             report "FAIL: PLAYER armed does not pass player" severity failure;
 
-        -- 3b) PLAYER ARM, play_valid=0 (DELAY): нули с каденсом, не hold last
+        -- 3b) PLAYER ARM, play_en=0, play_valid=0 (DELAY): нули с каденсом
+        play_en <= '0';
         play_valid <= '0';
         wait until rising_edge(clock); -- регистр mux: старый сэмпл ещё один такт
+        wait until rising_edge(clock); -- play_valid_d гаснет (слот Q)
         saw_valid := false;
         for k in 0 to 7 loop
             wait until rising_edge(clock);
@@ -101,6 +106,46 @@ begin
         assert saw_valid
             report "FAIL: DELAY gap w/o valid cadence (DAC holds last sample!)"
             severity failure;
+
+        -- 3c) PLAY: каденс плеера 0/1. После DELAY фаза mux чужая —
+        -- на play_valid=0 нельзя ставить valid=phase (лишний I, Q пропадает).
+        play_en <= '1';
+        play_valid <= '0';
+        for k in 0 to 3 loop
+            wait until rising_edge(clock);
+        end loop;
+        declare
+            variable prev_v  : std_logic := '0';
+            variable saw_iq  : boolean := false;
+            variable stuffed : boolean := false;
+            variable dbl     : boolean := false;
+        begin
+            prev_v := '0';
+            for k in 0 to 15 loop
+                play_valid <= '1' when (k mod 2 = 0) else '0';
+                wait until rising_edge(clock);
+                if out_valid = '1' and out_i = 0 and out_q = 0 then
+                    stuffed := true;
+                end if;
+                if out_valid = '1' and out_i = 333 then
+                    saw_iq := true;
+                end if;
+                if out_valid = '1' and prev_v = '1' then
+                    dbl := true;
+                end if;
+                prev_v := out_valid;
+            end loop;
+            assert not stuffed
+                report "FAIL: PLAY stuffed zero-I between player samples"
+                severity failure;
+            assert not dbl
+                report "FAIL: PLAY two consecutive valids (LMS Q slot eaten)"
+                severity failure;
+            assert saw_iq
+                report "FAIL: PLAY did not pass player I/Q"
+                severity failure;
+        end;
+        play_en <= '0';
         play_valid <= '1';
         wait until rising_edge(clock);
         wait until rising_edge(clock);
