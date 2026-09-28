@@ -373,6 +373,23 @@ architecture legion of bladerf is
     signal lg_fft_en        : std_logic;
     signal lg_fft_dc_notch  : std_logic;
     signal lg_fft_lock      : std_logic;
+    signal lg_fft_xlat_bypass : std_logic;
+    signal lg_fft_excl      : unsigned(7 downto 0);
+    signal lg_ch_ctrl       : std_logic_vector(15 downto 0);
+    signal lg_ch_idx        : unsigned(6 downto 0);
+    signal lg_lut_we        : std_logic;
+    signal lg_lut_addr      : unsigned(7 downto 0);
+    signal lg_lut_data      : unsigned(7 downto 0);
+    signal lg_peak1_word    : std_logic_vector(31 downto 0);
+    signal lg_peak2_word    : std_logic_vector(31 downto 0);
+    signal lg_peak3_word    : std_logic_vector(31 downto 0);
+    signal lg_ch_word       : std_logic_vector(31 downto 0);
+    signal lg_mag_valid     : std_logic;
+    signal lg_mag_last      : std_logic;
+    signal lg_mag_bin       : unsigned(7 downto 0);
+    signal lg_mag_pow       : unsigned(15 downto 0);
+    signal lg_mag_frame     : unsigned(6 downto 0);
+    signal lg_xlat_en       : std_logic;
     signal lg_peak_word     : std_logic_vector(31 downto 0);
     signal lg_xlat_i        : signed(15 downto 0);
     signal lg_xlat_q        : signed(15 downto 0);
@@ -1580,9 +1597,20 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
+        rx_fft_xlat_bypass => lg_fft_xlat_bypass,
+        rx_fft_excl   => lg_fft_excl,
+        rx_ch_ctrl    => lg_ch_ctrl,
+        rx_ch_idx     => lg_ch_idx,
+        rx_lut_we     => lg_lut_we,
+        rx_lut_addr   => lg_lut_addr,
+        rx_lut_data   => lg_lut_data,
         rx_ch_fs_hz   => lg_ch_fs_hz,
         rx_ch_lo_khz  => lg_ch_lo_khz,
         rx_peak_word  => lg_peak_word,
+        rx_peak1_word => lg_peak1_word,
+        rx_peak2_word => lg_peak2_word,
+        rx_peak3_word => lg_peak3_word,
+        rx_ch_word    => lg_ch_word,
         rx_ch_energy  => lg_ch_energy,
         rx_ch_bins    => lg_ch_bins_rx,
         rx_ch_active  => lg_ch_active
@@ -1613,30 +1641,59 @@ begin
         det_count   => lg_det_count
       );
 
-    -- FFT-пик на том же тапе, что детектор (после RX iq_correction)
+    -- FFT-пик + 8-slot энергия + Top-N / occupancy
     U_legion_fft_peak : entity work.legion_fft_peak
+      port map (
+        clock      => rx_clock,
+        reset      => rx_reset,
+        enable     => lg_fft_en,
+        dc_notch   => lg_fft_dc_notch,
+        excl       => lg_fft_excl,
+        fs_hz      => lg_ch_fs_hz,
+        lo_khz     => lg_ch_lo_khz,
+        in_i       => rx_sample_corrected_i,
+        in_q       => rx_sample_corrected_q,
+        in_valid   => rx_sample_corrected_valid,
+        peak_word  => lg_peak_word,
+        peak1_word => lg_peak1_word,
+        peak2_word => lg_peak2_word,
+        peak3_word => lg_peak3_word,
+        mag_valid  => lg_mag_valid,
+        mag_last   => lg_mag_last,
+        mag_bin    => lg_mag_bin,
+        mag_pow    => lg_mag_pow,
+        mag_frame  => lg_mag_frame,
+        ch_energy  => lg_ch_energy,
+        ch_bins    => lg_ch_bins_rx,
+        ch_active  => lg_ch_active
+      );
+
+    U_legion_fft_channelize : entity work.legion_fft_channelize
       port map (
         clock     => rx_clock,
         reset     => rx_reset,
         enable    => lg_fft_en,
-        dc_notch  => lg_fft_dc_notch,
-        fs_hz     => lg_ch_fs_hz,
-        lo_khz    => lg_ch_lo_khz,
-        in_i      => rx_sample_corrected_i,
-        in_q      => rx_sample_corrected_q,
-        in_valid  => rx_sample_corrected_valid,
-        peak_word => lg_peak_word,
-        ch_energy => lg_ch_energy,
-        ch_bins   => lg_ch_bins_rx,
-        ch_active => lg_ch_active
+        ch_ctrl   => lg_ch_ctrl,
+        ch_idx    => lg_ch_idx,
+        lut_we    => lg_lut_we,
+        lut_addr  => lg_lut_addr,
+        lut_data  => lg_lut_data,
+        mag_valid => lg_mag_valid,
+        mag_last  => lg_mag_last,
+        mag_bin   => lg_mag_bin,
+        mag_pow   => lg_mag_pow,
+        mag_frame => lg_mag_frame,
+        ch_word   => lg_ch_word
       );
 
+    -- Gemini / два тона ≥ fs/16: MA-16 режет вторую; bypass = in→out.
+    lg_xlat_en <= lg_fft_en and not lg_fft_xlat_bypass;
     -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой RX.
     U_legion_lb_xlat : entity work.legion_lb_xlat
       port map (
         clock     => rx_clock,
         reset     => rx_reset,
-        enable    => lg_fft_en,
+        enable    => lg_xlat_en,
         lock      => lg_fft_lock,
         peak_word => lg_peak_word,
         in_i      => rx_sample_corrected_i,

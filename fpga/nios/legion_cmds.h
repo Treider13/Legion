@@ -48,7 +48,7 @@
 #define LEGION_REG_FIRE_BW_HZ     0x13  /* leftover; вырез цифровой, analog не узжаем */
 #define LEGION_REG_PEAK_KHZ       0x14  /* найденная частота, кГц (считает NIOS) */
 #define LEGION_REG_PEAK_BIN       0x15  /* слово пика HDL: bin/mag/frame/valid */
-#define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch, bit2 lock */
+#define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch, bit2 lock, bit3 xlat bypass */
 #define LEGION_REG_BAND_IDX       0x17  /* 0..7 — куда писать F1/F2 */
 #define LEGION_REG_BAND_F1_KHZ    0x18
 #define LEGION_REG_BAND_F2_KHZ    0x19
@@ -69,37 +69,44 @@
 #define LEGION_REG_LB_AMP         0x28  /* [15:0] A0 Q15, [31:16] A1 */
 #define LEGION_REG_WALK_PERIOD    0x29  /* сэмплы между шагами; 0 = фронт det */
 #define LEGION_REG_WALK_FTW_STEP  0x2A  /* прирост FTW0 за шаг */
-#define LEGION_REG_PROTO_PERIOD   0x2B  /* период пакета, сэмплы (хост) */
-#define LEGION_REG_PROTO_PULSE    0x2C  /* длительность пакета, сэмплы */
-#define LEGION_REG_DRFM_STEP_SRC  0x2D  /* 0=WALK_PERIOD, 1=PROTO_PERIOD */
-#define LEGION_REG_CH_THR         0x2E  /* порог энергии слота (NIOS) */
-#define LEGION_REG_CH_HYST        0x2F  /* N окон подряд (NIOS) */
-#define LEGION_REG_CH_TARGET      0x30  /* FFT bin 0..255 */
-#define LEGION_REG_CH_MODE        0x31  /* 0=8×10 МГц ISM 2.4, 1=ELRS 80 */
-#define LEGION_REG_CH_ACTIVE_0    0x32  /* [7:0] активные 10-МГц слоты */
-#define LEGION_REG_CH_ACTIVE_1    0x33  /* ELRS bits 0..31 */
-#define LEGION_REG_CH_ACTIVE_2    0x34  /* ELRS bits 32..63 */
-#define LEGION_REG_CH_ACTIVE_3    0x35  /* ELRS bits 64..79 */
-#define LEGION_REG_CH_ENERGY_0    0x36
-#define LEGION_REG_CH_ENERGY_1    0x37
-#define LEGION_REG_CH_ENERGY_2    0x38
-#define LEGION_REG_CH_ENERGY_3    0x39
-#define LEGION_REG_CH_ENERGY_4    0x3A
-#define LEGION_REG_CH_ENERGY_5    0x3B
-#define LEGION_REG_CH_ENERGY_6    0x3C
-#define LEGION_REG_CH_ENERGY_7    0x3D
-#define LEGION_REG_CH_HITS_0      0x3E
-#define LEGION_REG_CH_HITS_1      0x3F
-#define LEGION_REG_CH_HITS_2      0x40
-#define LEGION_REG_CH_HITS_3      0x41
-#define LEGION_REG_CH_HITS_4      0x42
-#define LEGION_REG_CH_HITS_5      0x43
-#define LEGION_REG_CH_HITS_6      0x44
-#define LEGION_REG_CH_HITS_7      0x45
-#define LEGION_REG_CH_BINS_03     0x46  /* пики слотов 0..3 */
-#define LEGION_REG_CH_BINS_47     0x47  /* пики слотов 4..7 */
-#define LEGION_REG_CH_FS_HZ       0x48  /* NIOS → HDL */
-#define LEGION_REG_CH_LO_KHZ      0x49  /* центр взгляда → HDL */
+#define LEGION_REG_CH_CTRL        0x2B  /* HDL [15:0]; NIOS preset [17:16] */
+#define LEGION_REG_CH_IDX         0x2C  /* индекс 0..79 */
+#define LEGION_REG_CH_PWR         0x2D  /* STATUS mux: слово канала */
+#define LEGION_REG_PEAK1          0x2E  /* STATUS mux: Top-N 1 */
+#define LEGION_REG_PEAK2          0x2F
+#define LEGION_REG_PEAK3          0x30
+#define LEGION_REG_CH_LUT         0x31  /* write {idx[15:8], ch[7:0]} */
+#define LEGION_REG_PROTO_PERIOD   0x32  /* период пакета, сэмплы (хост) */
+#define LEGION_REG_PROTO_PULSE    0x33  /* длительность пакета, сэмплы */
+#define LEGION_REG_DRFM_STEP_SRC  0x34  /* 0=WALK_PERIOD, 1=PROTO_PERIOD */
+#define LEGION_REG_CH_THR         0x35  /* порог энергии слота (NIOS) */
+#define LEGION_REG_CH_HYST        0x36  /* N окон подряд (NIOS) */
+#define LEGION_REG_CH_TARGET      0x37  /* FFT bin 0..255 */
+#define LEGION_REG_CH_MODE        0x38  /* 0=8×10 МГц ISM 2.4, 1=ELRS 80 */
+#define LEGION_REG_CH_ACTIVE_0    0x39  /* [7:0] активные 10-МГц слоты */
+#define LEGION_REG_CH_ACTIVE_1    0x3A  /* ELRS bits 0..31 */
+#define LEGION_REG_CH_ACTIVE_2    0x3B  /* ELRS bits 32..63 */
+#define LEGION_REG_CH_ACTIVE_3    0x3C  /* ELRS bits 64..79 */
+#define LEGION_REG_CH_ENERGY_0    0x3D
+#define LEGION_REG_CH_ENERGY_1    0x3E
+#define LEGION_REG_CH_ENERGY_2    0x3F
+#define LEGION_REG_CH_ENERGY_3    0x40
+#define LEGION_REG_CH_ENERGY_4    0x41
+#define LEGION_REG_CH_ENERGY_5    0x42
+#define LEGION_REG_CH_ENERGY_6    0x43
+#define LEGION_REG_CH_ENERGY_7    0x44
+#define LEGION_REG_CH_HITS_0      0x45
+#define LEGION_REG_CH_HITS_1      0x46
+#define LEGION_REG_CH_HITS_2      0x47
+#define LEGION_REG_CH_HITS_3      0x48
+#define LEGION_REG_CH_HITS_4      0x49
+#define LEGION_REG_CH_HITS_5      0x4A
+#define LEGION_REG_CH_HITS_6      0x4B
+#define LEGION_REG_CH_HITS_7      0x4C
+#define LEGION_REG_CH_BINS_03     0x4D  /* пики слотов 0..3 */
+#define LEGION_REG_CH_BINS_47     0x4E  /* пики слотов 4..7 */
+#define LEGION_REG_CH_FS_HZ       0x4F  /* NIOS → HDL */
+#define LEGION_REG_CH_LO_KHZ      0x50  /* центр взгляда → HDL */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -108,6 +115,23 @@
 #define LEGION_FFT_CTRL_EN        (1u << 0)
 #define LEGION_FFT_CTRL_DC_NOTCH  (1u << 1)
 #define LEGION_FFT_CTRL_LOCK      (1u << 2) /* xlat не следует за live-пиком */
+#define LEGION_FFT_CTRL_XLAT_BYPASS (1u << 3) /* xlat=passthrough; два тона ≥ fs/16 */
+#define LEGION_CH_MAP_RAW         0u
+#define LEGION_CH_MAP_LUT         1u
+#define LEGION_CH_MAP_MASK        3u
+#define LEGION_CH_FFTSHIFT        (1u << 5)
+#define LEGION_CH_DC_SKIP         (1u << 6)
+#define LEGION_CH_N80             (1u << 7)
+#define LEGION_CH_N               80u
+#define LEGION_CH_SLOT_N          8u
+#define LEGION_CH_EXCL_DEFAULT    8u
+#define LEGION_CH_PRESET_SHIFT    16
+#define LEGION_CH_PRESET_MASK     3u
+#define LEGION_CH_PRESET_MANUAL   0u
+#define LEGION_CH_PRESET_ELRS     1u /* ExpressLRS FHSS.cpp ISM2G4 80×1 МГц */
+#define LEGION_CH_PRESET_ISM8     2u /* 2400–2480 / 8×10 МГц, не OcuSync */
+#define LEGION_CH_PRESET_O4VID3   3u /* DJI O4 20/10 МГц: 5768.5/5789.5/5814.5 */
+#define LEGION_XLAT_NULL_BINS     16u /* MA-16 first-null: f=fs/N=fs/16 → 256/16 bins */
 #define LEGION_BAND_MAX           8u
 #define LEGION_SURVEY_LOOK_MAX    128u
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
@@ -122,7 +146,6 @@
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
 #define LEGION_REG_MAX            LEGION_REG_CH_LO_KHZ
-#define LEGION_CH_N               8u
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u
