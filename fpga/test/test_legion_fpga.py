@@ -152,6 +152,13 @@ py_map = {
     "LEGION_REG_LB_AMP": lf.REG_LB_AMP,
     "LEGION_REG_WALK_PERIOD": lf.REG_WALK_PERIOD,
     "LEGION_REG_WALK_FTW_STEP": lf.REG_WALK_FTW_STEP,
+    "LEGION_REG_CH_CTRL": lf.REG_CH_CTRL,
+    "LEGION_REG_CH_IDX": lf.REG_CH_IDX,
+    "LEGION_REG_CH_PWR": lf.REG_CH_PWR,
+    "LEGION_REG_PEAK1": lf.REG_PEAK1,
+    "LEGION_REG_PEAK2": lf.REG_PEAK2,
+    "LEGION_REG_PEAK3": lf.REG_PEAK3,
+    "LEGION_REG_CH_LUT": lf.REG_CH_LUT,
     "LEGION_REG_CH_TARGET": lf.REG_CH_TARGET,
 }
 
@@ -1294,6 +1301,26 @@ check("micro: SETTLE_N = 6 мс @ 56e6",
       gw_m.fpga._t.regs.get(lf.REG_SETTLE_N) == lf.settle_n_for_fs(56_000_000))
 check("micro: BAND_COUNT 1", gw_m.fpga._t.regs.get(lf.REG_BAND_COUNT) == 1)
 check("settle_n_for_fs 56e6 = 336000", lf.settle_n_for_fs(56_000_000) == 336000)
+rpcm({"op": "disarm"})
+check("set_channelize ELRS",
+      gw_m.fpga.set_channelize(preset=lf.CH_PRESET_ELRS) is True)
+check("micro: CH_CTRL preset ELRS",
+      gw_m.fpga._t.regs.get(lf.REG_CH_CTRL) == (lf.CH_PRESET_ELRS << 16))
+check("micro: CH_IDX 0", gw_m.fpga._t.regs.get(lf.REG_CH_IDX) == 0)
+check("write_ch_lut bin16→ch3", gw_m.fpga.write_ch_lut(16, 3) is True)
+check("micro: CH_LUT packed",
+      gw_m.fpga._t.regs.get(lf.REG_CH_LUT) == ((16 << 8) | 3))
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2500.0, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2600,
+          "scan_dwell_us": 400, "fft_enable": True, "fire_bw_mhz": 2,
+          "ch_preset": 1, "xlat_bypass": True})
+check("micro: ARM ch_preset+bypass ok", r.get("ok") is True)
+check("micro: FFT_CTRL enable|notch|bypass",
+      gw_m.fpga._t.regs.get(lf.REG_FFT_CTRL) ==
+      (lf.FFT_CTRL_EN | lf.FFT_CTRL_DC_NOTCH | lf.FFT_CTRL_XLAT_BYPASS))
+check("micro: CH_CTRL preset from ARM",
+      gw_m.fpga._t.regs.get(lf.REG_CH_CTRL) == (lf.CH_PRESET_ELRS << 16))
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2428.0, "fs_hz": 56_000_000, "bw_mhz": 56,

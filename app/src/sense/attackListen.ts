@@ -32,10 +32,24 @@ export function attackListenSpanMhz(fsHz: number, cropFactor: number): number {
   return (fsHz / 1e6) * (1 - cropFactor);
 }
 
+export function attackTxClockHz(opts: {
+  analogMhz: number;
+  paint?: AttackPaint | null;
+}): number {
+  return attackListenPlan({
+    analogMhz: opts.analogMhz,
+    paintOwnsTx: opts.paint != null,
+    paint: opts.paint ?? null,
+    txLive: true,
+  }).fsHz;
+}
+
 export function attackListenPlan(opts: {
   analogMhz: number;
   paintOwnsTx: boolean;
   paint: AttackPaint | null;
+  /** ПЕРЕДАТЬ жив: AD9361 один BBPLL + USB FD ≤40. Не 61.44. */
+  txLive?: boolean;
 }): AttackListenPlan {
   const analog =
     Number.isFinite(opts.analogMhz) && opts.analogMhz > 0 ? opts.analogMhz : ATTACK_LISTEN_ANALOG_MHZ;
@@ -50,6 +64,22 @@ export function attackListenPlan(opts: {
     );
     const fsHz = Math.max(ATTACK_TX_FS_MIN_HZ, Math.round(windowMhz * 1e6));
     const filterMhz = Math.min(analog, fsHz / 1e6, ATTACK_TX_MAX_MHZ);
+    const cropFactor = attackCropFactor(fsHz, filterMhz);
+    return {
+      fsHz,
+      filterMhz,
+      cropFactor,
+      spanMhz: attackListenSpanMhz(fsHz, cropFactor),
+      fftN: ATTACK_FFT_N_FULL,
+    };
+  }
+  if (opts.txLive) {
+    // Nuand robert.ghilduta 2023-03-20: один BBPLL. USB FD xA4 ≤40 МГц.
+    const fsHz =
+      analog >= ATTACK_LISTEN_ANALOG_MHZ - 0.5
+        ? ATTACK_FD_FS_HZ
+        : Math.min(ATTACK_FD_FS_HZ, Math.max(ATTACK_TX_FS_MIN_HZ, analog * 1e6));
+    const filterMhz = Math.min(analog, ATTACK_LISTEN_ANALOG_MHZ, fsHz / 1e6, ATTACK_TX_MAX_MHZ);
     const cropFactor = attackCropFactor(fsHz, filterMhz);
     return {
       fsHz,

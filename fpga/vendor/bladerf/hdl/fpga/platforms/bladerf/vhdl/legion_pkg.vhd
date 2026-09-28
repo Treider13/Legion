@@ -81,9 +81,19 @@ package legion_pkg is
     constant LEGION_REG_LB_AMP     : natural := 16#28#; -- [15:0] A0 Q15, [31:16] A1
     constant LEGION_REG_WALK_PERIOD : natural := 16#29#; -- сэмплы между шагами; 0 = фронт det
     constant LEGION_REG_WALK_FTW_STEP : natural := 16#2A#; -- прирост FTW0 за шаг
+    -- Occupancy после FFT (FOSDEM energy-window) + Top-N (SciPy find_peaks).
+    -- Не 88 PIO: CH_PWR/PEAKk — STATUS mux, как 0x15/0x23.
+    constant LEGION_REG_CH_CTRL    : natural := 16#2B#; -- HDL [15:0]; NIOS preset [17:16]
+    constant LEGION_REG_CH_IDX     : natural := 16#2C#; -- индекс 0..79 (как BAND_IDX)
+    constant LEGION_REG_CH_PWR     : natural := 16#2D#; -- STATUS mux: слово канала
+    constant LEGION_REG_PEAK1      : natural := 16#2E#; -- STATUS mux: пик 1
+    constant LEGION_REG_PEAK2      : natural := 16#2F#;
+    constant LEGION_REG_PEAK3      : natural := 16#30#;
+    constant LEGION_REG_CH_LUT     : natural := 16#31#; -- write {idx[15:8], ch[7:0]}
     -- Синтез: цифровой hop DRFM→TX без LO. [31]=arm, [7:0]=signed bin.
     -- FTW = bin≪24 (f = bin·fs/256). HDL берёт слово на следующем sample_en.
-    constant LEGION_REG_CH_TARGET : natural := 16#2B#;
+    -- 0x2B занят CH_CTRL.
+    constant LEGION_REG_CH_TARGET : natural := 16#32#;
 
     constant LEGION_WALK_CTL_EN    : natural := 0;
     constant LEGION_WALK_CTL_AUTO  : natural := 1;
@@ -100,6 +110,26 @@ package legion_pkg is
     constant LEGION_FFT_CTRL_EN      : natural := 0;
     constant LEGION_FFT_CTRL_DC_NOTCH : natural := 1;
     constant LEGION_FFT_CTRL_LOCK    : natural := 2;
+    constant LEGION_FFT_CTRL_XLAT_BYPASS : natural := 3; -- xlat=passthrough; два FTW отводов
+
+    -- CH_CTRL (HDL 16 бит): [1:0] map 0=raw 1=lut, [4:2] grp_shift,
+    -- [5] fftshift, [6] dc_skip, [7] n80, [15:8] excl (0 → 8).
+    -- NIOS [17:16] preset: 0 manual / 1 ELRS / 2 ISM-OCC-8 / 3 O4-VID-3.
+    -- ELRS: ExpressLRS FHSS.cpp ISM2G4 2400.4…2479.4 / 80 / 1.000 МГц.
+    -- ISM-OCC-8: геометрическая занятость 2400…2480 / 8×10 МГц (FOSDEM
+    -- energy-window), не таблица DJI OcuSync.
+    -- O4-VID-3: DJI specs 20/10 МГц CH1 5768.5 / CH2 5789.5 / CH3 5814.5.
+    constant LEGION_CH_MAP_RAW     : natural := 0;
+    constant LEGION_CH_MAP_LUT     : natural := 1;
+    constant LEGION_CH_FFTSHIFT    : natural := 5;
+    constant LEGION_CH_DC_SKIP     : natural := 6;
+    constant LEGION_CH_N80         : natural := 7;
+    constant LEGION_CH_N           : natural := 80;
+    constant LEGION_CH_EXCL_DEFAULT : natural := 8;
+    constant LEGION_CH_PRESET_MANUAL : natural := 0;
+    constant LEGION_CH_PRESET_ELRS   : natural := 1;
+    constant LEGION_CH_PRESET_ISM8   : natural := 2;
+    constant LEGION_CH_PRESET_O4VID3 : natural := 3;
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (живой expired),

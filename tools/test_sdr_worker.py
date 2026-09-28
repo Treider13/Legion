@@ -710,6 +710,61 @@ def main() -> int:
     again = radio.tx_wave(2425.0, "qpsk", {"amp": 0.2})
     check("tx_wave без fs снова 2 МГц", again.get("ok") is True and abs(radio._tx_fs - w.TX_FS) < 1)
 
+    hop = w.Radio()
+    hop.fake = True
+    hop.analog_bw = 56.0
+    first = hop.tx_wave(2442.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    lo0 = hop._tx_lo_hz
+    check(
+        "первый TX: analog + design 2 МГц на часах 40",
+        first.get("ok") is True
+        and first.get("digitalHop") is False
+        and first.get("designFsHz") == 2e6
+        and first.get("fsHz") == 40e6
+        and lo0 is not None
+        and abs(lo0 - (2442e6 - 40e6 / 8)) < 1
+        and hop._tx_mix_hz is not None
+        and abs(float(hop._tx_mix_hz) - 40e6 / 8) < 1,
+    )
+    worker_src = open(WORKER).read()
+    prime_src = worker_src[worker_src.index("def _tx_prime") : worker_src.index("def _tx_commit")]
+    check(
+        "analog prime коммитит mix в локе setFrequency",
+        "self._tx_mix_hz = float(mix_hz)" in prime_src
+        and prime_src.index("self.dev.setFrequency(SOAPY_SDR_TX")
+        < prime_src.index("self._tx_mix_hz = float(mix_hz)"),
+    )
+    bb0 = hop._tone_bb
+    second = hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "второй hop в окне — цифра, LO стоит",
+        second.get("ok") is True
+        and second.get("digitalHop") is True
+        and hop._tx_lo_hz == lo0
+        and abs(float(second.get("mixHz") or 0) - (2445e6 - lo0)) < 1,
+    )
+    check("цифровой hop не пересобирает полку", hop._tone_bb is bb0)
+    check(
+        "цифровой hop только меняет mix",
+        hop._tx_mix_hz is not None and abs(float(hop._tx_mix_hz) - (2445e6 - lo0)) < 1,
+    )
+    dc = hop.tx_wave(lo0 / 1e6, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "hop на LO — analog (горбу нельзя сидеть на утечке)",
+        dc.get("ok") is True and dc.get("digitalHop") is False and hop._tx_lo_hz != lo0,
+    )
+    far = hop.tx_wave(2500.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "вне окна — analog, новый LO",
+        far.get("ok") is True
+        and far.get("digitalHop") is False
+        and hop._tx_lo_hz is not None
+        and hop._tx_lo_hz != lo0,
+    )
+    hop.tx_off()
+    check("tx_off сбрасывает стоящий LO и опору", hop._tx_lo_hz is None and hop._tone_bb is None)
+    check("банк 31 волны на месте", len(w.WAVE_KINDS) == 31 and "p4" in w.WAVE_KINDS)
+
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
     check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)
 
@@ -820,6 +875,36 @@ def main() -> int:
         check(
             "writeStream timeout гасит TX",
             isinstance(refused, dict) and refused.get("ok") is False and "сигнала на RF out нет" in str(refused.get("reason")),
+        )
+
+        class _RollbackTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.freqs: list[float] = []
+
+            def setFrequency(self, _d, _c, hz):
+                self.freqs.append(float(hz))
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": -1})()
+
+        rb = w.Radio()
+        rb.fake = False
+        rb.hardware_key = "bladerf2"
+        rb._tx_fs = 40e6
+        rb.tx_mhz = 2445.0
+        rb._tx_lo_hz = 2437e6
+        rb.dev = _RollbackTx()
+        rolled = rb._tx_prime(buf, 2495e6, rb.tx_mhz, 40e6)
+        wrong_lo = 2445e6 - 40e6 / 8
+        check(
+            "откат analog после цифры — стоящий LO, не last RF−fs/8",
+            isinstance(rolled, dict)
+            and rolled.get("ok") is False
+            and rb.dev.freqs[:1] == [2495e6]
+            and rb.dev.freqs[-1] == 2437e6
+            and abs(rb.dev.freqs[-1] - wrong_lo) > 1
+            and rb._tx_lo_hz == 2437e6,
         )
 
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---

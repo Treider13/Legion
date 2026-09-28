@@ -48,7 +48,7 @@
 #define LEGION_REG_FIRE_BW_HZ     0x13  /* leftover; вырез цифровой, analog не узжаем */
 #define LEGION_REG_PEAK_KHZ       0x14  /* найденная частота, кГц (считает NIOS) */
 #define LEGION_REG_PEAK_BIN       0x15  /* слово пика HDL: bin/mag/frame/valid */
-#define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch, bit2 lock */
+#define LEGION_REG_FFT_CTRL       0x16  /* bit0 enable, bit1 dc_notch, bit2 lock, bit3 xlat bypass */
 #define LEGION_REG_BAND_IDX       0x17  /* 0..7 — куда писать F1/F2 */
 #define LEGION_REG_BAND_F1_KHZ    0x18
 #define LEGION_REG_BAND_F2_KHZ    0x19
@@ -69,8 +69,16 @@
 #define LEGION_REG_LB_AMP         0x28  /* [15:0] A0 Q15, [31:16] A1 */
 #define LEGION_REG_WALK_PERIOD    0x29  /* сэмплы между шагами; 0 = фронт det */
 #define LEGION_REG_WALK_FTW_STEP  0x2A  /* прирост FTW0 за шаг */
-/* Синтез: [31]=arm, [7:0]=signed bin. FTW=bin<<24. LO не двигается. */
-#define LEGION_REG_CH_TARGET      0x2B
+#define LEGION_REG_CH_CTRL        0x2B  /* HDL [15:0]; NIOS preset [17:16] */
+#define LEGION_REG_CH_IDX         0x2C  /* индекс 0..79 */
+#define LEGION_REG_CH_PWR         0x2D  /* STATUS mux: слово канала */
+#define LEGION_REG_PEAK1          0x2E  /* STATUS mux: Top-N 1 */
+#define LEGION_REG_PEAK2          0x2F
+#define LEGION_REG_PEAK3          0x30
+#define LEGION_REG_CH_LUT         0x31  /* write {idx[15:8], ch[7:0]} */
+/* Синтез: [31]=arm, [7:0]=signed bin. FTW=bin<<24. LO не двигается.
+ * 0x2B занят CH_CTRL. */
+#define LEGION_REG_CH_TARGET      0x32
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -79,6 +87,22 @@
 #define LEGION_FFT_CTRL_EN        (1u << 0)
 #define LEGION_FFT_CTRL_DC_NOTCH  (1u << 1)
 #define LEGION_FFT_CTRL_LOCK      (1u << 2) /* xlat не следует за live-пиком */
+#define LEGION_FFT_CTRL_XLAT_BYPASS (1u << 3) /* xlat=passthrough; два тона ≥ fs/16 */
+#define LEGION_CH_MAP_RAW         0u
+#define LEGION_CH_MAP_LUT         1u
+#define LEGION_CH_MAP_MASK        3u
+#define LEGION_CH_FFTSHIFT        (1u << 5)
+#define LEGION_CH_DC_SKIP         (1u << 6)
+#define LEGION_CH_N80             (1u << 7)
+#define LEGION_CH_N               80u
+#define LEGION_CH_EXCL_DEFAULT    8u
+#define LEGION_CH_PRESET_SHIFT    16
+#define LEGION_CH_PRESET_MASK     3u
+#define LEGION_CH_PRESET_MANUAL   0u
+#define LEGION_CH_PRESET_ELRS     1u /* ExpressLRS FHSS.cpp ISM2G4 80×1 МГц */
+#define LEGION_CH_PRESET_ISM8     2u /* 2400–2480 / 8×10 МГц, не OcuSync */
+#define LEGION_CH_PRESET_O4VID3   3u /* DJI O4 20/10 МГц: 5768.5/5789.5/5814.5 */
+#define LEGION_XLAT_NULL_BINS     16u /* MA-16 first-null: f=fs/N=fs/16 → 256/16 bins */
 #define LEGION_BAND_MAX           8u
 #define LEGION_SURVEY_LOOK_MAX    128u
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
@@ -151,7 +175,8 @@ bool legion_air_down(void);
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.
  * Пока CH_TARGET снят, хоп внутри взгляда = live FFT → xlat.
  * Пока CH_TARGET вооружён, downmix и aim стоят на одном bin
- * (иначе TX = эмиттер − live + aim).
+ * (иначе TX = эмиттер − live + aim). Два тона ≥ 16 бинов: xlat bypass,
+ * синтез не вооружается (passthrough × FTW сдвинул бы сырой IQ).
  * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
  * HDL DC-notch снят, SCAN_SURVEY_US от unmute — снова обзор.
  * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой
