@@ -323,6 +323,8 @@ int main(void)
           !legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_PLAYER));
     CHECK("WALK_CTL сброс", legion_reg_write(LEGION_REG_WALK_CTL, 0));
     CHECK("DELAY пишется в HDL", legion_reg_write(LEGION_REG_DELAY, 16));
+    CHECK("LB_DELAY пишется в HDL", legion_reg_write(LEGION_REG_LB_DELAY, 64));
+    CHECK("LB_FTW пишется в HDL", legion_reg_write(LEGION_REG_LB_FTW, 0x12345678u));
     /* Изоляция guard'а: отклонённый ARM не должен взвести legion_armed —
      * иначе wd_fired сейчас вызвал бы DISARM (найдено перепроверкой,
      * раунд 6: без этого шага баг маскировался бы последующим re-ARM). */

@@ -237,11 +237,40 @@ from attack_dsp import (  # noqa: E402
     analyze_iq,
     cancel_own,
     leftover_ratio,
+    channelize_decim,
     channelize_look,
     multitaper_dbm,
     spectral_flatness,
     synth_look_iq,
 )
+from droneid import analyze_droneid  # noqa: E402
+from fhss_detect import analyze_fhss, attach_rc  # noqa: E402
+from opendroneid import parse_opendroneid  # noqa: E402
+from protocol_db import nearest_analog_channel  # noqa: E402
+from rc_spectrum import analyze_rc, band_of  # noqa: E402
+
+ATTACK_RC_S = 0.16  # 160 мс: два интервала 19 Гц mLRS
+ATTACK_DRONEID_S = 0.002  # вспышка ~0.64 мс; 40 мс порог FHSS её отрезал
+ATTACK_FHSS_S = 0.04
+
+
+def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
+    return band_of(freq_mhz) in ("s24", "p900", "uhf") and float(bw_mhz) <= 2.5
+
+
+def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:
+    # proto17 README: 2.3995…2.4595 и 5.7565…5.7965. Не «только 2.4».
+    # analog PAL/NTSC — не DroneID. Непрерывное видео 5.8 режет энергия (peak≈median).
+    if parsed.get("analogKind") in ("pal", "ntsc"):
+        return False
+    f = float(freq_mhz)
+    in24 = 2395.0 <= f <= 2505.0
+    in58 = 5725.0 <= f <= 5875.0
+    if not (in24 or in58):
+        return False
+    if parsed.get("kind") == "ofdm":
+        return True
+    return float(bw_mhz) >= 6.0
 
 
 def rx_stream_samples(fs: float) -> int:
@@ -1646,6 +1675,7 @@ class Radio:
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
         iq = None
+        src = None
         if self.fake:
             n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
             if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
@@ -1678,7 +1708,26 @@ class Radio:
         if same_clock:
             work, clip_all = cancel_own(iq, np.asarray(replica))
             leftover = leftover_ratio(iq, work)
+        iq_rc = None
+        iq_long = None
+        if not self.fake and src is not None:
+            have = int(src.available())
+            want_d = min(have, ATTACK_MEM_CAP)
+            want_rc = min(have, int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+            if want_d >= int(work_fs * ATTACK_DRONEID_S):
+                iq_long = src.latest(want_d)
+            if want_rc >= int(work_fs * ATTACK_FHSS_S):
+                iq_rc = iq_long if want_rc == want_d else src.latest(want_rc)
+        elif self.fake:
+            iq_rc = work
+            iq_long = work
+        # FHSS только на широком IQ. Канализатор 2 МГц hop-set убивает.
+        # 65k think (~1 мс @ 61.44) мало: то же кольцо, что RC (160 мс).
+        fhss_src = iq_rc if iq_rc is not None else work
+        fhss = analyze_fhss(fhss_src, work_fs, center_mhz) if fhss_src is not None and len(fhss_src) >= 256 else None
+        hop_spacing = float((fhss or {}).get("spacingMhz") or 0.0)
         out_looks = []
+        droneid_by_lo: dict[int, dict[str, Any]] = {}
         for row in looks[:4]:
             freq = float(row.get("freqMhz") or center_mhz)
             bw = float(row.get("bwMhz") or 2.0)
@@ -1689,10 +1738,34 @@ class Radio:
             parsed["clip"] = bool(parsed.get("clip") or clip_all)
             if leftover_row is not None:
                 parsed["leftover"] = leftover_row
+            if fhss:
+                parsed["fhss"] = fhss
+            if _want_rc(freq, bw):
+                src_rc = iq_rc if iq_rc is not None else work
+                ch_rc, fs_rc = channelize_decim(src_rc, work_fs, freq, center_mhz, 2.0e6)
+                if ch_rc.size >= 128 and fs_rc > 0:
+                    rc = analyze_rc(ch_rc, fs_rc, freq, hop_spacing)
+                    parsed["rc"] = attach_rc(fhss, rc, freq) if fhss else rc
+            if parsed.get("analogKind") in ("pal", "ntsc") and parsed.get("hit"):
+                chn = nearest_analog_channel(freq)
+                if chn:
+                    parsed["analogChannel"] = chn
+            if _want_droneid(freq, bw, parsed):
+                # Не channelize_look(target 15.36, BW 12): want_fs≠15.36.
+                key = int(round(freq * 2.0))
+                if key not in droneid_by_lo:
+                    src_d = iq_long if iq_long is not None else work
+                    droneid_by_lo[key] = analyze_droneid(src_d, work_fs, freq, center_mhz)
+                parsed["droneid"] = droneid_by_lo[key]
+            frames = row.get("odidFrames") or row.get("odid_frames")
+            if frames:
+                parsed["opendroneid"] = parse_opendroneid(frames)
             out_looks.append(parsed)
         clip_all = bool(clip_all or any(bool(x.get("clip")) for x in out_looks))
         extra["thinkFsHz"] = work_fs
         extra["cancelClock"] = bool(same_clock)
+        if fhss:
+            extra["fhss"] = fhss
         return {
             "ok": True,
             "looks": out_looks,
@@ -2614,6 +2687,10 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             [x for x in looks if isinstance(x, dict)],
             bool(msg.get("residual")),
         )
+    if op == "opendroneid_parse":
+        frames = msg.get("frames") or msg.get("odidFrames") or msg.get("hex")
+        parsed = parse_opendroneid(frames)
+        return {"ok": bool(parsed.get("hit")), **parsed}
     if op == "park":
         return radio.park(
             float(msg["centerMhz"]),

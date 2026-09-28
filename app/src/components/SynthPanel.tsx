@@ -12,6 +12,7 @@ export function SynthPanel() {
         <span className="panel-title">СИНТЕЗАТОР // ADF4351</span>
         <p className="panel-note">
           Режим ESP32: генератор ADF4351 по USB. SDR и Ethernet здесь не участвуют.
+          Детектора дронов нет — нет IQ.
         </p>
         <div className="corr-grid">
           <label>

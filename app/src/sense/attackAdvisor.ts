@@ -266,9 +266,9 @@ export function buildAttackAdvice(input: {
     const fw = input.widths.get(top.id);
     honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
   }
-  const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
+  const atlas = top ? classifyAttackFamily(top, input.windowMhz, undefined, undefined) : null;
   const topAtlas = top
-    ? atlasForTracks(live, input.windowMhz).find((t) => t.id === top.id)?.atlas ?? atlas
+    ? atlasForTracks(live, input.windowMhz, undefined, input.looks).find((t) => t.id === top.id)?.atlas ?? atlas
     : null;
   const windowFill =
     topAtlas?.id === "window-fill" ||
@@ -282,6 +282,13 @@ export function buildAttackAdvice(input: {
     scene += ` Семья hop: ${fam.fLowMhz.toFixed(2)}…${fam.fHighMhz.toFixed(2)} МГц`;
     if (fam.gridMhz > 0) scene += `, шаг сетки ≈ ${fam.gridMhz.toFixed(2)} МГц`;
     scene += " (уже виденные вспышки, не будущий канал).";
+  }
+  const fhssLook = top ? input.looks.get(top.id)?.fhss : undefined;
+  if (fhssLook?.hit) {
+    scene += ` FHSS IQ: ${fhssLook.unique} кан., шаг ${fhssLook.spacingMhz.toFixed(2)} МГц, dwell ${fhssLook.dwellMs.toFixed(1)} мс`;
+    if (fhssLook.domain?.label) scene += ` · ${fhssLook.domain.label}`;
+    if (fhssLook.windowLimited) scene += " (окно xA4 56 МГц обрезает 2.4 ISM)";
+    scene += ".";
   }
   if (windowFill) {
     scene += ` Окно слуха ≈ ${input.windowMhz.toFixed(0)} МГц забито — канал может быть 60/80, рука платы 40 МГц туда не достанет.`;

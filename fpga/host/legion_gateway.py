@@ -978,6 +978,16 @@ class LegionGateway:
                     walk_ftw_step = int(msg["walk_ftw_step"]) if "walk_ftw_step" in msg else 0
             except (TypeError, ValueError):
                 return {"ok": False, "reason": "lb_delay/lb_amp/walk_period: не число"}
+            if "lb_ftw" not in msg and "lb_shift_hz" in msg:
+                try:
+                    lb_shift_hz = float(msg.get("lb_shift_hz") or 0.0)
+                    fs_mix = float(fs_for_wd) if fs_for_wd else 2_000_000.0
+                    if abs(lb_shift_hz) < 0.5 or fs_mix <= 0:
+                        lb_ftw = 0
+                    else:
+                        lb_ftw = int(round(lb_shift_hz / fs_mix * (1 << 32))) & 0xFFFFFFFF
+                except (TypeError, ValueError):
+                    return {"ok": False, "reason": "lb_ftw/lb_shift_hz: не число"}
             walk_en = bool(msg.get("walk_en", walk_auto or walk_delay > 0 or walk_step > 0))
             if mode == lf.MODE_LB_GATED:
                 if "walk_en" not in msg and "delay" not in msg:
@@ -1173,7 +1183,9 @@ class LegionGateway:
                 "det_shift": lf.REG_DET_SHIFT, "player_len": lf.REG_PLAYER_LEN,
                 "player_ctl": lf.REG_PLAYER_CTL, "lb_shift": lf.REG_LB_SHIFT,
                 "wd_limit": lf.REG_WD_LIMIT,
-                "delay": lf.REG_DELAY, "walk_step": lf.REG_WALK_STEP,
+                "delay": lf.REG_DELAY, "lb_delay": lf.REG_LB_DELAY,
+                "lb_ftw": lf.REG_LB_FTW,
+                "walk_step": lf.REG_WALK_STEP,
                 "walk_max": lf.REG_WALK_MAX, "walk_ctl": lf.REG_WALK_CTL,
                 "lb_delay": lf.REG_LB_DELAY, "lb_ftw": lf.REG_LB_FTW,
                 "lb_delay1": lf.REG_LB_DELAY1, "lb_ftw1": lf.REG_LB_FTW1,

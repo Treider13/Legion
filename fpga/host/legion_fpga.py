@@ -314,6 +314,27 @@ class LegionFpga:
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)
 
+    def set_lb_delay(self, delay: int) -> bool:
+        """Живой DRFM после CDC. 0 = обход. Не DELAY walk-off 0x1F."""
+        n = int(delay)
+        if n < 0:
+            n = 0
+        if n > 4095:
+            n = 4095
+        return self.write_reg(REG_LB_DELAY, n & 0xFFF)
+
+    def set_lb_ftw(self, ftw: int) -> bool:
+        """Частотный сдвиг после delayline. 0 = обход смесителя."""
+        return self.write_reg(REG_LB_FTW, int(ftw) & 0xFFFFFFFF)
+
+    def set_lb_shift_hz(self, hz: float, fs_hz: float) -> bool:
+        """FTW = round(hz/fs · 2³²), знак как uint32 wrap. |hz|<0.5 → 0."""
+        fs = float(fs_hz) if fs_hz else 0.0
+        f = float(hz) if hz is not None else 0.0
+        if fs <= 0.0 or abs(f) < 0.5:
+            return self.set_lb_ftw(0)
+        return self.set_lb_ftw(int(round(f / fs * (1 << 32))) & 0xFFFFFFFF)
+
     def set_watchdog(self, limit: int) -> bool:
         return self.write_reg(REG_WD_LIMIT, limit & 0xFFFF)
 
