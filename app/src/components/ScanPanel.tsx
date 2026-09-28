@@ -11,6 +11,7 @@ import {
   isFpgaAirPattern,
   isFpgaTaskLive,
   patternOptionRu,
+  detectorListens,
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
@@ -23,6 +24,8 @@ import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
 import { lookRu } from "../sense/attackLook";
+import { droneBandLabel, droneSurveyLine } from "../sense/droneBands";
+import { RfClassCard } from "./RfClassCard";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
   ATTACK_HOLD_MAX_MS,
@@ -31,8 +34,9 @@ import {
   paintCenterMhz,
   paintRefuseReason,
   paintSpanMhz,
-  paintWaveHint,
 } from "../sense/attackPaint";
+import { attackShelfHint, clipShelfToCorridor } from "../sense/attackShelfTx";
+import { clampShelfMhz } from "../sense/txShelf";
 import { TxGainControl } from "./TxGainControl";
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
@@ -47,6 +51,7 @@ export function ScanPanel() {
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
   const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
+  const classLive = detectorListens(s.scanPattern) && !taskLive && !airLive;
   const interceptSetup = fpgaAir && !taskLive && !airLive;
   const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
@@ -93,7 +98,7 @@ export function ScanPanel() {
             ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
-              : `${HOST_ATTACK_MODE_RU_CAPS}: слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Мозг помнит IQ на плате и hop-вспышки сессии, пишет разбор и подсказки по-русски. Рамка мышкой до ${ATTACK_TX_MAX_MHZ} МГц, тип волны и выдержка — кнопка «взять» ставит только то, что вы нажали; в эфир само не уходит. ПЕРЕДАТЬ заливает нарисованное. Пунктир на спектре — предложение, не рамка. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
+              : `${HOST_ATTACK_MODE_RU_CAPS}: без рамки слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Рамка мышкой — коридор (может быть шире ${ATTACK_TX_MAX_MHZ} МГц; одно окно USB FD ≤${ATTACK_TX_MAX_MHZ}). Полка — горб на найденном, тип волны — чем заливаем полку. Выдержка — на каждой засечке, сессию гасит только Стоп передачу. Пунктир — предложение, не рамка. Без рамки — авто-handoff живой засечки той же полкой. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -116,7 +121,7 @@ export function ScanPanel() {
                 : "окно FPGA"
               : taskLive
                 ? "не перехват"
-                : `МГц · ${auto ? "energy" : "сканер выкл"}`}
+                : `МГц · ${auto ? "energy" : classLive ? "слух классов" : "сканер выкл"}`}
           </span>
         </div>
         <div className={`freq-hud-card tx ${airLive ? (s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
@@ -234,6 +239,26 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
+            <label title="Живая линия задержки RX→TX после CDC. Не walk-off снимок. 0 — обход. 4096 сэмплов @ 2 MSPS ≈ 2 мс.">
+              DRFM ЗАДЕРЖКА
+              <input
+                aria-label="Живая задержка loopback в сэмплах"
+                inputMode="numeric"
+                value={s.fpgaLbDelay}
+                onChange={(e) => s.setFpgaLbDelay(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label title="Частотный сдвиг после delayline (mesarcik). FTW=round(Гц/fs·2³²). 0 — обход смесителя.">
+              DRFM СДВИГ Гц
+              <input
+                aria-label="Частотный сдвиг loopback в герцах"
+                inputMode="numeric"
+                value={s.fpgaLbShiftHz}
+                onChange={(e) => s.setFpgaLbShiftHz(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
           </>
         )}
         {interceptSetup && (
@@ -326,10 +351,10 @@ export function ScanPanel() {
         )}
         {auto && (
           <>
-            <label title="Сколько миллисекунд держать усилитель в нарисованной рамке после ПЕРЕДАТЬ.">
+            <label title="Сколько миллисекунд держать полку на одной засечке, потом следующая в коридоре. Сессию не гасит.">
               TX РАМКИ мс
               <input
-                aria-label="Выдержка передачи в рамке Атаки"
+                aria-label="Выдержка полки на засечке Атаки"
                 type="number"
                 min={ATTACK_HOLD_MIN_MS}
                 max={ATTACK_HOLD_MAX_MS}
@@ -339,10 +364,10 @@ export function ScanPanel() {
                 disabled={s.transmitArmed}
               />
             </label>
-            <label title="Тип baseband, которым заливаем рамку. CW — узкий тон в центре.">
-              ВОЛНА РАМКИ
+            <label title="Тип baseband на полке засечки. CW — узкий тон в центре полки, не коридора.">
+              ВОЛНА ПОЛКИ
               <select
-                aria-label="Тип волны для рамки Атаки"
+                aria-label="Тип волны полки Атаки"
                 value={s.txWaveKind ?? ""}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -373,13 +398,13 @@ export function ScanPanel() {
             }`
           : auto
             ? s.attackPaint
-              ? "Атака: рамка ваша. Подсказки ниже — помощник, не кнопка. ПЕРЕДАТЬ жмёте вы."
+              ? "Атака: рамка — где ищем. Полка и волна — что уходит на найденное. ПЕРЕДАТЬ жмёте вы."
               : s.autoDispatch === "priority"
               ? "рамки нет: без обвода ПЕРЕДАТЬ возьмёт живую засечку. Приоритет — сильнее рядом."
               : s.autoDispatch === "park"
                 ? "рамки нет: стоянка в узком коридоре. Широкий линк обведите мышкой сами."
                 : "рамки нет: очередь засечек. Широкий линк обведите мышкой сами."
-            : `без сканера: ноутбук ставит TX до стопа. Шаг двигает центр. Полка ${s.txShelfMhz} МГц — ширина горба${
+            : `СКАНИРОВАТЬ — слух классов (аналог и цифра). ПЕРЕДАТЬ — TX до стопа, класс на тех же часах полки. Шаг двигает центр. Полка ${s.txShelfMhz} МГц — ширина горба${
                 s.txWaveKind && waveFillsSoloWindow(s.txWaveKind)
                   ? ", шум займёт её целиком"
                   : ". Тон и QPSK уже полки — горб останется узким"
@@ -389,14 +414,21 @@ export function ScanPanel() {
         <p className="sens-hint">
           TX-контент:{" "}
           {s.txWaveKind !== null
-            ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА / волна рамки)`
-            : "CW тон · сменить — волна рамки выше или вкладка ТИП СИГНАЛА"}
+            ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА / волна полки)`
+            : "CW тон · сменить — волна полки выше или вкладка ТИП СИГНАЛА"}
         </p>
       )}
       {auto && (
         <p className="sens-hint">
           {s.attackPaint
-            ? `рамка ${s.attackPaint.f1Mhz.toFixed(2)}…${s.attackPaint.f2Mhz.toFixed(2)} МГц · центр ${paintCenterMhz(s.attackPaint).toFixed(3)} · ${paintSpanMhz(s.attackPaint).toFixed(2)} МГц · ${paintWaveHint(s.txWaveKind, s.attackPaint, s.txWaveParams)}`
+            ? (() => {
+                const analog = catalogCaps(s.sdrId).analogBwMhz;
+                const shelf = clampShelfMhz(parseLocaleNumber(s.txShelfMhz), analog);
+                const mid = paintCenterMhz(s.attackPaint);
+                const clip = clipShelfToCorridor(mid, shelf, s.attackPaint, analog);
+                const occ = clip?.occupyMhz ?? shelf;
+                return `коридор ${s.attackPaint.f1Mhz.toFixed(2)}…${s.attackPaint.f2Mhz.toFixed(2)} МГц · ${paintSpanMhz(s.attackPaint).toFixed(2)} МГц · полка ${occ.toFixed(2)} МГц · ${attackShelfHint(s.txWaveKind, occ, s.attackPaint)}`;
+              })()
             : "рамки нет — выделите полосу мышкой на спектре, иначе ПЕРЕДАТЬ возьмёт живую засечку как раньше"}
           {s.attackTxUntil != null && s.transmitArmed
             ? ` · TX ещё ${Math.max(0, s.attackTxUntil - Date.now())} мс`
@@ -409,7 +441,7 @@ export function ScanPanel() {
             : ""}
         </p>
       )}
-      {auto && (
+      {classLive && (
         <>
           <div className="sens-row">
             <span className="att-label">ЧУВСТВИТЕЛЬНОСТЬ ЗАСЕЧКИ</span>
@@ -447,6 +479,14 @@ export function ScanPanel() {
         <button className="btn-ghost" onClick={() => s.clearSdrBands()} disabled={busy}>
           ОЧИСТИТЬ
         </button>
+        <button
+          className="btn-ghost"
+          onClick={() => s.applyDroneSurvey()}
+          disabled={busy}
+          title={droneSurveyLine(s.sdrId)}
+        >
+          ПОЛОСЫ ДРОНОВ
+        </button>
         {auto && (
           <button className="btn-ghost" onClick={() => s.injectDemoTone()}>
             ДЕМО-НЕСУЩАЯ
@@ -473,13 +513,21 @@ export function ScanPanel() {
           )
         ) : (
           <>
-            {auto &&
+            {classLive && (auto || !s.transmitArmed) &&
               (s.scanRunning ? (
                 <button className="btn-danger" onClick={() => s.stopScan()}>
                   СТОП СКАН
                 </button>
               ) : (
-                <button className="btn-primary" onClick={() => s.startScan()}>
+                <button
+                  className="btn-primary"
+                  onClick={() => s.startScan()}
+                  title={
+                    auto
+                      ? "Слух Атаки"
+                      : "Слух классов на analog платы. Во время ПЕРЕДАТЬ — на часах полки, эту кнопку не крутим"
+                  }
+                >
                   СКАНИРОВАТЬ
                 </button>
               ))}
@@ -519,11 +567,15 @@ export function ScanPanel() {
       )}
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полоса из F1…F2 при старте, либо добавьте вручную</li>}
-        {s.sdrBands.map((b, i) => (
-          <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
-            {b.f1Mhz} … {b.f2Mhz} МГц
-          </li>
-        ))}
+        {s.sdrBands.map((b, i) => {
+          const tag = droneBandLabel(b);
+          return (
+            <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
+              {tag ? <span className="band-chip">{tag}</span> : null}
+              {b.f1Mhz} … {b.f2Mhz} МГц
+            </li>
+          );
+        })}
       </ul>
 
       <SpectrumScope />
@@ -547,9 +599,11 @@ export function ScanPanel() {
                   ? " · атака рамка"
                   : " · авто TX"
                 : " · TX с ноутбука"
-              : auto && s.scanRunning
+              : classLive && s.scanRunning
                 ? " · слушает"
-                : ""}
+                : classLive && s.transmitArmed && !auto
+                  ? " · слух на полке"
+                  : ""}
         </span>
         <span>{f2}</span>
       </div>
@@ -573,6 +627,27 @@ export function ScanPanel() {
               : `наблюдение недоступно: ${s.fpgaStatus.reason ?? "?"}`}
           </div>
         </div>
+      )}
+      {(classLive || airLive) && (
+        <RfClassCard
+          rows={
+            s.attackRows.length
+              ? s.attackRows
+              : atlasForTracks(s.attackTracks, analogBw).map(
+                  (t): AttackRow => ({
+                    ...t,
+                    width3Mhz: t.widthMhz,
+                    width26Mhz: t.widthMhz,
+                    occ99Mhz: t.widthMhz,
+                    look: undefined,
+                    familyId: null,
+                    infoRu: "",
+                  }),
+                )
+          }
+          pattern={s.scanPattern}
+          fpga={airLive ? s.fpgaClass : null}
+        />
       )}
       {auto && (
         <>

@@ -41,6 +41,16 @@ export interface HostAttackLook {
   kurt?: number;
   clip?: boolean;
   leftover?: number | null;
+  analogKind?: string;
+  analogScore?: number;
+  palScore?: number;
+  ntscScore?: number;
+  hit?: boolean;
+  droneid?: Record<string, unknown>;
+  opendroneid?: Record<string, unknown>;
+  rc?: Record<string, unknown>;
+  fhss?: Record<string, unknown>;
+  analogChannel?: Record<string, unknown>;
 }
 
 export interface HostAttackThinkResult {
@@ -49,6 +59,7 @@ export interface HostAttackThinkResult {
   looks: HostAttackLook[];
   leftover?: number | null;
   clip?: boolean;
+  fhss?: Record<string, unknown>;
   memorySamples?: number;
   memoryCap?: number;
   memoryMs?: number;
@@ -226,6 +237,7 @@ export async function hostAttackThink(
     looks: r.looks ?? [],
     leftover: r.leftover,
     clip: r.clip,
+    fhss: r.fhss,
     memorySamples: r.memorySamples,
     memoryCap: r.memoryCap,
     memoryMs: r.memoryMs,
@@ -335,9 +347,11 @@ export async function hostTxWave(
   wave: string,
   params: Record<string, number>,
   fsHz?: number,
+  txBwMhz?: number,
 ): Promise<TxCueResult> {
   const payload: Record<string, unknown> = { op: "tx_wave", freqMhz, wave, params };
   if (fsHz != null && Number.isFinite(fsHz) && fsHz > 0) payload.fsHz = fsHz;
+  if (txBwMhz != null && Number.isFinite(txBwMhz) && txBwMhz > 0) payload.txBwMhz = txBwMhz;
   const r = await hostRpc<{
     ok?: boolean;
     reason?: string;

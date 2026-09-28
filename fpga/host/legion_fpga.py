@@ -64,6 +64,21 @@ REG_WALK_STEP = 0x20
 REG_WALK_MAX = 0x21
 REG_WALK_CTL = 0x22  # bit0 EN, bit1 AUTO, bit2 HOLD
 REG_WALK_CUR = 0x23  # STATUS mux: текущая задержка
+REG_LB_DELAY = 0x24  # tap0, сэмплы; 0 = без отвода
+REG_LB_FTW = 0x25  # tap0 смеситель; 0 = обход
+REG_LB_DELAY1 = 0x26  # tap1
+REG_LB_FTW1 = 0x27
+REG_LB_AMP = 0x28  # [15:0] A0 Q15, [31:16] A1
+REG_WALK_PERIOD = 0x29  # сэмплы между шагами; 0 = фронт det
+REG_WALK_FTW_STEP = 0x2A  # прирост FTW0 за шаг
+
+# xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
+LB_AMP_Q15_UNITY = 0x7FFF
+LB_AMP_Q15_HALF = 16384
+LB_DELAY1_DEFAULT = 64
+WALK_PERIOD_DEFAULT = 4096
+WALK_STEP_LIVE_DEFAULT = 1
+WALK_MAX_LIVE_DEFAULT = 4095
 
 WALK_CTL_EN = 1 << 0
 WALK_CTL_AUTO = 1 << 1
@@ -282,8 +297,43 @@ class LegionFpga:
                 self.write_reg(REG_WALK_MAX, int(maximum) & 0xFFFFFFFF) and
                 self.write_reg(REG_WALK_CTL, ctl))
 
+    def set_live_drfm(self, delay0: int = 0, delay1: int = 0,
+                      ftw0: int = 0, ftw1: int = 0,
+                      amp0: int = LB_AMP_Q15_UNITY, amp1: int = 0,
+                      period: int = 0, ftw_step: int = 0) -> bool:
+        """Живые отводы после CDC: delay + mix + Q15. Не DELAY 0x1F."""
+        amp = (int(amp0) & 0xFFFF) | ((int(amp1) & 0xFFFF) << 16)
+        return (self.write_reg(REG_LB_DELAY, int(delay0) & 0xFFF) and
+                self.write_reg(REG_LB_FTW, int(ftw0) & 0xFFFFFFFF) and
+                self.write_reg(REG_LB_DELAY1, int(delay1) & 0xFFF) and
+                self.write_reg(REG_LB_FTW1, int(ftw1) & 0xFFFFFFFF) and
+                self.write_reg(REG_LB_AMP, amp) and
+                self.write_reg(REG_WALK_PERIOD, int(period) & 0xFFFFFFFF) and
+                self.write_reg(REG_WALK_FTW_STEP, int(ftw_step) & 0xFFFFFFFF))
+
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)
+
+    def set_lb_delay(self, delay: int) -> bool:
+        """Живой DRFM после CDC. 0 = обход. Не DELAY walk-off 0x1F."""
+        n = int(delay)
+        if n < 0:
+            n = 0
+        if n > 4095:
+            n = 4095
+        return self.write_reg(REG_LB_DELAY, n & 0xFFF)
+
+    def set_lb_ftw(self, ftw: int) -> bool:
+        """Частотный сдвиг после delayline. 0 = обход смесителя."""
+        return self.write_reg(REG_LB_FTW, int(ftw) & 0xFFFFFFFF)
+
+    def set_lb_shift_hz(self, hz: float, fs_hz: float) -> bool:
+        """FTW = round(hz/fs · 2³²), знак как uint32 wrap. |hz|<0.5 → 0."""
+        fs = float(fs_hz) if fs_hz else 0.0
+        f = float(hz) if hz is not None else 0.0
+        if fs <= 0.0 or abs(f) < 0.5:
+            return self.set_lb_ftw(0)
+        return self.set_lb_ftw(int(round(f / fs * (1 << 32))) & 0xFFFFFFFF)
 
     def set_watchdog(self, limit: int) -> bool:
         return self.write_reg(REG_WD_LIMIT, limit & 0xFFFF)

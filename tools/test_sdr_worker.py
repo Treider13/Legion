@@ -75,7 +75,7 @@ def main() -> int:
         tone = w.make_cw()
         check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
         check("CW длина кратна 8", len(tone) % 8 == 0)
-        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.25) < 0.02)
+        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.9) < 0.02)
         freqs = np.linspace(2440, 2444, 1024)
         db = np.linspace(-90, -40, 1024)
         pooled = w._pool_bins(freqs, db, 64)
@@ -412,6 +412,33 @@ def main() -> int:
             think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
         )
         check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
+        check("DroneID 5.8 proto17", w._want_droneid(5756.5, 10.0, {"kind": "ofdm"}) is True)
+        check("DroneID не analog PAL", w._want_droneid(5800.0, 20.0, {"analogKind": "pal"}) is False)
+        check("DroneID 2.3995 proto17", w._want_droneid(2399.5, 10.0, {"kind": "unknown"}) is True)
+        check("DroneID 2.4 + 10 МГц", w._want_droneid(2442.0, 10.0, {"kind": "unknown"}) is True)
+        import droneid as dji_w
+
+        burst_w = dji_w.synth_droneid_burst(dji_w.pack_droneid_91(), dji_w.DRONEID_FS)
+        x61_w = np_atk.zeros(burst_w.size * 4, dtype=np_atk.complex64)
+        x61_w[::4] = burst_w
+        live._attack_mem.reset()
+        live._attack_mem.push_block(x61_w)
+        live._tone_bb = None
+        think_d = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 10}], False)
+        did = ((think_d.get("looks") or [{}])[0].get("droneid")) or {}
+        check("think DroneID plaintext xA4", did.get("ok") is True)
+        if did.get("ok") is not True:
+            print("    detail", did)
+        pad5 = int(61.44e6 * 0.005)
+        x5 = np_atk.zeros(pad5, dtype=np_atk.complex64)
+        x5[: x61_w.size] = x61_w
+        live._attack_mem.reset()
+        live._attack_mem.push_block(x5)
+        think_5 = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 10}], False)
+        did5 = ((think_5.get("looks") or [{}])[0].get("droneid")) or {}
+        check("think DroneID кольцо 5 мс не хвост 1 мс", did5.get("ok") is True)
+        if did5.get("ok") is not True:
+            print("    detail5", did5)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())
@@ -738,6 +765,24 @@ def main() -> int:
         buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
         err = rt._tx_prime(buf, 2442e6, None, 10e6)
         check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+
+        class _BwTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bw = None
+
+            def setBandwidth(self, _d, _c, bw):
+                self.bw = bw
+
+        bwtx = w.Radio()
+        bwtx.fake = False
+        bwtx.hardware_key = "bladerf2"
+        bwtx._rx_fs = 40e6
+        bwtx._tx_fs = 40e6
+        bwtx.analog_bw = 56.0
+        bwtx.dev = _BwTx()
+        err_bw = bwtx._tx_prime(buf, 2415e6, None, 40e6, 15e6)
+        check("полка Атаки: фильтр 15 при часах слуха 40", err_bw is None and abs((bwtx.dev.bw or 0) - 15e6) < 1)
         check("AD9361: _tx_fs берёт часы RX", abs(rt._tx_fs - 10e6) < 1)
 
         class _ChunkTx(_TxClk):

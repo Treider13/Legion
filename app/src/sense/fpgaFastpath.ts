@@ -25,6 +25,14 @@ export const FPGA_AIR_SDR_IDS: readonly string[] = [
   "bladerf-x40",
 ];
 
+/** xA4 lab DRFM: два отвода 4096, не RFSoC 4×256 км. Mux потом ×0.9. */
+export const XA4_LB_DELAY0 = 0;
+export const XA4_LB_DELAY1 = 64;
+export const XA4_LB_AMP_HALF = 16384;
+export const XA4_WALK_PERIOD = 4096;
+export const XA4_WALK_STEP = 1;
+export const XA4_WALK_MAX = 4095;
+
 export function fpgaAirSupported(sdrId: string): boolean {
   return FPGA_AIR_SDR_IDS.includes(sdrId);
 }
@@ -494,6 +502,14 @@ export function ncoFtwFromFrac(fj: number): number {
   return Math.round(frac * 2 ** 32) >>> 0;
 }
 
+/** FTW смесителя DRFM: hz/fs·2³². 0 Гц → 0 (обход, не DC-LO). */
+export function lbFtwFromHz(hz: number, fsHz: number): number {
+  if (!Number.isFinite(hz) || !Number.isFinite(fsHz) || fsHz <= 0 || Math.abs(hz) < 0.5) {
+    return 0;
+  }
+  return (Math.round((hz / fsHz) * 2 ** 32) >>> 0);
+}
+
 /** Дописывает усиление TX (дБ тракта) в команду ARM. null — не трогаем init AD9361. */
 export function attachTxGainDb(
   cmd: Record<string, unknown>,
@@ -542,6 +558,17 @@ export function fpgaArmCmd(
     walkAuto?: boolean;
     walkHold?: boolean;
     walkEn?: boolean;
+    /** Живой DRFM после CDC (не DELAY 0x1F). xA4: два отвода 4096. */
+    lbDelay?: number;
+    lbDelay1?: number;
+    lbFtw?: number;
+    lbFtw1?: number;
+    lbAmp0?: number;
+    lbAmp1?: number;
+    walkPeriod?: number;
+    walkFtwStep?: number;
+    /** Частотный сдвиг DRFM, Гц. 0 = обход. Если задан lbFtw — не пишем. */
+    lbShiftHz?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -580,6 +607,14 @@ export function fpgaArmCmd(
   if (opts.walkEn || opts.walkAuto || (typeof opts.delay === "number" && opts.delay > 0)) {
     cmd.walk_en = true;
   }
+  if (opts.lbDelay !== undefined && Number.isFinite(opts.lbDelay) && opts.lbDelay >= 0) {
+    cmd.lb_delay = Math.min(4095, Math.round(opts.lbDelay));
+  }
+  if (opts.lbFtw !== undefined && Number.isFinite(opts.lbFtw)) {
+    cmd.lb_ftw = Math.round(opts.lbFtw) >>> 0;
+  } else if (opts.lbShiftHz !== undefined && Number.isFinite(opts.lbShiftHz)) {
+    cmd.lb_shift_hz = opts.lbShiftHz;
+  }
   if (opts.scanEnable) {
     cmd.scan_enable = true;
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
@@ -613,6 +648,28 @@ export function fpgaArmCmd(
         cmd.scan_bands = opts.scanBands.map((b) => ({ f1_mhz: b.f1Mhz, f2_mhz: b.f2Mhz }));
       }
     }
+  }
+  if (mode === "lb_gated") {
+    cmd.lb_delay = opts.lbDelay ?? XA4_LB_DELAY0;
+    cmd.lb_delay1 = opts.lbDelay1 ?? XA4_LB_DELAY1;
+    if (opts.lbFtw !== undefined && Number.isFinite(opts.lbFtw)) {
+      cmd.lb_ftw = Math.round(opts.lbFtw) >>> 0;
+    } else if (opts.lbShiftHz !== undefined && Number.isFinite(opts.lbShiftHz)) {
+      cmd.lb_shift_hz = opts.lbShiftHz;
+    } else {
+      cmd.lb_ftw = 0;
+    }
+    cmd.lb_ftw1 = opts.lbFtw1 ?? 0;
+    cmd.lb_amp0 = opts.lbAmp0 ?? XA4_LB_AMP_HALF;
+    cmd.lb_amp1 = opts.lbAmp1 ?? XA4_LB_AMP_HALF;
+    cmd.walk_period = opts.walkPeriod ?? XA4_WALK_PERIOD;
+    cmd.walk_ftw_step = opts.walkFtwStep ?? 0;
+    if (cmd.walk_step === undefined) cmd.walk_step = XA4_WALK_STEP;
+    if (cmd.walk_max === undefined) cmd.walk_max = XA4_WALK_MAX;
+    if (opts.walkEn === false) cmd.walk_en = false;
+    else if (cmd.walk_en === undefined) cmd.walk_en = true;
+    if (opts.walkHold === undefined) cmd.walk_hold = true;
+    else cmd.walk_hold = !!opts.walkHold;
   }
   return cmd;
 }

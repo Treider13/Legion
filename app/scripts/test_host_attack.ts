@@ -4,11 +4,16 @@
 // ============================================================================
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
-import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import { analogCombFromIq, PAL_LINE_HZ, parseAnalogComb } from "../src/sense/analogComb";
+import { atlasForTracks, classifyAttackFamily, bandBucket, extraFromLook } from "../src/sense/attackAtlas";
+import { droneBandLabel, droneSurveyBands } from "../src/sense/droneBands";
+import { classifyFpgaObserve } from "../src/sense/fpgaObserveClass";
+import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { matchAttackLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { droneidPlainLines, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { classifyFhssDomain, droneidModel, droneidState, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -36,6 +41,13 @@ import {
   paintWaveHint,
   waveOccupiesPaintMhz,
 } from "../src/sense/attackPaint";
+import {
+  clampCorridorPaint,
+  clipShelfToCorridor,
+  attackListenWindowMhz,
+  attackShelfTxPlan,
+} from "../src/sense/attackShelfTx";
+import { openLoopShelfTxPlan, shelfFsHz } from "../src/sense/txShelf";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
@@ -86,10 +98,17 @@ async function main(): Promise<void> {
   check("soapy crop чужих режимов 0.5", SOAPY_CROP_FACTOR === 0.5);
   check("RESENSE_MS 1 с как был", RESENSE_MS === 1000);
   const storeSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/state/store.ts"), "utf8");
-  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const armAttackHoldTimer"));
+  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const attackAnalogNow"));
   check(
     "resense Атаки не зовёт DIO-40",
     resenseSrc.includes("hostAttackScan") && resenseSrc.includes("attackListenPlan"),
+  );
+  check(
+    "resense рамки не схлопывает часы полкой",
+    resenseSrc.includes("runAttackShelfTx") &&
+      resenseSrc.includes("listenWhileTx") &&
+      resenseSrc.includes("holdMasked: listenWhileTx") &&
+      !resenseSrc.includes("shelfFsNow"),
   );
   check(
     "тик скана сверяет gScanGen после await",
@@ -108,18 +127,71 @@ async function main(): Promise<void> {
     storeSrc.includes("bumpAttackThinkGen") && storeSrc.includes("thinkGen !== gAttackThinkGen"),
   );
   const fireSrc = storeSrc.slice(storeSrc.indexOf("const fireAttackPaintTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  const shelfSrc = storeSrc.slice(storeSrc.indexOf("const runAttackShelfTx"), storeSrc.indexOf("const cueAttackTarget"));
   check(
-    "рамка ПЕРЕДАТЬ всегда hostTxWave на часах рамки",
-    fireSrc.includes("hostTxWave") &&
-      fireSrc.includes('?? "sine"') &&
-      !fireSrc.includes("hostTx(") &&
-      !fireSrc.includes("txCue"),
+    "полка Атаки идёт hostTxWave с фильтром полки",
+    shelfSrc.includes("hostTxWave") &&
+      shelfSrc.includes("plan.filterMhz") &&
+      shelfSrc.includes("plan.fsHz") &&
+      !shelfSrc.includes("hostTx(") &&
+      !shelfSrc.includes("txCue"),
   );
   check(
-    "рамка ПЕРЕДАТЬ сначала слух на часах рамки (AD9361 один BBPLL)",
-    fireSrc.includes("hostAttackScan") &&
-      fireSrc.indexOf("hostAttackScan") < fireSrc.indexOf("hostTxWave") &&
-      fireSrc.includes("paintOwnsTx: true"),
+    "сначала слух на часах коридора, потом TX (AD9361 один BBPLL)",
+    shelfSrc.includes("hostAttackScan") &&
+      shelfSrc.indexOf("hostAttackScan") < shelfSrc.indexOf("hostTxWave"),
+  );
+  check(
+    "выдержка не гасит сессию",
+    storeSrc.includes("цель меняем, сессию не гасим") &&
+      !fireSrc.includes("void get().stopTransmit()"),
+  );
+  check(
+    "очередь Атаки не берёт merge-архив засечек",
+    storeSrc.includes("liveCorridorDets") &&
+      storeSrc.includes('t.state === "cooled"') &&
+      storeSrc.slice(storeSrc.indexOf("const liveCorridorDets"), storeSrc.indexOf("const muteAttackTxKeepSession")).includes("liveWindow"),
+  );
+  const muteSrc = storeSrc.slice(storeSrc.indexOf("const muteAttackTxKeepSession"), storeSrc.indexOf("const runAttackShelfTx"));
+  check(
+    "mute сессии рвёт in-flight TX поколением",
+    muteSrc.includes("gTxGen += 1") && muteSrc.includes("gGate.reset()"),
+  );
+  const openLoopSrc = storeSrc.slice(storeSrc.indexOf("const runOpenLoopShelfTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  const startOpenSrc = storeSrc.slice(storeSrc.indexOf("const startOpenLoopTx"), storeSrc.indexOf("const bandsForFpgaAir"));
+  check(
+    "качание/сплошная/случайная всегда hostTxWave с фильтром полки",
+    openLoopSrc.includes("hostTxWave") &&
+      openLoopSrc.includes("shelf.fsHz") &&
+      openLoopSrc.includes("shelf.filterMhz") &&
+      openLoopSrc.includes("openLoopShelfTxPlan") &&
+      !openLoopSrc.includes("hostTx(") &&
+      !openLoopSrc.includes("txCue"),
+  );
+  check(
+    "шаг open-loop не подменяет полку",
+    startOpenSrc.includes("scanWindowMhz") &&
+      startOpenSrc.includes("runOpenLoopShelfTx") &&
+      !startOpenSrc.includes("runHandoffAsync"),
+  );
+  const handoffSrc = storeSrc.slice(storeSrc.indexOf("const runHandoffAsync"), storeSrc.indexOf("const restoreHeldTx"));
+  const restoreSrc = storeSrc.slice(storeSrc.indexOf("const restoreHeldTx"), storeSrc.indexOf("const resenseHeld"));
+  check(
+    "без рамки Атаки часы слуха + фильтр полки, не hostTx 2 МГц",
+    handoffSrc.includes("attackNoPaintShelf") &&
+      handoffSrc.includes("hostTxWave") &&
+      handoffSrc.includes("shelf.fsHz") &&
+      handoffSrc.includes("shelf.filterMhz") &&
+      !handoffSrc.includes("hostTx(") &&
+      !handoffSrc.includes("shelfFsNow"),
+  );
+  check(
+    "restore без рамки не схлопывает BBPLL полкой",
+    restoreSrc.includes("attackNoPaintShelf") &&
+      restoreSrc.includes("shelf.fsHz") &&
+      restoreSrc.includes("shelf.filterMhz") &&
+      !restoreSrc.includes("shelfFsNow") &&
+      !restoreSrc.includes("hostTx("),
   );
   check(
     "pickArmed архив по-прежнему пуст",
@@ -295,6 +367,9 @@ async function main(): Promise<void> {
   check("5.8 12 МГц sticky — цифра, не аналог", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 12, duty: 0.9, streak: 10,
   }).id === "digital-video");
+  check("5.8 12 + PAL гребёнка — аналог", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 12, duty: 0.9, streak: 10,
+  }, 56, { kind: "pal", score: 4, palScore: 4, ntscScore: 1, hit: true }).id === "analog-video");
   check("5.8 30 МГц sticky — широко", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 30, duty: 0.9, streak: 10,
   }).id === "digital-wide");
@@ -313,9 +388,8 @@ async function main(): Promise<void> {
   check("корзина 5.8", bandBucket(5805) === "c58");
   check("корзина 169", bandBucket(169) === "vhf");
   check("корзина 470", bandBucket(470) === "uhf");
-  const rc24 = classifyAttackFamily({
-    freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1,
-  });
+  const rc24Track = { freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1 };
+  const rc24 = classifyAttackFamily(rc24Track);
   check("2.4 hop ≤2 — rc-24", rc24.id === "rc-24");
   check(
     "2.4 класс: ELRS, mLRS и не разделить",
@@ -330,9 +404,173 @@ async function main(): Promise<void> {
     rc900.hint.includes("Crossfire") && rc900.hint.includes("не разделить"),
     rc900.hint,
   );
+  check(
+    "2.4 + IQ 250 Гц CSS dual",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "elrs-ghost-250", label: "CSS 250 Гц (ELRS или Ghost Pure Race)", hint: "CSS" },
+    }).id === "elrs-ghost-250",
+  );
+  check(
+    "2.4 + IQ 31 Гц CSS = mLRS",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "mlrs", label: "mLRS LoRa 31 Гц", hint: "CSS + 19/31 Гц" },
+    }).id === "mlrs",
+  );
+  check(
+    "2.4 + IQ 50 Гц CSS не уникален",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "elrs-mlrs-50", label: "LoRa 50 Гц (ELRS или mLRS)", hint: "50 Гц CSS" },
+    }).id === "elrs-mlrs-50",
+  );
+  check(
+    "Layer 3 DroneID перекрывает hop-корзину",
+    classifyAttackFamily(
+      { freqMhz: 2442, widthMhz: 10, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { layer3: { id: "droneid", label: "DroneID 1581F5", hint: "plaintext" } },
+    ).id === "droneid",
+  );
+  const workerLook = parseWorkerLook(
+    {
+      kind: "cycle",
+      label: "есть цикл",
+      conf: 0.7,
+      droneid: {
+        hit: true,
+        ok: true,
+        zcScore: 0.8,
+        plain: {
+          serial: "1581F5YHD228Q00A",
+          latitude: 47.1,
+          longitude: 8.2,
+          altitude: 540,
+          height: 120,
+          product_type: 63,
+          seqno: 15,
+          state_info: 0x75,
+          velocity_north: 10,
+          velocity_east: -7,
+          velocity_up: 1,
+          yaw: 16900 / 100 / 57.296,
+          home_latitude: 47.11,
+          home_longitude: 8.21,
+          uuid: "legion-lab",
+        },
+      },
+      rc: { id: "elrs", label: "ELRS LoRa 250 Гц", hint: "CSS", rateHz: 250, css: true },
+    },
+    2442,
+  );
+  check("parseWorkerLook serial", workerLook.droneid?.plain?.serial === "1581F5YHD228Q00A");
+  check("parseWorkerLook Mini 2", workerLook.droneid?.plain?.model === "Mini 2");
+  check("parseWorkerLook motor", workerLook.droneid?.plain?.state?.motorOn === true);
+  check("parseWorkerLook rc elrs", workerLook.rc?.id === "elrs");
+  check(
+    "AMC ofdm+hit не analog",
+    parseAnalogComb({ kind: "ofdm", hit: true, score: 4 }).hit === false,
+  );
+  check(
+    "analogKind pal + hit",
+    parseAnalogComb({ analogKind: "pal", hit: true, analogScore: 4 }).kind === "pal",
+  );
+  check("lookRu несёт DroneID Mini 2", lookRu(workerLook).includes("DroneID Mini 2 1581F5YHD228Q00A"), lookRu(workerLook));
+  check("extraFromLook droneid", extraFromLook(workerLook)?.layer3?.id === "droneid");
+  check(
+    "extraFromLook модель",
+    extraFromLook(workerLook)?.layer3?.label.includes("Mini 2") === true,
+    extraFromLook(workerLook)?.layer3?.label,
+  );
+  check("kismet Mini 2", droneidModel(63) === "Mini 2");
+  check("kismet Mavic 3", droneidModel(68) === "Mavic 3");
+  check("kismet нет id 99", droneidModel(99) === "Unknown (99)");
+  check("state 0x75 мотор", droneidState(0x75)?.motorOn === true && droneidState(0x75)?.inAir === true);
+  const l3 = droneidPlainLines(workerLook.droneid!.plain!);
+  check("l3 дом", l3.some((s) => s.includes("дом 47.11000")), l3.join(" | "));
+  check("l3 N/E/U", l3.some((s) => s.includes("N/E/U 10/-7/1")), l3.join(" | "));
+  check(
+    "шаг 260 кГц = Crossfire",
+    classifyFhssDomain(0.26, "p900").unique && classifyFhssDomain(0.26, "p900").id === "crossfire",
+  );
+  check("шаг 1 МГц 2.4 не уникален", classifyFhssDomain(1.0, "s24").unique === false);
+  check("шаг 0.6 900 не уникален", classifyFhssDomain(0.6, "p900").unique === false);
+  check("канал R5", nearestAnalogChannel(5806)?.id === "R5");
+  check("канал A4 на 5805", nearestAnalogChannel(5805)?.id === "A4");
+  check("2.4 не analog-канал", nearestAnalogChannel(2442) == null);
+  check("каталог баз ≥ 12", PROTOCOL_CATALOG.length >= 12);
+  check(
+    "каталог IN866+US433W",
+    PROTOCOL_CATALOG.some((p) => p.id === "elrs-in866") && PROTOCOL_CATALOG.some((p) => p.id === "elrs-us433w"),
+  );
+  check("корзина 1.2 на 1080", bandBucket(1080) === "l12");
+  check(
+    "433 + IQ ELRS extra",
+    classifyAttackFamily(
+      { freqMhz: 433.4, widthMhz: 0.5, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { rc: { id: "elrs", label: "ELRS LoRa 100 Гц", hint: "CSS 433" } },
+    ).id === "elrs",
+  );
+  const fhssLook = parseWorkerLook(
+    {
+      kind: "tone",
+      label: "узкий",
+      rc: { id: "crossfire", label: "Crossfire 150 Гц FSK", hint: "260 кГц", rateHz: 150, css: false },
+      fhss: {
+        hit: true,
+        hops: 8,
+        unique: 8,
+        hopSetMhz: [902.165, 902.425, 902.685],
+        spacingMhz: 0.26,
+        dwellMs: 4,
+        intervalMs: 6.67,
+        rateHz: 150,
+        hopBwMhz: 0.2,
+        spanMhz: 2,
+        fLowMhz: 902.165,
+        fHighMhz: 904.0,
+        windowLimited: false,
+        hint: "Crossfire",
+        domain: { id: "crossfire", family: "crossfire", label: "Crossfire 915", hint: "260", unique: true },
+      },
+    },
+    915,
+  );
+  check("parseWorkerLook fhss", fhssLook.fhss?.hit === true && fhssLook.fhss.spacingMhz === 0.26);
+  check("parseWorkerLook crossfire", fhssLook.rc?.id === "crossfire");
+  check("lookRu несёт FHSS", lookRu(fhssLook).includes("FHSS"), lookRu(fhssLook));
+  check(
+    "900 + шаг 260 → Crossfire",
+    classifyAttackFamily(
+      { freqMhz: 915, widthMhz: 0.4, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      extraFromLook(fhssLook),
+    ).id === "crossfire",
+  );
+  check(
+    "ghost extra",
+    classifyAttackFamily(
+      { freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { rc: { id: "ghost", label: "Ghost Long Range 15 Гц", hint: "15 Гц" } },
+    ).id === "ghost",
+  );
+  check("parseFhssLook без hit пуст", parseFhssLook({ hops: 3 }) == null);
   check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
   }).id === "digital-burst");
+  check("mid-C 12 МГц без гребёнки — не цифровой линк O4", classifyAttackFamily({
+    freqMhz: 5400, widthMhz: 12, duty: 0.9, streak: 10,
+  }).id !== "digital-video");
+  check("mid-C 20 МГц — не цифровой линк", classifyAttackFamily({
+    freqMhz: 5400, widthMhz: 20, duty: 0.9, streak: 10,
+  }).id !== "digital-video");
+  check("5.8 8 МГц IQ без гребёнки — не аналог по ширине", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 8, duty: 0.9, streak: 10,
+  }, 56, { kind: "none", score: 0, palScore: 0, ntscScore: 0, hit: false }).id !== "analog-video");
   const floors = atlasForTracks([
     {
       id: 1, freqMhz: 5800, fLowMhz: 5785, fHighMhz: 5815, widthMhz: 30,
@@ -366,7 +604,17 @@ async function main(): Promise<void> {
     paintOwnsTx: true,
     paint: { f1Mhz: 2430, f2Mhz: 2450 },
   });
-  check("ПЕРЕДАТЬ 20 МГц не раздувает USB до 61.44", fd.fsHz === 20e6 && fd.fsHz <= ATTACK_FD_FS_HZ);
+  check("коридор 20 МГц не раздувает USB до 61.44", fd.fsHz === 20e6 && fd.fsHz <= ATTACK_FD_FS_HZ);
+  const wideListen = attackListenPlan({
+    analogMhz: 56,
+    paintOwnsTx: false,
+    paint: { f1Mhz: 2400, f2Mhz: 2450 },
+  });
+  check(
+    "коридор 50 на xA4 — часы 40, не 50 и не полка",
+    wideListen.fsHz === ATTACK_FD_FS_HZ && wideListen.fsHz <= ATTACK_FD_FS_HZ,
+  );
+  check("окно слуха 50/56 = 40", attackListenWindowMhz(50, 56) === 40);
   const x40 = attackListenPlan({ analogMhz: 28, paintOwnsTx: false, paint: null });
   check("x40 слух не 61.44", x40.fsHz === 28e6 && x40.filterMhz === 28);
   check("потолок хита не 22", ATTACK_MAX_BW_MHZ === 56);
@@ -477,6 +725,7 @@ async function main(): Promise<void> {
     clip: false,
     leftover: null,
     source: "iq",
+    analog: { kind: "none", score: 0, palScore: 0, ntscScore: 0, hit: false },
   });
   hopMem.noteScene(1, hopTracks);
   hopMem.noteScene(2, hopTracks);
@@ -1836,7 +2085,59 @@ async function main(): Promise<void> {
   );
 
   const fat = clampPaintToCaps({ f1Mhz: 2400, f2Mhz: 2500 });
-  check("рамка шире 40 обрезана", paintSpanMhz(fat) <= ATTACK_TX_MAX_MHZ + 1e-9);
+  check("подсказка hop по-прежнему режется в 40", paintSpanMhz(fat) <= ATTACK_TX_MAX_MHZ + 1e-9);
+  const corridor50 = clampCorridorPaint({ f1Mhz: 2400, f2Mhz: 2450 });
+  check("коридор 50 не режется по USB 40", Math.abs(paintSpanMhz(corridor50) - 50) < 1e-9);
+  const midShelf = clipShelfToCorridor(2415, 15, { f1Mhz: 2400, f2Mhz: 2450 }, 56);
+  check(
+    "полка 15 на 2415 внутри 2400–2450",
+    midShelf != null &&
+      Math.abs(midShelf.loMhz - 2415) < 1e-6 &&
+      Math.abs(midShelf.f1Mhz - 2407.5) < 1e-6 &&
+      Math.abs(midShelf.f2Mhz - 2422.5) < 1e-6,
+    midShelf ? `${midShelf.f1Mhz}…${midShelf.f2Mhz}` : "null",
+  );
+  const edgeShelf = clipShelfToCorridor(2402, 15, { f1Mhz: 2400, f2Mhz: 2450 }, 56);
+  check(
+    "полка у края коридора не вылезает ниже 2400",
+    edgeShelf != null &&
+      Math.abs(edgeShelf.f1Mhz - 2400) < 1e-6 &&
+      Math.abs(edgeShelf.f2Mhz - 2409.5) < 1e-6 &&
+      Math.abs(edgeShelf.loMhz - 2404.75) < 1e-6,
+    edgeShelf ? `${edgeShelf.f1Mhz}…${edgeShelf.f2Mhz} lo=${edgeShelf.loMhz}` : "null",
+  );
+  const hopShelf = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: null, params: {} });
+  check(
+    "open-loop без типа — sine на часах и фильтре полки",
+    hopShelf.waveKind === "sine" &&
+      hopShelf.fsHz === shelfFsHz(15, 56) &&
+      Math.abs(hopShelf.filterMhz - 15) < 1e-6 &&
+      Math.abs(hopShelf.occupyMhz - 15) < 1e-6,
+    `kind=${hopShelf.waveKind} fs=${hopShelf.fsHz} filt=${hopShelf.filterMhz}`,
+  );
+  const hopNoise = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "awgn", params: {} });
+  check("open-loop шум на полке 15, не на шаге", hopNoise.waveKind === "awgn" && hopNoise.fsHz === 15e6);
+  const hopChirp = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "chirp", params: {} });
+  check(
+    "open-loop чирп размах = полка, не 1 МГц",
+    (hopChirp.waveParams.spanKhz ?? 0) >= 7000,
+    `spanKhz=${hopChirp.waveParams.spanKhz}`,
+  );
+  const hopCap = openLoopShelfTxPlan({ shelfMhz: 80, analogMhz: 28, kind: "awgn", params: {} });
+  check("open-loop полка не шире analog x40", hopCap.filterMhz === 28 && hopCap.fsHz === 28e6);
+  const xa4Plan = attackShelfTxPlan({
+    f0Mhz: 2415,
+    paint: { f1Mhz: 2400, f2Mhz: 2450 },
+    shelfMhz: 15,
+    analogMhz: 56,
+    kind: "awgn",
+    params: {},
+  });
+  check(
+    "план xA4: часы слуха 40, фильтр 15",
+    xa4Plan != null && xa4Plan.fsHz === ATTACK_FD_FS_HZ && Math.abs(xa4Plan.filterMhz - 15) < 1e-6,
+    xa4Plan ? `fs=${xa4Plan.fsHz} filt=${xa4Plan.filterMhz}` : "null",
+  );
   const bands = [{ f1Mhz: 2400, f2Mhz: 2500 }];
   const clipped = clipPaintToAllowlist({ f1Mhz: 2430, f2Mhz: 2440 }, bands);
   check("рамка в allowlist", clipped != null && paintCenterMhz(clipped!) > 2430);
@@ -1884,8 +2185,8 @@ async function main(): Promise<void> {
   L().setScanPattern("auto");
   L().setAttackHoldMs(ATTACK_HOLD_MIN_MS);
   L().armTxWave("awgn");
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
-  check("рамка легла в стор", L().attackPaint != null && Math.abs(paintCenterMhz(L().attackPaint!) - 2440) < 0.05);
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
+  check("рамка легла в стор", L().attackPaint != null && Math.abs(paintCenterMhz(L().attackPaint!) - 2450) < 0.05);
   useLegion.setState({
     attackAdvice: {
       scene: "тест",
@@ -1905,7 +2206,7 @@ async function main(): Promise<void> {
   });
   L().applyAttackHint("paint");
   check("взять рамку — только клик оператора", L().attackPaint != null && Math.abs(L().attackPaint.f1Mhz - 2410) < 0.05);
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
 
   L().setScanPattern("fpga");
   check("уход с Атаки чистит рамку", L().attackPaint == null && L().attackTracks.length === 0);
@@ -1914,27 +2215,44 @@ async function main(): Promise<void> {
   L().setScanPattern("auto");
   L().setAttackHoldMs(ATTACK_HOLD_MIN_MS);
   L().armTxWave("awgn");
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
 
   L().startScan();
   check("скан Атаки пошёл", await waitFor("scan", () => L().scanRunning));
   L().injectDemoTone();
-  // Замок рамки должен держать оператора, а не lastForward (его ещё нет до
-  // commit ПЕРЕДАТЬ). Иначе тик скана в окне armed→TX забирает демо-несущую.
-  useLegion.setState({ transmitArmed: true });
-  const stolen = await waitFor("тик украл TX", () => L().lastForwardMhz != null, 500);
   check(
-    "рамка+armed: тик не авто-handoff до ПЕРЕДАТЬ",
-    !stolen,
+    "слух без ПЕРЕДАТЬ не ставит усилитель",
+    L().lastForwardMhz == null && !L().transmitArmed,
+  );
+  check(
+    "слух видит демо в коридоре",
+    await waitFor(
+      "det",
+      () =>
+        L().detections.some((d) => Math.abs(d.freqMhz - 2450) < 2) ||
+        L().attackTracks.some((t) => Math.abs(t.freqMhz - 2450) < 2),
+      2000,
+    ),
+  );
+  await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
+  await L().startTransmit();
+  check(
+    "ПЕРЕДАТЬ наводит полку на засечку, не на центр рамки",
+    await waitFor(
+      "shelf on det",
+      () => L().transmitArmed && L().lastForwardMhz != null && Math.abs(L().lastForwardMhz! - 2450) < 1.5,
+      2000,
+    ),
     `lastForward=${L().lastForwardMhz}`,
   );
-  await L().stopTransmit();
-  await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
-  await L().startTransmit();
-  check("рамка TX на центр, не на демо", L().transmitArmed && L().lastForwardMhz != null && Math.abs(L().lastForwardMhz! - 2440) < 0.15);
-  check("выдержка рамки заведена", L().attackTxUntil != null && L().attackTxUntil! > Date.now());
-  check("таймер рамки гасит TX", await waitFor("hold end", () => L().lastForwardMhz == null && !L().transmitArmed, 1500));
+  check("выдержка полки заведена", L().attackTxUntil != null && L().attackTxUntil! > Date.now());
+  await new Promise((r) => setTimeout(r, ATTACK_HOLD_MIN_MS + 80));
+  check(
+    "таймер меняет цель, сессию не гасит",
+    L().transmitArmed === true,
+    `armed=${L().transmitArmed} fwd=${L().lastForwardMhz}`,
+  );
 
   await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
   L().stopScan();
@@ -1951,7 +2269,65 @@ async function main(): Promise<void> {
   await L().stopTransmit();
   L().stopScan();
 
-  // sweep/band/hop сканер не поднимают (scanRefusedReason). Тот же crop, что tickScan без listen.
+  L().setScanPattern("sweep");
+  L().setTxShelfMhz("15");
+  L().setScanWindowMhz("20");
+  L().disarmTxWave();
+  await L().startTransmit();
+  check(
+    "качание без типа ставит полку, не CW 2 МГц",
+    await waitFor(
+      "sweep shelf",
+      () =>
+        L().transmitArmed &&
+        L().lastForwardMhz != null &&
+        (L().lastCueReason ?? "").includes("полка 15.00") &&
+        (L().lastCueReason ?? "").includes("sine") &&
+        (L().lastCueReason ?? "").includes("фильтр 15.00"),
+      2000,
+    ),
+    `cue=${L().lastCueReason} fwd=${L().lastForwardMhz}`,
+  );
+  check("качание не поднимает сканер", L().scanRunning === false);
+  await L().stopTransmit();
+  L().setScanPattern("band");
+  L().setTxShelfMhz("12");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "сплошная шум — горб полки 12",
+    await waitFor(
+      "band shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 12.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().setScanPattern("hop");
+  L().setTxShelfMhz("8");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "случайная шум — горб полки 8",
+    await waitFor(
+      "hop shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 8.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().disarmTxWave();
+  L().setScanPattern("auto");
+
+  // Хост-скан без class-listen: тот же crop 0.5, что cinema/soapy. Слух классов — другой путь.
   const other = new MockSdrBackend();
   other.setEmulation(true);
   other.open("bladerf-micro-xa4");
@@ -1960,6 +2336,93 @@ async function main(): Promise<void> {
     otherBins.length > 1 ? otherBins[otherBins.length - 1]!.freqMhz - otherBins[0]!.freqMhz : 0;
   check("чужой путь: 1024 × crop 0.5", otherBins.length === 512);
   check("чужой путь: окно ~20, не 56", Math.abs(otherSpan - 20) < 2, `span=${otherSpan.toFixed(2)}`);
+
+  const palN = 8192;
+  const palFs = 2e6;
+  const palIq = new Float64Array(palN * 2);
+  for (let i = 0; i < palN; i++) {
+    const t = i / palFs;
+    const ph =
+      2 * Math.PI * (palFs / 16) * t +
+      0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t) +
+      0.28 * Math.sin(2 * Math.PI * 2 * PAL_LINE_HZ * t);
+    palIq[2 * i] = 0.4 * Math.cos(ph);
+    palIq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  const palComb = analogCombFromIq(palIq, palFs);
+  check("гребёнка PAL на ЧМ", palComb.hit && palComb.kind === "pal", JSON.stringify(palComb));
+  const toneIq = new Float64Array(palN * 2);
+  for (let i = 0; i < palN; i++) {
+    const ph = (2 * Math.PI * i) / 16;
+    toneIq[2 * i] = 0.4 * Math.cos(ph);
+    toneIq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  check("тон без гребёнки analog", analogCombFromIq(toneIq, palFs).hit === false);
+  const ofdmN = 8192;
+  const ofdmFs = 2e6;
+  const ofdmIq = new Float64Array(ofdmN * 2);
+  for (let i = 0; i < ofdmN; i++) {
+    let re = 0;
+    let im = 0;
+    for (let k = -16; k <= 16; k++) {
+      if (k === 0) continue;
+      const ph = 2 * Math.PI * k * (ofdmFs / 64) * (i / ofdmFs);
+      re += Math.cos(ph);
+      im += Math.sin(ph);
+    }
+    ofdmIq[2 * i] = 0.04 * re;
+    ofdmIq[2 * i + 1] = 0.04 * im;
+  }
+  check("OFDM 2 МГц (2×PAL бин) не analog", analogCombFromIq(ofdmIq, ofdmFs).hit === false);
+  const xa4Fs = 20.48e6;
+  const xa4N = 32768;
+  const xa4Iq = new Float64Array(xa4N * 2);
+  for (let i = 0; i < xa4N; i++) {
+    const t = i / xa4Fs;
+    const ph =
+      2 * Math.PI * (xa4Fs / 16) * t +
+      0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t) +
+      0.28 * Math.sin(2 * Math.PI * 2 * PAL_LINE_HZ * t);
+    xa4Iq[2 * i] = 0.4 * Math.cos(ph);
+    xa4Iq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  check("гребёнка PAL на канале xA4 20.48", analogCombFromIq(xa4Iq, xa4Fs).hit === true);
+
+  const xa4Bands = droneSurveyBands("bladerf-micro-xa4");
+  const x40Bands = droneSurveyBands("bladerf-x40");
+  check("xA4 плейлист 8 полос до 6 ГГц", xa4Bands.length === 8 && xa4Bands.some((b) => b.f2Mhz >= 5900));
+  check("x40 без 5.8", x40Bands.length === 6 && x40Bands.every((b) => b.f2Mhz <= 3800));
+  check("класс-слух xA4 = 61.44/56", classListenPlan(56).fsHz === 61_440_000 && classListenPlan(56).filterMhz === 56);
+  const shelfL = shelfListenPlan({ fsHz: 15e6, filterMhz: 15 });
+  check("слух на полке не 61.44", shelfL.fsHz === 15e6 && shelfL.filterMhz === 15);
+  const silentFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5800, detActive: false, lookMhz: 56 });
+  check("FPGA тишина честная", silentFpga.atlas.id === "silent" && silentFpga.detActive === false);
+  const liveFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5780, detActive: true, lookMhz: 56 });
+  check("FPGA окно 56 = энергия, не window-fill", liveFpga.atlas.id === "fpga-energy");
+  check("FPGA не выдумывает analog без IQ", liveFpga.atlas.id !== "analog-video");
+  const narrowFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5800, detActive: true, lookMhz: 2 });
+  check("FPGA взгляд 2 МГц тоже не analog/fill", narrowFpga.atlas.id === "fpga-energy");
+  check("бирка 5.8", droneBandLabel({ f1Mhz: 5320, f2Mhz: 5950 }) === "5.3–5.95");
+  check("бирка 2.4", droneBandLabel({ f1Mhz: 2400, f2Mhz: 2485 }) === "2.4");
+
+  L().applyDroneSurvey();
+  check("ПОЛОСЫ ДРОНОВ на xA4", L().sdrBands.length === 8 && L().sdrBands.some((b) => b.f2Mhz >= 5900));
+  L().clearSdrBands();
+  L().setSdrAllowField("sdrF1", "2400");
+  L().setSdrAllowField("sdrF2", "2500");
+  L().addSdrBand();
+
+  await L().stopTransmit();
+  L().stopScan();
+  L().setScanPattern("sweep");
+  L().startScan();
+  check("слух в качании без TX", await waitFor("class-scan", () => L().scanRunning));
+  await L().startTransmit();
+  check("ПЕРЕДАТЬ в качании гасит отдельный скан", L().scanRunning === false);
+  L().startScan();
+  check("скан во время полки отказан", L().scanRunning === false);
+  await L().stopTransmit();
+  L().setScanPattern("auto");
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

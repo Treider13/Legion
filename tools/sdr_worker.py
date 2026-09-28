@@ -237,11 +237,40 @@ from attack_dsp import (  # noqa: E402
     analyze_iq,
     cancel_own,
     leftover_ratio,
+    channelize_decim,
     channelize_look,
     multitaper_dbm,
     spectral_flatness,
     synth_look_iq,
 )
+from droneid import analyze_droneid  # noqa: E402
+from fhss_detect import analyze_fhss, attach_rc  # noqa: E402
+from opendroneid import parse_opendroneid  # noqa: E402
+from protocol_db import nearest_analog_channel  # noqa: E402
+from rc_spectrum import analyze_rc, band_of  # noqa: E402
+
+ATTACK_RC_S = 0.16  # 160 мс: два интервала 19 Гц mLRS
+ATTACK_DRONEID_S = 0.002  # вспышка ~0.64 мс; 40 мс порог FHSS её отрезал
+ATTACK_FHSS_S = 0.04
+
+
+def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
+    return band_of(freq_mhz) in ("s24", "p900", "uhf") and float(bw_mhz) <= 2.5
+
+
+def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:
+    # proto17 README: 2.3995…2.4595 и 5.7565…5.7965. Не «только 2.4».
+    # analog PAL/NTSC — не DroneID. Непрерывное видео 5.8 режет энергия (peak≈median).
+    if parsed.get("analogKind") in ("pal", "ntsc"):
+        return False
+    f = float(freq_mhz)
+    in24 = 2395.0 <= f <= 2505.0
+    in58 = 5725.0 <= f <= 5875.0
+    if not (in24 or in58):
+        return False
+    if parsed.get("kind") == "ofdm":
+        return True
+    return float(bw_mhz) >= 6.0
 
 
 def rx_stream_samples(fs: float) -> int:
@@ -530,7 +559,7 @@ def write_stream_all(dev: Any, stream: Any, buf: Any, timeout_us: int, underflow
     return total, "ok"
 
 
-def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.25):
+def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.9):
     """Непрерывный синус, не DC. DC на LMS/AD9361 часто давит IQ-коррекция.
     Источник: Deepwave transmit_tone + пример SoapySDR writeStream CF32."""
     if not NUMPY:
@@ -570,7 +599,7 @@ def _pfloat(pr: dict[str, Any], key: str, default: float, lo: float, hi: float) 
 
 
 def _amp(pr: dict[str, Any]) -> float:
-    return _pfloat(pr, "amp", 0.25, 0.01, 0.9)
+    return _pfloat(pr, "amp", 0.9, 0.01, 0.9)
 
 
 def _seed(pr: dict[str, Any]) -> int:
@@ -1646,6 +1675,7 @@ class Radio:
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
         iq = None
+        src = None
         if self.fake:
             n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
             if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
@@ -1678,7 +1708,26 @@ class Radio:
         if same_clock:
             work, clip_all = cancel_own(iq, np.asarray(replica))
             leftover = leftover_ratio(iq, work)
+        iq_rc = None
+        iq_long = None
+        if not self.fake and src is not None:
+            have = int(src.available())
+            want_d = min(have, ATTACK_MEM_CAP)
+            want_rc = min(have, int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+            if want_d >= int(work_fs * ATTACK_DRONEID_S):
+                iq_long = src.latest(want_d)
+            if want_rc >= int(work_fs * ATTACK_FHSS_S):
+                iq_rc = iq_long if want_rc == want_d else src.latest(want_rc)
+        elif self.fake:
+            iq_rc = work
+            iq_long = work
+        # FHSS только на широком IQ. Канализатор 2 МГц hop-set убивает.
+        # 65k think (~1 мс @ 61.44) мало: то же кольцо, что RC (160 мс).
+        fhss_src = iq_rc if iq_rc is not None else work
+        fhss = analyze_fhss(fhss_src, work_fs, center_mhz) if fhss_src is not None and len(fhss_src) >= 256 else None
+        hop_spacing = float((fhss or {}).get("spacingMhz") or 0.0)
         out_looks = []
+        droneid_by_lo: dict[int, dict[str, Any]] = {}
         for row in looks[:4]:
             freq = float(row.get("freqMhz") or center_mhz)
             bw = float(row.get("bwMhz") or 2.0)
@@ -1689,10 +1738,34 @@ class Radio:
             parsed["clip"] = bool(parsed.get("clip") or clip_all)
             if leftover_row is not None:
                 parsed["leftover"] = leftover_row
+            if fhss:
+                parsed["fhss"] = fhss
+            if _want_rc(freq, bw):
+                src_rc = iq_rc if iq_rc is not None else work
+                ch_rc, fs_rc = channelize_decim(src_rc, work_fs, freq, center_mhz, 2.0e6)
+                if ch_rc.size >= 128 and fs_rc > 0:
+                    rc = analyze_rc(ch_rc, fs_rc, freq, hop_spacing)
+                    parsed["rc"] = attach_rc(fhss, rc, freq) if fhss else rc
+            if parsed.get("analogKind") in ("pal", "ntsc") and parsed.get("hit"):
+                chn = nearest_analog_channel(freq)
+                if chn:
+                    parsed["analogChannel"] = chn
+            if _want_droneid(freq, bw, parsed):
+                # Не channelize_look(target 15.36, BW 12): want_fs≠15.36.
+                key = int(round(freq * 2.0))
+                if key not in droneid_by_lo:
+                    src_d = iq_long if iq_long is not None else work
+                    droneid_by_lo[key] = analyze_droneid(src_d, work_fs, freq, center_mhz)
+                parsed["droneid"] = droneid_by_lo[key]
+            frames = row.get("odidFrames") or row.get("odid_frames")
+            if frames:
+                parsed["opendroneid"] = parse_opendroneid(frames)
             out_looks.append(parsed)
         clip_all = bool(clip_all or any(bool(x.get("clip")) for x in out_looks))
         extra["thinkFsHz"] = work_fs
         extra["cancelClock"] = bool(same_clock)
+        if fhss:
+            extra["fhss"] = fhss
         return {
             "ok": True,
             "looks": out_looks,
@@ -1978,12 +2051,20 @@ class Radio:
             out["txError"] = self.tx_error
         return out
 
-    def _tx_prime(self, buf: Any, lo_hz: float, prev_mhz: float | None, fs: float | None = None) -> dict[str, Any] | None:
+    def _tx_prime(
+        self,
+        buf: Any,
+        lo_hz: float,
+        prev_mhz: float | None,
+        fs: float | None = None,
+        tx_bw_hz: float | None = None,
+    ) -> dict[str, Any] | None:
         """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
         иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима.
         Буфер подменяется под локом сразу после первой записи — TX-петля не
         успевает выпустить старую волну на новой частоте.
-        fs=None → TX_FS (2 МГц, tx_cue и обычный ПЕРЕДАТЬ). Solo пишет окно."""
+        fs=None → TX_FS (2 МГц, tx_cue и обычный ПЕРЕДАТЬ). Solo пишет окно.
+        tx_bw_hz: analog TX filter (полка Атаки). Часы могут быть шире (слух xA4)."""
         tx_fs = float(fs) if fs and fs > 0 else float(TX_FS)
         prev_fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
         timeout = stream_timeout_us(len(buf), tx_fs)
@@ -2016,9 +2097,13 @@ class Radio:
                         except Exception:
                             pass
                     try:
-                        # Широким волнам (шум, OFDM — до fs) нужен весь фильтр TX,
-                        # иначе дефолтный (~1.5 МГц у LMS6002D) режет края спектра.
-                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, min(tx_fs, self.analog_bw * 1e6))
+                        # Полка Атаки: фильтр уже горба, часы = слух (общий BBPLL).
+                        # Иначе широкий шум режет дефолтный LPF LMS (~1.5 МГц).
+                        if tx_bw_hz and tx_bw_hz > 0:
+                            want_bw = min(float(tx_bw_hz), tx_fs, self.analog_bw * 1e6)
+                        else:
+                            want_bw = min(tx_fs, self.analog_bw * 1e6)
+                        self.dev.setBandwidth(SOAPY_SDR_TX, 0, want_bw)
                     except Exception:
                         pass
                     _apply_tx_gain(self.dev, self.tx_gain_db)
@@ -2093,7 +2178,14 @@ class Radio:
             f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f})",
         )
 
-    def tx_wave(self, freq_mhz: float, wave: str, params: dict[str, Any], fs_hz: float | None = None) -> dict[str, Any]:
+    def tx_wave(
+        self,
+        freq_mhz: float,
+        wave: str,
+        params: dict[str, Any],
+        fs_hz: float | None = None,
+        tx_bw_hz: float | None = None,
+    ) -> dict[str, Any]:
         """TX произвольной baseband-волны из WAVE_KINDS (вкладка ТИП СИГНАЛА).
         Буфер гетеродинируется на +fs/8, LO = RF − fs/8: ось 0 Гц волны
         оказывается на запрошенной RF, DC-волны не давятся IQ-коррекцией.
@@ -2119,7 +2211,7 @@ class Radio:
             self._tx_fs = tx_fs
             self.tx_error = None
             us = int((time.perf_counter() - t0) * 1e6)
-            return {
+            out = {
                 "ok": True,
                 "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц",
                 "latencyUs": us,
@@ -2127,6 +2219,9 @@ class Radio:
                 "fsHz": tx_fs,
                 "fake": True,
             }
+            if tx_bw_hz and tx_bw_hz > 0:
+                out["txBwHz"] = float(tx_bw_hz)
+            return out
         if self.dev is None:
             self._tone_bb = None
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
@@ -2138,7 +2233,7 @@ class Radio:
         buf = (bb * np.exp(1j * 2.0 * np.pi * (tx_fs / 8.0) * t)).astype(np.complex64)
         rf_hz = freq_mhz * 1e6
         lo_hz = cw_lo_hz(rf_hz, tx_fs)
-        err = self._tx_prime(buf, lo_hz, self.tx_mhz, tx_fs)
+        err = self._tx_prime(buf, lo_hz, self.tx_mhz, tx_fs, tx_bw_hz)
         if err is not None:
             self._tone_bb = None
             return err
@@ -2592,6 +2687,10 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             [x for x in looks if isinstance(x, dict)],
             bool(msg.get("residual")),
         )
+    if op == "opendroneid_parse":
+        frames = msg.get("frames") or msg.get("odidFrames") or msg.get("hex")
+        parsed = parse_opendroneid(frames)
+        return {"ok": bool(parsed.get("hit")), **parsed}
     if op == "park":
         return radio.park(
             float(msg["centerMhz"]),
@@ -2608,11 +2707,19 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         params = msg.get("params")
         fs_raw = msg.get("fsHz", msg.get("fs_hz"))
         fs_hz = float(fs_raw) if fs_raw not in (None, "") else None
+        bw_raw = msg.get("txBwMhz", msg.get("tx_bw_hz"))
+        tx_bw_hz = None
+        if bw_raw not in (None, ""):
+            bw = float(bw_raw)
+            if bw > 0:
+                # txBwMhz с хоста — мегагерцы; tx_bw_hz уже в герцах.
+                tx_bw_hz = bw * 1e6 if bw < 1e4 else bw
         return radio.tx_wave(
             float(msg["freqMhz"]),
             str(msg.get("wave") or ""),
             params if isinstance(params, dict) else {},
             fs_hz,
+            tx_bw_hz,
         )
     if op == "tx_off":
         radio.tx_off()

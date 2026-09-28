@@ -142,6 +142,28 @@ def main() -> int:
         abs(float(ch_look["famAlphaHz"]) - 15625) < 5000 and float(ch_look["famCoh"]) >= 0.22,
         f"fs={ch_fs:.0f} a={ch_look['famAlphaHz']:.0f} coh={ch_look['famCoh']:.3f}",
     )
+    pal = d.synth_analog_pal(8192, 2e6)
+    ac = d.analog_comb(pal, 2e6)
+    check("гребёнка PAL на ЧМ", ac["hit"] is True and ac["analogKind"] == "pal", str(ac))
+    tone_c = d.analog_comb(d.synth_look_iq("tone", 8192, 2e6), 2e6)
+    check("тон без analog comb", tone_c["hit"] is False, str(tone_c))
+    ofdm_c = d.analog_comb(d.synth_look_iq("ofdm", 8192, 2e6), 2e6)
+    check("OFDM без analog comb", ofdm_c["hit"] is False, str(ofdm_c))
+    xa4_fs = 20.48e6
+    pal_xa4 = d.synth_analog_pal(32768, xa4_fs)
+    ac_xa4 = d.analog_comb(pal_xa4, xa4_fs)
+    check("гребёнка PAL на канале xA4 20.48", ac_xa4["hit"] is True, str(ac_xa4))
+    ofdm_xa4 = d.analog_comb(d.synth_look_iq("ofdm", 32768, xa4_fs), xa4_fs)
+    check("OFDM 20.48 не analog", ofdm_xa4["hit"] is False, str(ofdm_xa4))
+    native = 61.44e6
+    pal_native = d.synth_analog_pal(d.ATTACK_THINK_N, native)
+    ch, ch_fs = d.channelize_look(pal_native, native, 5800.0, 5800.0, 8.0)
+    ac_ch = d.analog_comb(ch, ch_fs)
+    check("PAL после channelize 61.44→канал", ac_ch["hit"] is True, str(ac_ch) + f" fs={ch_fs}")
+    pal_look = d.analyze_iq(pal, 2e6)
+    check("analyze_iq несёт analogKind", pal_look.get("analogKind") == "pal", str(pal_look))
+    dec, dfs = d.channelize_decim(pal_native, native, 5800.0, 5800.0, 2e6)
+    check("channelize_decim fs ~2e6", 1.5e6 <= dfs <= 2.5e6 and dec.size > 100, f"fs={dfs} n={dec.size}")
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

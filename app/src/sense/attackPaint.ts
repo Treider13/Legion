@@ -124,6 +124,14 @@ export function paintRefuseReason(
   return null;
 }
 
+/** Рамка на Атаке = коридор слуха. Тик имеет право наводить полку на засечки внутри. */
+export function attackCorridorLive(
+  pattern: string,
+  paint: AttackPaint | null | undefined,
+): boolean {
+  return pattern === "auto" && paint != null;
+}
+
 export function paintWaveHint(kind: WaveKind | null, paint: AttackPaint, params: Record<string, number>): string {
   const occ = waveOccupiesPaintMhz(kind, paint, params);
   const span = paintSpanMhz(paint);
