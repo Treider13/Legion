@@ -877,6 +877,36 @@ def main() -> int:
             isinstance(refused, dict) and refused.get("ok") is False and "сигнала на RF out нет" in str(refused.get("reason")),
         )
 
+        class _RollbackTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.freqs: list[float] = []
+
+            def setFrequency(self, _d, _c, hz):
+                self.freqs.append(float(hz))
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": -1})()
+
+        rb = w.Radio()
+        rb.fake = False
+        rb.hardware_key = "bladerf2"
+        rb._tx_fs = 40e6
+        rb.tx_mhz = 2445.0
+        rb._tx_lo_hz = 2437e6
+        rb.dev = _RollbackTx()
+        rolled = rb._tx_prime(buf, 2495e6, rb.tx_mhz, 40e6)
+        wrong_lo = 2445e6 - 40e6 / 8
+        check(
+            "откат analog после цифры — стоящий LO, не last RF−fs/8",
+            isinstance(rolled, dict)
+            and rolled.get("ok") is False
+            and rb.dev.freqs[:1] == [2495e6]
+            and rb.dev.freqs[-1] == 2437e6
+            and abs(rb.dev.freqs[-1] - wrong_lo) > 1
+            and rb._tx_lo_hz == 2437e6,
+        )
+
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading
     gw_env = os.environ.copy()

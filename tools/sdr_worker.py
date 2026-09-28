@@ -2154,7 +2154,11 @@ class Radio:
                     # Soapy: один writeStream часто отдаёт MTU (4096), не весь буфер.
                     written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
                     if kind != "ok" or written != len(buf):
-                        if prev_mhz is not None:
+                        # После цифрового hop стоящий LO ≠ last RF − fs/8.
+                        # Откат на фактический analog LO, иначе mix петли сядет на чужой RF.
+                        if self._tx_lo_hz is not None:
+                            self.dev.setFrequency(SOAPY_SDR_TX, 0, float(self._tx_lo_hz))
+                        elif prev_mhz is not None:
                             self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, prev_fs))
                         elif created and self.tx is not None:
                             try:
