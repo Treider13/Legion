@@ -674,6 +674,82 @@ def channelize_decim(
     return np.asarray(shifted[:n].reshape(-1, decim).mean(axis=1), dtype=np.complex64), fs_out
 
 
+# Как GNU Radio freq_xlating FIR: край 0.45·fs, не 0.5 (алиасинг).
+ATTACK_NYQUIST_FRAC = 0.45
+
+
+def rotator_shift(x: np.ndarray, freq_hz: float, fs: float) -> np.ndarray:
+    """GNU Radio blocks.rotator: y[n] = x[n] · exp(j 2π (f/fs) n).
+
+    gnuradio/gr-blocks/lib/rotator_cc_impl.cc — phase incr = exp(j 2π f/fs).
+    Тот же сдвиг, что channelize_look / crop_iq, без ФНЧ и децимации.
+    """
+    src = np.asarray(x, dtype=np.complex64).ravel()
+    if src.size == 0 or fs <= 0:
+        return src
+    f = float(freq_hz)
+    if abs(f) < 1e-9:
+        return np.array(src, copy=True, dtype=np.complex64)
+    n = np.arange(int(src.size), dtype=np.float64)
+    return (src * np.exp(1j * 2.0 * np.pi * (f / float(fs)) * n)).astype(np.complex64)
+
+
+def analog_window_covers(
+    rf_hz: float,
+    lo_hz: float,
+    fs: float,
+    analog_bw_hz: float,
+    occupy_hz: float = 0.0,
+    frac: float = ATTACK_NYQUIST_FRAC,
+) -> bool:
+    """Цифровой hop, пока |RF−LO| + occupy/2 внутри 0.45·min(fs, analog).
+
+    Analog hop только вне окна: ADI AD9361 Fast Lock ≈ 20 мкс + SPI, не µs
+    (EngineerZone / UG-570). ice9/blue-dragon: стоять в широком окне.
+    """
+    if fs <= 0:
+        return False
+    limit = float(frac) * float(fs)
+    bw = float(analog_bw_hz)
+    if bw > 0:
+        limit = min(limit, float(frac) * bw)
+    need = abs(float(rf_hz) - float(lo_hz)) + 0.5 * max(float(occupy_hz), 0.0)
+    return need <= limit
+
+
+def resample_iq(x: np.ndarray, fs_in: float, fs_out: float) -> np.ndarray:
+    """SciPy signal.resample — Fourier method: тот же период, новая сетка.
+
+    GNU Radio rational_resampler — полифаза на потоке. Здесь один буфер TX:
+    полка (occupy) синтезируется на своих часах и поднимается на часы USB FD,
+    иначе 31 волна растянулась бы с 2 МГц до 40 (не полка, а Найквист).
+    """
+    src = np.asarray(x, dtype=np.complex64).ravel()
+    if src.size == 0 or fs_in <= 0 or fs_out <= 0:
+        return src
+    if abs(float(fs_in) - float(fs_out)) / max(float(fs_in), float(fs_out)) < 0.02:
+        return src
+    n_in = int(src.size)
+    n_out = max(8, int(round(n_in * float(fs_out) / float(fs_in))))
+    if n_out == n_in:
+        return src
+    X = np.fft.fft(np.asarray(src, dtype=np.complex128))
+    Y = np.zeros(n_out, dtype=np.complex128)
+    half = min(n_in, n_out) // 2
+    if half > 0:
+        Y[:half] = X[:half]
+        Y[-half:] = X[-half:]
+    if min(n_in, n_out) % 2 == 0 and half < n_in and half < n_out:
+        nyq = X[half]
+        if n_out > n_in:
+            Y[half] = nyq * 0.5
+            Y[n_out - half] = nyq * 0.5
+        else:
+            Y[half] = nyq
+    y = np.fft.ifft(Y) * (float(n_out) / float(n_in))
+    return y.astype(np.complex64)
+
+
 def analyze_iq(
     x: np.ndarray,
     fs: float,

@@ -710,6 +710,38 @@ def main() -> int:
     again = radio.tx_wave(2425.0, "qpsk", {"amp": 0.2})
     check("tx_wave без fs снова 2 МГц", again.get("ok") is True and abs(radio._tx_fs - w.TX_FS) < 1)
 
+    hop = w.Radio()
+    hop.fake = True
+    hop.analog_bw = 56.0
+    first = hop.tx_wave(2442.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    lo0 = hop._tx_lo_hz
+    check(
+        "первый TX: analog + design 2 МГц на часах 40",
+        first.get("ok") is True
+        and first.get("digitalHop") is False
+        and first.get("designFsHz") == 2e6
+        and first.get("fsHz") == 40e6
+        and lo0 is not None
+        and abs(lo0 - (2442e6 - 40e6 / 8)) < 1,
+    )
+    second = hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "второй hop в окне — цифра, LO стоит",
+        second.get("ok") is True
+        and second.get("digitalHop") is True
+        and hop._tx_lo_hz == lo0
+        and abs(float(second.get("mixHz") or 0) - (2445e6 - lo0)) < 1,
+    )
+    far = hop.tx_wave(2500.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "вне окна — analog, новый LO",
+        far.get("ok") is True
+        and far.get("digitalHop") is False
+        and hop._tx_lo_hz is not None
+        and hop._tx_lo_hz != lo0,
+    )
+    check("банк 31 волны на месте", len(w.WAVE_KINDS) == 31 and "p4" in w.WAVE_KINDS)
+
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
     check("tx_wave неизвестный тип → отказ", bad_wave.get("ok") is False)
 

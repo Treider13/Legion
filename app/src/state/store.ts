@@ -1202,23 +1202,40 @@ export const useLegion = create<LegionStore>((set, get) => {
   const shelfFsNow = (): number =>
     shelfFsHz(parseLocaleNumber(get().txShelfMhz), catalogCaps(get().sdrId).analogBwMhz);
 
-  /** Атака без рамки: часы = слух (общий BBPLL), горб = analog-фильтр полки. Не hostTx 2 МГц. */
+  /** Атака без рамки: часы USB FD (общий BBPLL, не 61.44), occupy = полка. */
   const attackNoPaintShelf = (): {
     kind: WaveKind;
     params: Record<string, number>;
     fsHz: number;
     filterMhz: number;
+    designFsHz: number;
   } => {
     const analog = gLive ? catalogCaps(get().sdrId).analogBwMhz : gSdr.analogBwMhz();
-    const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null });
+    const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null, txLive: true });
     const shelf = openLoopShelfTxPlan({
       shelfMhz: parseLocaleNumber(get().txShelfMhz),
       analogMhz: analog,
       kind: get().txWaveKind,
       params: get().txWaveParams,
     });
-    return { kind: shelf.waveKind, params: shelf.waveParams, fsHz: listen.fsHz, filterMhz: shelf.filterMhz };
+    return {
+      kind: shelf.waveKind,
+      params: shelf.waveParams,
+      fsHz: listen.fsHz,
+      filterMhz: shelf.filterMhz,
+      designFsHz: shelf.fsHz,
+    };
   };
+
+  const autoTxLive = (st: {
+    scanPattern: string;
+    attackPaint: AttackPaint | null;
+    transmitArmed: boolean;
+    lastForwardMhz: number | null;
+  }): boolean =>
+    st.scanPattern === "auto" &&
+    st.transmitArmed &&
+    (attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed) || st.lastForwardMhz != null);
 
   const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
     const st = get();
@@ -1240,7 +1257,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (plan.sdrTx) {
         const shelf = attackNoPaintShelf();
         const tx = gLive
-          ? await hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)
+          ? await hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz, shelf.designFsHz)
           : gSdr.txWave(plan.freqMhz, shelf.kind);
         sdrUs = tx.latencyUs;
         pushLog("sys", tx.reason);
@@ -1259,6 +1276,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         gGate.commit(plan.freqMhz);
         gSkipMhz = null;
+        gAttackOccupyMhz = shelf.filterMhz;
       }
       executeHandoff(plan, sdrUs, powerDbm);
       if (get().scanPattern === "auto" && !get().attackPaint) {
@@ -1283,7 +1301,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     if (!get().transmitArmed) return false;
     const shelf = attackNoPaintShelf();
     const tx = gLive
-      ? await hostTxWave(mhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)
+      ? await hostTxWave(mhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz, shelf.designFsHz)
       : gSdr.txWave(mhz, shelf.kind);
     if (!tx.ok) {
       pushLog("sys", tx.reason);
@@ -1300,16 +1318,15 @@ export const useLegion = create<LegionStore>((set, get) => {
     const gen = gTxGen;
     gResense = true;
     try {
-      const listenWhileTx =
-        attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed) &&
-        (gLive ? catalogCaps(get().sdrId).fullDuplex : gSdr.fullDuplex());
+      const fd = gLive ? catalogCaps(get().sdrId).fullDuplex : gSdr.fullDuplex();
+      const listenWhileTx = autoTxLive(get()) && fd;
       if (!listenWhileTx) {
         if (gLive) await hostTxOff();
         else gSdr.txOff();
       }
       let bins: ScanBin[] = [];
-      // Атака слушает 61.44/56. hostScan = DIO 40 — после этого слайса LO/ADC
-      // дёргались бы 61.44↔40 каждый RESENSE_MS. Чужие режимы этот путь не зовут.
+      // FD: свой TX не гасим (NIOS energy-walker: resense mute глушил бы эфир).
+      // HD: txOff, слух 61.44. hostScan = DIO 40 — не зовём в auto.
       const analogMhz = gLive ? catalogCaps(get().sdrId).analogBwMhz : gSdr.analogBwMhz();
       const paint = get().attackPaint;
       const listen =
@@ -1318,6 +1335,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               analogMhz,
               paintOwnsTx: attackPaintOwnsTx(get().scanPattern, paint, get().transmitArmed),
               paint,
+              txLive: listenWhileTx,
             })
           : null;
       if (gLive) {
@@ -1499,7 +1517,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         if (win.fsHz && win.fsHz > 0) fsHz = win.fsHz;
       }
       const tx = gLive
-        ? await hostTxWave(plan.loMhz, waveKind, plan.waveParams, fsHz, plan.filterMhz)
+        ? await hostTxWave(plan.loMhz, waveKind, plan.waveParams, fsHz, plan.filterMhz, plan.occupyMhz * 1e6)
         : gSdr.txWave(plan.loMhz, waveKind);
       pushLog("sys", tx.reason);
       if (!tx.ok) {
@@ -1714,6 +1732,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           analogMhz: catalogCaps(st.sdrId).analogBwMhz,
           paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
           paint: st.attackPaint,
+          txLive: autoTxLive(st),
         }).spanMhz,
       ),
     );
@@ -2587,7 +2606,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ attackPaint: null, attackPaintDraft: null });
         const st = get();
         const analog = catalogCaps(st.sdrId).analogBwMhz;
-        const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null });
+        const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null, txLive: autoTxLive(st) });
         set(attackBrainPatch(st, st.attackTracks, st.scanBins, listen.spanMhz));
         if (st.scanRunning) {
           gWalker = new ScanWalker({
@@ -2609,6 +2628,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         analogMhz: analog,
         paintOwnsTx: attackPaintOwnsTx(st.scanPattern, paint, st.transmitArmed),
         paint,
+        txLive: autoTxLive({ ...st, attackPaint: paint }),
       });
       set(attackBrainPatch({ ...st, attackPaint: paint }, st.attackTracks, st.scanBins, listen.spanMhz));
       if (st.scanRunning) {
@@ -5005,6 +5025,7 @@ export const useLegion = create<LegionStore>((set, get) => {
                 analogMhz: analog,
                 paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
                 paint: st.attackPaint,
+                txLive: autoTxLive(st),
               })
             : classListenPlan(analog)
           : null;
@@ -5081,6 +5102,7 @@ export const useLegion = create<LegionStore>((set, get) => {
                   analogMhz: analog,
                   paintOwnsTx: attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed),
                   paint: get().attackPaint,
+                  txLive: autoTxLive(get()),
                 })
               : classListenPlan(analog)
             : null;

@@ -1177,6 +1177,15 @@ static void legion_fft_walk(void)
         legion_quiet_t0 = now;
         legion_snap_have = false;
         legion_snap_frame = 0;
+        /* Кадр, уже сидевший в регистре на выходе SETTLE — stale FFT.
+         * Первый НОВЫЙ valid после этого целит. Не жжём лишний живой кадр. */
+        {
+            uint32_t w0 = legion_peak_word();
+            if ((w0 & 0x80000000u) != 0) {
+                legion_snap_have = true;
+                legion_snap_frame = (w0 >> 24) & 0x7fu;
+            }
+        }
         return;
     }
 
@@ -1203,12 +1212,7 @@ static void legion_fft_walk(void)
         }
         frame = (w >> 24) & 0x7fu;
         /* 7-бит frame в HDL: 0 — обычный кадр (обёртка 127→0), не сентинел. */
-        if (!legion_snap_have) {
-            legion_snap_have = true;
-            legion_snap_frame = frame;
-            return;
-        }
-        if (frame == legion_snap_frame) {
+        if (legion_snap_have && frame == legion_snap_frame) {
             return;
         }
         mag = (w >> 8) & 0xffffu;
@@ -1216,6 +1220,8 @@ static void legion_fft_walk(void)
         if (peak == 0) {
             return;
         }
+        legion_snap_have = true;
+        legion_snap_frame = frame;
         legion_fft_fire(peak, mag);
         return;
     }

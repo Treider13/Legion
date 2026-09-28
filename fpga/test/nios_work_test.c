@@ -715,11 +715,12 @@ int main(void)
     CHECK("FFT: без энергии шумовой bin не шагает", rfic_n == 0);
     t_status = LEGION_STATUS_DET_ACTIVE;
     t_peak_word = mk_peak(1, 0, 0x2000, 16); /* frame=0 валиден (обёртка 7 бит) */
-    legion_work(); /* запомнить кадр */
-    CHECK("FFT: ждём новый кадр (в т.ч. после frame=0)", rfic_n == 0);
-    t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
-    legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → PEAK 2453.5, LO 2450 */
+    legion_work(); /* первый новый valid+энергия → FIRE */
+    CHECK("FFT: первый новый кадр (в т.ч. frame=0) целит",
+          rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    legion_work(); /* HOLD: тот же прицел */
     CHECK("FFT n==1: FIRE без hop PLL на пик",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
                    2453500ULL * 1000ULL) < 0);

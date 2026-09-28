@@ -2066,7 +2066,7 @@ async function main(): Promise<void> {
   check(
     "Атака без рамки: часы слуха, фильтр полки",
     storeSrc.includes("const attackNoPaintShelf") &&
-      storeSrc.includes("hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)"),
+      storeSrc.includes("hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz, shelf.designFsHz)"),
   );
   check(
     "качание/сплошная/случайная — отдельный TX полки, не CW hostTx",
