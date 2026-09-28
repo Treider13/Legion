@@ -278,9 +278,8 @@ architecture legion of bladerf is
     signal lg_xlat_v        : std_logic;
     signal lg_xlat_bb_i     : signed(15 downto 0);
     signal lg_xlat_bb_q     : signed(15 downto 0);
-    signal lg_rx_aim        : std_logic;
-    signal lg_fifo_i        : signed(15 downto 0);
-    signal lg_fifo_q        : signed(15 downto 0);
+    signal lg_lb_word       : std_logic_vector(63 downto 0);
+    signal lg_aim_dly       : std_logic_vector(31 downto 0);
     signal lg_aim_data      : std_logic_vector(31 downto 0);
     signal lg_lb_to_mux     : std_logic_vector(31 downto 0);
     signal lg_wd_fired      : std_logic;
@@ -1207,7 +1206,8 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
-        rx_aim_en     => lg_rx_aim,
+        -- Бит arm в rx_clock больше не переключает формат FIFO.
+        rx_aim_en     => open,
         rx_peak_word  => lg_peak_word
       );
 
@@ -1254,11 +1254,9 @@ begin
         bb_i      => lg_xlat_bb_i,
         bb_q      => lg_xlat_bb_q
       );
-    -- arm: в DRFM база (вырез уже снял соседей). Иначе — прежний вырез на bin.
-    -- Первые FIFO(64)+delay сэмплов после arm ещё старый вырез: aim сдвинет
-    -- их второй раз, потом в линии уже база и bin садится куда написан.
-    lg_fifo_i <= lg_xlat_bb_i when lg_rx_aim = '1' else lg_xlat_i;
-    lg_fifo_q <= lg_xlat_bb_q when lg_rx_aim = '1' else lg_xlat_q;
+    -- CDC-слово: [63:32] база после MA, [31:0] когерентный вырез.
+    -- Один указатель, половины не разъезжаются. FTW = bin<<24 сдвигает
+    -- центр на f; NCO от выреза дал бы peak+target.
 
     U_legion_det_sync : entity work.synchronizer
       generic map ( RESET_LEVEL => '0' )
@@ -1371,20 +1369,24 @@ begin
       );
     lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO else '0';
 
+    -- [31:0] — вырез (walk-off, delayline, combine). [63:32] — база синтеза.
     U_legion_dcfifo : entity work.legion_dcfifo
+      generic map ( WIDTH => 64 )
       port map (
         wr_clk   => rx_clock,
         wr_reset => rx_reset,
-        wr_data  => std_logic_vector(lg_fifo_i) & std_logic_vector(lg_fifo_q),
+        wr_data  => std_logic_vector(lg_xlat_bb_i) & std_logic_vector(lg_xlat_bb_q)
+                    & std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
         wr_en    => lg_lb_wr_en,
         wr_full  => lg_lb_full,
         rd_clk   => tx_clock,
         rd_reset => tx_reset,
-        rd_data  => lg_lb_data,
+        rd_data  => lg_lb_word,
         rd_en    => lg_lb_rd_en,
         rd_empty => lg_lb_empty,
         rd_level => lg_lb_level
       );
+    lg_lb_data <= lg_lb_word(31 downto 0);
     lg_lb_wr_en <= lg_xlat_v
                    when lg_lb_active_rx = '1' and lg_rx_arm = '1' and lg_lb_full = '0'
                    else '0';
@@ -1409,6 +1411,15 @@ begin
         din       => lg_lb_data,
         sample_en => lg_mux_rd_en,
         dout      => lg_lb_dly0
+      );
+    U_legion_aim_delay : entity work.legion_delayline
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        delay     => lg_dly0_sel,
+        din       => lg_lb_word(63 downto 32),
+        sample_en => lg_mux_rd_en,
+        dout      => lg_aim_dly
       );
     U_legion_delayline1 : entity work.legion_delayline
       port map (
@@ -1475,14 +1486,14 @@ begin
         dout      => lg_lb_mux_data
       );
 
-    -- Синтез: копия отвода 0 (DRFM) × NCO(CH_TARGET). LO не трогаем.
+    -- Синтез: отвод базы (тот же delay, что tap 0) × NCO(CH_TARGET). LO не трогаем.
     U_legion_lb_aim : entity work.legion_lb_aim
       port map (
         clock     => tx_clock,
         reset     => tx_reset,
         ch_target => lg_tx_ch_target,
         sample_en => lg_mux_rd_en,
-        din       => lg_lb_dly0,
+        din       => lg_aim_dly,
         dout      => lg_aim_data
       );
     lg_lb_to_mux <= lg_aim_data when lg_tx_ch_target(31) = '1' else lg_lb_mux_data;

@@ -27,8 +27,8 @@ entity legion_lb_xlat is
         out_i     : out signed(15 downto 0);
         out_q     : out signed(15 downto 0);
         out_valid : out std_logic;
-        -- База после MA, до обратного смесителя. Копия в DRFM, когда
-        -- CH_TARGET.arm: legion_lb_aim ставит её на bin, LO не двигается.
+        -- База после MA, до обратного смесителя. Пишется во второе FIFO
+        -- синтеза; общее FIFO остаётся на out (когерентный up-mix).
         bb_i      : out signed(15 downto 0);
         bb_q      : out signed(15 downto 0)
     );
