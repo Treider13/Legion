@@ -1583,13 +1583,17 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
     if (ordinary) {
         if (legion_inner_on) {
             if (now - legion_inner_t0 >= dwell) {
-                legion_fft_stare_hdl(false);
                 legion_inner_on = false;
                 if (have) {
                     uint8_t const evt = (bin != legion_inner_bin)
                         ? (uint8_t)LEGION_EVT_SWITCH
                         : (uint8_t)LEGION_EVT_LOCK;
                     legion_survey_lock_fire(peak, mag, bin, evt);
+                } else {
+                    /* Нет нового пика. Сначала снять FTW, потом lock:
+                     * иначе база уже с живого bin, а NCO ещё на старом. */
+                    legion_aim_clear();
+                    legion_fft_stare_hdl(false);
                 }
             }
             return;
@@ -1611,6 +1615,10 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
 
 static void legion_survey_begin_pass(uint8_t evt)
 {
+    /* До снятия lock. inner_clear пишет FFT_CTRL без LOCK, а mute
+     * хопа — только после apply_bw. Пока FTW вооружён, живой пик
+     * уезжает на старый bin. */
+    legion_aim_clear();
     legion_survey_clear_hits();
     legion_survey_ph = LEGION_SURVEY_PH_PASS;
     legion_stare_on = false;
