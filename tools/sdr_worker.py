@@ -250,7 +250,6 @@ from protocol_db import nearest_analog_channel  # noqa: E402
 from rc_spectrum import analyze_rc, band_of  # noqa: E402
 
 ATTACK_RC_S = 0.16  # 160 мс: два интервала 19 Гц mLRS
-DRONEID_THINK_N = 1 << 16
 
 
 def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
@@ -258,11 +257,12 @@ def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
 
 
 def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:
+    # proto17 / NDSS / RUB-SysSec: OFDM DroneID на 2.4, не на 5.8 video.
+    if not (2400.0 <= float(freq_mhz) <= 2500.0):
+        return False
     if parsed.get("kind") == "ofdm":
         return True
-    if float(bw_mhz) >= 8.0:
-        return True
-    return 2400.0 <= float(freq_mhz) <= 2500.0 and float(bw_mhz) >= 6.0
+    return float(bw_mhz) >= 6.0
 
 
 def rx_stream_samples(fs: float) -> int:
@@ -1708,7 +1708,7 @@ class Radio:
         elif self.fake:
             iq_rc = work
         # FHSS только на широком IQ. Канализатор 2 МГц hop-set убивает.
-        # 65k think (~1 мс @ 61.44) мало: берём то же кольцо, что RC (до 80 мс).
+        # 65k think (~1 мс @ 61.44) мало: то же кольцо, что RC (160 мс).
         fhss_src = iq_rc if iq_rc is not None else work
         fhss = analyze_fhss(fhss_src, work_fs, center_mhz) if fhss_src is not None and len(fhss_src) >= 256 else None
         hop_spacing = float((fhss or {}).get("spacingMhz") or 0.0)
@@ -1736,19 +1736,9 @@ class Radio:
                 if chn:
                     parsed["analogChannel"] = chn
             if _want_droneid(freq, bw, parsed):
-                ch_d, fs_d = channelize_look(
-                    work,
-                    work_fs,
-                    freq,
-                    center_mhz,
-                    max(bw, 12.0),
-                    n=min(int(work.size), DRONEID_THINK_N),
-                    target_fs=15.36e6,
-                )
-                if ch_d.size >= 2048 and fs_d > 0:
-                    parsed["droneid"] = analyze_droneid(ch_d, fs_d)
-                elif abs(work_fs - 15.36e6) < 1.0 or abs(work_fs - 30.72e6) < 1.0 or abs(work_fs - 61.44e6) < 1.0:
-                    parsed["droneid"] = analyze_droneid(work, work_fs)
+                # Не channelize_look(target 15.36, BW 12): want_fs=24/20.48, /4 нет.
+                src_d = iq_rc if iq_rc is not None else work
+                parsed["droneid"] = analyze_droneid(src_d, work_fs, freq, center_mhz)
             frames = row.get("odidFrames") or row.get("odid_frames")
             if frames:
                 parsed["opendroneid"] = parse_opendroneid(frames)

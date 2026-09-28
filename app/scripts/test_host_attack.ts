@@ -4,7 +4,7 @@
 // ============================================================================
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
-import { analogCombFromIq, PAL_LINE_HZ } from "../src/sense/analogComb";
+import { analogCombFromIq, PAL_LINE_HZ, parseAnalogComb } from "../src/sense/analogComb";
 import { atlasForTracks, classifyAttackFamily, bandBucket, extraFromLook } from "../src/sense/attackAtlas";
 import { droneBandLabel, droneSurveyBands } from "../src/sense/droneBands";
 import { classifyFpgaObserve } from "../src/sense/fpgaObserveClass";
@@ -448,6 +448,14 @@ async function main(): Promise<void> {
   );
   check("parseWorkerLook serial", workerLook.droneid?.plain?.serial === "1581F5YHD228Q00A");
   check("parseWorkerLook rc elrs", workerLook.rc?.id === "elrs");
+  check(
+    "AMC ofdm+hit не analog",
+    parseAnalogComb({ kind: "ofdm", hit: true, score: 4 }).hit === false,
+  );
+  check(
+    "analogKind pal + hit",
+    parseAnalogComb({ analogKind: "pal", hit: true, analogScore: 4 }).kind === "pal",
+  );
   check("lookRu несёт DroneID", lookRu(workerLook).includes("DroneID 1581F5YHD228Q00A"), lookRu(workerLook));
   check("extraFromLook droneid", extraFromLook(workerLook)?.layer3?.id === "droneid");
   check(

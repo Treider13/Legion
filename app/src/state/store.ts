@@ -1644,7 +1644,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     try {
       const looks = live.map((t) => ({
         freqMhz: t.freqMhz,
-        bwMhz: Math.max(0.4, Math.min(8, t.widthMhz * 1.4)),
+        bwMhz: Math.max(0.4, Math.min(16, t.widthMhz * 1.4)),
       }));
       const paint = get().attackPaint;
       if (residual && paint) {

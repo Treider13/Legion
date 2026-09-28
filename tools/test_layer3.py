@@ -58,6 +58,27 @@ def main() -> int:
     x61[::4] = burst
     got61 = dji.analyze_droneid(x61, 61.44e6)
     check("xA4 61.44/4 plaintext", got61.get("ok") is True, str(got61.get("reason")))
+    check("ZC root 600", got61.get("zcRoot") == 600, str(got61.get("zcRoot")))
+
+    t61 = np.arange(x61.size, dtype=np.float64) / 61.44e6
+    xoff = (x61 * np.exp(1j * 2.0 * np.pi * 2.0e6 * t61)).astype(np.complex64)
+    got_off = dji.analyze_droneid(xoff, 61.44e6, 2442.0, 2440.0)
+    check("DC +2 МГц plaintext", got_off.get("ok") is True, str(got_off.get("reason")))
+
+    pad = np.zeros(int(dji.DRONEID_FS * 0.02), dtype=np.complex64)
+    buried = np.concatenate([pad, burst])
+    got_b = dji.analyze_droneid(buried, dji.DRONEID_FS)
+    check("вспышка не в начале окна", got_b.get("ok") is True, str(got_b.get("reason")))
+
+    bad24, fs24 = dji.prepare_droneid_iq(np.ones(4096, dtype=np.complex64), 24e6)
+    check("24 MSPS не DroneID fs", bad24.size == 0 and fs24 == 0.0)
+
+    long_cp, short_cp = dji.cyclic_prefix_lengths(dji.DRONEID_FS)
+    nfft = dji.fft_size(dji.DRONEID_FS)
+    start147 = long_cp + nfft + 4 * (short_cp + nfft)
+    tail147 = burst[start147:]
+    hits147 = dji.find_zc(tail147, dji.DRONEID_FS)
+    check("обрезанный кадр → root 147", bool(hits147) and hits147[0]["root"] == 147, str(hits147[:1]))
 
     basic = od.encode_basic_id("TEST-UAS-001", 1, 2)
     loc = od.encode_location(55.75, 37.62, 150.0, 40.0, 2)
@@ -188,6 +209,20 @@ def main() -> int:
     )
     in866 = pdb.classify_fhss_domain(0.525, 866.0)
     check("шаг 0.525 на 866 не уникален", in866["unique"] is False, str(in866))
+    check(
+        "mode_delta 0.525 не 0.50",
+        abs(fh._mode_delta([863.275 + i * 0.525 for i in range(8)]) - 0.525) < 1e-9,
+        str(fh._mode_delta([863.275 + i * 0.525 for i in range(8)])),
+    )
+    hops868 = [863.275 + i * 0.525 for i in range(8)]
+    x868 = fh.synth_fhss(8.0e6, 865.0, hops868, 0.004)
+    a868 = fh.analyze_fhss(x868, 8.0e6, 865.0)
+    check("FHSS 0.525 hit", a868.get("hit") is True, str(a868))
+    check(
+        "FHSS шаг 0.525 живой",
+        abs(float(a868.get("spacingMhz") or 0) - 0.525) < 0.04,
+        str(a868.get("spacingMhz")),
+    )
     usw = next(d for d in pdb.FHSS_DOMAINS if d["id"] == "elrs-us433w")
     check("US433W 20 каналов", usw["n"] == 20 and abs(usw["spacing"] - (438.0 - 423.5) / 19) < 1e-9)
 

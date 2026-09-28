@@ -262,12 +262,12 @@ function fftRadix2(re: Float64Array, im: Float64Array): void {
 
 export function parseAnalogComb(raw: Record<string, unknown> | undefined): AnalogComb {
   if (!raw) return { ...ANALOG_COMB_NONE };
-  const kindRaw = String(raw.analogKind ?? raw.kind ?? "none");
+  const kindRaw = String(raw.analogKind ?? "none");
   const kind: AnalogCombKind = kindRaw === "pal" || kindRaw === "ntsc" ? kindRaw : "none";
   const palScore = Number(raw.palScore) || 0;
   const ntscScore = Number(raw.ntscScore) || 0;
   const score = Number(raw.analogScore ?? raw.score) || Math.max(palScore, ntscScore);
-  const hit = raw.hit === true || (kind !== "none" && score >= ANALOG_COMB_HIT);
+  const hit = kind !== "none" && (raw.hit === true || score >= ANALOG_COMB_HIT);
   return { kind: hit ? kind : "none", score, palScore, ntscScore, hit };
 }
 

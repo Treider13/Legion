@@ -34,6 +34,7 @@ export interface DroneidLook {
   plain: DroneidPlain | null;
   reason?: string | null;
   encrypted?: boolean;
+  zcRoot?: number;
 }
 
 export interface OpendroneidLook {
@@ -185,6 +186,7 @@ function parseDroneidLook(raw: unknown): DroneidLook | null {
     plain: plain && plain.serial ? plain : null,
     reason: typeof o.reason === "string" ? o.reason : null,
     encrypted: o.encrypted === true,
+    zcRoot: Number(o.zcRoot) || 0,
   };
 }
 

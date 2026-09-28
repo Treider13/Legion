@@ -412,6 +412,19 @@ def main() -> int:
             think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
         )
         check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
+        check("DroneID только 2.4", w._want_droneid(5800.0, 20.0, {"kind": "ofdm"}) is False)
+        check("DroneID 2.4 + 10 МГц", w._want_droneid(2442.0, 10.0, {"kind": "unknown"}) is True)
+        import droneid as dji_w
+
+        burst_w = dji_w.synth_droneid_burst(dji_w.pack_droneid_91(), dji_w.DRONEID_FS)
+        x61_w = np_atk.zeros(burst_w.size * 4, dtype=np_atk.complex64)
+        x61_w[::4] = burst_w
+        live._attack_mem.reset()
+        live._attack_mem.push_block(x61_w)
+        live._tone_bb = None
+        think_d = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 10}], False)
+        did = ((think_d.get("looks") or [{}])[0].get("droneid")) or {}
+        check("think DroneID plaintext xA4", did.get("ok") is True, str(did.get("reason")))
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

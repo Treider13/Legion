@@ -235,17 +235,23 @@ def _unique_set(freqs: list[float], gate: float) -> list[float]:
 
 
 def _mode_delta(freqs: list[float]) -> float:
+    """Медиана кластера с наибольшим голосом. Не квантованный ключ:
+
+    round(0.525·20)=10 (банковское) → 0.50 — ложь; 18% tol её прятал.
+    Голос — бин 50 кГц, ответ — медиана живых Δ.
+    """
     if len(freqs) < 2:
         return 0.0
     xs = sorted(freqs)
     deltas = [xs[i] - xs[i - 1] for i in range(1, len(xs)) if xs[i] - xs[i - 1] >= 0.12]
     if not deltas:
         return 0.0
-    bins: dict[float, int] = {}
+    bins: dict[int, list[float]] = {}
     for d in deltas:
-        key = round(d * 20.0) / 20.0
-        bins[key] = bins.get(key, 0) + 1
-    return max(bins.items(), key=lambda kv: kv[1])[0]
+        key = int(round(d / 0.05))
+        bins.setdefault(key, []).append(d)
+    best = max(bins.values(), key=len)
+    return float(np.median(best))
 
 
 def attach_rc(fhss: dict[str, Any], rc: dict[str, Any] | None, freq_mhz: float) -> dict[str, Any]:
