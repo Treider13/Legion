@@ -847,10 +847,17 @@ int main(void)
     t_tamer += 8;
     legion_work();
     {
+        uint32_t a0 = 0;
+        uint32_t a2 = 0;
         uint32_t a3 = 0;
+        legion_reg_read(LEGION_REG_CH_ACTIVE_0, &a0);
+        legion_reg_read(LEGION_REG_CH_ACTIVE_2, &a2);
         legion_reg_read(LEGION_REG_CH_ACTIVE_3, &a3);
-        /* 2467.5 МГц → ELRS i=(2467500-2400400+500)/1000 = 67 */
-        CHECK("CH scan: ELRS маска hop 67", (a3 & (1u << 3)) != 0);
+        CHECK("CH scan: ACTIVE_0 слот 6", (a0 & (1u << 6)) != 0);
+        /* слот 6 = 2460…2470 → ELRS 2460.4…2469.4 = hops 60…69 */
+        CHECK("CH scan: ELRS hop 60 в слоте 6", (a2 & (1u << 28)) != 0);
+        CHECK("CH scan: ELRS hop 67", (a3 & (1u << 3)) != 0);
+        CHECK("CH scan: ELRS hop 69", (a3 & (1u << 5)) != 0);
     }
     memset(t_ch_e, 0, sizeof(t_ch_e));
     t_tamer += 8;

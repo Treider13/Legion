@@ -1076,17 +1076,19 @@ static void legion_ch_read_map(void)
     legion_ch_bin[7] = (b47 >> 24) & 0xffu;
 }
 
-/* Октант bin/32, если HDL без LO/fs; иначе слот 10 МГц на 2400…2480. */
+/* Тот же fs/LO, что peak: legion_fs_hz / look_center, не тень HDL. */
 static uint32_t legion_ch_slot_of_bin(uint32_t bin)
 {
     int32_t khz;
     uint32_t abs_khz;
+    uint32_t lo;
 
     bin &= 0xffu;
-    if (legion_ch_fs_hz == 0 || legion_ch_lo_khz == 0) {
+    lo = legion_look_center_khz;
+    if (legion_fs_hz() == 0 || lo == 0) {
         return bin / 32u;
     }
-    khz = (int32_t)legion_ch_lo_khz + legion_bin_to_khz(bin);
+    khz = (int32_t)lo + legion_bin_to_khz(bin);
     if (khz < (int32_t)LEGION_OCUSYNC_F0_KHZ ||
         khz >= (int32_t)(LEGION_OCUSYNC_F0_KHZ + 8u * LEGION_OCUSYNC_BW_KHZ)) {
         return 0xffu;
@@ -1102,16 +1104,20 @@ static bool legion_ch_slot_in_look(uint32_t slot)
     uint32_t s_lo;
     uint32_t s_hi;
     uint32_t half;
+    uint32_t lo;
+    uint32_t fs;
 
     if (slot >= LEGION_CH_N) {
         return false;
     }
-    if (legion_ch_fs_hz == 0 || legion_ch_lo_khz == 0) {
+    lo = legion_look_center_khz;
+    fs = legion_fs_hz();
+    if (fs == 0 || lo == 0) {
         return true;
     }
-    half = legion_ch_fs_hz / 2000u;
-    look_lo = (legion_ch_lo_khz > half) ? legion_ch_lo_khz - half : 0;
-    look_hi = legion_ch_lo_khz + half;
+    half = fs / 2000u;
+    look_lo = (lo > half) ? lo - half : 0;
+    look_hi = lo + half;
     s_lo = LEGION_OCUSYNC_F0_KHZ + slot * LEGION_OCUSYNC_BW_KHZ;
     s_hi = s_lo + LEGION_OCUSYNC_BW_KHZ;
     return look_hi > s_lo && look_lo < s_hi;
@@ -1150,12 +1156,32 @@ static void legion_ch_elrs_set(uint32_t idx)
     }
 }
 
+/* 10 МГц слот кроет ~10 хопов ISM2G4 (шаг 1 МГц). Пик один не есть маска. */
+static void legion_ch_elrs_mark_slot(uint32_t slot)
+{
+    uint32_t s_lo;
+    uint32_t s_hi;
+    uint32_t k;
+    uint32_t f;
+
+    if (slot >= LEGION_CH_N) {
+        return;
+    }
+    s_lo = LEGION_OCUSYNC_F0_KHZ + slot * LEGION_OCUSYNC_BW_KHZ;
+    s_hi = s_lo + LEGION_OCUSYNC_BW_KHZ;
+    for (k = 0; k < LEGION_CH_ELRS_N; k++) {
+        f = LEGION_ELRS_F0_KHZ + k * LEGION_ELRS_SPACING_KHZ;
+        if (f >= s_lo && f < s_hi) {
+            legion_ch_elrs_set(k);
+        }
+    }
+}
+
 static void legion_ch_update_hits(void)
 {
     uint32_t i;
-    int32_t fkhz;
-    uint32_t eidx;
 
+    legion_ch_active0 = 0;
     legion_ch_active1 = 0;
     legion_ch_active2 = 0;
     legion_ch_active3 = 0;
@@ -1167,14 +1193,10 @@ static void legion_ch_update_hits(void)
             if (legion_ch_hits[i] < 255u) {
                 legion_ch_hits[i]++;
             }
+            legion_ch_active0 |= 1u << i;
+            legion_ch_elrs_mark_slot(i);
         } else {
             legion_ch_hits[i] = 0;
-        }
-        if (legion_ch_e[i] >= legion_ch_thr) {
-            fkhz = (int32_t)legion_ch_lo_khz +
-                   legion_bin_to_khz(legion_ch_bin[i]);
-            eidx = legion_ch_elrs_of_khz(fkhz);
-            legion_ch_elrs_set(eidx);
         }
     }
 }
@@ -1201,10 +1223,10 @@ static int legion_ch_pick(void)
             continue;
         }
         if (legion_ch_mode == LEGION_CH_MODE_ELRS) {
-            int32_t const fkhz = (int32_t)legion_ch_lo_khz +
+            int32_t const fkhz = (int32_t)legion_look_center_khz +
                 legion_bin_to_khz(legion_ch_bin[i]);
             if (legion_ch_elrs_of_khz(fkhz) == 0xffu &&
-                legion_ch_lo_khz != 0) {
+                legion_look_center_khz != 0) {
                 continue;
             }
         }
@@ -2488,7 +2510,7 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         return true;
     }
     if (addr == LEGION_REG_CH_ACTIVE_0) {
-        *data = legion_mux_word(LEGION_REG_CH_ACTIVE_0);
+        *data = legion_ch_active0;
         return true;
     }
     if (addr == LEGION_REG_CH_ACTIVE_1) {

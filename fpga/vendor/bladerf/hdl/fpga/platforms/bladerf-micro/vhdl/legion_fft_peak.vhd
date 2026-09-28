@@ -106,8 +106,16 @@ architecture rtl of legion_fft_peak is
         else
             sb := bin - 256;
         end if;
+        -- Тот же round, что legion_bin_to_khz: (k·fs ± 128000) / 256000.
+        -- Trunc здесь и round в NIOS расходились на границе 10 МГц.
         prod := to_signed(sb, 16) * signed(resize(fs, 32));
-        off_khz := resize(prod / to_signed(256000, 48), 32);
+        if prod >= 0 then
+            off_khz := resize((prod + to_signed(128000, 48)) /
+                              to_signed(256000, 48), 32);
+        else
+            off_khz := resize((prod - to_signed(128000, 48)) /
+                              to_signed(256000, 48), 32);
+        end if;
         f_khz := to_integer(signed(resize(lo, 32)) + off_khz);
         if f_khz < LEGION_OCUSYNC_F0_KHZ or
            f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then

@@ -75,7 +75,7 @@
 #define LEGION_REG_CH_THR         0x2E  /* порог энергии слота (NIOS) */
 #define LEGION_REG_CH_HYST        0x2F  /* N окон подряд (NIOS) */
 #define LEGION_REG_CH_TARGET      0x30  /* FFT bin 0..255 */
-#define LEGION_REG_CH_MODE        0x31  /* 0=OcuSync 8×10 МГц, 1=ELRS 80 */
+#define LEGION_REG_CH_MODE        0x31  /* 0=8×10 МГц ISM 2.4, 1=ELRS 80 */
 #define LEGION_REG_CH_ACTIVE_0    0x32  /* [7:0] активные 10-МГц слоты */
 #define LEGION_REG_CH_ACTIVE_1    0x33  /* ELRS bits 0..31 */
 #define LEGION_REG_CH_ACTIVE_2    0x34  /* ELRS bits 32..63 */
