@@ -76,6 +76,37 @@
 #define LEGION_REG_PEAK2          0x2F
 #define LEGION_REG_PEAK3          0x30
 #define LEGION_REG_CH_LUT         0x31  /* write {idx[15:8], ch[7:0]} */
+#define LEGION_REG_PROTO_PERIOD   0x32  /* период пакета, сэмплы (хост) */
+#define LEGION_REG_PROTO_PULSE    0x33  /* длительность пакета, сэмплы */
+#define LEGION_REG_DRFM_STEP_SRC  0x34  /* 0=WALK_PERIOD, 1=PROTO_PERIOD */
+#define LEGION_REG_CH_THR         0x35  /* порог энергии слота (NIOS) */
+#define LEGION_REG_CH_HYST        0x36  /* N окон подряд (NIOS) */
+#define LEGION_REG_CH_TARGET      0x37  /* FFT bin 0..255 */
+#define LEGION_REG_CH_MODE        0x38  /* 0=8×10 МГц ISM 2.4, 1=ELRS 80 */
+#define LEGION_REG_CH_ACTIVE_0    0x39  /* [7:0] активные 10-МГц слоты */
+#define LEGION_REG_CH_ACTIVE_1    0x3A  /* ELRS bits 0..31 */
+#define LEGION_REG_CH_ACTIVE_2    0x3B  /* ELRS bits 32..63 */
+#define LEGION_REG_CH_ACTIVE_3    0x3C  /* ELRS bits 64..79 */
+#define LEGION_REG_CH_ENERGY_0    0x3D
+#define LEGION_REG_CH_ENERGY_1    0x3E
+#define LEGION_REG_CH_ENERGY_2    0x3F
+#define LEGION_REG_CH_ENERGY_3    0x40
+#define LEGION_REG_CH_ENERGY_4    0x41
+#define LEGION_REG_CH_ENERGY_5    0x42
+#define LEGION_REG_CH_ENERGY_6    0x43
+#define LEGION_REG_CH_ENERGY_7    0x44
+#define LEGION_REG_CH_HITS_0      0x45
+#define LEGION_REG_CH_HITS_1      0x46
+#define LEGION_REG_CH_HITS_2      0x47
+#define LEGION_REG_CH_HITS_3      0x48
+#define LEGION_REG_CH_HITS_4      0x49
+#define LEGION_REG_CH_HITS_5      0x4A
+#define LEGION_REG_CH_HITS_6      0x4B
+#define LEGION_REG_CH_HITS_7      0x4C
+#define LEGION_REG_CH_BINS_03     0x4D  /* пики слотов 0..3 */
+#define LEGION_REG_CH_BINS_47     0x4E  /* пики слотов 4..7 */
+#define LEGION_REG_CH_FS_HZ       0x4F  /* NIOS → HDL */
+#define LEGION_REG_CH_LO_KHZ      0x50  /* центр взгляда → HDL */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -92,6 +123,7 @@
 #define LEGION_CH_DC_SKIP         (1u << 6)
 #define LEGION_CH_N80             (1u << 7)
 #define LEGION_CH_N               80u
+#define LEGION_CH_SLOT_N          8u
 #define LEGION_CH_EXCL_DEFAULT    8u
 #define LEGION_CH_PRESET_SHIFT    16
 #define LEGION_CH_PRESET_MASK     3u
@@ -113,7 +145,17 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_CH_LUT
+#define LEGION_REG_MAX            LEGION_REG_CH_LO_KHZ
+#define LEGION_CH_ELRS_N          80u
+#define LEGION_CH_MODE_OCUSYNC    0u
+#define LEGION_CH_MODE_ELRS       1u
+#define LEGION_OCUSYNC_F0_KHZ     2400000u
+#define LEGION_OCUSYNC_BW_KHZ     10000u
+#define LEGION_ELRS_F0_KHZ        2400400u
+#define LEGION_ELRS_F1_KHZ        2479400u
+#define LEGION_ELRS_SPACING_KHZ   1000u
+#define LEGION_DRFM_STEP_SRC_LAB  0u
+#define LEGION_DRFM_STEP_SRC_PROTO 1u
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -121,6 +163,7 @@
 #define LEGION_MODE_NCO           0x2   /* тон DDS */
 #define LEGION_MODE_LB_GATED      0x3   /* RX→TX по детектору */
 #define LEGION_MODE_LB_ALWAYS     0x4   /* RX→TX всегда */
+#define LEGION_MODE_AIM           0x5   /* NCO по CH_TARGET */
 
 /* Статус (STATUS-PIO, читается по read-пакету target 0x80), биты:
  *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (HDL, живой),
@@ -164,7 +207,9 @@ bool legion_air_down(void);
  * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
  * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
  * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
- * узжаем. HOLD: TURN = выдержка, затем следующий взгляд (плитка);
+ * узжаем. CH_THR≠0: HOLD читает карту 8×10 МГц каждый SETTLE; цель погасла →
+ * CHANNEL_SCAN (max energy, CH_HITS≥N) → CH_TARGET=бин без ARM/сброса DRFM.
+ * HOLD: TURN = выдержка, затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
  * хоп внутри взгляда = live FFT → xlat.

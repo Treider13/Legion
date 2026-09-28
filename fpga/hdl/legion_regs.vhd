@@ -46,6 +46,10 @@ entity legion_regs is
         tx_lb_amp1    : out unsigned(15 downto 0);
         tx_walk_period : out unsigned(31 downto 0);
         tx_walk_ftw_step : out unsigned(31 downto 0);
+        tx_proto_period : out unsigned(31 downto 0);
+        tx_proto_pulse  : out unsigned(31 downto 0);
+        tx_drfm_step_src : out std_logic;
+        tx_ch_target    : out unsigned(7 downto 0);
         -- Домен RX (пороги детектора)
         rx_clock      : in  std_logic;
         rx_reset      : in  std_logic;
@@ -61,11 +65,16 @@ entity legion_regs is
         rx_lut_we     : out std_logic;
         rx_lut_addr   : out unsigned(7 downto 0);
         rx_lut_data   : out unsigned(7 downto 0);
+        rx_ch_fs_hz   : out unsigned(31 downto 0);
+        rx_ch_lo_khz  : out unsigned(31 downto 0);
         rx_peak_word  : in  std_logic_vector(31 downto 0);
         rx_peak1_word : in  std_logic_vector(31 downto 0);
         rx_peak2_word : in  std_logic_vector(31 downto 0);
         rx_peak3_word : in  std_logic_vector(31 downto 0);
         rx_ch_word    : in  std_logic_vector(31 downto 0);
+        rx_ch_energy  : in  legion_ch_energy_t;
+        rx_ch_bins    : in  std_logic_vector(63 downto 0);
+        rx_ch_active  : in  std_logic_vector(7 downto 0);
         -- Статусные входы из TX/RX доменов
         tx_playing    : in  std_logic;
         tx_cap_done   : in  std_logic;
@@ -105,6 +114,12 @@ architecture rtl of legion_regs is
     signal r_lb_amp     : std_logic_vector(31 downto 0);
     signal r_walk_period : std_logic_vector(31 downto 0);
     signal r_walk_ftw_step : std_logic_vector(31 downto 0);
+    signal r_proto_period : std_logic_vector(31 downto 0);
+    signal r_proto_pulse  : std_logic_vector(31 downto 0);
+    signal r_step_src     : std_logic;
+    signal r_ch_target    : std_logic_vector(7 downto 0);
+    signal r_ch_fs        : std_logic_vector(31 downto 0);
+    signal r_ch_lo        : std_logic_vector(31 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -128,6 +143,10 @@ architecture rtl of legion_regs is
     signal lba_meta, lba_tx     : std_logic_vector(31 downto 0);
     signal wper_meta, wper_tx   : std_logic_vector(31 downto 0);
     signal wfs_meta, wfs_tx     : std_logic_vector(31 downto 0);
+    signal pper_meta, pper_tx   : std_logic_vector(31 downto 0);
+    signal ppul_meta, ppul_tx   : std_logic_vector(31 downto 0);
+    signal src_meta, src_tx     : std_logic;
+    signal cht_meta, cht_tx     : std_logic_vector(7 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -148,6 +167,11 @@ architecture rtl of legion_regs is
     signal pk3_meta, pk3_nios   : std_logic_vector(31 downto 0);
     signal ch_meta, ch_nios     : std_logic_vector(31 downto 0);
     signal wcur_meta, wcur_nios : std_logic_vector(31 downto 0);
+    signal e_meta, e_nios       : legion_ch_energy_t;
+    signal bins_meta, bins_nios : std_logic_vector(63 downto 0);
+    signal act_meta, act_nios   : std_logic_vector(7 downto 0);
+    signal fs_meta, fs_rx       : std_logic_vector(31 downto 0);
+    signal lo_meta, lo_rx       : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
     signal det_gray_rx   : std_logic_vector(15 downto 0);
@@ -199,6 +223,12 @@ begin
             r_lb_amp     <= x"00007FFF"; -- A0≈1.0, A1=0: один отвод, mux даст 0.9
             r_walk_period <= (others => '0');
             r_walk_ftw_step <= (others => '0');
+            r_proto_period <= (others => '0');
+            r_proto_pulse  <= (others => '0');
+            r_step_src     <= '0';
+            r_ch_target    <= (others => '0');
+            r_ch_fs        <= (others => '0');
+            r_ch_lo        <= (others => '0');
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -237,6 +267,12 @@ begin
                     when LEGION_REG_LB_AMP     => r_lb_amp     <= pio_wdata;
                     when LEGION_REG_WALK_PERIOD => r_walk_period <= pio_wdata;
                     when LEGION_REG_WALK_FTW_STEP => r_walk_ftw_step <= pio_wdata;
+                    when LEGION_REG_PROTO_PERIOD => r_proto_period <= pio_wdata;
+                    when LEGION_REG_PROTO_PULSE => r_proto_pulse <= pio_wdata;
+                    when LEGION_REG_DRFM_STEP_SRC => r_step_src <= pio_wdata(0);
+                    when LEGION_REG_CH_TARGET => r_ch_target <= pio_wdata(7 downto 0);
+                    when LEGION_REG_CH_FS_HZ  => r_ch_fs     <= pio_wdata;
+                    when LEGION_REG_CH_LO_KHZ => r_ch_lo     <= pio_wdata;
                     when others => null;
                 end case;
             end if;
@@ -265,6 +301,10 @@ begin
             lba_meta  <= (others => '0'); lba_tx <= (others => '0');
             wper_meta <= (others => '0'); wper_tx <= (others => '0');
             wfs_meta  <= (others => '0'); wfs_tx <= (others => '0');
+            pper_meta <= (others => '0'); pper_tx <= (others => '0');
+            ppul_meta <= (others => '0'); ppul_tx <= (others => '0');
+            src_meta  <= '0'; src_tx <= '0';
+            cht_meta  <= (others => '0'); cht_tx <= (others => '0');
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -289,6 +329,10 @@ begin
             lba_meta  <= r_lb_amp;     lba_tx  <= lba_meta;
             wper_meta <= r_walk_period; wper_tx <= wper_meta;
             wfs_meta  <= r_walk_ftw_step; wfs_tx <= wfs_meta;
+            pper_meta <= r_proto_period; pper_tx <= pper_meta;
+            ppul_meta <= r_proto_pulse;  ppul_tx <= ppul_meta;
+            src_meta  <= r_step_src;     src_tx  <= src_meta;
+            cht_meta  <= r_ch_target;    cht_tx  <= cht_meta;
         end if;
     end process;
 
@@ -315,6 +359,10 @@ begin
     tx_lb_amp1    <= unsigned(lba_tx(31 downto 16));
     tx_walk_period <= unsigned(wper_tx);
     tx_walk_ftw_step <= unsigned(wfs_tx);
+    tx_proto_period <= unsigned(pper_tx);
+    tx_proto_pulse  <= unsigned(ppul_tx);
+    tx_drfm_step_src <= src_tx;
+    tx_ch_target    <= unsigned(cht_tx);
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
     -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
@@ -351,6 +399,8 @@ begin
             luta_meta <= (others => '0'); luta_rx <= (others => '0');
             lutd_meta <= (others => '0'); lutd_rx <= (others => '0');
             lutt_meta <= '0'; lutt_rx <= '0'; lutt_rx_d <= '0';
+            fs_meta  <= (others => '0'); fs_rx  <= (others => '0');
+            lo_meta  <= (others => '0'); lo_rx  <= (others => '0');
         elsif rising_edge(rx_clock) then
             thr_meta <= r_det_thr;   thr_rx <= thr_meta;
             sh_meta  <= r_det_shift; sh_rx  <= sh_meta;
@@ -362,6 +412,8 @@ begin
             lutt_meta <= r_lut_tog;
             lutt_rx   <= lutt_meta;
             lutt_rx_d <= lutt_rx;
+            fs_meta  <= r_ch_fs;     fs_rx  <= fs_meta;
+            lo_meta  <= r_ch_lo;     lo_rx  <= lo_meta;
         end if;
     end process;
 
@@ -377,6 +429,8 @@ begin
     rx_lut_we       <= lutt_rx xor lutt_rx_d;
     rx_lut_addr     <= unsigned(luta_rx);
     rx_lut_data     <= unsigned(lutd_rx);
+    rx_ch_fs_hz     <= unsigned(fs_rx);
+    rx_ch_lo_khz    <= unsigned(lo_rx);
 
     -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
     cdc_det_src : process(rx_clock, rx_reset)
@@ -413,6 +467,12 @@ begin
             pk3_nios <= (others => '0');
             ch_meta <= (others => '0');
             ch_nios <= (others => '0');
+            e_meta    <= (others => (others => '0'));
+            e_nios    <= (others => (others => '0'));
+            bins_meta <= (others => '0');
+            bins_nios <= (others => '0');
+            act_meta  <= (others => '0');
+            act_nios  <= (others => '0');
         elsif rising_edge(nios_clk) then
             pk_meta <= rx_peak_word;
             pk_nios <= pk_meta;
@@ -424,6 +484,12 @@ begin
             pk3_nios <= pk3_meta;
             ch_meta <= rx_ch_word;
             ch_nios <= ch_meta;
+            e_meta    <= rx_ch_energy;
+            e_nios    <= e_meta;
+            bins_meta <= rx_ch_bins;
+            bins_nios <= bins_meta;
+            act_meta  <= rx_ch_active;
+            act_nios  <= act_meta;
         end if;
     end process;
 
@@ -441,18 +507,37 @@ begin
 
     -- Чтение 0x15: IOWR(AWS,0x15) we=0 → STATUS = peak.
     -- Чтение 0x23: текущая задержка walk-off.
+    -- PEAK1..3 / CH_PWR — occupancy main. ACTIVE/ENERGY/BINS — 8-slot карта.
     -- we=1 или другой addr — прежний STATUS (бит 4 = 0 в HDL).
-    pio_status <= pk_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK_BIN)
-                  else pk1_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK1)
-                  else pk2_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK2)
-                  else pk3_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK3)
-                  else ch_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_CH_PWR)
-                  else wcur_nios when (pio_we = '0' and
-                                 to_integer(unsigned(pio_addr)) = LEGION_REG_WALK_CUR)
-                  else (gray2bin(det_gray_nios) & st_nios(15 downto 0));
+    status_mux : process(pio_we, pio_addr, pk_nios, pk1_nios, pk2_nios, pk3_nios,
+                         ch_nios, wcur_nios, act_nios, e_nios, bins_nios,
+                         det_gray_nios, st_nios)
+        variable a : integer;
+    begin
+        a := to_integer(unsigned(pio_addr));
+        if pio_we = '0' and a = LEGION_REG_PEAK_BIN then
+            pio_status <= pk_nios;
+        elsif pio_we = '0' and a = LEGION_REG_PEAK1 then
+            pio_status <= pk1_nios;
+        elsif pio_we = '0' and a = LEGION_REG_PEAK2 then
+            pio_status <= pk2_nios;
+        elsif pio_we = '0' and a = LEGION_REG_PEAK3 then
+            pio_status <= pk3_nios;
+        elsif pio_we = '0' and a = LEGION_REG_CH_PWR then
+            pio_status <= ch_nios;
+        elsif pio_we = '0' and a = LEGION_REG_WALK_CUR then
+            pio_status <= wcur_nios;
+        elsif pio_we = '0' and a = LEGION_REG_CH_ACTIVE_0 then
+            pio_status <= x"000000" & act_nios;
+        elsif pio_we = '0' and a >= LEGION_REG_CH_ENERGY_0 and
+              a <= LEGION_REG_CH_ENERGY_7 then
+            pio_status <= e_nios(a - LEGION_REG_CH_ENERGY_0);
+        elsif pio_we = '0' and a = LEGION_REG_CH_BINS_03 then
+            pio_status <= bins_nios(31 downto 0);
+        elsif pio_we = '0' and a = LEGION_REG_CH_BINS_47 then
+            pio_status <= bins_nios(63 downto 32);
+        else
+            pio_status <= gray2bin(det_gray_nios) & st_nios(15 downto 0);
+        end if;
+    end process;
 end architecture;

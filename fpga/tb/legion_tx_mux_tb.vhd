@@ -275,6 +275,15 @@ begin
         end loop;
         wd_ok <= '1';
 
+        -- 10) AIM = тот же тракт, что NCO (тон с каденсом, 0.9).
+        mode <= LEGION_MODE_AIM;
+        arm <= '1';
+        nco_valid <= '1';
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        assert out_valid = '1' and out_i /= 0
+            report "FAIL: AIM does not emit NCO" severity failure;
+
         report "legion_tx_mux_tb: PASS" severity note;
         done <= true;
         wait;

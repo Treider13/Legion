@@ -78,6 +78,39 @@ REG_PEAK1 = 0x2E
 REG_PEAK2 = 0x2F
 REG_PEAK3 = 0x30
 REG_CH_LUT = 0x31  # write {idx[15:8], ch[7:0]}
+REG_PROTO_PERIOD = 0x32  # период пакета, сэмплы
+REG_PROTO_PULSE = 0x33  # длительность пакета, сэмплы
+REG_DRFM_STEP_SRC = 0x34  # 0=WALK_PERIOD, 1=PROTO_PERIOD
+REG_CH_THR = 0x35
+REG_CH_HYST = 0x36
+REG_CH_TARGET = 0x37
+REG_CH_MODE = 0x38
+REG_CH_ACTIVE_0 = 0x39
+REG_CH_ACTIVE_1 = 0x3A
+REG_CH_ACTIVE_2 = 0x3B
+REG_CH_ACTIVE_3 = 0x3C
+REG_CH_ENERGY_0 = 0x3D
+REG_CH_ENERGY_1 = 0x3E
+REG_CH_ENERGY_2 = 0x3F
+REG_CH_ENERGY_3 = 0x40
+REG_CH_ENERGY_4 = 0x41
+REG_CH_ENERGY_5 = 0x42
+REG_CH_ENERGY_6 = 0x43
+REG_CH_ENERGY_7 = 0x44
+REG_CH_HITS_0 = 0x45
+REG_CH_HITS_1 = 0x46
+REG_CH_HITS_2 = 0x47
+REG_CH_HITS_3 = 0x48
+REG_CH_HITS_4 = 0x49
+REG_CH_HITS_5 = 0x4A
+REG_CH_HITS_6 = 0x4B
+REG_CH_HITS_7 = 0x4C
+REG_CH_BINS_03 = 0x4D
+REG_CH_BINS_47 = 0x4E
+REG_CH_FS_HZ = 0x4F
+REG_CH_LO_KHZ = 0x50
+CH_MODE_OCUSYNC = 0
+CH_MODE_ELRS = 1
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF
@@ -118,6 +151,7 @@ MODE_PLAYER = 0x1
 MODE_NCO = 0x2
 MODE_LB_GATED = 0x3
 MODE_LB_ALWAYS = 0x4
+MODE_AIM = 0x5  # NCO по CH_TARGET
 
 CTRL_ARM = 1 << 0
 CTRL_WD_EN = 1 << 4
@@ -266,6 +300,7 @@ class LegionFpga:
                 self.write_reg(REG_SETTLE_N, int(settle_n) & 0xFFFFFFFF) and
                 self.write_reg(REG_FFT_CTRL, ctrl))
 
+
     def set_channelize(self, preset: int = 0, map_lut: bool = False,
                        grp_shift: int = 0, fftshift: bool = False,
                        dc_skip: bool = False, n80: bool = False,
@@ -352,6 +387,21 @@ class LegionFpga:
                 self.write_reg(REG_LB_AMP, amp) and
                 self.write_reg(REG_WALK_PERIOD, int(period) & 0xFFFFFFFF) and
                 self.write_reg(REG_WALK_FTW_STEP, int(ftw_step) & 0xFFFFFFFF))
+
+    def set_proto_timing(self, period: int = 0, pulse: int = 0,
+                         step_src: int = 0) -> bool:
+        """PRI: PROTO_PERIOD/PULSE в сэмплах; step_src=1 шагает walk по PRI."""
+        return (self.write_reg(REG_PROTO_PERIOD, int(period) & 0xFFFFFFFF) and
+                self.write_reg(REG_PROTO_PULSE, int(pulse) & 0xFFFFFFFF) and
+                self.write_reg(REG_DRFM_STEP_SRC, int(step_src) & 1))
+
+    def set_channel_map(self, thr: int = 0, hyst: int = 0,
+                        target: int = 0, mode: int = 0) -> bool:
+        """Карта 8×10 МГц / ELRS 80. thr=0 — CHANNEL_SCAN выкл. hyst=N хитов."""
+        return (self.write_reg(REG_CH_THR, int(thr) & 0xFFFFFFFF) and
+                self.write_reg(REG_CH_HYST, int(hyst) & 0xFFFFFFFF) and
+                self.write_reg(REG_CH_MODE, int(mode) & 1) and
+                self.write_reg(REG_CH_TARGET, int(target) & 0xFF))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

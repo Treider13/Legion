@@ -44,7 +44,7 @@ LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
 
 | Каталог | Содержимое |
 |---|---|
-| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_walkoff`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
+| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_walkoff`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs`, `legion_lb_aim` |
 | `tb/` | GHDL-тестбенчи + `run_ghdl.sh` |
 | `nios/` | `legion_cmds.c/h` — обработчик регистров на NIOS II (target 0x80) |
 | `host/` | `legion_fpga.py` (регистровый API), `legion_gateway.py` (TCP↔USB агент шлюза), `gen_sine_lut.py` |
@@ -138,8 +138,9 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
    требует токен; в приложении — поле «ТОКЕН ШЛЮЗА» на вкладке ТИП СИГНАЛА.
    Без переменной — открытая доверенная LAN стенда (как WiFi AP прошивки).
 2. LEGION на ноутбуке: вкладка ТИП СИГНАЛА → блок FPGA — ARM/СТОП/статус.
-   Режимы: `player` (волна из RAM), `nco` (тон), `lb_gated` (RX→TX по
-   детектору), `lb_always` (RX→TX постоянно), `pass` (обычный стрим).
+  Режимы: `player` (волна из RAM), `nco` (тон), `aim` (NCO по CH_TARGET),
+  `lb_gated` (RX→TX по детектору), `lb_always` (RX→TX постоянно),
+  `pass` (обычный стрим).
 3. Загрузка волны в RAM: capture_arm=1 → обычный TX-стрим волной
    (существующая ЗАШИТЬ) → capture_done=1 → режим `player`.
    Во время capture поток идёт и на LMS (слышно, что грузим — в нагрузку).

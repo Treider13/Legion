@@ -1,7 +1,7 @@
 -- ============================================================================
 -- LEGION — мультиплексор TX-источника (tx_clock домен).
 -- Источники: 0=поток хоста (fifo_reader), 1=плеер RAM, 2=NCO,
---            3=loopback по детектору, 4=loopback всегда.
+--            3=loopback по детектору, 4=loopback всегда, 5=aim (NCO).
 -- ARM=0 / watchdog expired / источник не готов → ТИШИНА: нули с каденсом
 -- valid каждый 2-й такт (lms6002d.vhd: valid=0 + enable=1 держит ПОСЛЕДНИЙ
 -- сэмпл на DAC — поэтому тишина обязана гнать нули с valid, а не молчать).
@@ -170,10 +170,11 @@ begin
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;
                     end if;
-                when LEGION_MODE_NCO =>
+                when LEGION_MODE_NCO | LEGION_MODE_AIM =>
                     if live = '1' then
                         -- LUT NCO ≈ 1.0 (2047<<4). Масштаб на mux, не в
                         -- entity: legion_nco_tb держит контракт полной шкалы.
+                        -- AIM — тот же тракт, FTW снаружи от legion_lb_aim.
                         out_i <= lb_amp_q15(nco_i);
                         out_q <= lb_amp_q15(nco_q);
                         out_valid <= nco_valid;

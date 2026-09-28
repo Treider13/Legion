@@ -5,6 +5,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use ieee.math_real.all;
+use work.legion_pkg.all;
 
 entity legion_fft_peak_tb is
 end entity;
@@ -19,6 +20,11 @@ architecture tb of legion_fft_peak_tb is
     signal in_q     : signed(15 downto 0) := (others => '0');
     signal in_v     : std_logic := '0';
     signal peak     : std_logic_vector(31 downto 0);
+    signal energy   : legion_ch_energy_t;
+    signal bins     : std_logic_vector(63 downto 0);
+    signal act      : std_logic_vector(7 downto 0);
+    signal fs_hz    : unsigned(31 downto 0) := (others => '0');
+    signal lo_khz   : unsigned(31 downto 0) := (others => '0');
     signal peak1    : std_logic_vector(31 downto 0);
     signal peak2    : std_logic_vector(31 downto 0);
     signal peak3    : std_logic_vector(31 downto 0);
@@ -92,12 +98,13 @@ begin
     dut : entity work.legion_fft_peak
         port map (
             clock => clk, reset => rst, enable => en, dc_notch => notch,
-            excl => excl,
+            excl => excl, fs_hz => fs_hz, lo_khz => lo_khz,
             in_i => in_i, in_q => in_q, in_valid => in_v,
             peak_word => peak, peak1_word => peak1,
             peak2_word => peak2, peak3_word => peak3,
             mag_valid => mag_v, mag_last => mag_last,
-            mag_bin => mag_bin, mag_pow => mag_pow, mag_frame => mag_fr
+            mag_bin => mag_bin, mag_pow => mag_pow, mag_frame => mag_fr,
+            ch_energy => energy, ch_bins => bins, ch_active => act
         );
 
     stim : process
@@ -129,6 +136,12 @@ begin
             report "FAIL: bin16 got " & integer'image(bin) severity failure;
         fr1 := to_integer(unsigned(pw(30 downto 24)));
         assert pw(31) = '1' report "FAIL: valid after bin16" severity failure;
+        assert unsigned(bins(7 downto 0)) = 16
+            report "FAIL: slot0 peak bin" severity failure;
+        assert act(0) = '1'
+            report "FAIL: slot0 active on bin16" severity failure;
+        assert unsigned(energy(0)) /= 0
+            report "FAIL: slot0 energy" severity failure;
 
         -- второй кадр: bin 240 (= −16). valid от кадра 16 ещё стоит —
         -- ждём смену frame, не первый valid.
@@ -145,6 +158,12 @@ begin
         assert bin = 240
             report "FAIL: bin240 got " & integer'image(bin) severity failure;
         assert fr2 /= fr1 report "FAIL: frame did not advance" severity failure;
+        assert unsigned(bins(63 downto 56)) = 240
+            report "FAIL: slot7 peak bin" severity failure;
+        assert act(7) = '1'
+            report "FAIL: slot7 active on bin240" severity failure;
+        assert unsigned(energy(7)) /= 0
+            report "FAIL: slot7 energy" severity failure;
 
         -- DC + bin16, notch: пик 16 (не 0)
         en <= '0';
@@ -157,6 +176,23 @@ begin
         bin := to_integer(unsigned(pw(7 downto 0)));
         assert bin = 16
             report "FAIL: dc_notch peak got " & integer'image(bin) severity failure;
+
+        -- 10 МГц @ 40 MSPS, LO=2440: bin16 → 2442.5 МГц → слот 4 (2440–2450)
+        en <= '0';
+        wait until rising_edge(clk);
+        wait until rising_edge(clk);
+        fs_hz <= to_unsigned(40000000, 32);
+        lo_khz <= to_unsigned(2440000, 32);
+        en <= '1';
+        notch <= '0';
+        feed_tone(clk, in_i, in_q, in_v, 16, 20000.0, 0.0);
+        wait_valid(clk, peak, pw);
+        assert unsigned(energy(4)) /= 0
+            report "FAIL: 10 MHz slot4 energy" severity failure;
+        assert act(4) = '1'
+            report "FAIL: 10 MHz slot4 active" severity failure;
+        assert unsigned(bins(39 downto 32)) = 16
+            report "FAIL: 10 MHz slot4 bin" severity failure;
 
         -- disable снимает valid
         en <= '0';

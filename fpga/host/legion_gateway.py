@@ -929,7 +929,8 @@ class LegionGateway:
                                   "прошивка: op flash или вкладка КАСТОМ FPGA"}
             mode_name = str(msg.get("mode") or "player")
             mode = {"player": lf.MODE_PLAYER, "nco": lf.MODE_NCO,
-                    "lb_gated": lf.MODE_LB_GATED, "lb_always": lf.MODE_LB_ALWAYS}.get(mode_name)
+                    "lb_gated": lf.MODE_LB_GATED, "lb_always": lf.MODE_LB_ALWAYS,
+                    "aim": lf.MODE_AIM}.get(mode_name)
             if mode is None:
                 return {"ok": False, "reason": f"неизвестный mode {mode_name}"}
             # lb_gated без явного порога = гейт на шум (порог 0). Отказ честно.
@@ -1023,10 +1024,24 @@ class LegionGateway:
                 amp0=lb_amp0, amp1=lb_amp1, period=walk_period, ftw_step=walk_ftw_step,
             ):
                 return {"ok": False, "reason": "запись LB_DELAY/FTW/AMP не удалась"}
+            try:
+                proto_period = int(msg["proto_period"]) if "proto_period" in msg else 0
+                proto_pulse = int(msg["proto_pulse"]) if "proto_pulse" in msg else 0
+                drfm_step_src = int(msg["drfm_step_src"]) if "drfm_step_src" in msg else 0
+                ch_thr = int(msg["ch_thr"]) if "ch_thr" in msg else 0
+                ch_hyst = int(msg["ch_hyst"]) if "ch_hyst" in msg else 0
+                ch_target = int(msg["ch_target"]) if "ch_target" in msg else 0
+                ch_mode = int(msg["ch_mode"]) if "ch_mode" in msg else 0
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "proto_*/ch_*: не число"}
+            if not self.fpga.set_proto_timing(proto_period, proto_pulse, drfm_step_src):
+                return {"ok": False, "reason": "запись PROTO_* не удалась"}
+            if not self.fpga.set_channel_map(ch_thr, ch_hyst, ch_target, ch_mode):
+                return {"ok": False, "reason": "запись CH_* не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
-            elif mode == lf.MODE_NCO:
+            elif mode == lf.MODE_NCO or mode == lf.MODE_AIM:
                 # Панель без FTW = DC. Шлюз ставит fs/8, не ноль.
                 if not self.fpga.set_nco_freq(2.0e6 / 8.0):
                     return {"ok": False, "reason": "NCO FTW по умолчанию (fs/8) не записался"}
@@ -1204,6 +1219,13 @@ class LegionGateway:
                 "lb_delay1": lf.REG_LB_DELAY1, "lb_ftw1": lf.REG_LB_FTW1,
                 "lb_amp": lf.REG_LB_AMP, "walk_period": lf.REG_WALK_PERIOD,
                 "walk_ftw_step": lf.REG_WALK_FTW_STEP,
+                "proto_period": lf.REG_PROTO_PERIOD, "proto_pulse": lf.REG_PROTO_PULSE,
+                "drfm_step_src": lf.REG_DRFM_STEP_SRC, "ch_thr": lf.REG_CH_THR,
+                "ch_hyst": lf.REG_CH_HYST, "ch_target": lf.REG_CH_TARGET,
+                "ch_mode": lf.REG_CH_MODE, "ch_active_0": lf.REG_CH_ACTIVE_0,
+                "ch_active_1": lf.REG_CH_ACTIVE_1, "ch_active_2": lf.REG_CH_ACTIVE_2,
+                "ch_active_3": lf.REG_CH_ACTIVE_3,
+                "ch_energy_0": lf.REG_CH_ENERGY_0, "ch_hits_0": lf.REG_CH_HITS_0,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,

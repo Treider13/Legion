@@ -18,6 +18,8 @@ architecture tb of legion_lb_walk_tb is
     signal walk_step    : unsigned(31 downto 0) := to_unsigned(4, 32);
     signal walk_max     : unsigned(31 downto 0) := to_unsigned(16, 32);
     signal walk_period  : unsigned(31 downto 0) := (others => '0');
+    signal proto_period : unsigned(31 downto 0) := (others => '0');
+    signal step_src     : std_logic := '0';
     signal ftw0_init    : unsigned(31 downto 0) := (others => '0');
     signal ftw1_init    : unsigned(31 downto 0) := to_unsigned(7, 32);
     signal ftw_step     : unsigned(31 downto 0) := (others => '0');
@@ -63,7 +65,8 @@ begin
             enable => enable, arm => arm, hold_max => hold_max,
             delay_init => delay_init, delay1_init => delay1_init,
             walk_step => walk_step, walk_max => walk_max,
-            walk_period => walk_period,
+            walk_period => walk_period, proto_period => proto_period,
+            step_src => step_src,
             ftw0_init => ftw0_init, ftw1_init => ftw1_init, ftw_step => ftw_step,
             det_active => det_active, sample_en => sample_en,
             tap => tap, tap1 => tap1, ftw0 => ftw0, ftw1 => ftw1,
@@ -178,6 +181,48 @@ begin
         pulse_sample(sample_en, 4);
         assert tap = to_unsigned(2, 12)
             report "FAIL: period restarts after det gap" severity failure;
+
+        -- SRC=1: шаг по PROTO_PERIOD, det=0 не сбрасывает и не запрещает.
+        enable <= '0';
+        delay_init <= to_unsigned(0, 12);
+        delay1_init <= to_unsigned(0, 12);
+        walk_step <= to_unsigned(1, 32);
+        walk_period <= to_unsigned(4096, 32);
+        proto_period <= to_unsigned(3, 32);
+        step_src <= '1';
+        ftw0_init <= to_unsigned(0, 32);
+        ftw_step <= to_unsigned(0, 32);
+        det_active <= '0';
+        tick(2);
+        enable <= '1';
+        tick(2);
+        pulse_sample(sample_en, 2);
+        assert tap = to_unsigned(0, 12)
+            report "FAIL: proto 3, 2 samples must not step" severity failure;
+        pulse_sample(sample_en, 1);
+        assert tap = to_unsigned(1, 12)
+            report "FAIL: proto 3 third sample steps without det" severity failure;
+        pulse_sample(sample_en, 3);
+        assert tap = to_unsigned(2, 12)
+            report "FAIL: proto continues across det=0" severity failure;
+
+        -- SRC=1 и PROTO_PERIOD=0: как лабораторные часы (WALK_PERIOD, det-gate).
+        enable <= '0';
+        delay_init <= to_unsigned(0, 12);
+        walk_period <= to_unsigned(2, 32);
+        proto_period <= to_unsigned(0, 32);
+        step_src <= '1';
+        det_active <= '0';
+        tick(2);
+        enable <= '1';
+        tick(2);
+        pulse_sample(sample_en, 4);
+        assert tap = to_unsigned(0, 12)
+            report "FAIL: proto=0 must not free-run" severity failure;
+        det_active <= '1';
+        pulse_sample(sample_en, 2);
+        assert tap = to_unsigned(1, 12)
+            report "FAIL: proto=0 falls back to WALK_PERIOD" severity failure;
 
         report "legion_lb_walk_tb: PASS" severity note;
         done <= true;
