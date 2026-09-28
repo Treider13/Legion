@@ -30,7 +30,7 @@ MLRS_900_LORA = (19.0, 31.0)
 MLRS_900_FSK = (50.0,)
 
 SX1280_LORA_BW = 812_500.0
-CSS_HIT = 3.4
+CSS_HIT = 1.55
 RATE_TOL = 0.10
 
 
@@ -111,8 +111,16 @@ def envelope_packets(x: np.ndarray, fs: float) -> dict[str, Any]:
     }
 
 
+def _fft_sharp(z: np.ndarray) -> float:
+    spec = np.abs(np.fft.fft(z * np.hanning(int(z.size))))
+    mid = spec.copy()
+    mid[:4] = 0
+    mid[-4:] = 0
+    return float(np.max(mid)) / (float(np.median(spec)) + 1e-20)
+
+
 def css_score(x: np.ndarray, fs: float, bw: float = SX1280_LORA_BW) -> float:
-    """Острота dechirp (пик FFT / медиана). LoRa — линейный chirp, FLRC нет."""
+    """Во сколько раз dechirp острее сырого FFT. LoRa ≫ 1, FLRC ≈ 1."""
     z = np.asarray(x, dtype=np.complex128).ravel()
     if z.size < 64 or fs <= 0:
         return 0.0
@@ -121,18 +129,9 @@ def css_score(x: np.ndarray, fs: float, bw: float = SX1280_LORA_BW) -> float:
     t = np.arange(n, dtype=np.float64) / fs
     k = bw / max(t[-1], 1e-9)
     up = np.exp(1j * 2.0 * math.pi * (0.5 * k * t * t - 0.5 * bw * t))
-    dn = np.conj(up)
-    best = 0.0
-    for ref in (up, dn):
-        y = z * ref
-        spec = np.abs(np.fft.fft(y * np.hanning(n)))
-        mid = spec.copy()
-        mid[:4] = 0
-        mid[-4:] = 0
-        peak = float(np.max(mid))
-        med = float(np.median(spec)) + 1e-20
-        best = max(best, peak / med)
-    return best
+    raw = _fft_sharp(z)
+    best = max(_fft_sharp(z * up), _fft_sharp(z * np.conj(up)))
+    return best / (raw + 1e-12)
 
 
 def packet_css(x: np.ndarray, fs: float, starts: list[int], dur_s: float) -> float:

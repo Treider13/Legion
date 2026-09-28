@@ -209,6 +209,9 @@ def decode_basic_id(msg: bytes) -> dict[str, Any] | None:
         return None
     id_type = (msg[1] >> 4) & 0xF
     ua_type = msg[1] & 0xF
+    uas_id = _ascii(msg[2:22])
+    if id_type == 0 or not uas_id:
+        return None
     return {
         "type": "basic_id",
         "proto": msg[0] & 0xF,
@@ -216,7 +219,7 @@ def decode_basic_id(msg: bytes) -> dict[str, Any] | None:
         "idTypeN": id_type,
         "uaType": UA_TYPES.get(ua_type, str(ua_type)),
         "uaTypeN": ua_type,
-        "uasId": _ascii(msg[2:22]),
+        "uasId": uas_id,
     }
 
 
@@ -230,6 +233,8 @@ def decode_location(msg: bytes) -> dict[str, Any] | None:
     status = (b1 >> 4) & 0xF
     lat = decode_latlon(_i32(msg, 5))
     lon = decode_latlon(_i32(msg, 9))
+    if abs(lat) > 90 or abs(lon) > 180:
+        return None
     ts = _u16(msg, 21)
     return {
         "type": "location",
@@ -460,15 +465,15 @@ def parse_opendroneid(frames: Any) -> dict[str, Any]:
         raw = _as_bytes(item)
         if not raw:
             continue
+        structured = extract_ie221(raw) + extract_ie221(raw[24:] if len(raw) > 36 else b"") + extract_ble(raw)
+        if structured:
+            for pay in structured:
+                messages.extend(_payload_messages(pay))
+            continue
         for blob in [raw, raw[24:] if len(raw) > 36 else b""]:
             if not blob:
                 continue
-            rows = _payload_messages(blob)
-            if rows:
-                messages.extend(rows)
-                continue
-            for pay in extract_ie221(blob) + extract_ble(raw):
-                messages.extend(_payload_messages(pay))
+            messages.extend(_payload_messages(blob))
     # дедуп по типу+ключевым полям
     seen: set[str] = set()
     uniq: list[dict[str, Any]] = []

@@ -223,14 +223,21 @@ def _maxstar(a: float, b: float) -> float:
     return a if a > b else b
 
 
+def _clip(x: float, lim: float = 20.0) -> float:
+    if x > lim:
+        return lim
+    if x < -lim:
+        return -lim
+    return x
+
+
 def _map_decode(
     sys_llr: list[float],
     par_llr: list[float],
     apriori: list[float],
     n: int,
 ) -> list[float]:
-    """Max-log-MAP, 8 состояний, хвост 3 такта встроен в длину n (без хвоста — n=K)."""
-    # Переходы: (state, u) → (next, parity)
+    """Max-log-MAP: полный APP LLR. Le = L_app − ys − La."""
     nxt = [[0, 0] for _ in range(8)]
     par = [[0, 0] for _ in range(8)]
     for s in range(8):
@@ -238,10 +245,6 @@ def _map_decode(
             p, ns = _rsc_step(u, s)
             nxt[s][u] = ns
             par[s][u] = p
-    prev: list[list[tuple[int, int]]] = [[] for _ in range(8)]
-    for s in range(8):
-        for u in (0, 1):
-            prev[nxt[s][u]].append((s, u))
 
     alpha = [[-1e9] * 8 for _ in range(n + 1)]
     beta = [[-1e9] * 8 for _ in range(n + 1)]
@@ -281,23 +284,36 @@ def _map_decode(
         for s in range(8):
             beta[k][s] -= m
 
-    ext = [0.0] * n
+    app = [0.0] * n
     for k in range(n):
+        la = apriori[k] if k < len(apriori) else 0.0
         ys = sys_llr[k] if k < len(sys_llr) else 0.0
         yp = par_llr[k] if k < len(par_llr) else 0.0
-        la = apriori[k] if k < len(apriori) else 0.0
         m0 = m1 = -1e9
         for s in range(8):
             for u in (0, 1):
+                sign_u = 1.0 if u else -1.0
                 sign_p = 1.0 if par[s][u] else -1.0
-                gamma_p = 0.5 * yp * sign_p
-                met = alpha[k][s] + gamma_p + beta[k + 1][nxt[s][u]]
+                gamma = 0.5 * (la + ys) * sign_u + 0.5 * yp * sign_p
+                met = alpha[k][s] + gamma + beta[k + 1][nxt[s][u]]
                 if u:
                     m1 = _maxstar(m1, met)
                 else:
                     m0 = _maxstar(m0, met)
-        ext[k] = (m1 - m0)
-    return ext
+        app[k] = m1 - m0
+    return app
+
+
+def _tail_soft(d0: list[int], d1: list[int], d2: list[int]) -> tuple[list[float], list[float], list[float], list[float]]:
+    """12 хвостов 36.212 5.1.3.2.2 → xt, zt, xpt, zpt."""
+    def s(v: list[int], i: int) -> float:
+        return float(v[i]) if i < len(v) else 0.0
+
+    xt = [s(d0, TURBO_K), s(d2, TURBO_K), s(d1, TURBO_K + 1)]
+    zt = [s(d1, TURBO_K), s(d0, TURBO_K + 1), s(d2, TURBO_K + 1)]
+    xpt = [s(d0, TURBO_K + 2), s(d2, TURBO_K + 2), s(d1, TURBO_K + 3)]
+    zpt = [s(d1, TURBO_K + 2), s(d0, TURBO_K + 3), s(d2, TURBO_K + 3)]
+    return xt, zt, xpt, zpt
 
 
 def turbo_decode(
@@ -306,29 +322,32 @@ def turbo_decode(
     d2: list[int],
     iterations: int = TURBO_ITERS,
 ) -> list[int]:
-    """Декод K информационных бит. d* — soft int8, длина D."""
+    """Декод K информационных бит. d* — soft int8, длина D. Хвост 3 такта в MAP."""
     k = TURBO_K
+    n = k + 3
     pi = turbo_interleave_idx()
-    inv = [0] * k
-    for i, p in enumerate(pi):
-        inv[p] = i
-    sys = [float(x) for x in d0[:k]]
-    par1 = [float(x) for x in d1[:k]]
-    par2 = [float(x) for x in d2[:k]]
-    ext = [0.0] * k
+    xt, zt, xpt, zpt = _tail_soft(d0, d1, d2)
+    sys = [float(x) for x in d0[:k]] + xt
+    par1 = [float(x) for x in d1[:k]] + zt
+    sys2_core = [0.0] * k
+    for i in range(k):
+        sys2_core[i] = float(d0[pi[i]])
+    sys2 = sys2_core + xpt
+    par2 = [float(x) for x in d2[:k]] + zpt
+    ext = [0.0] * n
     hard = [0] * k
     for _ in range(iterations):
-        ext1 = _map_decode(sys, par1, ext, k)
-        ap2 = [0.0] * k
-        sys2 = [0.0] * k
+        app1 = _map_decode(sys, par1, ext, n)
+        le1 = [_clip(app1[i] - sys[i] - ext[i]) for i in range(k)]
+        ap2 = [0.0] * n
         for i in range(k):
-            ap2[i] = ext1[pi[i]]
-            sys2[i] = sys[pi[i]]
-        ext2i = _map_decode(sys2, par2, ap2, k)
+            ap2[i] = le1[pi[i]]
+        app2 = _map_decode(sys2, par2, ap2, n)
+        le2i = [_clip(app2[i] - sys2[i] - ap2[i]) for i in range(k)]
         for i in range(k):
-            ext[pi[i]] = ext2i[i]
+            ext[pi[i]] = le2i[i]
         for i in range(k):
-            hard[i] = 1 if (sys[i] + ext1[i] + ext[i]) > 0 else 0
+            hard[i] = 1 if app1[i] > 0 else 0
     return hard
 
 
