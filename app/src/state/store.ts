@@ -108,7 +108,7 @@ import {
   planFpgaAir,
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
-import { shelfFsHz } from "../sense/txShelf";
+import { openLoopShelfTxPlan, shelfFsHz } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
   airHopBlockedReason,
@@ -1712,6 +1712,65 @@ export const useLegion = create<LegionStore>((set, get) => {
     return true;
   };
 
+  /** Качание / сплошная / случайная: полка всегда часы+фильтр. Шаг только двигает центр. */
+  const runOpenLoopShelfTx = async (mhz: number, powerDbm = 0): Promise<boolean> => {
+    const st = get();
+    const caps = catalogCaps(st.sdrId);
+    const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
+    const shelf = openLoopShelfTxPlan({
+      shelfMhz: parseLocaleNumber(st.txShelfMhz),
+      analogMhz: analog,
+      kind: st.txWaveKind,
+      params: st.txWaveParams,
+    });
+    const plan = planHandoff({
+      det: mhzAsDet(mhz, powerDbm),
+      bands: st.sdrBands,
+      loadOk: st.sdrLoadOk,
+      transmitArmed: st.transmitArmed,
+      lastCuedMhz: gGate.lastCuedMhz,
+      inflight: gGate.inflight,
+      sdrCanTx: gLive ? caps.canTx : gSdr.canTx(),
+    });
+    if (plan.skip) return false;
+    const gen = gTxGen;
+    gGate.reserve(plan.freqMhz);
+    let sdrUs = 0;
+    try {
+      if (plan.sdrTx) {
+        const tx = gLive
+          ? await hostTxWave(plan.freqMhz, shelf.waveKind, shelf.waveParams, shelf.fsHz, shelf.filterMhz)
+          : gSdr.txWave(plan.freqMhz, shelf.waveKind);
+        sdrUs = tx.latencyUs;
+        pushLog("sys", tx.reason);
+        if (!tx.ok) {
+          gGate.abort();
+          return false;
+        }
+        if (gen !== gTxGen) {
+          gGate.abort();
+          pushLog("sys", "open-loop полка: отменена оператором в полёте — состояние не коммитим");
+          return false;
+        }
+        gGate.commit(plan.freqMhz);
+        gSkipMhz = null;
+      }
+      executeHandoff(plan, sdrUs, powerDbm);
+      set({
+        lastCueReason:
+          `${st.scanPattern} полка ${shelf.occupyMhz.toFixed(2)} МГц @ ${plan.freqMhz.toFixed(3)}` +
+          ` · ${shelf.waveKind} · fs ${(shelf.fsHz / 1e6).toFixed(2)}` +
+          ` · фильтр ${shelf.filterMhz.toFixed(2)}`,
+      });
+      return true;
+    } finally {
+      if (gen === gTxGen) {
+        const queued = gGate.release();
+        if (queued !== null) void runOpenLoopShelfTx(queued.mhz, queued.powerDbm);
+      }
+    }
+  };
+
   const startOpenLoopTx = (): void => {
     stopTxWalk();
     const st = get();
@@ -1733,7 +1792,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       const step = gWalker?.next();
       if (!step?.centerMhz) return;
       inflight = true;
-      void runHandoffAsync(step.centerMhz, 0).finally(() => {
+      void runOpenLoopShelfTx(step.centerMhz, 0).finally(() => {
         inflight = false;
       });
     };

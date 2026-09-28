@@ -2017,6 +2017,13 @@ async function main(): Promise<void> {
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())"));
   check("зашить передаёт полку в часы TX", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, shelfFsNow())"));
+  check(
+    "качание/сплошная/случайная — отдельный TX полки, не CW hostTx",
+    storeSrc.includes("const runOpenLoopShelfTx") &&
+      storeSrc.includes("openLoopShelfTxPlan") &&
+      storeSrc.includes("shelf.filterMhz") &&
+      storeSrc.includes("runOpenLoopShelfTx(step.centerMhz, 0)"),
+  );
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
   check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
   const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат «энергия"));

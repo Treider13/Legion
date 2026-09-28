@@ -42,6 +42,7 @@ import {
   attackListenWindowMhz,
   attackShelfTxPlan,
 } from "../src/sense/attackShelfTx";
+import { openLoopShelfTxPlan, shelfFsHz } from "../src/sense/txShelf";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
@@ -150,6 +151,23 @@ async function main(): Promise<void> {
   check(
     "mute сессии рвёт in-flight TX поколением",
     muteSrc.includes("gTxGen += 1") && muteSrc.includes("gGate.reset()"),
+  );
+  const openLoopSrc = storeSrc.slice(storeSrc.indexOf("const runOpenLoopShelfTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  const startOpenSrc = storeSrc.slice(storeSrc.indexOf("const startOpenLoopTx"), storeSrc.indexOf("const bandsForFpgaAir"));
+  check(
+    "качание/сплошная/случайная всегда hostTxWave с фильтром полки",
+    openLoopSrc.includes("hostTxWave") &&
+      openLoopSrc.includes("shelf.fsHz") &&
+      openLoopSrc.includes("shelf.filterMhz") &&
+      openLoopSrc.includes("openLoopShelfTxPlan") &&
+      !openLoopSrc.includes("hostTx(") &&
+      !openLoopSrc.includes("txCue"),
+  );
+  check(
+    "шаг open-loop не подменяет полку",
+    startOpenSrc.includes("scanWindowMhz") &&
+      startOpenSrc.includes("runOpenLoopShelfTx") &&
+      !startOpenSrc.includes("runHandoffAsync"),
   );
   check(
     "pickArmed архив по-прежнему пуст",
@@ -1897,6 +1915,25 @@ async function main(): Promise<void> {
       Math.abs(edgeShelf.loMhz - 2404.75) < 1e-6,
     edgeShelf ? `${edgeShelf.f1Mhz}…${edgeShelf.f2Mhz} lo=${edgeShelf.loMhz}` : "null",
   );
+  const hopShelf = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: null, params: {} });
+  check(
+    "open-loop без типа — sine на часах и фильтре полки",
+    hopShelf.waveKind === "sine" &&
+      hopShelf.fsHz === shelfFsHz(15, 56) &&
+      Math.abs(hopShelf.filterMhz - 15) < 1e-6 &&
+      Math.abs(hopShelf.occupyMhz - 15) < 1e-6,
+    `kind=${hopShelf.waveKind} fs=${hopShelf.fsHz} filt=${hopShelf.filterMhz}`,
+  );
+  const hopNoise = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "awgn", params: {} });
+  check("open-loop шум на полке 15, не на шаге", hopNoise.waveKind === "awgn" && hopNoise.fsHz === 15e6);
+  const hopChirp = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "chirp", params: {} });
+  check(
+    "open-loop чирп размах = полка, не 1 МГц",
+    (hopChirp.waveParams.spanKhz ?? 0) >= 7000,
+    `spanKhz=${hopChirp.waveParams.spanKhz}`,
+  );
+  const hopCap = openLoopShelfTxPlan({ shelfMhz: 80, analogMhz: 28, kind: "awgn", params: {} });
+  check("open-loop полка не шире analog x40", hopCap.filterMhz === 28 && hopCap.fsHz === 28e6);
   const xa4Plan = attackShelfTxPlan({
     f0Mhz: 2415,
     paint: { f1Mhz: 2400, f2Mhz: 2450 },
@@ -2040,6 +2077,64 @@ async function main(): Promise<void> {
   );
   await L().stopTransmit();
   L().stopScan();
+
+  L().setScanPattern("sweep");
+  L().setTxShelfMhz("15");
+  L().setScanWindowMhz("20");
+  L().disarmTxWave();
+  await L().startTransmit();
+  check(
+    "качание без типа ставит полку, не CW 2 МГц",
+    await waitFor(
+      "sweep shelf",
+      () =>
+        L().transmitArmed &&
+        L().lastForwardMhz != null &&
+        (L().lastCueReason ?? "").includes("полка 15.00") &&
+        (L().lastCueReason ?? "").includes("sine") &&
+        (L().lastCueReason ?? "").includes("фильтр 15.00"),
+      2000,
+    ),
+    `cue=${L().lastCueReason} fwd=${L().lastForwardMhz}`,
+  );
+  check("качание не поднимает сканер", L().scanRunning === false);
+  await L().stopTransmit();
+  L().setScanPattern("band");
+  L().setTxShelfMhz("12");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "сплошная шум — горб полки 12",
+    await waitFor(
+      "band shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 12.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().setScanPattern("hop");
+  L().setTxShelfMhz("8");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "случайная шум — горб полки 8",
+    await waitFor(
+      "hop shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 8.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().disarmTxWave();
+  L().setScanPattern("auto");
 
   // sweep/band/hop сканер не поднимают (scanRefusedReason). Тот же crop, что tickScan без listen.
   const other = new MockSdrBackend();
