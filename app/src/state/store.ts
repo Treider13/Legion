@@ -1656,7 +1656,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (!r.ok) return;
       for (const row of r.looks) {
         const tr = matchAttackLook(live, row.freqMhz ?? Number.NaN);
-        if (tr) gAttackMemory.noteLook(tr.id, parseWorkerLook(row as unknown as Record<string, unknown>, row.freqMhz ?? 0));
+        if (tr) {
+          const raw = { ...(row as unknown as Record<string, unknown>), fhss: row.fhss ?? r.fhss };
+          gAttackMemory.noteLook(tr.id, parseWorkerLook(raw, row.freqMhz ?? 0));
+        }
       }
       if (residual) {
         const leftover = r.leftover;

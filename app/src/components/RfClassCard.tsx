@@ -3,12 +3,13 @@ import { ATTACK_SILENT_HINT } from "../sense/attackAtlas";
 import { lookRu } from "../sense/attackLook";
 import type { AttackRow } from "../sense/attackScene";
 import type { FpgaObserveClass } from "../sense/fpgaObserveClass";
+import { hopRailPct, isHopRcId, PROTOCOL_CATALOG, type FhssLook } from "../sense/protocolDb";
 import { detectorListens, HOST_ATTACK_MODE_RU_CAPS, patternLabelRu, type SdrWalkPattern } from "../sense/modes";
 
 function familyTone(id: string): string {
   if (id === "analog-video") return "rfclass-analog";
   if (id.startsWith("digital") || id === "window-fill") return "rfclass-digital";
-  if (id === "elrs" || id === "mlrs" || id === "elrs-mlrs-50") return "rfclass-hop";
+  if (isHopRcId(id) || id === "crossfire" || id === "ghost") return "rfclass-hop";
   if (id === "droneid" || id === "opendroneid") return "rfclass-digital";
   if (id.startsWith("hop") || id.startsWith("rc-") || id === "digital-burst") return "rfclass-hop";
   if (id === "two-floor") return "rfclass-two";
@@ -22,6 +23,77 @@ function stateRu(state: AttackRow["state"]): string {
   if (state === "confirmed") return "ЖИВОЙ";
   if (state === "cooled") return "ОСТЫЛ";
   return "НОВЫЙ";
+}
+
+function HopRail(props: { fhss: FhssLook; nowMhz?: number }) {
+  const { fhss, nowMhz } = props;
+  const lo = fhss.fLowMhz || Math.min(...fhss.hopSetMhz, nowMhz ?? 0);
+  const hi = fhss.fHighMhz || Math.max(...fhss.hopSetMhz, nowMhz ?? 0);
+  if (!(hi > lo) || fhss.hopSetMhz.length < 1) return null;
+  return (
+    <div className="rfclass-rail" aria-label="набор hop">
+      <span className="rfclass-rail-edge">{lo.toFixed(1)}</span>
+      <div className="rfclass-rail-track">
+        {fhss.hopSetMhz.map((f) => (
+          <i key={f} className="rfclass-rail-tick" style={{ left: `${hopRailPct(f, lo, hi)}%` }} title={`${f.toFixed(3)} МГц`} />
+        ))}
+        {nowMhz != null && (
+          <i className="rfclass-rail-now" style={{ left: `${hopRailPct(nowMhz, lo, hi)}%` }} title="сейчас" />
+        )}
+      </div>
+      <span className="rfclass-rail-edge">{hi.toFixed(1)}</span>
+    </div>
+  );
+}
+
+function Layer3Line({ row }: { row: AttackRow }) {
+  const did = row.look?.droneid;
+  const od = row.look?.opendroneid;
+  if (did?.ok && did.plain) {
+    const p = did.plain;
+    const pos =
+      p.latitude != null && p.longitude != null && Number.isFinite(p.latitude) && Number.isFinite(p.longitude)
+        ? `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`
+        : "";
+    return (
+      <p className="rfclass-l3">
+        DroneID {p.serial}
+        {pos ? ` · ${pos}` : ""}
+        {p.altitude != null && Number.isFinite(p.altitude) ? ` · ${p.altitude.toFixed(0)} м` : ""}
+      </p>
+    );
+  }
+  if (did?.hit) {
+    return <p className="rfclass-l3">{did.encrypted ? "DroneID без plaintext (O3+/O4)" : "DroneID ZC"}</p>;
+  }
+  if (od?.hit && od.uas) {
+    const pos =
+      od.uas.latitude != null && od.uas.longitude != null
+        ? ` · ${od.uas.latitude.toFixed(5)}, ${od.uas.longitude.toFixed(5)}`
+        : "";
+    return (
+      <p className="rfclass-l3">
+        RID {od.uas.uasId || "—"}
+        {pos}
+      </p>
+    );
+  }
+  return null;
+}
+
+function liveIds(rows: readonly AttackRow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const t of rows) {
+    if (t.state === "cooled") continue;
+    ids.add(t.atlas.id);
+    if (t.look?.rc?.id) ids.add(t.look.rc.id);
+    if (t.look?.droneid?.hit) ids.add("droneid");
+    if (t.look?.opendroneid?.hit) ids.add("opendroneid");
+    if (t.look?.analog?.hit) ids.add("analog-video");
+    if (t.look?.fhss?.domain?.id) ids.add(t.look.fhss.domain.id);
+    if (t.look?.fhss?.domain?.family) ids.add(t.look.fhss.domain.family);
+  }
+  return ids;
 }
 
 export function RfClassCard(props: {
@@ -39,9 +111,10 @@ export function RfClassCard(props: {
   const mode = props.fpga ? "УМНАЯ АТАКА · observe" : patternLabelRu(props.pattern);
   const help = detectorListens(props.pattern)
     ? props.pattern === "auto"
-      ? `${HOST_ATTACK_MODE_RU_CAPS}: класс по спектру и IQ. Имя фирмы не пишем.`
+      ? `${HOST_ATTACK_MODE_RU_CAPS}: класс по спектру, IQ, FHSS и Layer 3. Имя фирмы — только если сетка уникальна.`
       : "СКАНИРОВАТЬ — analog платы. ПЕРЕДАТЬ — слух на часах полки. Засечки в Атаку не идут."
-    : "Класс с платы: энергия и полоса. Гребёнка analog — только хост-IQ.";
+    : "Класс с платы: энергия и полоса. Гребёнка analog и FHSS — только хост-IQ.";
+  const seen = liveIds(live);
 
   return (
     <div className="rfclass" aria-label="Классы эфира">
@@ -73,6 +146,7 @@ export function RfClassCard(props: {
         <div className="rfclass-grid" aria-live="polite">
           {live.map((t) => {
             const comb = analogCombRu(t.look?.analog);
+            const fhss = t.look?.fhss;
             return (
               <article key={t.id} className={`rfclass-tile ${familyTone(t.atlas.id)}`} title={t.atlas.hint}>
                 <div className="rfclass-tile-top">
@@ -87,11 +161,31 @@ export function RfClassCard(props: {
                 {t.infoRu ? <p className="rfclass-info">{t.infoRu}</p> : null}
                 <p className="rfclass-hint">{t.look ? lookRu(t.look) : t.atlas.hint}</p>
                 {comb ? <p className="rfclass-comb">{comb}</p> : null}
+                <Layer3Line row={t} />
+                {fhss?.hit ? (
+                  <p className="rfclass-fhss">
+                    FHSS {fhss.unique} кан. · шаг {fhss.spacingMhz.toFixed(2)} МГц · dwell {fhss.dwellMs.toFixed(1)} мс
+                    {fhss.rateHz > 0 ? ` · ${fhss.rateHz.toFixed(0)} hop/с` : ""}
+                    {fhss.windowLimited ? " · окно xA4 обрезает 2.4" : ""}
+                  </p>
+                ) : null}
+                {fhss?.hit ? <HopRail fhss={fhss} nowMhz={t.freqMhz} /> : null}
               </article>
             );
           })}
         </div>
       )}
+      <div className="rfclass-catalog" aria-label="база протоколов">
+        <p className="rfclass-catalog-kicker">БАЗЫ 2026</p>
+        <ul>
+          {PROTOCOL_CATALOG.map((p) => (
+            <li key={p.id} className={seen.has(p.id) ? "on" : ""} title={p.hint}>
+              <span>{p.label}</span>
+              <small>{p.layer}</small>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

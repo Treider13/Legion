@@ -6,6 +6,7 @@
 import type { AnalogComb } from "./analogComb";
 import type { AttackTrack } from "./attackTracks";
 import { ATTACK_VIDEO_BW_MHZ } from "./attackDetect";
+import { classifyFhssDomain, nearestAnalogChannel, type AnalogChannel, type FhssLook, type RcId } from "./protocolDb";
 
 export type AttackBand =
   | "vhf"
@@ -27,7 +28,7 @@ export interface AttackAtlasRow {
 }
 
 export interface RcClassHint {
-  id: "elrs" | "mlrs" | "elrs-mlrs-50" | "rc-unknown";
+  id: RcId;
   label: string;
   hint: string;
   rateHz?: number;
@@ -43,6 +44,8 @@ export interface Layer3Hint {
 export interface AttackClassExtra {
   rc?: RcClassHint | null;
   layer3?: Layer3Hint | null;
+  fhss?: FhssLook | null;
+  analogChannel?: AnalogChannel | null;
 }
 
 export function bandBucket(mhz: number): AttackBand {
@@ -78,10 +81,12 @@ export function classifyAttackFamily(
 
   if (analogHit) {
     const std = comb?.kind === "ntsc" ? "NTSC 15734" : "PAL 15625";
+    const ch = extra?.analogChannel ?? nearestAnalogChannel(t.freqMhz);
+    const chs = ch ? ` · канал ${ch.id} ${ch.mhz.toFixed(0)}` : "";
     return {
       id: "analog-video",
-      label: "аналоговое видео (гребёнка)",
-      hint: `${std} на FM — orecchiette/DragonSig, не имя борта`,
+      label: ch ? `аналог ${ch.id}` : "аналоговое видео (гребёнка)",
+      hint: `${std} на FM — orecchiette/DragonSig${chs}. Не имя борта`,
     };
   }
 
@@ -92,6 +97,13 @@ export function classifyAttackFamily(
   const rc = extra?.rc;
   if (rc && rc.id !== "rc-unknown" && (band === "s24" || band === "p900") && t.widthMhz <= 2.5) {
     return { id: rc.id, label: rc.label, hint: rc.hint };
+  }
+  const fhss = extra?.fhss;
+  if (fhss?.hit && fhss.spacingMhz > 0 && (band === "s24" || band === "p900") && t.widthMhz <= 2.5) {
+    const dom = classifyFhssDomain(fhss.spacingMhz, band, t.freqMhz);
+    if (dom.unique) {
+      return { id: dom.id, label: dom.label, hint: dom.hint };
+    }
   }
 
   if (t.widthMhz < 6 && band === "p900") {
@@ -195,6 +207,8 @@ export function extraFromLook(look?: {
   rc?: RcClassHint | null;
   droneid?: { hit?: boolean; ok?: boolean; plain?: { serial?: string; latitude?: number; longitude?: number } | null; encrypted?: boolean; zcScore?: number } | null;
   opendroneid?: { hit?: boolean; ok?: boolean; uas?: { uasId?: string; latitude?: number; longitude?: number } | null } | null;
+  fhss?: FhssLook | null;
+  analogChannel?: AnalogChannel | null;
 } | null): AttackClassExtra | undefined {
   if (!look) return undefined;
   let layer3: Layer3Hint | undefined;
@@ -235,7 +249,7 @@ export function extraFromLook(look?: {
       hint: `ASTM F3411 / IE 221 FA:0B:BC${pos}. PHY 802.11 на xA4 не демодулируем`,
     };
   }
-  return { rc: look.rc ?? undefined, layer3 };
+  return { rc: look.rc ?? undefined, layer3, fhss: look.fhss ?? undefined, analogChannel: look.analogChannel ?? undefined };
 }
 
 export function atlasForTracks(

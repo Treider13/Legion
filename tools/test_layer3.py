@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 
 import droneid as dji
+import fhss_detect as fh
 import lte_turbo as tb
 import opendroneid as od
+import protocol_db as pdb
 import rc_spectrum as rc
 
 fail = 0
@@ -99,12 +101,74 @@ def main() -> int:
 
     mflrc = rc.synth_rc_train(fs, 111.0, int(fs * 0.08), css=False, pkt_s=0.0008)
     a111 = rc.analyze_rc(mflrc, fs, 2442.0)
-    check("mLRS FLRC 111", a111["id"] == "mlrs", str(a111))
+    check("111 Гц без CSS dual mLRS/FrSky", a111["id"] == "mlrs-frsky-111", str(a111))
+
+    a250f = rc.analyze_rc(rc.synth_rc_train(fs, 250.0, int(fs * 0.08), css=False, pkt_s=0.0005), fs, 2442.0)
+    check("250 Гц без CSS dual ELRS/Tracer", a250f["id"] == "elrs-tracer-250", str(a250f))
 
     cls19 = rc.classify_rc(19.0, True, "s24")
     check("19 Гц таблица = mLRS", cls19["id"] == "mlrs", str(cls19))
     cls500 = rc.classify_rc(500.0, True, "s24")
     check("500 Гц таблица = ELRS", cls500["id"] == "elrs", str(cls500))
+    cls333f = rc.classify_rc(333.0, False, "s24")
+    check("333 Гц без CSS не FLRC", cls333f["id"] == "rc-unknown", str(cls333f))
+    cls15 = rc.classify_rc(15.0, True, "s24")
+    check("15 Гц CSS = Ghost", cls15["id"] == "ghost", str(cls15))
+    cls_cf = rc.classify_rc(150.0, False, "p900", 0.26)
+    check("150 Гц + 260 кГц = Crossfire", cls_cf["id"] == "crossfire", str(cls_cf))
+    cls_150 = rc.classify_rc(150.0, False, "p900", 0.0)
+    check("150 Гц 900 без шага dual", cls_150["id"] == "elrs-crossfire-150", str(cls_150))
+
+    r5 = pdb.nearest_analog_channel(5806.0)
+    check("канал R5", r5 is not None and r5["id"] == "R5", str(r5))
+    a4 = pdb.nearest_analog_channel(5805.0)
+    check("канал A4 ближе 5805 чем R5", a4 is not None and a4["id"] == "A4", str(a4))
+    miss = pdb.nearest_analog_channel(2442.0)
+    check("2.4 не analog-канал", miss is None)
+
+    xf = pdb.classify_fhss_domain(0.26, 915.0)
+    check("шаг 260 кГц = Crossfire", xf["family"] == "crossfire" and xf["unique"] is True, str(xf))
+    ov = pdb.classify_fhss_domain(1.0, 2442.0)
+    check("шаг 1 МГц 2.4 не уникален", ov["unique"] is False, str(ov))
+    ov6 = pdb.classify_fhss_domain(0.6, 915.0)
+    check("шаг 0.6 900 не уникален", ov6["unique"] is False, str(ov6))
+
+    fs_h = 8.0e6
+    hops = [902.165 + i * 0.260 for i in range(8)]
+    lo_h = 903.2  # hop-set внутри Найквиста 4 МГц, не алиас 915−902
+    xh = fh.synth_fhss(fs_h, lo_h, hops, 0.004)
+    ah = fh.analyze_fhss(xh, fs_h, lo_h)
+    check("FHSS hit", ah.get("hit") is True, str(ah))
+    check("FHSS ≥5 hop", int(ah.get("unique") or 0) >= 5, str(ah.get("unique")))
+    check(
+        "FHSS шаг ~260 кГц",
+        abs(float(ah.get("spacingMhz") or 0) - 0.26) < 0.06,
+        str(ah.get("spacingMhz")),
+    )
+    check(
+        "FHSS домен Crossfire",
+        (ah.get("domain") or {}).get("family") == "crossfire",
+        str(ah.get("domain")),
+    )
+
+    hops24 = [2440.0 + i * 1.0 for i in range(6)]
+    x24 = fh.synth_fhss(fs_h, 2442.5, hops24, 0.003)
+    a24 = fh.analyze_fhss(x24, fs_h, 2442.5)
+    check("FHSS 2.4 hit", a24.get("hit") is True, str(a24))
+    check(
+        "FHSS 1 МГц не уникален",
+        (a24.get("domain") or {}).get("unique") is False,
+        str(a24.get("domain")),
+    )
+
+    tone = rc.synth_rc_train(fs, 250.0, int(fs * 0.04), css=True, pkt_s=0.001)
+    sticky = fh.analyze_fhss(tone, fs, 2442.0)
+    check("один канал не FHSS", sticky.get("hit") is False, str(sticky))
+
+    cat = pdb.catalog()
+    check("каталог не пуст", len(cat) >= 12, str(len(cat)))
+    ids = {r["id"] for r in cat}
+    check("каталог DroneID+ODID+Crossfire", {"droneid", "opendroneid", "crossfire"} <= ids, str(ids))
 
     return fail
 

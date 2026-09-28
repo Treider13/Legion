@@ -283,6 +283,13 @@ export function buildAttackAdvice(input: {
     if (fam.gridMhz > 0) scene += `, шаг сетки ≈ ${fam.gridMhz.toFixed(2)} МГц`;
     scene += " (уже виденные вспышки, не будущий канал).";
   }
+  const fhssLook = top ? input.looks.get(top.id)?.fhss : undefined;
+  if (fhssLook?.hit) {
+    scene += ` FHSS IQ: ${fhssLook.unique} кан., шаг ${fhssLook.spacingMhz.toFixed(2)} МГц, dwell ${fhssLook.dwellMs.toFixed(1)} мс`;
+    if (fhssLook.domain?.label) scene += ` · ${fhssLook.domain.label}`;
+    if (fhssLook.windowLimited) scene += " (окно xA4 56 МГц обрезает 2.4 ISM)";
+    scene += ".";
+  }
   if (windowFill) {
     scene += ` Окно слуха ≈ ${input.windowMhz.toFixed(0)} МГц забито — канал может быть 60/80, рука платы 40 МГц туда не достанет.`;
   }

@@ -49,6 +49,8 @@ export interface HostAttackLook {
   droneid?: Record<string, unknown>;
   opendroneid?: Record<string, unknown>;
   rc?: Record<string, unknown>;
+  fhss?: Record<string, unknown>;
+  analogChannel?: Record<string, unknown>;
 }
 
 export interface HostAttackThinkResult {
@@ -57,6 +59,7 @@ export interface HostAttackThinkResult {
   looks: HostAttackLook[];
   leftover?: number | null;
   clip?: boolean;
+  fhss?: Record<string, unknown>;
   memorySamples?: number;
   memoryCap?: number;
   memoryMs?: number;
@@ -234,6 +237,7 @@ export async function hostAttackThink(
     looks: r.looks ?? [],
     leftover: r.leftover,
     clip: r.clip,
+    fhss: r.fhss,
     memorySamples: r.memorySamples,
     memoryCap: r.memoryCap,
     memoryMs: r.memoryMs,

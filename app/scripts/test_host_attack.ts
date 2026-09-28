@@ -13,6 +13,7 @@ import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { classifyFhssDomain, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -449,6 +450,63 @@ async function main(): Promise<void> {
   check("parseWorkerLook rc elrs", workerLook.rc?.id === "elrs");
   check("lookRu несёт DroneID", lookRu(workerLook).includes("DroneID 1581F5YHD228Q00A"), lookRu(workerLook));
   check("extraFromLook droneid", extraFromLook(workerLook)?.layer3?.id === "droneid");
+  check(
+    "шаг 260 кГц = Crossfire",
+    classifyFhssDomain(0.26, "p900").unique && classifyFhssDomain(0.26, "p900").id === "crossfire",
+  );
+  check("шаг 1 МГц 2.4 не уникален", classifyFhssDomain(1.0, "s24").unique === false);
+  check("шаг 0.6 900 не уникален", classifyFhssDomain(0.6, "p900").unique === false);
+  check("канал R5", nearestAnalogChannel(5806)?.id === "R5");
+  check("канал A4 на 5805", nearestAnalogChannel(5805)?.id === "A4");
+  check("2.4 не analog-канал", nearestAnalogChannel(2442) == null);
+  check("каталог баз ≥ 12", PROTOCOL_CATALOG.length >= 12);
+  const fhssLook = parseWorkerLook(
+    {
+      kind: "tone",
+      label: "узкий",
+      rc: { id: "crossfire", label: "Crossfire 150 Гц FSK", hint: "260 кГц", rateHz: 150, css: false },
+      fhss: {
+        hit: true,
+        hops: 8,
+        unique: 8,
+        hopSetMhz: [902.165, 902.425, 902.685],
+        spacingMhz: 0.26,
+        dwellMs: 4,
+        intervalMs: 6.67,
+        rateHz: 150,
+        hopBwMhz: 0.2,
+        spanMhz: 2,
+        fLowMhz: 902.165,
+        fHighMhz: 904.0,
+        windowLimited: false,
+        hint: "Crossfire",
+        domain: { id: "crossfire", family: "crossfire", label: "Crossfire 915", hint: "260", unique: true },
+      },
+    },
+    915,
+  );
+  check("parseWorkerLook fhss", fhssLook.fhss?.hit === true && fhssLook.fhss.spacingMhz === 0.26);
+  check("parseWorkerLook crossfire", fhssLook.rc?.id === "crossfire");
+  check("lookRu несёт FHSS", lookRu(fhssLook).includes("FHSS"), lookRu(fhssLook));
+  check(
+    "900 + шаг 260 → Crossfire",
+    classifyAttackFamily(
+      { freqMhz: 915, widthMhz: 0.4, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      extraFromLook(fhssLook),
+    ).id === "crossfire",
+  );
+  check(
+    "ghost extra",
+    classifyAttackFamily(
+      { freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { rc: { id: "ghost", label: "Ghost Long Range 15 Гц", hint: "15 Гц" } },
+    ).id === "ghost",
+  );
+  check("parseFhssLook без hit пуст", parseFhssLook({ hops: 3 }) == null);
   check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
   }).id === "digital-burst");

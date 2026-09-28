@@ -5,6 +5,14 @@
 import { analogCombRu, ANALOG_COMB_NONE, parseAnalogComb, type AnalogComb } from "./analogComb";
 import { binsAroundPeak, cepstrumPeak, spectralFlatness, type AttackWidths } from "./attackMeasure";
 import { ATTACK_ASSOC_MHZ } from "./attackTracks";
+import {
+  nearestAnalogChannel,
+  parseAnalogChannel,
+  parseFhssLook,
+  type AnalogChannel,
+  type FhssLook,
+  type RcId,
+} from "./protocolDb";
 import type { ScanBin } from "../sdr/types";
 
 export type AttackLookKind = "tone" | "ofdm" | "cycle" | "noise" | "unknown";
@@ -43,7 +51,7 @@ export interface OpendroneidLook {
 }
 
 export interface RcLook {
-  id: "elrs" | "mlrs" | "elrs-mlrs-50" | "rc-unknown";
+  id: RcId;
   label: string;
   hint: string;
   rateHz: number;
@@ -51,6 +59,7 @@ export interface RcLook {
   css: boolean;
   cssScore?: number;
   packets?: number;
+  spacingMhz?: number;
 }
 
 export interface AttackLook {
@@ -71,6 +80,8 @@ export interface AttackLook {
   droneid?: DroneidLook | null;
   opendroneid?: OpendroneidLook | null;
   rc?: RcLook | null;
+  fhss?: FhssLook | null;
+  analogChannel?: AnalogChannel | null;
 }
 
 export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: AttackWidths): AttackLook {
@@ -112,6 +123,8 @@ export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: 
     droneid: null,
     opendroneid: null,
     rc: null,
+    fhss: null,
+    analogChannel: null,
   };
 }
 
@@ -139,6 +152,10 @@ export function parseWorkerLook(raw: Record<string, unknown>, freqMhz: number): 
     droneid: parseDroneidLook(raw.droneid),
     opendroneid: parseOpendroneidLook(raw.opendroneid),
     rc: parseRcLook(raw.rc),
+    fhss: parseFhssLook(raw.fhss),
+    analogChannel:
+      parseAnalogChannel(raw.analogChannel) ??
+      (parseAnalogComb(raw).hit ? nearestAnalogChannel(freqMhz) : null),
   };
 }
 
@@ -196,10 +213,18 @@ function parseRcLook(raw: unknown): RcLook | null {
   const o = asRecord(raw);
   if (!o) return null;
   const idRaw = String(o.id ?? "rc-unknown");
-  const id: RcLook["id"] =
-    idRaw === "elrs" || idRaw === "mlrs" || idRaw === "elrs-mlrs-50" || idRaw === "rc-unknown"
-      ? idRaw
-      : "rc-unknown";
+  const known: RcId[] = [
+    "elrs",
+    "mlrs",
+    "elrs-mlrs-50",
+    "crossfire",
+    "ghost",
+    "mlrs-frsky-111",
+    "elrs-tracer-250",
+    "elrs-crossfire-150",
+    "rc-unknown",
+  ];
+  const id: RcId = (known as string[]).includes(idRaw) ? (idRaw as RcId) : "rc-unknown";
   return {
     id,
     label: String(o.label ?? "узкий RC"),
@@ -209,6 +234,7 @@ function parseRcLook(raw: unknown): RcLook | null {
     css: o.css === true,
     cssScore: Number(o.cssScore) || 0,
     packets: Number(o.packets) || 0,
+    spacingMhz: Number(o.spacingMhz) || 0,
   };
 }
 
@@ -268,6 +294,11 @@ export function lookRu(look: AttackLook | undefined): string {
   }
   if (look.opendroneid?.uas?.uasId) bits.push(`RID ${look.opendroneid.uas.uasId}`);
   if (look.rc && look.rc.id !== "rc-unknown") bits.push(look.rc.label);
+  if (look.fhss?.hit) {
+    const n = look.fhss.unique || look.fhss.hops;
+    bits.push(`FHSS ${n} кан. шаг ${look.fhss.spacingMhz.toFixed(2)} МГц`);
+  }
+  if (look.analogChannel) bits.push(`канал ${look.analogChannel.id}`);
   bits.push(`уверенность ${pct}%`, src);
   return bits.join(" · ");
 }

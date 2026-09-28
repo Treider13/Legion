@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""ELRS vs mLRS по спектру: CSS (LoRa) + интервал пакетов.
+"""ELRS vs mLRS / Crossfire / Ghost по спектру: CSS + интервал + шаг hop.
 
-Факты (не маркетинг):
-  ExpressLRS common.h / expresslrs.org Signal Health:
-    2.4 LoRa: 25/50/100/150/200/250/333/500 Гц, SX1280 BW 812.5 кГц
-    2.4 FLRC: 250/500/1000 Гц (и DVDA с тем же эфирным шагом)
-    900 LoRa: 25/50/100/150/200/250/333/500 Гц
-  olliw42/mLRS README:
-    2.4 LoRa: 50 / 31 / 19 Гц; FLRC 111 Гц
-    868/915 LoRa: 31 / 19 Гц; FSK 50 Гц
-  50 Гц LoRa — пересечение ELRS и mLRS: уникально не приписать.
-  Без двух пакетов в окне — только CSS/FLRC, не имя.
-
+Таблицы и честные dual — protocol_db (ExpressLRS common.cpp, mLRS, g3gg0, Ghost).
+333 Гц FLRC в SX1280 common.cpp нет (это LoRa 8CH).
 xA4: канал ~2 MSPS после децимации. 160 мс кольца хватает на 19 Гц.
 """
 from __future__ import annotations
@@ -21,32 +12,10 @@ from typing import Any
 
 import numpy as np
 
-ELRS_24_LORA = (25.0, 50.0, 100.0, 150.0, 200.0, 250.0, 333.0, 500.0)
-ELRS_24_FLRC = (250.0, 333.0, 500.0, 1000.0)
-MLRS_24_LORA = (19.0, 31.0, 50.0)
-MLRS_24_FLRC = (111.0,)
-ELRS_900_LORA = (25.0, 50.0, 100.0, 150.0, 200.0, 250.0, 333.0, 500.0)
-MLRS_900_LORA = (19.0, 31.0)
-MLRS_900_FSK = (50.0,)
+from protocol_db import band_of, classify_rc as classify_rc_db
 
 SX1280_LORA_BW = 812_500.0
 CSS_HIT = 1.55
-RATE_TOL = 0.10
-
-
-def _nearest(rate: float, table: tuple[float, ...]) -> tuple[float, float]:
-    if rate <= 0 or not table:
-        return 0.0, 1e9
-    best = min(table, key=lambda x: abs(x - rate) / x)
-    err = abs(best - rate) / best
-    return best, err
-
-
-def _in_table(rate: float, table: tuple[float, ...]) -> float | None:
-    best, err = _nearest(rate, table)
-    if err <= RATE_TOL:
-        return best
-    return None
 
 
 def envelope_packets(x: np.ndarray, fs: float) -> dict[str, Any]:
@@ -147,107 +116,18 @@ def packet_css(x: np.ndarray, fs: float, starts: list[int], dur_s: float) -> flo
     return float(np.median(scores)) if scores else css_score(x, fs)
 
 
-def classify_rc(rate_hz: float, css: bool, band: str) -> dict[str, Any]:
-    """Имя только когда сетка не пересекается. 50 Гц LoRa — dual."""
-    rate = float(rate_hz)
-    b900 = band == "p900"
-    if css:
-        if _in_table(rate, MLRS_24_LORA if not b900 else MLRS_900_LORA) in (19.0, 31.0):
-            hit = _in_table(rate, MLRS_24_LORA if not b900 else MLRS_900_LORA)
-            return {
-                "id": "mlrs",
-                "label": f"mLRS LoRa {hit:.0f} Гц",
-                "hint": "CSS + 19/31 Гц — сетка olliw42/mLRS, не ELRS",
-                "matchedHz": hit,
-            }
-        if _in_table(rate, (50.0,)):
-            return {
-                "id": "elrs-mlrs-50",
-                "label": "LoRa 50 Гц (ELRS или mLRS)",
-                "hint": "50 Гц CSS есть и у ELRS, и у mLRS — уникально не приписать",
-                "matchedHz": 50.0,
-            }
-        table = ELRS_900_LORA if b900 else ELRS_24_LORA
-        hit = _in_table(rate, table)
-        if hit and hit != 50.0:
-            return {
-                "id": "elrs",
-                "label": f"ELRS LoRa {hit:.0f} Гц",
-                "hint": "CSS + скорость ELRS (100…500 Гц / 25 Гц) — mLRS таких 2.4-режимов нет",
-                "matchedHz": hit,
-            }
-        return {
-            "id": "rc-unknown",
-            "label": "CSS / LoRa-подобно",
-            "hint": "chirp есть, интервал не сел на сетку ELRS/mLRS",
-            "matchedHz": 0.0,
-        }
-    # не CSS: FLRC / FSK
-    if not b900:
-        if _in_table(rate, MLRS_24_FLRC):
-            return {
-                "id": "mlrs",
-                "label": "mLRS FLRC 111 Гц",
-                "hint": "без CSS, ~9 мс — FLRC mLRS; ELRS FLRC 250/500/1000",
-                "matchedHz": 111.0,
-            }
-        hit = _in_table(rate, ELRS_24_FLRC)
-        if hit:
-            return {
-                "id": "elrs",
-                "label": f"ELRS FLRC {hit:.0f} Гц",
-                "hint": "без CSS, 250…1000 Гц — сетка ExpressLRS FLRC/FSK",
-                "matchedHz": hit,
-            }
-    else:
-        if _in_table(rate, MLRS_900_FSK):
-            return {
-                "id": "elrs-mlrs-50",
-                "label": "900 50 Гц без CSS",
-                "hint": "50 Гц на 900: ELRS LoRa/DVDA, mLRS FSK, Crossfire — не разделить",
-                "matchedHz": 50.0,
-            }
-        hit = _in_table(rate, ELRS_900_LORA)
-        if hit and hit >= 100.0:
-            return {
-                "id": "elrs",
-                "label": f"ELRS 900 {hit:.0f} Гц",
-                "hint": "≥100 Гц на 900 — сетка ELRS; mLRS 900 только 19/31 (и FSK 50)",
-                "matchedHz": hit,
-            }
-        if _in_table(rate, MLRS_900_LORA):
-            hit = _in_table(rate, MLRS_900_LORA)
-            return {
-                "id": "mlrs",
-                "label": f"mLRS 900 {hit:.0f} Гц",
-                "hint": "19/31 Гц на 900 — mLRS; ELRS 900 так низко не ходит (кроме 25)",
-                "matchedHz": hit,
-            }
-    if rate <= 0:
-        return {
-            "id": "rc-unknown",
-            "label": "узкий RC, мало пакетов",
-            "hint": "нужно ≥2 пакета в окне памяти (~160 мс) чтобы снять интервал",
-            "matchedHz": 0.0,
-        }
-    return {
-        "id": "rc-unknown",
-        "label": "узкий RC, сетка не сошлась",
-        "hint": "интервал не ELRS и не mLRS — не имя фирмы",
-        "matchedHz": 0.0,
-    }
+def classify_rc(rate_hz: float, css: bool, band: str, hop_spacing_mhz: float = 0.0) -> dict[str, Any]:
+    """Имя только когда сетка (+ шаг hop) не пересекается."""
+    return classify_rc_db(rate_hz, css, band, hop_spacing_mhz)
 
 
-def band_of(freq_mhz: float) -> str:
-    if 850 <= freq_mhz <= 950:
-        return "p900"
-    if 2400 <= freq_mhz <= 2500:
-        return "s24"
-    return "other"
-
-
-def analyze_rc(x: np.ndarray, fs: float, freq_mhz: float = 2442.0) -> dict[str, Any]:
-    """CSS + интервал → elrs / mlrs / 50 Гц dual / unknown."""
+def analyze_rc(
+    x: np.ndarray,
+    fs: float,
+    freq_mhz: float = 2442.0,
+    hop_spacing_mhz: float = 0.0,
+) -> dict[str, Any]:
+    """CSS + интервал + шаг hop → elrs / mlrs / crossfire / ghost / dual."""
     band = band_of(freq_mhz)
     empty = {
         "id": "rc-unknown",
@@ -260,6 +140,7 @@ def analyze_rc(x: np.ndarray, fs: float, freq_mhz: float = 2442.0) -> dict[str, 
         "packets": 0,
         "band": band,
         "matchedHz": 0.0,
+        "spacingMhz": float(hop_spacing_mhz),
     }
     z = np.asarray(x, dtype=np.complex64).ravel()
     if z.size < 128 or fs <= 0:
@@ -267,7 +148,7 @@ def analyze_rc(x: np.ndarray, fs: float, freq_mhz: float = 2442.0) -> dict[str, 
     env = envelope_packets(z, fs)
     score = packet_css(z, fs, env["starts"], float(env["durS"]))
     css = score >= CSS_HIT
-    cls = classify_rc(float(env["rateHz"]), css, band)
+    cls = classify_rc(float(env["rateHz"]), css, band, hop_spacing_mhz)
     return {
         **cls,
         "rateHz": float(env["rateHz"]),
@@ -277,6 +158,7 @@ def analyze_rc(x: np.ndarray, fs: float, freq_mhz: float = 2442.0) -> dict[str, 
         "packets": int(env["n"]),
         "band": band,
         "durMs": float(env["durS"]) * 1e3,
+        "spacingMhz": float(hop_spacing_mhz),
     }
 
 
