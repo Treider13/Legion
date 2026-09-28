@@ -2093,11 +2093,15 @@ class Radio:
         prev_mhz: float | None,
         fs: float | None = None,
         tx_bw_hz: float | None = None,
+        play_bb: Any = None,
+        mix_hz: float | None = None,
+        phase_after: float | None = None,
     ) -> dict[str, Any] | None:
         """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
         иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима.
-        Буфер подменяется под локом сразу после первой записи — TX-петля не
-        успевает выпустить старую волну на новой частоте.
+        Mix/полка/фаза коммитятся в том же локе, что setFrequency: петля
+        rotator_cc не должна крутить старый IF на новом LO (GNU Radio work()
+        держит mutex вокруг rotate + set_phase_inc).
         fs=None → TX_FS (2 МГц, tx_cue и обычный ПЕРЕДАТЬ). Solo пишет окно.
         tx_bw_hz: analog TX filter (полка Атаки). Часы могут быть шире (слух xA4)."""
         tx_fs = float(fs) if fs and fs > 0 else float(TX_FS)
@@ -2166,6 +2170,14 @@ class Radio:
                         }
                     self._tone = buf
                     self._tx_fs = tx_fs
+                    self._tx_lo_hz = lo_hz
+                    if play_bb is not None:
+                        self._tone_bb = play_bb
+                        self._tx_off = 0
+                    if mix_hz is not None:
+                        self._tx_mix_hz = float(mix_hz)
+                    if phase_after is not None:
+                        self._tx_phase = float(phase_after)
                 except Exception as e:
                     return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
         finally:
@@ -2210,14 +2222,14 @@ class Radio:
         rf_hz = freq_mhz * 1e6
         lo_hz = cw_lo_hz(rf_hz, TX_FS)
         tone = make_cw()
-        self._tone_bb = None
-        self._tx_mix_hz = None
-        self._tx_phase = 0.0
-        self._tx_off = 0
+        with self._lock:
+            self._tone_bb = None
+            self._tx_mix_hz = None
+            self._tx_phase = 0.0
+            self._tx_off = 0
         err = self._tx_prime(tone, lo_hz, self.tx_mhz)
         if err is not None:
             return err
-        self._tx_lo_hz = lo_hz
         return self._tx_commit(
             tone, freq_mhz, t0,
             f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f})",
@@ -2275,9 +2287,6 @@ class Radio:
         except Exception as e:
             return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
         play = np.asarray(bb, dtype=np.complex64)
-        if play is not self._tone_bb:
-            self._tx_off = 0
-        self._tone_bb = play
         self._design_fs = design_fs
         rf_hz = float(freq_mhz) * 1e6
         analog_hz = float(self.analog_bw) * 1e6
@@ -2310,13 +2319,20 @@ class Radio:
         }
         if tx_bw_hz and tx_bw_hz > 0:
             extra["txBwHz"] = float(tx_bw_hz)
+
+        def _publish_play(reset_phase: bool) -> None:
+            if play is not self._tone_bb:
+                self._tx_off = 0
+            self._tone_bb = play
+            self._tx_mix_hz = float(mix_hz)
+            if reset_phase:
+                self._tx_phase = 0.0
+                self._tx_off = 0
+
         if self.fake:
             with self._lock:
-                self._tx_mix_hz = float(mix_hz)
-                if not digital:
-                    self._tx_phase = 0.0
-                    self._tx_off = 0
-            self._tone = rotator_shift(self._tone_bb, mix_hz, tx_fs)
+                _publish_play(not digital)
+            self._tone = rotator_shift(play, mix_hz, tx_fs)
             self.tx_mhz = freq_mhz
             self._tx_fs = tx_fs
             self._tx_lo_hz = lo_hz
@@ -2331,36 +2347,36 @@ class Radio:
                 **extra,
             }
         if self.dev is None:
-            self._tone_bb = None
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
         if not SOAPY:
-            self._tone_bb = None
             return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
         if digital:
             with self._lock:
-                self._tx_mix_hz = float(mix_hz)
+                _publish_play(False)
             out = self._tx_commit(
-                self._tone if self._tone is not None else self._tone_bb,
+                self._tone if self._tone is not None else play,
                 freq_mhz,
                 t0,
                 label,
             )
             out.update(extra)
             return out
-        # Analog: первый write уже на IF. Петля дальше крутит rotator по кускам.
-        buf = rotator_shift(self._tone_bb, mix_hz, tx_fs)
+        # Analog: setFrequency + mix/полка в одном локе (_tx_prime).
+        buf = rotator_shift(play, mix_hz, tx_fs)
         analog_tx_bw = (
             min(analog_hz, tx_fs) if design_fs_hz and design_fs_hz > 0 else tx_bw_hz
         )
-        err = self._tx_prime(buf, lo_hz, self.tx_mhz, tx_fs, analog_tx_bw)
+        n_play = int(play.size)
+        phase_after = (
+            math.remainder(2.0 * math.pi * (mix_hz / tx_fs) * float(n_play), 2.0 * math.pi)
+            if n_play and tx_fs > 0
+            else 0.0
+        )
+        err = self._tx_prime(
+            buf, lo_hz, self.tx_mhz, tx_fs, analog_tx_bw, play, mix_hz, phase_after,
+        )
         if err is not None:
-            self._tone_bb = None
             return err
-        self._tx_lo_hz = lo_hz
-        with self._lock:
-            self._tx_mix_hz = float(mix_hz)
-            _, self._tx_phase = rotator_apply(self._tone_bb, mix_hz, tx_fs, 0.0)
-            self._tx_off = 0
         out = self._tx_commit(buf, freq_mhz, t0, label)
         out.update(extra)
         return out

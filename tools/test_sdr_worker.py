@@ -722,7 +722,17 @@ def main() -> int:
         and first.get("designFsHz") == 2e6
         and first.get("fsHz") == 40e6
         and lo0 is not None
-        and abs(lo0 - (2442e6 - 40e6 / 8)) < 1,
+        and abs(lo0 - (2442e6 - 40e6 / 8)) < 1
+        and hop._tx_mix_hz is not None
+        and abs(float(hop._tx_mix_hz) - 40e6 / 8) < 1,
+    )
+    worker_src = open(WORKER).read()
+    prime_src = worker_src[worker_src.index("def _tx_prime") : worker_src.index("def _tx_commit")]
+    check(
+        "analog prime коммитит mix в локе setFrequency",
+        "self._tx_mix_hz = float(mix_hz)" in prime_src
+        and prime_src.index("self.dev.setFrequency(SOAPY_SDR_TX")
+        < prime_src.index("self._tx_mix_hz = float(mix_hz)"),
     )
     bb0 = hop._tone_bb
     second = hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
