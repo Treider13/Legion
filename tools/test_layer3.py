@@ -69,6 +69,16 @@ def main() -> int:
     got_off = dji.analyze_droneid(xoff, 61.44e6, 2442.0, 2440.0)
     check("DC +2 МГц plaintext", got_off.get("ok") is True, str(got_off.get("reason")))
 
+    t15 = np.arange(burst.size, dtype=np.float64) / dji.DRONEID_FS
+    xcfo = (burst * np.exp(1j * 2.0 * np.pi * 3000.0 * t15)).astype(np.complex64)
+    got_cfo = dji.analyze_droneid(xcfo, dji.DRONEID_FS)
+    check("+3 кГц CFO plaintext", got_cfo.get("ok") is True, str(got_cfo.get("reason")))
+    check(
+        "CFO знак proto17",
+        abs(float(got_cfo.get("cfoHz") or 0.0) - 3000.0) < 500.0,
+        str(got_cfo.get("cfoHz")),
+    )
+
     pad = np.zeros(int(dji.DRONEID_FS * 0.02), dtype=np.complex64)
     buried = np.concatenate([pad, burst])
     got_b = dji.analyze_droneid(buried, dji.DRONEID_FS)

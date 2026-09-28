@@ -411,7 +411,8 @@ def coarse_cfo(burst: np.ndarray, fs: float, eight: bool = False) -> float:
         d = off + nfft + cp
         if d > burst.size:
             break
-        acc += complex(np.vdot(burst[c:d], burst[a:b]))
+        # proto17: angle(dot(CP, tail))/N. np.vdot(a,b)=Σ conj(a)b — как MATLAB dot(CP,tail).
+        acc += complex(np.vdot(burst[a:b], burst[c:d]))
         off = d
     if acc == 0:
         return 0.0
