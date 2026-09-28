@@ -43,12 +43,12 @@ architecture tb of legion_regs_tb is
     signal tx_proto_period : unsigned(31 downto 0);
     signal tx_proto_pulse  : unsigned(31 downto 0);
     signal tx_step_src     : std_logic;
-    signal tx_ch_target    : unsigned(1 downto 0);
-    signal tx_ch_bins      : std_logic_vector(31 downto 0);
-    signal ch_e01          : std_logic_vector(31 downto 0) := x"00020001";
-    signal ch_e23          : std_logic_vector(31 downto 0) := x"00040003";
-    signal ch_bins         : std_logic_vector(31 downto 0) := x"C0A05010";
-    signal ch_act          : std_logic_vector(3 downto 0) := "0101";
+    signal tx_ch_target    : unsigned(7 downto 0);
+    signal ch_energy       : legion_ch_energy_t := (
+        0 => x"00000011", 1 => x"00000022", 2 => x"00000033", 3 => x"00000044",
+        4 => x"00000055", 5 => x"00000066", 6 => x"00000077", 7 => x"00000088");
+    signal ch_bins         : std_logic_vector(63 downto 0) := x"C0A05010B0E07020";
+    signal ch_act          : std_logic_vector(7 downto 0) := x"A5";
     signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
@@ -96,13 +96,13 @@ begin
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
             tx_proto_period => tx_proto_period, tx_proto_pulse => tx_proto_pulse,
             tx_drfm_step_src => tx_step_src, tx_ch_target => tx_ch_target,
-            tx_ch_bins => tx_ch_bins,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
             rx_fft_lock => rx_fft_lock,
+            rx_ch_fs_hz => open, rx_ch_lo_khz => open,
             rx_peak_word => peak_word,
-            rx_ch_energy01 => ch_e01, rx_ch_energy23 => ch_e23,
+            rx_ch_energy => ch_energy,
             rx_ch_bins => ch_bins, rx_ch_active => ch_act,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt,
@@ -233,24 +233,29 @@ begin
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PERIOD, 40000);
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PULSE, 58000);
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_DRFM_STEP_SRC, 1);
-        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_TARGET, 2);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_TARGET, 80);
         for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
         assert tx_proto_period = to_unsigned(40000, 32) report "FAIL: PROTO_PERIOD CDC" severity failure;
         assert tx_proto_pulse = to_unsigned(58000, 32) report "FAIL: PROTO_PULSE CDC" severity failure;
         assert tx_step_src = '1' report "FAIL: DRFM_STEP_SRC CDC" severity failure;
-        assert tx_ch_target = to_unsigned(2, 2) report "FAIL: CH_TARGET CDC" severity failure;
-        assert tx_ch_bins = ch_bins report "FAIL: CH_BINS rx-tx CDC" severity failure;
+        assert tx_ch_target = to_unsigned(80, 8) report "FAIL: CH_TARGET CDC" severity failure;
 
-        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE, 7));
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE_0, 7));
         pio_we <= '0';
         for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
-        assert pio_status(3 downto 0) = ch_act report "FAIL: CH_ACTIVE mux" severity failure;
-        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY01, 7));
+        assert pio_status(7 downto 0) = ch_act report "FAIL: CH_ACTIVE_0 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY_0, 7));
         for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
-        assert pio_status = ch_e01 report "FAIL: CH_ENERGY01 mux" severity failure;
-        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS, 7));
+        assert pio_status = ch_energy(0) report "FAIL: CH_ENERGY_0 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY_7, 7));
         for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
-        assert pio_status = ch_bins report "FAIL: CH_BINS mux" severity failure;
+        assert pio_status = ch_energy(7) report "FAIL: CH_ENERGY_7 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS_03, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_bins(31 downto 0) report "FAIL: CH_BINS_03 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS_47, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_bins(63 downto 32) report "FAIL: CH_BINS_47 mux" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;

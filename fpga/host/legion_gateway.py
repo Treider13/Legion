@@ -1018,11 +1018,12 @@ class LegionGateway:
                 ch_thr = int(msg["ch_thr"]) if "ch_thr" in msg else 0
                 ch_hyst = int(msg["ch_hyst"]) if "ch_hyst" in msg else 0
                 ch_target = int(msg["ch_target"]) if "ch_target" in msg else 0
+                ch_mode = int(msg["ch_mode"]) if "ch_mode" in msg else 0
             except (TypeError, ValueError):
                 return {"ok": False, "reason": "proto_*/ch_*: не число"}
             if not self.fpga.set_proto_timing(proto_period, proto_pulse, drfm_step_src):
                 return {"ok": False, "reason": "запись PROTO_* не удалась"}
-            if not self.fpga.set_channel_map(ch_thr, ch_hyst, ch_target):
+            if not self.fpga.set_channel_map(ch_thr, ch_hyst, ch_target, ch_mode):
                 return {"ok": False, "reason": "запись CH_* не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
@@ -1208,6 +1209,10 @@ class LegionGateway:
                 "proto_period": lf.REG_PROTO_PERIOD, "proto_pulse": lf.REG_PROTO_PULSE,
                 "drfm_step_src": lf.REG_DRFM_STEP_SRC, "ch_thr": lf.REG_CH_THR,
                 "ch_hyst": lf.REG_CH_HYST, "ch_target": lf.REG_CH_TARGET,
+                "ch_mode": lf.REG_CH_MODE, "ch_active_0": lf.REG_CH_ACTIVE_0,
+                "ch_active_1": lf.REG_CH_ACTIVE_1, "ch_active_2": lf.REG_CH_ACTIVE_2,
+                "ch_active_3": lf.REG_CH_ACTIVE_3,
+                "ch_energy_0": lf.REG_CH_ENERGY_0, "ch_hits_0": lf.REG_CH_HITS_0,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,

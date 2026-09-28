@@ -77,10 +77,33 @@ REG_DRFM_STEP_SRC = 0x2D  # 0=WALK_PERIOD, 1=PROTO_PERIOD
 REG_CH_THR = 0x2E
 REG_CH_HYST = 0x2F
 REG_CH_TARGET = 0x30
-REG_CH_ACTIVE = 0x31
-REG_CH_ENERGY01 = 0x32
-REG_CH_ENERGY23 = 0x33
-REG_CH_BINS = 0x34
+REG_CH_MODE = 0x31
+REG_CH_ACTIVE_0 = 0x32
+REG_CH_ACTIVE_1 = 0x33
+REG_CH_ACTIVE_2 = 0x34
+REG_CH_ACTIVE_3 = 0x35
+REG_CH_ENERGY_0 = 0x36
+REG_CH_ENERGY_1 = 0x37
+REG_CH_ENERGY_2 = 0x38
+REG_CH_ENERGY_3 = 0x39
+REG_CH_ENERGY_4 = 0x3A
+REG_CH_ENERGY_5 = 0x3B
+REG_CH_ENERGY_6 = 0x3C
+REG_CH_ENERGY_7 = 0x3D
+REG_CH_HITS_0 = 0x3E
+REG_CH_HITS_1 = 0x3F
+REG_CH_HITS_2 = 0x40
+REG_CH_HITS_3 = 0x41
+REG_CH_HITS_4 = 0x42
+REG_CH_HITS_5 = 0x43
+REG_CH_HITS_6 = 0x44
+REG_CH_HITS_7 = 0x45
+REG_CH_BINS_03 = 0x46
+REG_CH_BINS_47 = 0x47
+REG_CH_FS_HZ = 0x48
+REG_CH_LO_KHZ = 0x49
+CH_MODE_OCUSYNC = 0
+CH_MODE_ELRS = 1
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF
@@ -330,11 +353,12 @@ class LegionFpga:
                 self.write_reg(REG_DRFM_STEP_SRC, int(step_src) & 1))
 
     def set_channel_map(self, thr: int = 0, hyst: int = 0,
-                        target: int = 0) -> bool:
-        """Карта 4 групп FFT. thr=0 — CHANNEL_SCAN выкл (прежний HOLD)."""
+                        target: int = 0, mode: int = 0) -> bool:
+        """Карта 8×10 МГц / ELRS 80. thr=0 — CHANNEL_SCAN выкл. hyst=N хитов."""
         return (self.write_reg(REG_CH_THR, int(thr) & 0xFFFFFFFF) and
                 self.write_reg(REG_CH_HYST, int(hyst) & 0xFFFFFFFF) and
-                self.write_reg(REG_CH_TARGET, int(target) & 3))
+                self.write_reg(REG_CH_MODE, int(mode) & 1) and
+                self.write_reg(REG_CH_TARGET, int(target) & 0xFF))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

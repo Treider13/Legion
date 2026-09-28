@@ -302,14 +302,14 @@ architecture legion of bladerf is
     signal lg_tx_proto_period : unsigned(31 downto 0);
     signal lg_tx_proto_pulse  : unsigned(31 downto 0);
     signal lg_tx_step_src     : std_logic;
-    signal lg_tx_ch_target    : unsigned(1 downto 0);
-    signal lg_tx_ch_bins      : std_logic_vector(31 downto 0);
+    signal lg_tx_ch_target    : unsigned(7 downto 0);
     signal lg_aim_ftw         : unsigned(31 downto 0);
     signal lg_nco_ftw_sel     : unsigned(31 downto 0);
-    signal lg_ch_energy01     : std_logic_vector(31 downto 0);
-    signal lg_ch_energy23     : std_logic_vector(31 downto 0);
-    signal lg_ch_bins_rx      : std_logic_vector(31 downto 0);
-    signal lg_ch_active       : std_logic_vector(3 downto 0);
+    signal lg_ch_energy       : legion_ch_energy_t;
+    signal lg_ch_bins_rx      : std_logic_vector(63 downto 0);
+    signal lg_ch_active       : std_logic_vector(7 downto 0);
+    signal lg_ch_fs_hz        : unsigned(31 downto 0);
+    signal lg_ch_lo_khz       : unsigned(31 downto 0);
     signal lg_lb_dly0       : std_logic_vector(31 downto 0);
     signal lg_lb_dly1       : std_logic_vector(31 downto 0);
     signal lg_lb_mix0       : std_logic_vector(31 downto 0);
@@ -1565,7 +1565,6 @@ begin
         tx_proto_pulse  => lg_tx_proto_pulse,
         tx_drfm_step_src => lg_tx_step_src,
         tx_ch_target    => lg_tx_ch_target,
-        tx_ch_bins      => lg_tx_ch_bins,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1581,11 +1580,12 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
+        rx_ch_fs_hz   => lg_ch_fs_hz,
+        rx_ch_lo_khz  => lg_ch_lo_khz,
         rx_peak_word  => lg_peak_word,
-        rx_ch_energy01 => lg_ch_energy01,
-        rx_ch_energy23 => lg_ch_energy23,
-        rx_ch_bins     => lg_ch_bins_rx,
-        rx_ch_active   => lg_ch_active
+        rx_ch_energy  => lg_ch_energy,
+        rx_ch_bins    => lg_ch_bins_rx,
+        rx_ch_active  => lg_ch_active
       );
 
     -- arm/mode → rx_clock для гейтинга записи loopback FIFO
@@ -1620,14 +1620,15 @@ begin
         reset     => rx_reset,
         enable    => lg_fft_en,
         dc_notch  => lg_fft_dc_notch,
+        fs_hz     => lg_ch_fs_hz,
+        lo_khz    => lg_ch_lo_khz,
         in_i      => rx_sample_corrected_i,
         in_q      => rx_sample_corrected_q,
         in_valid  => rx_sample_corrected_valid,
         peak_word => lg_peak_word,
-        ch_energy01 => lg_ch_energy01,
-        ch_energy23 => lg_ch_energy23,
-        ch_bins     => lg_ch_bins_rx,
-        ch_active   => lg_ch_active
+        ch_energy => lg_ch_energy,
+        ch_bins   => lg_ch_bins_rx,
+        ch_active => lg_ch_active
       );
 
     -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой RX.
@@ -1761,7 +1762,6 @@ begin
     U_legion_lb_aim : entity work.legion_lb_aim
       port map (
         ch_target => lg_tx_ch_target,
-        ch_bins   => lg_tx_ch_bins,
         ftw       => lg_aim_ftw
       );
     lg_nco_ftw_sel <= lg_aim_ftw when lg_tx_mode = LEGION_MODE_AIM else lg_tx_nco_ftw;

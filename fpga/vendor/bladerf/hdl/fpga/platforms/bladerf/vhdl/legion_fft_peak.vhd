@@ -11,6 +11,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use work.legion_fft_twiddle.all;
+use work.legion_pkg.all;
 
 entity legion_fft_peak is
     port (
@@ -18,15 +19,16 @@ entity legion_fft_peak is
         reset     : in  std_logic;
         enable    : in  std_logic;
         dc_notch  : in  std_logic;
+        fs_hz     : in  unsigned(31 downto 0);
+        lo_khz    : in  unsigned(31 downto 0);
         in_i      : in  signed(15 downto 0);
         in_q      : in  signed(15 downto 0);
-        in_valid    : in  std_logic;
-        peak_word   : out std_logic_vector(31 downto 0);
-        -- 4 группы по 64 бина: сумма |X|² и бин-argmax внутри группы.
-        ch_energy01 : out std_logic_vector(31 downto 0);
-        ch_energy23 : out std_logic_vector(31 downto 0);
-        ch_bins     : out std_logic_vector(31 downto 0);
-        ch_active   : out std_logic_vector(3 downto 0)
+        in_valid  : in  std_logic;
+        peak_word : out std_logic_vector(31 downto 0);
+        -- 8 слотов 10 МГц (2400…2480) или 8 октантов, если fs/lo = 0.
+        ch_energy : out legion_ch_energy_t;
+        ch_bins   : out std_logic_vector(63 downto 0);
+        ch_active : out std_logic_vector(7 downto 0)
     );
 end entity;
 
@@ -56,15 +58,14 @@ architecture rtl of legion_fft_peak is
     signal frame_r   : unsigned(6 downto 0) := (others => '0');
     signal valid_r   : std_logic := '0';
     signal word_r    : std_logic_vector(31 downto 0) := (others => '0');
-    type mag4_t is array (0 to 3) of unsigned(31 downto 0);
-    type bin4_t is array (0 to 3) of unsigned(7 downto 0);
-    signal g_acc     : mag4_t := (others => (others => '0'));
-    signal g_pk      : mag4_t := (others => (others => '0'));
-    signal g_bin     : bin4_t := (others => (others => '0'));
-    signal e01_r     : std_logic_vector(31 downto 0) := (others => '0');
-    signal e23_r     : std_logic_vector(31 downto 0) := (others => '0');
-    signal bins_r    : std_logic_vector(31 downto 0) := (others => '0');
-    signal act_r     : std_logic_vector(3 downto 0) := (others => '0');
+    type mag8_t is array (0 to 7) of unsigned(31 downto 0);
+    type bin8_t is array (0 to 7) of unsigned(7 downto 0);
+    signal g_acc     : mag8_t := (others => (others => '0'));
+    signal g_pk      : mag8_t := (others => (others => '0'));
+    signal g_bin     : bin8_t := (others => (others => '0'));
+    signal e_r       : legion_ch_energy_t := (others => (others => '0'));
+    signal bins_r    : std_logic_vector(63 downto 0) := (others => '0');
+    signal act_r     : std_logic_vector(7 downto 0) := (others => '0');
     signal a_i_r     : signed(15 downto 0) := (others => '0');
     signal a_q_r     : signed(15 downto 0) := (others => '0');
     signal b_i_r     : signed(15 downto 0) := (others => '0');
@@ -87,12 +88,42 @@ architecture rtl of legion_fft_peak is
     begin
         return std_logic_vector(ii) & std_logic_vector(qq);
     end function;
+
+    -- 2400…2480 / 10 МГц при известном LO/fs; иначе октант bin/32.
+    function ch_slot(bin : natural; fs : unsigned(31 downto 0);
+                     lo : unsigned(31 downto 0)) return integer is
+        variable sb      : integer;
+        variable prod    : signed(47 downto 0);
+        variable off_khz : signed(31 downto 0);
+        variable f_khz   : integer;
+        variable slot    : integer;
+    begin
+        if fs = 0 or lo = 0 then
+            return bin / 32;
+        end if;
+        if bin < 128 then
+            sb := bin;
+        else
+            sb := bin - 256;
+        end if;
+        prod := to_signed(sb, 16) * signed(resize(fs, 32));
+        off_khz := resize(prod / to_signed(256000, 48), 32);
+        f_khz := to_integer(signed(resize(lo, 32)) + off_khz);
+        if f_khz < LEGION_OCUSYNC_F0_KHZ or
+           f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then
+            return -1;
+        end if;
+        slot := (f_khz - LEGION_OCUSYNC_F0_KHZ) / LEGION_OCUSYNC_BW_KHZ;
+        if slot < 0 or slot > 7 then
+            return -1;
+        end if;
+        return slot;
+    end function;
 begin
-    peak_word   <= word_r;
-    ch_energy01 <= e01_r;
-    ch_energy23 <= e23_r;
-    ch_bins     <= bins_r;
-    ch_active   <= act_r;
+    peak_word <= word_r;
+    ch_energy <= e_r;
+    ch_bins   <= bins_r;
+    ch_active <= act_r;
 
     -- True dual-port, чтение и запись в разных тактах бабочки (не same-addr).
     ram_p : process(clock)
@@ -137,8 +168,7 @@ begin
             frame_r   <= (others => '0');
             valid_r   <= '0';
             word_r    <= (others => '0');
-            e01_r     <= (others => '0');
-            e23_r     <= (others => '0');
+            e_r       <= (others => (others => '0'));
             bins_r    <= (others => '0');
             act_r     <= (others => '0');
             g_acc     <= (others => (others => '0'));
@@ -159,8 +189,7 @@ begin
                 collect_n <= (others => '0');
                 valid_r   <= '0';
                 word_r    <= (others => '0');
-                e01_r     <= (others => '0');
-                e23_r     <= (others => '0');
+                e_r       <= (others => (others => '0'));
                 bins_r    <= (others => '0');
                 act_r     <= (others => '0');
             else
@@ -256,8 +285,8 @@ begin
                             best_mag <= mag;
                             best_bin <= peak_i(7 downto 0);
                         end if;
-                        gi := to_integer(peak_i(7 downto 6));
-                        if not skip_dc then
+                        gi := ch_slot(to_integer(peak_i(7 downto 0)), fs_hz, lo_khz);
+                        if (not skip_dc) and gi >= 0 and gi <= 7 then
                             sum := resize(g_acc(gi), 33) + resize(mag, 33);
                             if sum(32) = '1' then
                                 g_acc(gi) <= (others => '1');
@@ -283,18 +312,29 @@ begin
                         word_r(23 downto 8)  <= std_logic_vector(best_mag(31 downto 16));
                         word_r(30 downto 24) <= std_logic_vector(frame_r + 1);
                         word_r(31)           <= '1';
-                        e01_r(15 downto 0)   <= std_logic_vector(g_acc(0)(31 downto 16));
-                        e01_r(31 downto 16)  <= std_logic_vector(g_acc(1)(31 downto 16));
-                        e23_r(15 downto 0)   <= std_logic_vector(g_acc(2)(31 downto 16));
-                        e23_r(31 downto 16)  <= std_logic_vector(g_acc(3)(31 downto 16));
+                        e_r(0) <= std_logic_vector(g_acc(0));
+                        e_r(1) <= std_logic_vector(g_acc(1));
+                        e_r(2) <= std_logic_vector(g_acc(2));
+                        e_r(3) <= std_logic_vector(g_acc(3));
+                        e_r(4) <= std_logic_vector(g_acc(4));
+                        e_r(5) <= std_logic_vector(g_acc(5));
+                        e_r(6) <= std_logic_vector(g_acc(6));
+                        e_r(7) <= std_logic_vector(g_acc(7));
                         bins_r(7 downto 0)   <= std_logic_vector(g_bin(0));
                         bins_r(15 downto 8)  <= std_logic_vector(g_bin(1));
                         bins_r(23 downto 16) <= std_logic_vector(g_bin(2));
                         bins_r(31 downto 24) <= std_logic_vector(g_bin(3));
-                        act_r(0) <= '1' when g_acc(0)(31 downto 16) /= 0 else '0';
-                        act_r(1) <= '1' when g_acc(1)(31 downto 16) /= 0 else '0';
-                        act_r(2) <= '1' when g_acc(2)(31 downto 16) /= 0 else '0';
-                        act_r(3) <= '1' when g_acc(3)(31 downto 16) /= 0 else '0';
+                        bins_r(39 downto 32) <= std_logic_vector(g_bin(4));
+                        bins_r(47 downto 40) <= std_logic_vector(g_bin(5));
+                        bins_r(55 downto 48) <= std_logic_vector(g_bin(6));
+                        bins_r(63 downto 56) <= std_logic_vector(g_bin(7));
+                        for si in 0 to 7 loop
+                            if g_acc(si) /= 0 then
+                                act_r(si) <= '1';
+                            else
+                                act_r(si) <= '0';
+                            end if;
+                        end loop;
                         collect_n            <= (others => '0');
                         state                <= ST_COLLECT;
                 end case;
