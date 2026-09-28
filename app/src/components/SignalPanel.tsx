@@ -320,24 +320,32 @@ export function SignalPanel() {
                   disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
                 />
               </label>
-              <label title="На потолке держать задержку, не сбрасывать к начальной.">
-                <input
-                  type="checkbox"
-                  checked={s.fpgaWalkHold}
-                  onChange={(e) => s.setFpgaWalkHold(e.target.checked)}
-                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
-                />
-                HOLD на потолке
-              </label>
-              <label title="Автоцикл: детектор → захват с RX → задержка → переизлучение → шаг задержки. Порог — тот же, что у ретрансляции.">
-                <input
-                  type="checkbox"
-                  checked={s.fpgaWalkAuto}
-                  onChange={(e) => s.setFpgaWalkAuto(e.target.checked)}
-                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
-                />
-                АВТО: обнаружил → захват → задержка → play
-              </label>
+              <div className="walk-flags">
+                <label
+                  className="walk-flag"
+                  title="На потолке держать задержку, не сбрасывать к начальной."
+                >
+                  <input
+                    type="checkbox"
+                    checked={s.fpgaWalkHold}
+                    onChange={(e) => s.setFpgaWalkHold(e.target.checked)}
+                    disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                  />
+                  HOLD на потолке
+                </label>
+                <label
+                  className="walk-flag"
+                  title="Автоцикл: детектор → захват с RX → задержка → переизлучение → шаг задержки. Порог — тот же, что у ретрансляции."
+                >
+                  <input
+                    type="checkbox"
+                    checked={s.fpgaWalkAuto}
+                    onChange={(e) => s.setFpgaWalkAuto(e.target.checked)}
+                    disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                  />
+                  АВТО: обнаружил → захват → задержка → play
+                </label>
+              </div>
             </>
           )}
           <label title="Пароль агента на шлюзе, если там задан LEGION_FPGA_TOKEN. Без пароля на агенте поле оставьте пустым.">
