@@ -2354,7 +2354,18 @@ int main(void)
     legion_reg_write(LEGION_REG_CH_CTRL, LEGION_CH_PRESET_O4VID3 << 16);
     CHECK("smart lut: O4 без карточки DC = ch1",
           pio_wrote_reg(LEGION_REG_CH_LUT, (0u << 8) | 1u));
-    /* window_limited + f0_unconfirmed: нет stare после первого PASS. */
+    /* window_limited + f0_unconfirmed: нет stare после первого PASS.
+     * Коридор 2.4 явно: иначе leftover 5789.5…5789.5 (n=1) с LUT-теста.
+     * На x40 hop 5.8 падает (LMS ≤3800) и тест зеленел вхолостую;
+     * на micro hop 5.8 проходит, второй круг n=1 сразу даёт STARE. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2440000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2480000);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
     legion_reg_write(LEGION_REG_GRID_F0_HZ, 2400400000u);
     legion_reg_write(LEGION_REG_GRID_STEP_HZ, 1000000u);
     legion_reg_write(LEGION_REG_GRID_META,
