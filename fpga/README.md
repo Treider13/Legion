@@ -44,7 +44,7 @@ LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
 
 | Каталог | Содержимое |
 |---|---|
-| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_walkoff`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
+| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_walkoff`, `legion_lb_walk`, `legion_delayline`, `legion_mixer`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
 | `tb/` | GHDL-тестбенчи + `run_ghdl.sh` |
 | `nios/` | `legion_cmds.c/h` — обработчик регистров на NIOS II (target 0x80) |
 | `host/` | `legion_fpga.py` (регистровый API), `legion_gateway.py` (TCP↔USB агент шлюза), `gen_sine_lut.py` |
@@ -57,6 +57,7 @@ LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
    детектор (порог/окно/счётчик/кламп shift), плеер (capture→play по кругу,
    каденс valid каждый 2-й такт — контракт LMS6002D, тишина-с-каденсом до
    capture), walk-off (обход / DELAY / шаг / AUTO detect→capture→play),
+   живой отвод lb_walk (фронт det → tap += STEP),
    NCO (частота по нулям Q, амплитуда), watchdog (expiry/heartbeat),
    dcfifo (CDC, порядок), мультиплексор (PASS/тишина-с-каденсом/гейтинг/
    ramp-down на спаде det_active/отмена рампы/watchdog посреди рампы/
@@ -143,10 +144,18 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 3. Загрузка волны в RAM: capture_arm=1 → обычный TX-стрим волной
    (существующая ЗАШИТЬ) → capture_done=1 → режим `player`.
    Во время capture поток идёт и на LMS (слышно, что грузим — в нагрузку).
-   Лабораторный walk-off (нагрузка 50 Ом): регистры `DELAY` / `WALK_STEP` /
+   Лабораторный walk-off плеера (нагрузка 50 Ом): регистры `DELAY` / `WALK_STEP` /
    `WALK_MAX` / `WALK_CTL`. Автомат в FPGA: `capture_arm` → `capture_done`
    → тишина `DELAY` сэмплов → `play_en`; после круга RAM задержка += STEP.
    `WALK_CTL.AUTO` — старт по детектору, захват с RX FIFO, не с хоста.
+   Живой DRFM (`lb_gated` / `lb_always`): круговая BRAM `legion_delayline`
+   (mesarcik: `rdaddress -= delay`; RFSoC 2026: URAM, отвод в сэмплах).
+   `LB_DELAY` — начальный отвод, 0 = обход, потолок 4095 (xA4 M10K, не 256 км
+   URAM ZCU208). `WALK_CTL.EN` + `WALK_STEP` шагают отвод по фронту `det_active`
+   (`legion_lb_walk`), не тишиной 0x1F. `walk_auto` на lb_* шлюз отвергает.
+   Непрерывная энергия: `det_active` — уровень, один фронт на вспышку.
+   Дальность двухсторонняя: Δr = c·N/(2·fs). Амплитуда — аналоговый TX gain
+   AD9361/LMS, не цифровой Scaler mesarcik. 4 цели / PRI-lock не делаем.
 
 ## Эксплуатационные факты (сверены с форумами/даташитами)
 

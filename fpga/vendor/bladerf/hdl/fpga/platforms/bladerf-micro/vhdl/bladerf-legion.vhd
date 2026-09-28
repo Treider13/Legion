@@ -218,8 +218,13 @@ architecture legion of bladerf is
     signal lg_wo_lb_need    : std_logic;
     signal lg_wo_state      : std_logic_vector(2 downto 0);
     signal lg_wo_cur        : unsigned(31 downto 0);
+    signal lg_lbw_tap       : unsigned(11 downto 0);
+    signal lg_lbw_cur       : unsigned(31 downto 0);
+    signal lg_dly_sel       : unsigned(11 downto 0);
+    signal lg_walk_cur_mux  : unsigned(31 downto 0);
     signal lg_mux_rd_en     : std_logic;
     signal lg_mode_player   : std_logic;
+    signal lg_mode_lb       : std_logic;
 
     signal lg_play_i        : signed(15 downto 0);
     signal lg_play_q        : signed(15 downto 0);
@@ -1162,7 +1167,7 @@ begin
         tx_det_active => lg_det_active_tx,
         tx_det_count  => lg_det_count,
         tx_walk_state => lg_wo_state,
-        tx_walk_cur   => lg_wo_cur,
+        tx_walk_cur   => lg_walk_cur_mux,
         rx_clock      => rx_clock,
         rx_reset      => rx_reset,
         rx_det_thr    => lg_det_thr_rx,
@@ -1264,6 +1269,28 @@ begin
         state        => lg_wo_state
       );
     lg_mode_player <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
+    lg_mode_lb <= '1' when lg_tx_mode = LEGION_MODE_LB_GATED
+                       or lg_tx_mode = LEGION_MODE_LB_ALWAYS else '0';
+
+    -- Живой отвод: шаг по фронту det. Плеер 0x1F этот блок не трогает.
+    U_legion_lb_walk : entity work.legion_lb_walk
+      port map (
+        clock      => tx_clock,
+        reset      => tx_reset,
+        enable     => lg_tx_walk_en,
+        arm        => lg_tx_arm,
+        hold_max   => lg_tx_walk_hold,
+        delay_init => lg_tx_lb_delay,
+        walk_step  => lg_tx_walk_step,
+        walk_max   => lg_tx_walk_max,
+        det_active => lg_det_active_tx,
+        tap        => lg_lbw_tap,
+        cur_delay  => lg_lbw_cur
+      );
+    -- lb_*: отвод всегда через lb_walk. EN=0 — tap = LB_DELAY (обход шага).
+    -- Иначе STATUS.WALK_CUR держал бы плеерный 0x1F, не живой отвод.
+    lg_dly_sel <= lg_lbw_tap when lg_mode_lb = '1' else lg_tx_lb_delay;
+    lg_walk_cur_mux <= lg_lbw_cur when lg_mode_lb = '1' else lg_wo_cur;
 
     U_legion_player : entity work.legion_player
       port map (
@@ -1330,7 +1357,7 @@ begin
       port map (
         clock     => tx_clock,
         reset     => tx_reset,
-        delay     => lg_tx_lb_delay,
+        delay     => lg_dly_sel,
         din       => lg_lb_data,
         sample_en => lg_mux_rd_en,
         dout      => lg_lb_dly_data

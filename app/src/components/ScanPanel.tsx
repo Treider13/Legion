@@ -239,7 +239,7 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
-            <label title="Живая линия задержки RX→TX после CDC. Не walk-off снимок. 0 — обход. 4096 сэмплов @ 2 MSPS ≈ 2 мс.">
+            <label title="Живой отвод delayline. 0 — обход. ШАГ WALK-OFF на вкладке сигнала шагает отвод по фронту детектора.">
               DRFM ЗАДЕРЖКА
               <input
                 aria-label="Живая задержка loopback в сэмплах"

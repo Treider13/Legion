@@ -1,6 +1,7 @@
 -- ============================================================================
 -- LEGION — комплексный смеситель DRFM (tx_clock). mesarcik/DRFM:
--- store + delay + amplitude + frequency shift. Amplitude — LB_SHIFT в mux.
+-- store + delay + frequency shift. Амплитуда — аналоговый TX gain платы,
+-- не этот блок и не LB_SHIFT mux.
 -- Delay — legion_delayline. Сдвиг — умножение на LO после линии:
 --   y = x · (cos ωn + j sin ωn) = (I cos − Q sin) + j (I sin + Q cos).
 -- LO — второй legion_nco (не REG_NCO_FTW). FTW=0: обход, dout=din.

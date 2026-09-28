@@ -2156,6 +2156,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
           scanBands: bands,
+          ...walkoffArmOpts(get()),
+          walkAuto: false,
           ...lbDelayArmOpts(get()),
         }), get().txGainDb),
       );
@@ -3628,7 +3630,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           ncoFtw: ncoFtwFromFrac(Number(get().signalParams.fj)),
           freqMhz: mid,
           ...(tract ? { fsHz: tract.fsHz, bwMhz: tract.bwMhz } : {}),
-          ...(mode === "player" ? walkOpts : {}),
+          ...(mode === "player" ? walkOpts : air ? { ...walkOpts, walkAuto: false } : {}),
           ...lbDelayArmOpts(get()),
         }), get().txGainDb);
         const r = await gw(cmd);
@@ -3998,6 +4000,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             freqMhz: first,
             fsHz: tract.fsHz,
             bwMhz: tract.bwMhz,
+            ...walkoffArmOpts(get()),
+            walkAuto: false,
             ...lbDelayArmOpts(get()),
           }), get().txGainDb);
           if (gainDb !== undefined && Number.isFinite(gainDb)) {

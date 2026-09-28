@@ -412,6 +412,21 @@ check("lb_gated: RX включён через CONTROL RMW (бит1)",
       bool(gw.fpga._t.control & 0x2))
 check("lb_gated: TX включён через CONTROL RMW (бит2)",
       bool(gw.fpga._t.control & 0x4))
+r = rpc({"op": "arm", "mode": "lb_gated", "walk_auto": True, "det_thr": 5000})
+check("walk_auto на lb_gated → отказ", r.get("ok") is False)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000,
+         "walk_step": 4, "walk_max": 32, "walk_en": True, "lb_delay": 8})
+check("lb_gated живой отвод пишет STEP/MAX/EN/LB_DELAY",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_WALK_STEP) == 4 and
+      gw.fpga._t.regs.get(lf.REG_WALK_MAX) == 32 and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL) == lf.WALK_CTL_EN and
+      gw.fpga._t.regs.get(lf.REG_LB_DELAY) == 8)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "walk_step": 2})
+check("lb_gated walk_step без walk_en → EN сам",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_WALK_STEP) == 2 and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL) == lf.WALK_CTL_EN)
 r = rpc({"op": "disarm"})
 check("disarm снимает наш RX-enable", not (gw.fpga._t.control & 0x2))
 check("disarm снимает наш TX-enable", not (gw.fpga._t.control & 0x4))

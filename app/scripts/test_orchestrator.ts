@@ -42,6 +42,8 @@ import {
   clampDetShift,
   detThrFromMedian,
   detectorWindowUs,
+  drfmRangeMeters,
+  drfmRangeRu,
   fpgaArmCmd,
   fpgaObserveLine,
   fpgaTurnDwellClamp,
@@ -1515,6 +1517,18 @@ async function main(): Promise<void> {
     walkCmd.walk_auto === true && walkCmd.walk_en === true && walkCmd.det_thr === 5000);
   const lbCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", lbDelay: 64, lbShiftHz: -25000 });
   check("ARM несёт живой DRFM lb_delay", lbCmd.lb_delay === 64);
+  const lbWalk = fpgaArmCmd("lb_gated", {
+    detThr: 5000, detShift: 4, token: "t", lbDelay: 8, walkStep: 4, walkMax: 32, walkEn: true,
+  });
+  check("ARM lb живой отвод без walk_auto",
+    lbWalk.walk_step === 4 && lbWalk.walk_max === 32 && lbWalk.walk_en === true && lbWalk.walk_auto === undefined);
+  const lbWalkStepOnly = fpgaArmCmd("lb_gated", {
+    detThr: 5000, detShift: 4, token: "t", walkStep: 4,
+  });
+  check("ARM lb walk_step без walkEn → walk_en",
+    lbWalkStepOnly.walk_en === true && lbWalkStepOnly.walk_auto === undefined);
+  check("64 сэмпл @ 2 MSPS ≈ 4.8 км", Math.abs(drfmRangeMeters(64, 2e6) - 4796.679) < 0.01);
+  check("range ru км", drfmRangeRu(64, 2e6) === "4.80 км");
   check("ARM несёт DRFM сдвиг Гц", lbCmd.lb_shift_hz === -25000);
   const lbClamp = fpgaArmCmd("lb_always", { detThr: 5000, detShift: 4, token: "t", lbDelay: 9000 });
   check("ARM клампит lb_delay к 4095", lbClamp.lb_delay === 4095);
@@ -2232,6 +2246,16 @@ async function main(): Promise<void> {
     storeSrc.includes('fpgaAutoCycle: false') &&
     storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"),
       storeSrc.indexOf("const fpgaReturnToScan")).includes("fpgaAutoCycle: false"));
+  {
+    const onboardArm = storeSrc.slice(
+      storeSrc.indexOf("const startOnboardIntercept"),
+      storeSrc.indexOf("const fpgaReturnToScan"),
+    );
+    check("онбордовый ARM несёт живой walk без AUTO",
+      onboardArm.includes("...walkoffArmOpts(get())") &&
+      onboardArm.includes("walkAuto: false") &&
+      onboardArm.includes("...lbDelayArmOpts(get())"));
+  }
   check("fpgaDisarm сбрасывает очередь (новый цикл после СТОП)",
     storeSrc.slice(storeSrc.indexOf("fpgaDisarm: async"), storeSrc.indexOf("stopFpgaAir: async")).includes("gFpgaTurnLastMhz = null"));
   check("T5: хост не DISARM onboard по выдержке — выдержку делает NIOS",

@@ -13,6 +13,20 @@ import { FPGA_AIR_MODE_RU } from "./modes";
 import { planCenters, planParkCenters } from "./scan";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
+/** Двухсторонняя дальность: Δr = c·N/(2·fs). RFSoC 2026 / mesarcik — отвод в метрах. */
+export const DRFM_C_MPS = 299_792_458;
+
+export function drfmRangeMeters(samples: number, fsHz: number): number {
+  if (!(samples > 0) || !(fsHz > 0) || !Number.isFinite(samples) || !Number.isFinite(fsHz)) return 0;
+  return (samples / fsHz) * (DRFM_C_MPS / 2);
+}
+
+export function drfmRangeRu(samples: number, fsHz: number): string {
+  const m = drfmRangeMeters(samples, fsHz);
+  if (!(m > 0)) return "";
+  if (m >= 1000) return `${(m / 1000).toFixed(2)} км`;
+  return `${m.toFixed(0)} м`;
+}
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
 export const FPGA_US_DET_SHIFT = 4;
 /** Стартовый порог средней энергии; 0 открывает гейт на шум (шлюз отказывает). */
@@ -591,7 +605,12 @@ export function fpgaArmCmd(
   }
   if (opts.walkAuto) cmd.walk_auto = true;
   if (opts.walkHold) cmd.walk_hold = true;
-  if (opts.walkEn || opts.walkAuto || (typeof opts.delay === "number" && opts.delay > 0)) {
+  if (
+    opts.walkEn ||
+    opts.walkAuto ||
+    (typeof opts.delay === "number" && opts.delay > 0) ||
+    (typeof opts.walkStep === "number" && opts.walkStep > 0)
+  ) {
     cmd.walk_en = true;
   }
   if (opts.lbDelay !== undefined && Number.isFinite(opts.lbDelay) && opts.lbDelay >= 0) {

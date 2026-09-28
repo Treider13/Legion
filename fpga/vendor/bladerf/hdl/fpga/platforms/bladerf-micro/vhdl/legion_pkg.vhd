@@ -74,6 +74,7 @@ package legion_pkg is
     constant LEGION_REG_WALK_CUR   : natural := 16#23#; -- STATUS mux: текущая задержка
     -- Живая линия задержки loopback (не walk-off 0x1F): сэмплы после CDC FIFO.
     -- 0 = обход. Потолок DEPTH-1. Хост пишет при ARM lb_gated/lb_always.
+    -- При WALK_CTL.EN в lb_* отвод шагает legion_lb_walk (фронт det), не 0x1F.
     constant LEGION_REG_LB_DELAY   : natural := 16#24#;
     -- Частотный сдвиг живого DRFM (mesarcik): FTW смесителя после delayline.
     -- f = FTW·fs/2^32. 0 = обход (не мешать: фаза 0 обнулила бы Q).

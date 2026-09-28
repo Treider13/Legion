@@ -16,6 +16,7 @@ import {
   waveMeta,
   type WaveKind,
 } from "../sdr/waveforms";
+import { drfmRangeRu, LEGION_FPGA_FS_HZ } from "../sense/fpgaFastpath";
 import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { isFpgaAirLive } from "../sense/modes";
 import { useLegion } from "../state/store";
@@ -288,7 +289,7 @@ export function SignalPanel() {
               <option value="lb_always">Ретрансляция постоянная (RX→TX, без детектора)</option>
             </select>
           </label>
-          <label title="Живая линия задержки RX→TX (lb_gated / lb_always). Не walk-off 0x1F. 0 — обход, до 4095 сэмплов.">
+          <label title="Живой отвод delayline (mesarcik / RFSoC URAM). 0 — обход. С ШАГ WALK-OFF отвод растёт по фронту детектора, не тишиной плеера.">
             DRFM ЗАДЕРЖКА (сэмплы)
             <input
               aria-label="Живая задержка loopback в сэмплах"
@@ -297,6 +298,11 @@ export function SignalPanel() {
               onChange={(e) => s.setFpgaLbDelay(e.target.value)}
               disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
             />
+            {(() => {
+              const n = Number(s.fpgaLbDelay);
+              const ru = Number.isFinite(n) ? drfmRangeRu(n, LEGION_FPGA_FS_HZ) : "";
+              return ru ? <small>@ 2 MSPS ≈ {ru} двухсторонних</small> : null;
+            })()}
           </label>
           <label title="Частотный сдвиг DRFM после delayline. 0 — обход. Знак: плюс вверх по спектру, минус вниз.">
             DRFM СДВИГ (Гц)
@@ -308,19 +314,21 @@ export function SignalPanel() {
               disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
             />
           </label>
-          {s.fpgaMode === "player" && (
+          {(s.fpgaMode === "player" || s.fpgaMode === "lb_always" || s.fpgaMode === "lb_gated") && (
             <>
-              <label title="Число сэмплов тишины после capture_done до play_en. 0 — сразу. При 2 MSPS 1 сэмпл = 0.5 мкс.">
-                ЗАДЕРЖКА (сэмплы)
-                <input
-                  aria-label="Задержка walk-off в сэмплах"
-                  inputMode="numeric"
-                  value={s.fpgaWalkDelay}
-                  onChange={(e) => s.setFpgaWalkDelay(e.target.value)}
-                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
-                />
-              </label>
-              <label title="После каждого круга RAM задержка увеличивается на этот шаг (walk-off).">
+              {s.fpgaMode === "player" && (
+                <label title="Число сэмплов тишины после capture_done до play_en. 0 — сразу. Живой DRFM этим полем не ходит — там DRFM ЗАДЕРЖКА.">
+                  ЗАДЕРЖКА ПЛЕЕРА (сэмплы)
+                  <input
+                    aria-label="Задержка walk-off в сэмплах"
+                    inputMode="numeric"
+                    value={s.fpgaWalkDelay}
+                    onChange={(e) => s.setFpgaWalkDelay(e.target.value)}
+                    disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                  />
+                </label>
+              )}
+              <label title="Живой DRFM: отвод += шаг на каждом фронте детектора. Плеер: тишина += шаг после круга RAM.">
                 ШАГ WALK-OFF
                 <input
                   aria-label="Шаг walk-off в сэмплах"
@@ -330,7 +338,7 @@ export function SignalPanel() {
                   disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
                 />
               </label>
-              <label title="Потолок задержки. 0 — без потолка (до 2³²−1).">
+              <label title="Потолок отвода. Живой путь режется 4095. 0 — глубина RAM.">
                 ПОТОЛОК ЗАДЕРЖКИ
                 <input
                   aria-label="Потолок задержки в сэмплах"
@@ -353,18 +361,20 @@ export function SignalPanel() {
                   />
                   HOLD на потолке
                 </label>
-                <label
-                  className="walk-flag"
-                  title="Автоцикл: детектор → захват с RX → задержка → переизлучение → шаг задержки. Порог — тот же, что у ретрансляции."
-                >
-                  <input
-                    type="checkbox"
-                    checked={s.fpgaWalkAuto}
-                    onChange={(e) => s.setFpgaWalkAuto(e.target.checked)}
-                    disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
-                  />
-                  АВТО: обнаружил → захват → задержка → play
-                </label>
+                {s.fpgaMode === "player" && (
+                  <label
+                    className="walk-flag"
+                    title="Автоцикл плеера: детектор → захват с RX → тишина → play → шаг. Живой отвод шагает без этой галки, по фронту det."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={s.fpgaWalkAuto}
+                      onChange={(e) => s.setFpgaWalkAuto(e.target.checked)}
+                      disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                    />
+                    АВТО: обнаружил → захват → задержка → play
+                  </label>
+                )}
               </div>
             </>
           )}
