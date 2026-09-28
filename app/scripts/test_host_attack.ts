@@ -36,6 +36,13 @@ import {
   paintWaveHint,
   waveOccupiesPaintMhz,
 } from "../src/sense/attackPaint";
+import {
+  clampCorridorPaint,
+  clipShelfToCorridor,
+  attackListenWindowMhz,
+  attackShelfTxPlan,
+} from "../src/sense/attackShelfTx";
+import { openLoopShelfTxPlan, shelfFsHz } from "../src/sense/txShelf";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SOAPY_CROP_FACTOR } from "../src/sdr/backend";
 import { pickArmedAutoTarget, RESENSE_MS } from "../src/sense/hold";
 import { useLegion } from "../src/state/store";
@@ -86,10 +93,17 @@ async function main(): Promise<void> {
   check("soapy crop чужих режимов 0.5", SOAPY_CROP_FACTOR === 0.5);
   check("RESENSE_MS 1 с как был", RESENSE_MS === 1000);
   const storeSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/state/store.ts"), "utf8");
-  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const armAttackHoldTimer"));
+  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const attackAnalogNow"));
   check(
     "resense Атаки не зовёт DIO-40",
     resenseSrc.includes("hostAttackScan") && resenseSrc.includes("attackListenPlan"),
+  );
+  check(
+    "resense рамки не схлопывает часы полкой",
+    resenseSrc.includes("runAttackShelfTx") &&
+      resenseSrc.includes("listenWhileTx") &&
+      resenseSrc.includes("holdMasked: listenWhileTx") &&
+      !resenseSrc.includes("shelfFsNow"),
   );
   check(
     "тик скана сверяет gScanGen после await",
@@ -108,18 +122,71 @@ async function main(): Promise<void> {
     storeSrc.includes("bumpAttackThinkGen") && storeSrc.includes("thinkGen !== gAttackThinkGen"),
   );
   const fireSrc = storeSrc.slice(storeSrc.indexOf("const fireAttackPaintTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  const shelfSrc = storeSrc.slice(storeSrc.indexOf("const runAttackShelfTx"), storeSrc.indexOf("const cueAttackTarget"));
   check(
-    "рамка ПЕРЕДАТЬ всегда hostTxWave на часах рамки",
-    fireSrc.includes("hostTxWave") &&
-      fireSrc.includes('?? "sine"') &&
-      !fireSrc.includes("hostTx(") &&
-      !fireSrc.includes("txCue"),
+    "полка Атаки идёт hostTxWave с фильтром полки",
+    shelfSrc.includes("hostTxWave") &&
+      shelfSrc.includes("plan.filterMhz") &&
+      shelfSrc.includes("plan.fsHz") &&
+      !shelfSrc.includes("hostTx(") &&
+      !shelfSrc.includes("txCue"),
   );
   check(
-    "рамка ПЕРЕДАТЬ сначала слух на часах рамки (AD9361 один BBPLL)",
-    fireSrc.includes("hostAttackScan") &&
-      fireSrc.indexOf("hostAttackScan") < fireSrc.indexOf("hostTxWave") &&
-      fireSrc.includes("paintOwnsTx: true"),
+    "сначала слух на часах коридора, потом TX (AD9361 один BBPLL)",
+    shelfSrc.includes("hostAttackScan") &&
+      shelfSrc.indexOf("hostAttackScan") < shelfSrc.indexOf("hostTxWave"),
+  );
+  check(
+    "выдержка не гасит сессию",
+    storeSrc.includes("цель меняем, сессию не гасим") &&
+      !fireSrc.includes("void get().stopTransmit()"),
+  );
+  check(
+    "очередь Атаки не берёт merge-архив засечек",
+    storeSrc.includes("liveCorridorDets") &&
+      storeSrc.includes('t.state === "cooled"') &&
+      storeSrc.slice(storeSrc.indexOf("const liveCorridorDets"), storeSrc.indexOf("const muteAttackTxKeepSession")).includes("liveWindow"),
+  );
+  const muteSrc = storeSrc.slice(storeSrc.indexOf("const muteAttackTxKeepSession"), storeSrc.indexOf("const runAttackShelfTx"));
+  check(
+    "mute сессии рвёт in-flight TX поколением",
+    muteSrc.includes("gTxGen += 1") && muteSrc.includes("gGate.reset()"),
+  );
+  const openLoopSrc = storeSrc.slice(storeSrc.indexOf("const runOpenLoopShelfTx"), storeSrc.indexOf("const startOpenLoopTx"));
+  const startOpenSrc = storeSrc.slice(storeSrc.indexOf("const startOpenLoopTx"), storeSrc.indexOf("const bandsForFpgaAir"));
+  check(
+    "качание/сплошная/случайная всегда hostTxWave с фильтром полки",
+    openLoopSrc.includes("hostTxWave") &&
+      openLoopSrc.includes("shelf.fsHz") &&
+      openLoopSrc.includes("shelf.filterMhz") &&
+      openLoopSrc.includes("openLoopShelfTxPlan") &&
+      !openLoopSrc.includes("hostTx(") &&
+      !openLoopSrc.includes("txCue"),
+  );
+  check(
+    "шаг open-loop не подменяет полку",
+    startOpenSrc.includes("scanWindowMhz") &&
+      startOpenSrc.includes("runOpenLoopShelfTx") &&
+      !startOpenSrc.includes("runHandoffAsync"),
+  );
+  const handoffSrc = storeSrc.slice(storeSrc.indexOf("const runHandoffAsync"), storeSrc.indexOf("const restoreHeldTx"));
+  const restoreSrc = storeSrc.slice(storeSrc.indexOf("const restoreHeldTx"), storeSrc.indexOf("const resenseHeld"));
+  check(
+    "без рамки Атаки часы слуха + фильтр полки, не hostTx 2 МГц",
+    handoffSrc.includes("attackNoPaintShelf") &&
+      handoffSrc.includes("hostTxWave") &&
+      handoffSrc.includes("shelf.fsHz") &&
+      handoffSrc.includes("shelf.filterMhz") &&
+      !handoffSrc.includes("hostTx(") &&
+      !handoffSrc.includes("shelfFsNow"),
+  );
+  check(
+    "restore без рамки не схлопывает BBPLL полкой",
+    restoreSrc.includes("attackNoPaintShelf") &&
+      restoreSrc.includes("shelf.fsHz") &&
+      restoreSrc.includes("shelf.filterMhz") &&
+      !restoreSrc.includes("shelfFsNow") &&
+      !restoreSrc.includes("hostTx("),
   );
   check(
     "pickArmed архив по-прежнему пуст",
@@ -366,7 +433,17 @@ async function main(): Promise<void> {
     paintOwnsTx: true,
     paint: { f1Mhz: 2430, f2Mhz: 2450 },
   });
-  check("ПЕРЕДАТЬ 20 МГц не раздувает USB до 61.44", fd.fsHz === 20e6 && fd.fsHz <= ATTACK_FD_FS_HZ);
+  check("коридор 20 МГц не раздувает USB до 61.44", fd.fsHz === 20e6 && fd.fsHz <= ATTACK_FD_FS_HZ);
+  const wideListen = attackListenPlan({
+    analogMhz: 56,
+    paintOwnsTx: false,
+    paint: { f1Mhz: 2400, f2Mhz: 2450 },
+  });
+  check(
+    "коридор 50 на xA4 — часы 40, не 50 и не полка",
+    wideListen.fsHz === ATTACK_FD_FS_HZ && wideListen.fsHz <= ATTACK_FD_FS_HZ,
+  );
+  check("окно слуха 50/56 = 40", attackListenWindowMhz(50, 56) === 40);
   const x40 = attackListenPlan({ analogMhz: 28, paintOwnsTx: false, paint: null });
   check("x40 слух не 61.44", x40.fsHz === 28e6 && x40.filterMhz === 28);
   check("потолок хита не 22", ATTACK_MAX_BW_MHZ === 56);
@@ -1836,7 +1913,59 @@ async function main(): Promise<void> {
   );
 
   const fat = clampPaintToCaps({ f1Mhz: 2400, f2Mhz: 2500 });
-  check("рамка шире 40 обрезана", paintSpanMhz(fat) <= ATTACK_TX_MAX_MHZ + 1e-9);
+  check("подсказка hop по-прежнему режется в 40", paintSpanMhz(fat) <= ATTACK_TX_MAX_MHZ + 1e-9);
+  const corridor50 = clampCorridorPaint({ f1Mhz: 2400, f2Mhz: 2450 });
+  check("коридор 50 не режется по USB 40", Math.abs(paintSpanMhz(corridor50) - 50) < 1e-9);
+  const midShelf = clipShelfToCorridor(2415, 15, { f1Mhz: 2400, f2Mhz: 2450 }, 56);
+  check(
+    "полка 15 на 2415 внутри 2400–2450",
+    midShelf != null &&
+      Math.abs(midShelf.loMhz - 2415) < 1e-6 &&
+      Math.abs(midShelf.f1Mhz - 2407.5) < 1e-6 &&
+      Math.abs(midShelf.f2Mhz - 2422.5) < 1e-6,
+    midShelf ? `${midShelf.f1Mhz}…${midShelf.f2Mhz}` : "null",
+  );
+  const edgeShelf = clipShelfToCorridor(2402, 15, { f1Mhz: 2400, f2Mhz: 2450 }, 56);
+  check(
+    "полка у края коридора не вылезает ниже 2400",
+    edgeShelf != null &&
+      Math.abs(edgeShelf.f1Mhz - 2400) < 1e-6 &&
+      Math.abs(edgeShelf.f2Mhz - 2409.5) < 1e-6 &&
+      Math.abs(edgeShelf.loMhz - 2404.75) < 1e-6,
+    edgeShelf ? `${edgeShelf.f1Mhz}…${edgeShelf.f2Mhz} lo=${edgeShelf.loMhz}` : "null",
+  );
+  const hopShelf = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: null, params: {} });
+  check(
+    "open-loop без типа — sine на часах и фильтре полки",
+    hopShelf.waveKind === "sine" &&
+      hopShelf.fsHz === shelfFsHz(15, 56) &&
+      Math.abs(hopShelf.filterMhz - 15) < 1e-6 &&
+      Math.abs(hopShelf.occupyMhz - 15) < 1e-6,
+    `kind=${hopShelf.waveKind} fs=${hopShelf.fsHz} filt=${hopShelf.filterMhz}`,
+  );
+  const hopNoise = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "awgn", params: {} });
+  check("open-loop шум на полке 15, не на шаге", hopNoise.waveKind === "awgn" && hopNoise.fsHz === 15e6);
+  const hopChirp = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "chirp", params: {} });
+  check(
+    "open-loop чирп размах = полка, не 1 МГц",
+    (hopChirp.waveParams.spanKhz ?? 0) >= 7000,
+    `spanKhz=${hopChirp.waveParams.spanKhz}`,
+  );
+  const hopCap = openLoopShelfTxPlan({ shelfMhz: 80, analogMhz: 28, kind: "awgn", params: {} });
+  check("open-loop полка не шире analog x40", hopCap.filterMhz === 28 && hopCap.fsHz === 28e6);
+  const xa4Plan = attackShelfTxPlan({
+    f0Mhz: 2415,
+    paint: { f1Mhz: 2400, f2Mhz: 2450 },
+    shelfMhz: 15,
+    analogMhz: 56,
+    kind: "awgn",
+    params: {},
+  });
+  check(
+    "план xA4: часы слуха 40, фильтр 15",
+    xa4Plan != null && xa4Plan.fsHz === ATTACK_FD_FS_HZ && Math.abs(xa4Plan.filterMhz - 15) < 1e-6,
+    xa4Plan ? `fs=${xa4Plan.fsHz} filt=${xa4Plan.filterMhz}` : "null",
+  );
   const bands = [{ f1Mhz: 2400, f2Mhz: 2500 }];
   const clipped = clipPaintToAllowlist({ f1Mhz: 2430, f2Mhz: 2440 }, bands);
   check("рамка в allowlist", clipped != null && paintCenterMhz(clipped!) > 2430);
@@ -1884,8 +2013,8 @@ async function main(): Promise<void> {
   L().setScanPattern("auto");
   L().setAttackHoldMs(ATTACK_HOLD_MIN_MS);
   L().armTxWave("awgn");
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
-  check("рамка легла в стор", L().attackPaint != null && Math.abs(paintCenterMhz(L().attackPaint!) - 2440) < 0.05);
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
+  check("рамка легла в стор", L().attackPaint != null && Math.abs(paintCenterMhz(L().attackPaint!) - 2450) < 0.05);
   useLegion.setState({
     attackAdvice: {
       scene: "тест",
@@ -1905,7 +2034,7 @@ async function main(): Promise<void> {
   });
   L().applyAttackHint("paint");
   check("взять рамку — только клик оператора", L().attackPaint != null && Math.abs(L().attackPaint.f1Mhz - 2410) < 0.05);
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
 
   L().setScanPattern("fpga");
   check("уход с Атаки чистит рамку", L().attackPaint == null && L().attackTracks.length === 0);
@@ -1914,27 +2043,44 @@ async function main(): Promise<void> {
   L().setScanPattern("auto");
   L().setAttackHoldMs(ATTACK_HOLD_MIN_MS);
   L().armTxWave("awgn");
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
 
   L().startScan();
   check("скан Атаки пошёл", await waitFor("scan", () => L().scanRunning));
   L().injectDemoTone();
-  // Замок рамки должен держать оператора, а не lastForward (его ещё нет до
-  // commit ПЕРЕДАТЬ). Иначе тик скана в окне armed→TX забирает демо-несущую.
-  useLegion.setState({ transmitArmed: true });
-  const stolen = await waitFor("тик украл TX", () => L().lastForwardMhz != null, 500);
   check(
-    "рамка+armed: тик не авто-handoff до ПЕРЕДАТЬ",
-    !stolen,
+    "слух без ПЕРЕДАТЬ не ставит усилитель",
+    L().lastForwardMhz == null && !L().transmitArmed,
+  );
+  check(
+    "слух видит демо в коридоре",
+    await waitFor(
+      "det",
+      () =>
+        L().detections.some((d) => Math.abs(d.freqMhz - 2450) < 2) ||
+        L().attackTracks.some((t) => Math.abs(t.freqMhz - 2450) < 2),
+      2000,
+    ),
+  );
+  await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
+  L().setAttackPaint({ f1Mhz: 2420, f2Mhz: 2480 });
+  await L().startTransmit();
+  check(
+    "ПЕРЕДАТЬ наводит полку на засечку, не на центр рамки",
+    await waitFor(
+      "shelf on det",
+      () => L().transmitArmed && L().lastForwardMhz != null && Math.abs(L().lastForwardMhz! - 2450) < 1.5,
+      2000,
+    ),
     `lastForward=${L().lastForwardMhz}`,
   );
-  await L().stopTransmit();
-  await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
-  L().setAttackPaint({ f1Mhz: 2430, f2Mhz: 2450 });
-  await L().startTransmit();
-  check("рамка TX на центр, не на демо", L().transmitArmed && L().lastForwardMhz != null && Math.abs(L().lastForwardMhz! - 2440) < 0.15);
-  check("выдержка рамки заведена", L().attackTxUntil != null && L().attackTxUntil! > Date.now());
-  check("таймер рамки гасит TX", await waitFor("hold end", () => L().lastForwardMhz == null && !L().transmitArmed, 1500));
+  check("выдержка полки заведена", L().attackTxUntil != null && L().attackTxUntil! > Date.now());
+  await new Promise((r) => setTimeout(r, ATTACK_HOLD_MIN_MS + 80));
+  check(
+    "таймер меняет цель, сессию не гасит",
+    L().transmitArmed === true,
+    `armed=${L().transmitArmed} fwd=${L().lastForwardMhz}`,
+  );
 
   await new Promise((r) => setTimeout(r, ATTACK_COOLDOWN_MS + 30));
   L().stopScan();
@@ -1950,6 +2096,64 @@ async function main(): Promise<void> {
   );
   await L().stopTransmit();
   L().stopScan();
+
+  L().setScanPattern("sweep");
+  L().setTxShelfMhz("15");
+  L().setScanWindowMhz("20");
+  L().disarmTxWave();
+  await L().startTransmit();
+  check(
+    "качание без типа ставит полку, не CW 2 МГц",
+    await waitFor(
+      "sweep shelf",
+      () =>
+        L().transmitArmed &&
+        L().lastForwardMhz != null &&
+        (L().lastCueReason ?? "").includes("полка 15.00") &&
+        (L().lastCueReason ?? "").includes("sine") &&
+        (L().lastCueReason ?? "").includes("фильтр 15.00"),
+      2000,
+    ),
+    `cue=${L().lastCueReason} fwd=${L().lastForwardMhz}`,
+  );
+  check("качание не поднимает сканер", L().scanRunning === false);
+  await L().stopTransmit();
+  L().setScanPattern("band");
+  L().setTxShelfMhz("12");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "сплошная шум — горб полки 12",
+    await waitFor(
+      "band shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 12.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().setScanPattern("hop");
+  L().setTxShelfMhz("8");
+  L().armTxWave("awgn");
+  await L().startTransmit();
+  check(
+    "случайная шум — горб полки 8",
+    await waitFor(
+      "hop shelf",
+      () =>
+        L().transmitArmed &&
+        (L().lastCueReason ?? "").includes("полка 8.00") &&
+        (L().lastCueReason ?? "").includes("awgn"),
+      2000,
+    ),
+    `cue=${L().lastCueReason}`,
+  );
+  await L().stopTransmit();
+  L().disarmTxWave();
+  L().setScanPattern("auto");
 
   // sweep/band/hop сканер не поднимают (scanRefusedReason). Тот же crop, что tickScan без listen.
   const other = new MockSdrBackend();

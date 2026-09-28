@@ -335,9 +335,11 @@ export async function hostTxWave(
   wave: string,
   params: Record<string, number>,
   fsHz?: number,
+  txBwMhz?: number,
 ): Promise<TxCueResult> {
   const payload: Record<string, unknown> = { op: "tx_wave", freqMhz, wave, params };
   if (fsHz != null && Number.isFinite(fsHz) && fsHz > 0) payload.fsHz = fsHz;
+  if (txBwMhz != null && Number.isFinite(txBwMhz) && txBwMhz > 0) payload.txBwMhz = txBwMhz;
   const r = await hostRpc<{
     ok?: boolean;
     reason?: string;
