@@ -427,6 +427,16 @@ def main() -> int:
         check("think DroneID plaintext xA4", did.get("ok") is True)
         if did.get("ok") is not True:
             print("    detail", did)
+        pad5 = int(61.44e6 * 0.005)
+        x5 = np_atk.zeros(pad5, dtype=np_atk.complex64)
+        x5[: x61_w.size] = x61_w
+        live._attack_mem.reset()
+        live._attack_mem.push_block(x5)
+        think_5 = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 10}], False)
+        did5 = ((think_5.get("looks") or [{}])[0].get("droneid")) or {}
+        check("think DroneID кольцо 5 мс не хвост 1 мс", did5.get("ok") is True)
+        if did5.get("ok") is not True:
+            print("    detail5", did5)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

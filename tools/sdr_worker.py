@@ -250,6 +250,8 @@ from protocol_db import nearest_analog_channel  # noqa: E402
 from rc_spectrum import analyze_rc, band_of  # noqa: E402
 
 ATTACK_RC_S = 0.16  # 160 мс: два интервала 19 Гц mLRS
+ATTACK_DRONEID_S = 0.002  # вспышка ~0.64 мс; 40 мс порог FHSS её отрезал
+ATTACK_FHSS_S = 0.04
 
 
 def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
@@ -1701,18 +1703,23 @@ class Radio:
             work, clip_all = cancel_own(iq, np.asarray(replica))
             leftover = leftover_ratio(iq, work)
         iq_rc = None
+        iq_long = None
         if not self.fake and src is not None:
-            want_rc = min(int(src.available()), int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
-            if want_rc >= int(work_fs * 0.04):
-                iq_rc = src.latest(want_rc)
+            want_long = min(int(src.available()), int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+            if want_long >= int(work_fs * ATTACK_DRONEID_S):
+                iq_long = src.latest(want_long)
+            if want_long >= int(work_fs * ATTACK_FHSS_S):
+                iq_rc = iq_long
         elif self.fake:
             iq_rc = work
+            iq_long = work
         # FHSS только на широком IQ. Канализатор 2 МГц hop-set убивает.
         # 65k think (~1 мс @ 61.44) мало: то же кольцо, что RC (160 мс).
         fhss_src = iq_rc if iq_rc is not None else work
         fhss = analyze_fhss(fhss_src, work_fs, center_mhz) if fhss_src is not None and len(fhss_src) >= 256 else None
         hop_spacing = float((fhss or {}).get("spacingMhz") or 0.0)
         out_looks = []
+        droneid_by_lo: dict[int, dict[str, Any]] = {}
         for row in looks[:4]:
             freq = float(row.get("freqMhz") or center_mhz)
             bw = float(row.get("bwMhz") or 2.0)
@@ -1731,14 +1738,17 @@ class Radio:
                 if ch_rc.size >= 128 and fs_rc > 0:
                     rc = analyze_rc(ch_rc, fs_rc, freq, hop_spacing)
                     parsed["rc"] = attach_rc(fhss, rc, freq) if fhss else rc
-            if parsed.get("analogHit") or parsed.get("hit"):
+            if parsed.get("analogKind") in ("pal", "ntsc") and parsed.get("hit"):
                 chn = nearest_analog_channel(freq)
                 if chn:
                     parsed["analogChannel"] = chn
             if _want_droneid(freq, bw, parsed):
-                # Не channelize_look(target 15.36, BW 12): want_fs=24/20.48, /4 нет.
-                src_d = iq_rc if iq_rc is not None else work
-                parsed["droneid"] = analyze_droneid(src_d, work_fs, freq, center_mhz)
+                # Не channelize_look(target 15.36, BW 12): want_fs≠15.36.
+                key = int(round(freq * 2.0))
+                if key not in droneid_by_lo:
+                    src_d = iq_long if iq_long is not None else work
+                    droneid_by_lo[key] = analyze_droneid(src_d, work_fs, freq, center_mhz)
+                parsed["droneid"] = droneid_by_lo[key]
             frames = row.get("odidFrames") or row.get("odid_frames")
             if frames:
                 parsed["opendroneid"] = parse_opendroneid(frames)

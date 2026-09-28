@@ -100,20 +100,80 @@ def gold_scrambler(num_bits: int, x2_init: list[int] | None = None) -> np.ndarra
     return (x1[nc : nc + num_bits] ^ x2[nc : nc + num_bits]).astype(np.uint8)
 
 
+# Nuand/AD9361 на micro: 61.44, 40, 30.72, 23.04, 20.48, 20, 19.2, 15.36, 10.
+# Полка/коридор Атаки крутит 20–40 MSPS (один BBPLL), не 61.44.
+XA4_DRONEID_RATES = (
+    10.0e6,
+    15.36e6,
+    19.2e6,
+    20.0e6,
+    20.48e6,
+    23.04e6,
+    30.72e6,
+    40.0e6,
+    61.44e6,
+)
+
+
+def _lowpass_decim(z: np.ndarray, decim: int, cutoff_hz: float, fs: float) -> np.ndarray:
+    """ФНЧ до децимации — иначе сосед в окне 56 МГц садится на DroneID."""
+    x = np.asarray(z, dtype=np.complex128).ravel()
+    step = max(1, int(decim))
+    rate = float(fs)
+    if x.size < 8 or rate <= 0:
+        return np.zeros(0, dtype=np.complex64)
+    fc = float(cutoff_hz) / rate
+    if not (0 < fc < 0.49):
+        return x[::step].astype(np.complex64)
+    m = 24
+    t = np.arange(-m, m + 1, dtype=np.float64)
+    h = np.hanning(2 * m + 1) * np.sinc(2.0 * fc * t)
+    acc = float(np.sum(h))
+    if acc == 0:
+        return x[::step].astype(np.complex64)
+    y = np.convolve(x, h / acc, mode="same")
+    return y[::step].astype(np.complex64)
+
+
+def _fft_resample(z: np.ndarray, n_out: int) -> np.ndarray:
+    """Полосовой ресэмпл на точную длину (20/40 MSPS → 15.36)."""
+    x = np.asarray(z, dtype=np.complex128).ravel()
+    n = int(x.size)
+    want = int(n_out)
+    if n < 8 or want < 8:
+        return np.zeros(0, dtype=np.complex64)
+    if want == n:
+        return x.astype(np.complex64)
+    spec = np.fft.fft(x)
+    out = np.zeros(want, dtype=np.complex128)
+    copy = min(n, want)
+    half = copy // 2
+    out[:half] = spec[:half]
+    if copy > half:
+        out[-(copy - half) :] = spec[-(copy - half) :]
+    return (np.fft.ifft(out) * (want / n)).astype(np.complex64)
+
+
 def resample_to_droneid(x: np.ndarray, fs: float) -> tuple[np.ndarray, float]:
-    """xA4 61.44 → 15.36 ровно /4. 30.72 → /2. Иначе не выдумываем ресэмплер."""
+    """К 15.36: /4 /2 с ФНЧ, либо FFT на часах AD9361 10…40 MSPS."""
     z = np.asarray(x, dtype=np.complex64).ravel()
     rate = float(fs)
     if rate <= 0 or z.size < 64:
         return np.zeros(0, dtype=np.complex64), 0.0
     ratio = rate / DRONEID_FS
     if abs(ratio - 4.0) < 1e-6:
-        return z[::4], DRONEID_FS
+        return _lowpass_decim(z, 4, 7.0e6, rate), DRONEID_FS
     if abs(ratio - 2.0) < 1e-6:
-        return z[::2], DRONEID_FS
+        return _lowpass_decim(z, 2, 7.0e6, rate), DRONEID_FS
     if abs(ratio - 1.0) < 1e-6:
         return z, DRONEID_FS
-    return np.zeros(0, dtype=np.complex64), 0.0
+    if not any(abs(rate - known) < 50.0 for known in XA4_DRONEID_RATES):
+        return np.zeros(0, dtype=np.complex64), 0.0
+    filt = _lowpass_decim(z, 1, 7.0e6, rate)
+    n_out = int(round(filt.size * DRONEID_FS / rate))
+    if n_out < 64:
+        return np.zeros(0, dtype=np.complex64), 0.0
+    return _fft_resample(filt, n_out), DRONEID_FS
 
 
 def prepare_droneid_iq(
@@ -122,10 +182,7 @@ def prepare_droneid_iq(
     center_mhz: float = 0.0,
     lo_mhz: float = 0.0,
 ) -> tuple[np.ndarray, float]:
-    """Сдвиг на DC (если LO не на вспышке) и только точная /4 или /2.
-
-    channelize_look с target 15.36 и BW 12 МГц даёт 24/20.48 — это не DroneID fs.
-    """
+    """Сдвиг на DC и ресэмпл к 15.36 (ФНЧ + /4 или FFT на 20/40 MSPS)."""
     z = np.asarray(x, dtype=np.complex64).ravel()
     rate = float(fs)
     if z.size < 64 or rate <= 0:
@@ -427,7 +484,7 @@ def analyze_droneid(
     }
     work, work_fs = prepare_droneid_iq(x, fs, center_mhz, lo_mhz)
     if work.size < 2048 or work_fs <= 0:
-        none["reason"] = "нужен 15.36/30.72/61.44 MSPS (xA4 61.44/4)"
+        none["reason"] = "нужен 15.36 или часы xA4 10/19.2/20/20.48/23.04/30.72/40/61.44"
         return none
     hits = find_zc(work, work_fs)
     if not hits:

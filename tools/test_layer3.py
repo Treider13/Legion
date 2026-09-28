@@ -73,6 +73,15 @@ def main() -> int:
     bad24, fs24 = dji.prepare_droneid_iq(np.ones(4096, dtype=np.complex64), 24e6)
     check("24 MSPS не DroneID fs", bad24.size == 0 and fs24 == 0.0)
 
+    n40 = int(round(burst.size * 40.0e6 / dji.DRONEID_FS))
+    x40 = dji._fft_resample(burst, n40)
+    got40 = dji.analyze_droneid(x40, 40.0e6)
+    check("полка 40 MSPS plaintext", got40.get("ok") is True, str(got40.get("reason")))
+    n2048 = int(round(burst.size * 20.48e6 / dji.DRONEID_FS))
+    x2048 = dji._fft_resample(burst, n2048)
+    got2048 = dji.analyze_droneid(x2048, 20.48e6)
+    check("20.48 MSPS plaintext", got2048.get("ok") is True, str(got2048.get("reason")))
+
     long_cp, short_cp = dji.cyclic_prefix_lengths(dji.DRONEID_FS)
     nfft = dji.fft_size(dji.DRONEID_FS)
     start147 = long_cp + nfft + 4 * (short_cp + nfft)
