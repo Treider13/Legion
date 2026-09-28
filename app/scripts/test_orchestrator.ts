@@ -24,12 +24,14 @@ import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
 import { markCatalogPresent } from "../src/sdr/hostClient";
 import {
+  WAVE_AMP_MAX,
   WAVE_CATALOG,
   clampParams,
   constellationPoints,
   defaultParams,
   previewWaveform,
   spectrumDb,
+  waveAmpQ15,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
@@ -1178,7 +1180,8 @@ async function main(): Promise<void> {
   }
   check("превью: все волны finite, пик ≤ amp, спектр 1024", prevOk);
   const clamped = clampParams("qpsk", { amp: 99, alpha: -1, sps: 2.7, seed: 5 });
-  check("кламп параметров", clamped.amp === 0.9 && clamped.alpha === 0.03 && clamped.seed === 5);
+  check("кламп параметров", clamped.amp === WAVE_AMP_MAX && clamped.alpha === 0.03 && clamped.seed === 5);
+  check("каталог AMP.max = 0.9 Q15 29491", WAVE_AMP_MAX === 0.9 && waveAmpQ15(0.9) === 29491);
   const qp = constellationPoints("qpsk", defaultParams("qpsk"), 256);
   const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
   check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
@@ -1774,6 +1777,8 @@ async function main(): Promise<void> {
   check("кино перехват: scanPattern=fpga, не fpgaArm",
     autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
   check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
+  check("кино умная атака ставит амплитуду 0.9", autoSt.signalParams.amp === WAVE_AMP_MAX);
+  check("0.9 Q15 = 29491 как в FPGA", waveAmpQ15(WAVE_AMP_MAX) === 29491);
   check("кино перехват: канал 5 МГц записан", autoSt.fpgaAirBwMhz === "5");
   useLegion.getState().stopScan();
   const autoTurn = await runSmartStart({
@@ -2067,6 +2072,14 @@ async function main(): Promise<void> {
   const autoBlock = runSrc.slice(runSrc.indexOf('opts.path === "auto"'), runSrc.indexOf("s.armTxWave"));
   check("cinema auto: startScan, не startFpgaPath",
     autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
+  check("cinema auto: амплитуда гейта 0.9 до startScan",
+    autoBlock.includes("setSignalParam(\"amp\", WAVE_AMP_MAX)") &&
+    autoBlock.indexOf("setSignalParam") < autoBlock.indexOf("s.startScan()"));
+  const muxSrc = readFileSync(join(here, "../../fpga/hdl/legion_tx_mux.vhd"), "utf8");
+  const pkgSrc = readFileSync(join(here, "../../fpga/hdl/legion_pkg.vhd"), "utf8");
+  check("FPGA: гейт lb_gated масштабирует на 0.9 Q15",
+    pkgSrc.includes("LEGION_LB_AMP_Q15") && pkgSrc.includes("29491") &&
+    muxSrc.includes("lb_amp_q15") && muxSrc.includes("LEGION_MODE_LB_GATED"));
   check("cinema auto: эмуляция не ждёт scanRunning",
     autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
   check("cinema auto: канал, выдержка и период сканирования пишутся в стор",

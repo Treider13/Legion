@@ -81,6 +81,15 @@ begin
         assert det_active = '0' report "FAIL: detect not cleared" severity failure;
         assert det_count = 2 report "FAIL: count grew on silence" severity failure;
 
+        -- Амплитуда 0.9 Q15 (каталог AMP.max): I=29491, Q=0 → avg ≫ 1000
+        for k in 0 to 15 loop
+            send_sample(29491, 0);
+        end loop;
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        assert det_active = '1' report "FAIL: no detect at amp 0.9" severity failure;
+        assert det_count = 3 report "FAIL: count not incremented at amp 0.9" severity failure;
+
         -- Подпороговая энергия: I=20,Q=20 → 800 < 1000 → нет детекта
         for k in 0 to 15 loop
             send_sample(20, 20);
@@ -96,7 +105,7 @@ begin
             send_sample(100, 0);
         end loop;
         wait until rising_edge(clock);
-        assert det_count = 2 report "FAIL: shift=15 early detect (window overflow)" severity failure;
+        assert det_count = 3 report "FAIL: shift=15 early detect (window overflow)" severity failure;
         win_shift <= to_unsigned(4, 4);
 
         report "legion_detector_tb: PASS" severity note;

@@ -1,6 +1,6 @@
 // Главный старт: ESP32-коридор, онбордовый перехват (плата смотрит эфир)
 // или FPGA-ревизия legion без онбордового обзора (эфир-стоянка/обход, генерация).
-import type { WaveKind } from "../../sdr/waveforms";
+import { WAVE_AMP_MAX, type WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
 import { useLegion } from "../../state/store";
@@ -39,6 +39,9 @@ export async function runSmartStart(opts: {
     if (opts.dwellMs !== undefined) s.setFpgaTurnDwellMs(opts.dwellMs);
     if (opts.surveyPeriodMs !== undefined) s.setFpgaSurveyPeriodMs(opts.surveyPeriodMs);
     if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
+    // Гейт lb_gated открывает TX на потолке каталога (0.9 Q15 в HDL).
+    // Волна ПЕРЕДАТЬ в умной атаке не участвует — только эта цифра ЦАП.
+    s.setSignalParam("amp", WAVE_AMP_MAX);
     s.startScan();
     if (useLegion.getState().sdrEmulation) return true;
     const t0 = Date.now();

@@ -33,7 +33,18 @@ export interface WaveMeta {
   params: WaveParam[];
 }
 
-const AMP: WaveParam = { key: "amp", label: "АМПЛИТУДА", min: 0.05, max: 0.9, step: 0.05, def: 0.25 };
+/** Потолок цифровой амплитуды ЦАП (каталог и гейт умной атаки). */
+export const WAVE_AMP_MAX = 0.9;
+export const WAVE_AMP_MIN = 0.05;
+export const WAVE_AMP_DEF = 0.25;
+
+const AMP: WaveParam = { key: "amp", label: "АМПЛИТУДА", min: WAVE_AMP_MIN, max: WAVE_AMP_MAX, step: 0.05, def: WAVE_AMP_DEF };
+
+/** Q15 масштаб: 0.9 → 29491 = round(0.9·2¹⁵). Совпадает с LEGION_LB_AMP_Q15. */
+export function waveAmpQ15(amp: number = WAVE_AMP_MAX): number {
+  const a = Number.isFinite(amp) ? Math.min(WAVE_AMP_MAX, Math.max(WAVE_AMP_MIN, amp)) : WAVE_AMP_MAX;
+  return Math.round(a * 32768);
+}
 const FB: WaveParam = { key: "fbKhz", label: "ЧАСТОТА", unit: "кГц", min: 10, max: 900, step: 5, def: 125 };
 const SEED: WaveParam = { key: "seed", label: "SEED", min: 1, max: 99999, step: 1, def: 1337 };
 const SPS: WaveParam = { key: "sps", label: "SPS", min: 2, max: 16, step: 1, def: 4 };

@@ -8,6 +8,8 @@
 -- Спад det_active в LB_GATED — не ступенька last→0, а ramp-down:
 -- (lb×k)/32, k=31..1 за валид (~16 мкс на 2 MSPS); возврат энергии рампу
 -- отменяет мгновенно, авария (live=0) рампы не делает — нули сразу.
+-- Открытый гейт lb_gated масштабирует IQ на LEGION_LB_AMP_Q15 (0.9 Q15 —
+-- потолок каталога AMP.max). lb_always остаётся 1:1.
 -- Loopback CDC: rd_data в нашем dcfifo комбинационна (действительна до
 -- инкремента указателя) — захват на следующем такте после rd_en корректен.
 -- ============================================================================
@@ -64,10 +66,33 @@ architecture rtl of legion_tx_mux is
     signal ramp_k   : unsigned(4 downto 0);
     -- Предыдущий play_valid: слот Q после последнего сэмпла (play_en уже 0).
     signal play_valid_d : std_logic;
+
+    -- Модуль × Q15, затем знак: ASR отрицательных дал бы I ≠ −Q.
+    function lb_amp_q15(x : signed(15 downto 0)) return signed is
+        variable ext  : signed(16 downto 0);
+        variable mag  : unsigned(16 downto 0);
+        variable prod : unsigned(32 downto 0);
+        variable y    : signed(15 downto 0);
+    begin
+        ext := resize(x, 17);
+        if ext < 0 then
+            mag := unsigned(-ext);
+        else
+            mag := unsigned(ext);
+        end if;
+        prod := mag * to_unsigned(LEGION_LB_AMP_Q15, 16);
+        y := signed(prod(30 downto 15));
+        if ext < 0 then
+            return -y;
+        end if;
+        return y;
+    end function;
 begin
     live <= arm and wd_ok;
 
     process(clock, reset)
+        variable gi : signed(15 downto 0);
+        variable gq : signed(15 downto 0);
     begin
         if reset = '1' then
             phase     <= '0';
@@ -157,15 +182,22 @@ begin
                     -- (lms6002d.vhd). Гейт (GATED) режет ДАННЫЕ, не каденс.
                     if live = '1' then
                         out_valid <= phase;
+                        gi := lb_amp_q15(lb_i);
+                        gq := lb_amp_q15(lb_q);
                         if lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
-                            out_i <= lb_i;
-                            out_q <= lb_q;
+                            if mode = LEGION_MODE_LB_GATED then
+                                out_i <= gi;
+                                out_q <= gq;
+                            else
+                                out_i <= lb_i;
+                                out_q <= lb_q;
+                            end if;
                         elsif lb_valid = '1' and ramping = '1' then
-                            -- Спад энергии: (lb × k)/32, k=31..1.
+                            -- Спад энергии: (0.9·lb × k)/32, k=31..1.
                             -- |lb|≤32768 → ×31 < 2^20, 32 бит хватает;
                             -- shift_right на signed — арифметический.
-                            out_i <= resize(shift_right(resize(lb_i, 32) * to_integer(ramp_k), 5), 16);
-                            out_q <= resize(shift_right(resize(lb_q, 32) * to_integer(ramp_k), 5), 16);
+                            out_i <= resize(shift_right(resize(gi, 32) * to_integer(ramp_k), 5), 16);
+                            out_q <= resize(shift_right(resize(gq, 32) * to_integer(ramp_k), 5), 16);
                             if ramp_k = 0 then
                                 ramping <= '0';
                             else
