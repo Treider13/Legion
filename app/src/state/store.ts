@@ -56,7 +56,9 @@ import { cropPsdBins, detectFromBins, hostPaintSpanMhz, hostScanSpanMhz } from "
 import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/types";
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { detectAttackHits } from "../sense/attackDetect";
-import { attackListenPlan } from "../sense/attackListen";
+import { attackListenPlan, classListenPlan, shelfListenPlan } from "../sense/attackListen";
+import { droneSurveyBands, droneSurveyLine } from "../sense/droneBands";
+import { classifyFpgaObserve, type FpgaObserveClass } from "../sense/fpgaObserveClass";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
 import { matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../sense/attackLook";
 import { AttackSessionMemory } from "../sense/attackMemory";
@@ -134,9 +136,13 @@ import {
   modeConflict,
   modeOf,
   planSdrWork,
+  classScanBlockedByTx,
+  detectorListens,
+  patternLabelRu,
   scanRefusedReason,
   scannerParticipates,
   type AutoDispatch,
+  type SdrWalkPattern,
 } from "../sense/modes";
 import {
   OWN_TX_GUARD_MHZ,
@@ -315,15 +321,17 @@ interface LegionStore {
   detections: Detection[];
   lastInterceptMhz: number | null;
   lastCueReason: string;
-  /** Хост-Атака (scanPattern=auto): треки CFAR + атлас. Пусто в других режимах. */
+  /** Хост-классы: Атака и слух в качании/сплошной/случайной. */
   attackTracks: AttackTrack[];
   /** Рамка оператора на спектре. null = старый auto-handoff (тест гонок). */
   attackPaint: AttackPaint | null;
   attackPaintDraft: AttackPaint | null;
   attackHoldMs: number;
   attackTxUntil: number | null;
-  /** Карточка разбора Атаки. Пусто в других режимах. */
+  /** Карточка классов. В Атаке — ещё помощник. */
   attackRows: AttackRow[];
+  /** Класс с observe FPGA. Не хост-FFT. */
+  fpgaClass: FpgaObserveClass | null;
   attackAdvice: AttackAdvice;
   attackMemoryLine: string;
   attackSuggestPaint: AttackPaint | null;
@@ -412,6 +420,8 @@ interface LegionStore {
   fpgaWalkMax: string;
   fpgaWalkAuto: boolean;
   fpgaWalkHold: boolean;
+  /** Живая линия задержки loopback, сэмплы. Не walk-off. */
+  fpgaLbDelay: string;
   // журнал
   log: LogEntry[];
 
@@ -426,6 +436,7 @@ interface LegionStore {
   setSdrAllowField(field: "sdrF1" | "sdrF2", v: string): void;
   addSdrBand(): void;
   clearSdrBands(): void;
+  applyDroneSurvey(): void;
   setSdrLoad(ok: boolean): void;
   setPaMa(ma: number): void;
   setAutoCue(v: boolean): void;
@@ -516,6 +527,7 @@ interface LegionStore {
   setFpgaWalkMax(v: string): void;
   setFpgaWalkAuto(v: boolean): void;
   setFpgaWalkHold(v: boolean): void;
+  setFpgaLbDelay(v: string): void;
   fpgaArm(): Promise<void>;
   /** Главный кадр: ARM ревизии legion. air = lb_gated, solo = nco/player. */
   startFpgaPath(path: "solo" | "air"): Promise<boolean>;
@@ -769,6 +781,16 @@ export function walkoffArmOpts(s: {
   };
 }
 
+function parseLbDelay(raw: string): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(4095, Math.round(n));
+}
+
+function lbDelayArmOpts(s: { fpgaLbDelay: string }): { lbDelay: number } {
+  return { lbDelay: parseLbDelay(s.fpgaLbDelay) };
+}
+
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
 const FPGA_DET_SHIFT_FAST = FPGA_US_DET_SHIFT;
 /** NCO FTW и парковка эфирных режимов: 2 MSPS → окно детектора 16 = 8 мкс,
@@ -834,6 +856,7 @@ const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
+let gClassBusy = false;
 let gAttackThinkGen = 0;
 let gAttackThinkResidual: {
   tracks: AttackTrack[];
@@ -895,7 +918,7 @@ function attackBrainPatch(
   attackMemoryLine: string;
   attackSuggestPaint: AttackPaint | null;
 } {
-  if (s.scanPattern !== "auto") {
+  if (!detectorListens(s.scanPattern as SdrWalkPattern)) {
     return {
       attackTracks: [],
       attackRows: [],
@@ -904,9 +927,18 @@ function attackBrainPatch(
       attackSuggestPaint: null,
     };
   }
+  const view = attackViewOf(s, tracks, bins, windowMhz);
+  if (s.scanPattern !== "auto") {
+    return {
+      attackTracks: tracks.map((t) => ({ ...t })),
+      attackRows: view.rows,
+      attackAdvice: EMPTY_ATTACK_ADVICE,
+      attackMemoryLine: view.memoryLine,
+      attackSuggestPaint: null,
+    };
+  }
   gAttackMemory.noteHops(tracks, Date.now());
   gAttackMemory.noteScene(Date.now(), tracks);
-  const view = attackViewOf(s, tracks, bins, windowMhz);
   return {
     attackTracks: tracks.map((t) => ({ ...t })),
     attackRows: view.rows,
@@ -1579,7 +1611,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     spanMhz: number,
     residual: boolean,
   ): Promise<void> => {
-    if (get().scanPattern !== "auto" || !gLive) return;
+    if (!detectorListens(get().scanPattern as SdrWalkPattern) || !gLive) return;
     if (gAttackThinkBusy) {
       if (residual) {
         gAttackThinkResidual = {
@@ -1607,7 +1639,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         looks.unshift({ freqMhz: paintCenterMhz(paint), bwMhz: Math.max(0.4, paintSpanMhz(paint)) });
       }
       const r = await hostAttackThink(centerMhz, fsHz, looks, residual);
-      if (thinkGen !== gAttackThinkGen || get().scanPattern !== "auto") return;
+      if (thinkGen !== gAttackThinkGen || !detectorListens(get().scanPattern as SdrWalkPattern)) return;
       if (r.memoryCap) gAttackMemory.noteWorker(r.memorySamples ?? 0, r.memoryCap, r.memoryMs ?? 0);
       if (!r.ok) return;
       for (const row of r.looks) {
@@ -1654,7 +1686,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   const refreshAttackBrain = (): void => {
     const st = get();
-    if (st.scanPattern !== "auto") return;
+    if (!detectorListens(st.scanPattern as SdrWalkPattern)) return;
     set(
       attackBrainPatch(
         st,
@@ -1774,7 +1806,54 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (gen === gTxGen) {
         const queued = gGate.release();
         if (queued !== null) void runOpenLoopShelfTx(queued.mhz, queued.powerDbm);
+        else void classOpenLoopAt(plan.freqMhz, shelf);
       }
+    }
+  };
+
+  const classOpenLoopAt = async (
+    mhz: number,
+    shelf: ReturnType<typeof openLoopShelfTxPlan>,
+  ): Promise<void> => {
+    if (gClassBusy || !get().transmitArmed) return;
+    if (!detectorListens(get().scanPattern as SdrWalkPattern)) return;
+    if (scannerParticipates(get().scanPattern as SdrWalkPattern)) return;
+    gClassBusy = true;
+    try {
+      const st = get();
+      const listen = shelfListenPlan({ fsHz: shelf.fsHz, filterMhz: shelf.filterMhz });
+      let bins: ScanBin[] = [];
+      if (gLive) {
+        const win = await hostAttackScan(mhz, listen);
+        if (!get().transmitArmed || !win.ok) return;
+        bins = win.bins;
+        if (win.memoryCap) gAttackMemory.noteWorker(win.memorySamples ?? 0, win.memoryCap, win.memoryMs ?? 0);
+      } else {
+        bins = cropPsdBins(
+          gSdr.scanWindow(mhz, listen.fsHz / 1e6, Math.min(listen.fftN, 4096)),
+          listen.cropFactor,
+        );
+      }
+      const now = Date.now();
+      const hits = detectAttackHits(bins, st.scanThresholdDb, listen.spanMhz).filter((h) => {
+        if (st.sdrBands.length > 0 && !cueFreqAllowed(h.freqMhz, st.sdrBands)) return false;
+        return true;
+      });
+      const guard = ownTxBlankMhz(shelf.occupyMhz, st.txWaveKind !== null);
+      const blanked = (freqMhz: number): boolean => Math.abs(freqMhz - mhz) <= guard;
+      const feed = hits.filter((h) => !blanked(h.freqMhz));
+      gAttackTracker.update(feed, now, { centerMhz: mhz, spanMhz: listen.spanMhz, hidden: blanked });
+      const snap = gAttackTracker.snapshot();
+      set({
+        scanCenterMhz: mhz,
+        scanBins: bins,
+        ...attackBrainPatch(get(), snap, bins, listen.spanMhz),
+      });
+      void thinkAttackLooks(snap, listen.fsHz, mhz, listen.spanMhz, false);
+    } catch (e) {
+      pushLog("sys", `слух полки: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      gClassBusy = false;
     }
   };
 
@@ -2059,6 +2138,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
           scanBands: bands,
+          ...lbDelayArmOpts(get()),
         }), get().txGainDb),
       );
       if (gFpgaAirGen !== airGen) {
@@ -2110,7 +2190,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         // а железо за это время гаснет своим watchdog — но в логе честно.
         if (!d.ok) pushLog("sys", `FPGA DISARM при возврате к скану: ${d.reason ?? "отказ"} — TX гаснет watchdog железа`);
       }
-      set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null });
+      set({ fpgaArmed: false, fpgaAutoCycle: false, fpgaPath: null, fpgaBusy: false, lastForwardMhz: null, fpgaClass: null });
       gLastDetCount = null;
       gLastScanEventSeq = 0;
       gDetStagnantSinceMs = null;
@@ -2246,6 +2326,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     attackHoldMs: ATTACK_HOLD_DEFAULT_MS,
     attackTxUntil: null,
     attackRows: [],
+    fpgaClass: null,
     attackAdvice: EMPTY_ATTACK_ADVICE,
     attackMemoryLine: "",
     attackSuggestPaint: null,
@@ -2312,6 +2393,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaWalkMax: "0",
     fpgaWalkAuto: false,
     fpgaWalkHold: false,
+    fpgaLbDelay: "0",
     log: [],
 
     setTransportKind: (k) =>
@@ -2460,7 +2542,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
     setScanPattern: (p) => {
       if (p === "auto") {
-        set({ scanPattern: p });
+        set({ scanPattern: p, fpgaClass: null });
         return;
       }
       clearAttackHoldTimer();
@@ -2476,6 +2558,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         attackAdvice: EMPTY_ATTACK_ADVICE,
         attackMemoryLine: "",
         attackSuggestPaint: null,
+        fpgaClass: null,
       });
       gAttackMemory.reset();
     },
@@ -3133,6 +3216,21 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", "SDR allowlist очищен (ESP32 не тронут)");
     },
 
+    applyDroneSurvey: () => {
+      const s = get();
+      if (s.scanRunning || s.transmitArmed || s.fpgaArmed || s.fpgaBusy) {
+        pushLog("sys", "полосы дронов: сначала СТОП");
+        return;
+      }
+      const bands = droneSurveyBands(s.sdrId);
+      if (bands.length === 0) {
+        pushLog("sys", "полосы дронов: нет RX в каталоге этой платы");
+        return;
+      }
+      set({ sdrBands: bands });
+      pushLog("sys", droneSurveyLine(s.sdrId));
+    },
+
     setSdrLoad: (ok) => {
       set({ sdrLoadOk: ok });
       if (!ok) {
@@ -3386,6 +3484,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaWalkMax: (v) => set({ fpgaWalkMax: v }),
     setFpgaWalkAuto: (v) => set({ fpgaWalkAuto: v }),
     setFpgaWalkHold: (v) => set({ fpgaWalkHold: v }),
+    setFpgaLbDelay: (v) => set({ fpgaLbDelay: v }),
 
     fpgaArm: async () => {
       const s = get();
@@ -3510,6 +3609,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           freqMhz: mid,
           ...(tract ? { fsHz: tract.fsHz, bwMhz: tract.bwMhz } : {}),
           ...(mode === "player" ? walkOpts : {}),
+          ...lbDelayArmOpts(get()),
         }), get().txGainDb);
         const r = await gw(cmd);
         pushLog("sys", `FPGA ARM (${mode}): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -3878,6 +3978,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             freqMhz: first,
             fsHz: tract.fsHz,
             bwMhz: tract.bwMhz,
+            ...lbDelayArmOpts(get()),
           }), get().txGainDb);
           if (gainDb !== undefined && Number.isFinite(gainDb)) {
             armCmd.gain_db = Math.round(gainDb);
@@ -3961,6 +4062,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             freqMhz: mhz,
             fsHz: walk.fsHz,
             bwMhz: walk.analogMhz,
+            ...lbDelayArmOpts(get()),
           }), get().txGainDb);
           const r = await gw(cmd);
           pushLog("sys", `FPGA ARM (nco): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -4012,6 +4114,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               fsHz: walk.fsHz,
               bwMhz: walk.analogMhz,
               ...walkoffArmOpts(get()),
+              ...lbDelayArmOpts(get()),
             }), get().txGainDb),
           );
           pushLog("sys", `FPGA ARM (player walk-off AUTO): ${rAuto.reason ?? (rAuto.ok ? "ок" : "отказ")}`);
@@ -4127,6 +4230,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             fsHz: walk.fsHz,
             bwMhz: walk.analogMhz,
             ...walkoffArmOpts(get()),
+            ...lbDelayArmOpts(get()),
           }), get().txGainDb),
         );
         pushLog("sys", `FPGA ARM (player): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
@@ -4207,7 +4311,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
           target.phase = "release";
-          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null, fpgaStopPhase: "release", fpgaStatus: null });
+          set({ fpgaArmed: false, fpgaPath: null, lastForwardMhz: null, fpgaStopPhase: "release", fpgaStatus: null, fpgaClass: null });
         }
         const rel = await hostFpga({ op: "usb", action: "release", token: target.token }, target.gateway);
         if (!rel.ok) {
@@ -4291,6 +4395,17 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       if (get().fpgaArmed && get().fpgaMode === "lb_gated") {
         ingestFpgaLab(r.ok ? r.freq_mhz ?? null : null, r.ok && r.det_active === true, Date.now());
+      }
+      if (r.ok && isFpgaAirPattern(get().scanPattern) && get().fpgaArmed) {
+        const lookMhz = parseLocaleNumber(get().fpgaAirBwMhz);
+        set({
+          fpgaClass: classifyFpgaObserve({
+            peakMhz: r.peak_mhz,
+            loMhz: r.freq_mhz,
+            detActive: r.det_active === true,
+            lookMhz: Number.isFinite(lookMhz) && lookMhz > 0 ? lookMhz : catalogCaps(get().sdrId).analogBwMhz,
+          }),
+        });
       }
       // Длительная непрерывная работа (шлюз считает armed_s): лог один раз
       // на смену текста, не каждый опрос.
@@ -4481,7 +4596,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastForwardPowerDbm: null,
         sdrHoldSince: null,
         attackTxUntil: null,
-        attackTracks: get().scanPattern === "auto" ? gAttackTracker.snapshot() : get().attackTracks,
+        attackTracks: detectorListens(get().scanPattern as SdrWalkPattern)
+          ? gAttackTracker.snapshot()
+          : get().attackTracks,
       });
       pushLog("sys", "SDR закрыт");
     },
@@ -4833,6 +4950,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", refused);
           return;
         }
+        const txClock = classScanBlockedByTx(s.scanPattern, s.transmitArmed);
+        if (txClock) {
+          pushLog("sys", txClock);
+          return;
+        }
         if (!s.sdrEmulation) {
           if (!get().sdrOpened) {
             await get().openSdr();
@@ -4856,21 +4978,30 @@ export const useLegion = create<LegionStore>((set, get) => {
         const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
         const userWin = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
         const attackLive = st.scanPattern === "auto";
-        const listen0 = attackLive
-          ? attackListenPlan({
-              analogMhz: analog,
-              paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
-              paint: st.attackPaint,
-            })
+        const classLive = detectorListens(st.scanPattern);
+        const listen0 = classLive
+          ? attackLive
+            ? attackListenPlan({
+                analogMhz: analog,
+                paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
+                paint: st.attackPaint,
+              })
+            : classListenPlan(analog)
           : null;
         const windowMhz = listen0 ? listen0.spanMhz : Math.min(userWin, hostPaintSpanMhz(analog));
         const walkPaint =
           attackLive && st.attackPaint
             ? clipCorridorToAllowlist(st.attackPaint, st.sdrBands) ?? st.attackPaint
             : null;
+        const walkPat =
+          attackLive || !classLive
+            ? "sweep"
+            : st.scanPattern === "band" || st.scanPattern === "hop"
+              ? st.scanPattern
+              : "sweep";
         const walker = new ScanWalker({
           bands: walkPaint ? [corridorAsBand(walkPaint)] : st.sdrBands,
-          pattern: "sweep",
+          pattern: walkPat,
           windowMhz,
           analogBwMhz: analog,
           dwellMs: parseFloat(st.scanDwellMs),
@@ -4879,7 +5010,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gWalker = walker;
         const nBins = listen0 ? listen0.fftN : 1024;
         gLabSpur.recalibrate();
-        if (st.scanPattern === "auto" && !(st.transmitArmed && st.attackPaint)) {
+        if (classLive && !(st.transmitArmed && st.attackPaint)) {
           gAttackTracker.reset();
           gAttackMemory.forgetLooks();
           bumpAttackThinkGen();
@@ -4897,10 +5028,10 @@ export const useLegion = create<LegionStore>((set, get) => {
         }
         pushLog(
           "sys",
-          attackLive && listen0
+          classLive && listen0
             ? gLive
-              ? `АТАКА слух: Thomson DPSS×3 · FFT ${listen0.fftN} · fs ${(listen0.fsHz / 1e6).toFixed(2)} · фильтр ${listen0.filterMhz.toFixed(1)} · crop ${listen0.cropFactor.toFixed(3)} · окно ${listen0.spanMhz.toFixed(1)} МГц · память IQ 2^24`
-              : `АТАКА эмуляция: спектр эмулятора · FFT ${Math.min(listen0.fftN, 4096)} · окно ${listen0.spanMhz.toFixed(1)} МГц · разбор по бинам (IQ платы нет)`
+              ? `${attackLive ? "АТАКА" : patternLabelRu(st.scanPattern)} слух: Thomson DPSS×3 · FFT ${listen0.fftN} · fs ${(listen0.fsHz / 1e6).toFixed(2)} · фильтр ${listen0.filterMhz.toFixed(1)} · crop ${listen0.cropFactor.toFixed(3)} · окно ${listen0.spanMhz.toFixed(1)} МГц · память IQ 2^24`
+              : `${attackLive ? "АТАКА" : "классы"} эмуляция: спектр эмулятора · FFT ${Math.min(listen0.fftN, 4096)} · окно ${listen0.spanMhz.toFixed(1)} МГц · разбор по бинам (IQ платы нет)`
             : `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
         );
         let inflight = false;
@@ -4924,14 +5055,15 @@ export const useLegion = create<LegionStore>((set, get) => {
             if (!step?.centerMhz) return;
             centerMhz = step.centerMhz;
           }
-          const listen =
-            get().scanPattern === "auto"
+          const listen = detectorListens(get().scanPattern)
+            ? get().scanPattern === "auto"
               ? attackListenPlan({
                   analogMhz: analog,
                   paintOwnsTx: attackPaintOwnsTx(get().scanPattern, get().attackPaint, get().transmitArmed),
                   paint: get().attackPaint,
                 })
-              : null;
+              : classListenPlan(analog)
+            : null;
           const spanMhz = listen ? listen.spanMhz : hostScanSpanMhz(analog);
           if (gLive) {
             const win = listen
@@ -4964,7 +5096,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             ...d,
             ts: now,
           }));
-          const corridor = get().attackPaint;
+          const corridor = get().scanPattern === "auto" ? get().attackPaint : null;
           const raw = corridor ? rawAll.filter((d) => freqInCorridor(d.freqMhz, corridor)) : rawAll;
           const occupyGuard = ownTxBlankMhz(gAttackOccupyMhz, get().txWaveKind !== null);
           detections = withoutOwnTx(raw, get().lastForwardMhz, occupyGuard);
@@ -4991,10 +5123,12 @@ export const useLegion = create<LegionStore>((set, get) => {
           }
           let think: { snap: ReturnType<AttackTracker["snapshot"]>; fsHz: number; span: number; paintTx: boolean } | null =
             null;
-          if (cur.scanPattern === "auto" && bins.length > 0) {
+          if (detectorListens(cur.scanPattern) && bins.length > 0) {
             const hits = detectAttackHits(bins, cur.scanThresholdDb, listen?.spanMhz).filter((h) => {
               if (cur.sdrBands.length > 0 && !cueFreqAllowed(h.freqMhz, cur.sdrBands)) return false;
-              if (cur.attackPaint && !freqInCorridor(h.freqMhz, cur.attackPaint)) return false;
+              if (cur.scanPattern === "auto" && cur.attackPaint && !freqInCorridor(h.freqMhz, cur.attackPaint)) {
+                return false;
+              }
               return true;
             });
             const paint = cur.attackPaint;
@@ -5226,7 +5360,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         lastForwardPowerDbm: null,
         sdrHoldSince: null,
         lastCueReason: "SDR TX остановлен",
-        attackTracks: get().scanPattern === "auto" ? gAttackTracker.snapshot() : get().attackTracks,
+        attackTracks: detectorListens(get().scanPattern as SdrWalkPattern)
+          ? gAttackTracker.snapshot()
+          : get().attackTracks,
       });
       pushLog("sys", "SDR TX остановлен (ESP32 не тронут)");
     },

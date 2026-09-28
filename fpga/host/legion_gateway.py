@@ -415,7 +415,7 @@ class FakeTransport:
                         lf.REG_BAND_F1_KHZ, lf.REG_BAND_F2_KHZ,
                         lf.REG_BAND_COUNT, lf.REG_SETTLE_N,
                         lf.REG_DELAY, lf.REG_WALK_STEP, lf.REG_WALK_MAX,
-                        lf.REG_WALK_CTL, lf.REG_WALK_CUR):
+                        lf.REG_WALK_CTL, lf.REG_WALK_CUR, lf.REG_LB_DELAY):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -960,6 +960,14 @@ class LegionGateway:
                 enable=walk_en, auto=walk_auto, hold=walk_hold,
             ):
                 return {"ok": False, "reason": "запись DELAY/WALK_* не удалась"}
+            try:
+                lb_delay = int(msg.get("lb_delay") or 0)
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "lb_delay: не число"}
+            if lb_delay < 0 or lb_delay > 4095:
+                return {"ok": False, "reason": "lb_delay: 0…4095 сэмплов"}
+            if not self.fpga.set_lb_delay(lb_delay):
+                return {"ok": False, "reason": "запись LB_DELAY не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -1133,7 +1141,8 @@ class LegionGateway:
                 "det_shift": lf.REG_DET_SHIFT, "player_len": lf.REG_PLAYER_LEN,
                 "player_ctl": lf.REG_PLAYER_CTL, "lb_shift": lf.REG_LB_SHIFT,
                 "wd_limit": lf.REG_WD_LIMIT,
-                "delay": lf.REG_DELAY, "walk_step": lf.REG_WALK_STEP,
+                "delay": lf.REG_DELAY, "lb_delay": lf.REG_LB_DELAY,
+                "walk_step": lf.REG_WALK_STEP,
                 "walk_max": lf.REG_WALK_MAX, "walk_ctl": lf.REG_WALK_CTL,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,

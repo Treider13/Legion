@@ -72,6 +72,9 @@ package legion_pkg is
     constant LEGION_REG_WALK_MAX   : natural := 16#21#; -- потолок; 0 = до 2^32−1
     constant LEGION_REG_WALK_CTL   : natural := 16#22#; -- bit0 EN, bit1 AUTO, bit2 HOLD
     constant LEGION_REG_WALK_CUR   : natural := 16#23#; -- STATUS mux: текущая задержка
+    -- Живая линия задержки loopback (не walk-off 0x1F): сэмплы после CDC FIFO.
+    -- 0 = обход. Потолок DEPTH-1. Хост пишет при ARM lb_gated/lb_always.
+    constant LEGION_REG_LB_DELAY   : natural := 16#24#;
 
     constant LEGION_WALK_CTL_EN    : natural := 0;
     constant LEGION_WALK_CTL_AUTO  : natural := 1;
@@ -98,6 +101,7 @@ package legion_pkg is
 
     constant LEGION_RAM_DEPTH      : natural := 4096;   -- 4096×32бит = 16 M9K на EP4CE40
     constant LEGION_LB_FIFO_DEPTH  : natural := 64;     -- CDC RX→TX, Gray-указатели
+    -- Живой DRFM: та же глубина, что плеер. Не склеивать с DELAY 0x1F.
 
 end package;
 

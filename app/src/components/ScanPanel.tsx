@@ -11,6 +11,7 @@ import {
   isFpgaAirPattern,
   isFpgaTaskLive,
   patternOptionRu,
+  detectorListens,
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
@@ -23,6 +24,8 @@ import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
 import { lookRu } from "../sense/attackLook";
+import { droneBandLabel, droneSurveyLine } from "../sense/droneBands";
+import { RfClassCard } from "./RfClassCard";
 import { ATTACK_LISTEN_ANALOG_MHZ } from "../sense/attackListen";
 import {
   ATTACK_HOLD_MAX_MS,
@@ -48,6 +51,7 @@ export function ScanPanel() {
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
   const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
+  const classLive = detectorListens(s.scanPattern) && !taskLive && !airLive;
   const interceptSetup = fpgaAir && !taskLive && !airLive;
   const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
@@ -117,7 +121,7 @@ export function ScanPanel() {
                 : "окно FPGA"
               : taskLive
                 ? "не перехват"
-                : `МГц · ${auto ? "energy" : "сканер выкл"}`}
+                : `МГц · ${auto ? "energy" : classLive ? "слух классов" : "сканер выкл"}`}
           </span>
         </div>
         <div className={`freq-hud-card tx ${airLive ? (s.fpgaStatus?.det_active ? "live" : "") : s.lastForwardMhz != null ? "live" : ""}`}>
@@ -232,6 +236,16 @@ export function ScanPanel() {
                 step={0.1}
                 value={s.fpgaSurveyPeriodMs}
                 onChange={(e) => s.setFpgaSurveyPeriodMs(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
+            <label title="Живая линия задержки RX→TX после CDC. Не walk-off снимок. 0 — обход. 4096 сэмплов @ 2 MSPS ≈ 2 мс.">
+              DRFM ЗАДЕРЖКА
+              <input
+                aria-label="Живая задержка loopback в сэмплах"
+                inputMode="numeric"
+                value={s.fpgaLbDelay}
+                onChange={(e) => s.setFpgaLbDelay(e.target.value)}
                 disabled={busy || s.fpgaBusy}
               />
             </label>
@@ -380,7 +394,7 @@ export function ScanPanel() {
               : s.autoDispatch === "park"
                 ? "рамки нет: стоянка в узком коридоре. Широкий линк обведите мышкой сами."
                 : "рамки нет: очередь засечек. Широкий линк обведите мышкой сами."
-            : `без сканера: ноутбук ставит TX до стопа. Шаг двигает центр. Полка ${s.txShelfMhz} МГц — ширина горба${
+            : `СКАНИРОВАТЬ — слух классов (аналог и цифра). ПЕРЕДАТЬ — TX до стопа, класс на тех же часах полки. Шаг двигает центр. Полка ${s.txShelfMhz} МГц — ширина горба${
                 s.txWaveKind && waveFillsSoloWindow(s.txWaveKind)
                   ? ", шум займёт её целиком"
                   : ". Тон и QPSK уже полки — горб останется узким"
@@ -417,7 +431,7 @@ export function ScanPanel() {
             : ""}
         </p>
       )}
-      {auto && (
+      {classLive && (
         <>
           <div className="sens-row">
             <span className="att-label">ЧУВСТВИТЕЛЬНОСТЬ ЗАСЕЧКИ</span>
@@ -455,6 +469,14 @@ export function ScanPanel() {
         <button className="btn-ghost" onClick={() => s.clearSdrBands()} disabled={busy}>
           ОЧИСТИТЬ
         </button>
+        <button
+          className="btn-ghost"
+          onClick={() => s.applyDroneSurvey()}
+          disabled={busy}
+          title={droneSurveyLine(s.sdrId)}
+        >
+          ПОЛОСЫ ДРОНОВ
+        </button>
         {auto && (
           <button className="btn-ghost" onClick={() => s.injectDemoTone()}>
             ДЕМО-НЕСУЩАЯ
@@ -481,13 +503,21 @@ export function ScanPanel() {
           )
         ) : (
           <>
-            {auto &&
+            {classLive && (auto || !s.transmitArmed) &&
               (s.scanRunning ? (
                 <button className="btn-danger" onClick={() => s.stopScan()}>
                   СТОП СКАН
                 </button>
               ) : (
-                <button className="btn-primary" onClick={() => s.startScan()}>
+                <button
+                  className="btn-primary"
+                  onClick={() => s.startScan()}
+                  title={
+                    auto
+                      ? "Слух Атаки"
+                      : "Слух классов на analog платы. Во время ПЕРЕДАТЬ — на часах полки, эту кнопку не крутим"
+                  }
+                >
                   СКАНИРОВАТЬ
                 </button>
               ))}
@@ -527,11 +557,15 @@ export function ScanPanel() {
       )}
       <ul className="allow-list">
         {s.sdrBands.length === 0 && <li>полоса из F1…F2 при старте, либо добавьте вручную</li>}
-        {s.sdrBands.map((b, i) => (
-          <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
-            {b.f1Mhz} … {b.f2Mhz} МГц
-          </li>
-        ))}
+        {s.sdrBands.map((b, i) => {
+          const tag = droneBandLabel(b);
+          return (
+            <li key={`${b.f1Mhz}-${b.f2Mhz}-${i}`}>
+              {tag ? <span className="band-chip">{tag}</span> : null}
+              {b.f1Mhz} … {b.f2Mhz} МГц
+            </li>
+          );
+        })}
       </ul>
 
       <SpectrumScope />
@@ -555,9 +589,11 @@ export function ScanPanel() {
                   ? " · атака рамка"
                   : " · авто TX"
                 : " · TX с ноутбука"
-              : auto && s.scanRunning
+              : classLive && s.scanRunning
                 ? " · слушает"
-                : ""}
+                : classLive && s.transmitArmed && !auto
+                  ? " · слух на полке"
+                  : ""}
         </span>
         <span>{f2}</span>
       </div>
@@ -581,6 +617,27 @@ export function ScanPanel() {
               : `наблюдение недоступно: ${s.fpgaStatus.reason ?? "?"}`}
           </div>
         </div>
+      )}
+      {(classLive || airLive) && (
+        <RfClassCard
+          rows={
+            s.attackRows.length
+              ? s.attackRows
+              : atlasForTracks(s.attackTracks, analogBw).map(
+                  (t): AttackRow => ({
+                    ...t,
+                    width3Mhz: t.widthMhz,
+                    width26Mhz: t.widthMhz,
+                    occ99Mhz: t.widthMhz,
+                    look: undefined,
+                    familyId: null,
+                    infoRu: "",
+                  }),
+                )
+          }
+          pattern={s.scanPattern}
+          fpga={airLive ? s.fpgaClass : null}
+        />
       )}
       {auto && (
         <>

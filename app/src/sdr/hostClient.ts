@@ -41,6 +41,11 @@ export interface HostAttackLook {
   kurt?: number;
   clip?: boolean;
   leftover?: number | null;
+  analogKind?: string;
+  analogScore?: number;
+  palScore?: number;
+  ntscScore?: number;
+  hit?: boolean;
 }
 
 export interface HostAttackThinkResult {

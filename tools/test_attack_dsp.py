@@ -142,6 +142,15 @@ def main() -> int:
         abs(float(ch_look["famAlphaHz"]) - 15625) < 5000 and float(ch_look["famCoh"]) >= 0.22,
         f"fs={ch_fs:.0f} a={ch_look['famAlphaHz']:.0f} coh={ch_look['famCoh']:.3f}",
     )
+    pal = d.synth_analog_pal(8192, 2e6)
+    ac = d.analog_comb(pal, 2e6)
+    check("гребёнка PAL на ЧМ", ac["hit"] is True and ac["analogKind"] == "pal", str(ac))
+    tone_c = d.analog_comb(d.synth_look_iq("tone", 8192, 2e6), 2e6)
+    check("тон без analog comb", tone_c["hit"] is False, str(tone_c))
+    ofdm_c = d.analog_comb(d.synth_look_iq("ofdm", 8192, 2e6), 2e6)
+    check("OFDM без analog comb", ofdm_c["hit"] is False, str(ofdm_c))
+    pal_look = d.analyze_iq(pal, 2e6)
+    check("analyze_iq несёт analogKind", pal_look.get("analogKind") == "pal", str(pal_look))
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

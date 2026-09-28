@@ -40,7 +40,13 @@ export function walkPatternArmsTx(): boolean {
 
 export function scannerParticipates(pattern: SdrWalkPattern): boolean {
   // fpga: глаза — плата (энергия у АЦП). Хост-сканер в круге не участвует.
+  // sweep/band/hop: слух классов есть, но TX Атаки сюда не смешиваем.
   return pattern === "auto";
+}
+
+/** Слух RfClass: Атака и open-loop. FPGA — observe tap, не этот хост-FFT. */
+export function detectorListens(pattern: SdrWalkPattern): boolean {
+  return pattern === "auto" || pattern === "sweep" || pattern === "band" || pattern === "hop";
 }
 
 /** Имя онбордового режима для оператора. Wire id — scanPattern="fpga". */
@@ -73,19 +79,26 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "auto":
       return `${HOST_ATTACK_MODE_RU} (сканер → ПЕРЕДАТЬ)`;
     case "sweep":
-      return "КАЧАНИЕ TX (реверс, без сканера)";
+      return "КАЧАНИЕ TX (реверс; слух классов — СКАНИРОВАТЬ)";
     case "band":
-      return "СПЛОШНАЯ TX (по кругу, без сканера)";
+      return "СПЛОШНАЯ TX (по кругу; слух классов — СКАНИРОВАТЬ)";
     case "hop":
-      return "СЛУЧАЙНАЯ TX (без сканера)";
+      return "СЛУЧАЙНАЯ TX (слух классов — СКАНИРОВАТЬ)";
     case "fpga":
       return `${FPGA_AIR_MODE_RU} (плата сама: глухой обзор → ИИ окно на всплеск → выдержка внутри → снова обзор; USB не в круге)`;
   }
 }
 
 export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
-  if (scannerParticipates(pattern) || isFpgaAirPattern(pattern)) return null;
-  return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} сканер не участвует — выберите ${HOST_ATTACK_MODE_RU_CAPS}`;
+  if (detectorListens(pattern) || isFpgaAirPattern(pattern)) return null;
+  return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} слуха нет`;
+}
+
+/** xA4 один BBPLL (Nuand t=13047): 61.44-слух во время полки схлопнет TX. */
+export function classScanBlockedByTx(pattern: SdrWalkPattern, transmitArmed: boolean): string | null {
+  if (!transmitArmed) return null;
+  if (!detectorListens(pattern) || scannerParticipates(pattern)) return null;
+  return "СКАНИРОВАТЬ: при ПЕРЕДАТЬ слух уже на часах полки — один BBPLL, 61.44 не крутим";
 }
 
 export function autoDispatchLabelRu(dispatch: AutoDispatch): string {
@@ -142,7 +155,9 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
     useScanner: false,
     openLoopTx: true,
     useFpgaAir: false,
-    reason: `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер не участвует, пока оператор не стопнет`,
+    reason:
+      `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер Атаки не участвует. ` +
+      "Слух классов — СКАНИРОВАТЬ без TX (analog платы) или на часах полки после ПЕРЕДАТЬ",
   };
 }
 

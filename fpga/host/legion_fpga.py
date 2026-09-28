@@ -64,6 +64,7 @@ REG_WALK_STEP = 0x20
 REG_WALK_MAX = 0x21
 REG_WALK_CTL = 0x22  # bit0 EN, bit1 AUTO, bit2 HOLD
 REG_WALK_CUR = 0x23  # STATUS mux: текущая задержка
+REG_LB_DELAY = 0x24  # живая линия задержки loopback, сэмплы; 0=обход
 
 WALK_CTL_EN = 1 << 0
 WALK_CTL_AUTO = 1 << 1
@@ -284,6 +285,15 @@ class LegionFpga:
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)
+
+    def set_lb_delay(self, delay: int) -> bool:
+        """Живой DRFM после CDC. 0 = обход. Не DELAY walk-off 0x1F."""
+        n = int(delay)
+        if n < 0:
+            n = 0
+        if n > 4095:
+            n = 4095
+        return self.write_reg(REG_LB_DELAY, n & 0xFFF)
 
     def set_watchdog(self, limit: int) -> bool:
         return self.write_reg(REG_WD_LIMIT, limit & 0xFFFF)

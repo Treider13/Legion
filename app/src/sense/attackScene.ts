@@ -82,7 +82,11 @@ export function buildAttackScene(input: {
   for (const f of families) {
     for (const id of f.members) famOf.set(id, f.id);
   }
-  const atlas = atlasForTracks(input.tracks, input.windowMhz);
+  const combs = new Map<number, NonNullable<AttackLook["analog"]>>();
+  for (const [id, look] of looks) {
+    if (look.analog?.hit) combs.set(id, look.analog);
+  }
+  const atlas = atlasForTracks(input.tracks, input.windowMhz, combs);
   const info = readAttackInfo({
     tracks: input.tracks,
     snaps: input.memory.powerSnaps(),

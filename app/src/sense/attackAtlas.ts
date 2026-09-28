@@ -3,6 +3,7 @@
 // полоса / ширина / duty / соседи. Не декодер, не вход в TX, не имя фирмы.
 // Ширина сначала, потом корзина — иначе 10/20 на 5.8 зовут аналогом.
 // ============================================================================
+import type { AnalogComb } from "./analogComb";
 import type { AttackTrack } from "./attackTracks";
 import { ATTACK_VIDEO_BW_MHZ } from "./attackDetect";
 
@@ -15,6 +16,7 @@ export type AttackBand =
   | "s24"
   | "c33"
   | "c51"
+  | "c53"
   | "c58"
   | "other";
 
@@ -33,21 +35,33 @@ export function bandBucket(mhz: number): AttackBand {
   if (mhz >= 2400 && mhz <= 2500) return "s24";
   if (mhz >= 3080 && mhz <= 3600) return "c33";
   if (mhz >= 5150 && mhz <= 5250) return "c51";
+  if (mhz > 5250 && mhz < 5640) return "c53";
   if (mhz >= 5640 && mhz <= 5950) return "c58";
   return "other";
 }
 
-const DIGITAL_BANDS: readonly AttackBand[] = ["s14", "s24", "c51", "c58"];
+const DIGITAL_BANDS: readonly AttackBand[] = ["s14", "s24", "c51", "c53", "c58"];
 const ANALOG_BANDS: readonly AttackBand[] = ["l12", "c33", "c58"];
 
 export function classifyAttackFamily(
   t: Pick<AttackTrack, "freqMhz" | "widthMhz" | "duty" | "streak">,
   windowMhz?: number,
+  comb?: AnalogComb | null,
 ): AttackAtlasRow {
   const band = bandBucket(t.freqMhz);
   const hopLike = t.duty < 0.45 && t.streak <= 2;
   const sticky = t.duty >= 0.7;
   const win = windowMhz != null && windowMhz > 0 ? windowMhz : undefined;
+  const analogHit = !!comb?.hit && sticky && t.widthMhz >= ATTACK_VIDEO_BW_MHZ;
+
+  if (analogHit) {
+    const std = comb?.kind === "ntsc" ? "NTSC 15734" : "PAL 15625";
+    return {
+      id: "analog-video",
+      label: "аналоговое видео (гребёнка)",
+      hint: `${std} на FM — orecchiette/DragonSig, не имя борта`,
+    };
+  }
 
   if (t.widthMhz < 6 && band === "p900") {
     return {
@@ -143,9 +157,10 @@ function videoPeer(t: Pick<AttackTrack, "widthMhz" | "duty">): boolean {
 export function atlasForTracks(
   tracks: readonly AttackTrack[],
   windowMhz?: number,
+  combs?: ReadonlyMap<number, AnalogComb>,
 ): Array<AttackTrack & { atlas: AttackAtlasRow }> {
   return tracks.map((t) => {
-    const atlas = classifyAttackFamily(t, windowMhz);
+    const atlas = classifyAttackFamily(t, windowMhz, combs?.get(t.id));
     const band = bandBucket(t.freqMhz);
     const peers = tracks.filter((p) => p.id !== t.id && bandBucket(p.freqMhz) === band);
     const two =

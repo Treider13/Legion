@@ -73,3 +73,25 @@ export function attackListenPlan(opts: {
     fftN: ATTACK_FFT_N_FULL,
   };
 }
+
+/** Слух классов без рамки Атаки: analog платы, не DIO 40. */
+export function classListenPlan(analogMhz: number): AttackListenPlan {
+  return attackListenPlan({ analogMhz, paintOwnsTx: false, paint: null });
+}
+
+/** Слух на часах полки open-loop. Не 61.44 — иначе BBPLL xA4 схлопнет TX. */
+export function shelfListenPlan(opts: { fsHz: number; filterMhz: number }): AttackListenPlan {
+  const fsHz = Number.isFinite(opts.fsHz) && opts.fsHz > 0 ? opts.fsHz : ATTACK_FD_FS_HZ;
+  const filterMhz = Math.min(
+    Number.isFinite(opts.filterMhz) && opts.filterMhz > 0 ? opts.filterMhz : fsHz / 1e6,
+    fsHz / 1e6,
+  );
+  const cropFactor = attackCropFactor(fsHz, filterMhz);
+  return {
+    fsHz,
+    filterMhz,
+    cropFactor,
+    spanMhz: attackListenSpanMhz(fsHz, cropFactor),
+    fftN: fsHz >= 20e6 ? ATTACK_FFT_N_FULL : ATTACK_FFT_N,
+  };
+}

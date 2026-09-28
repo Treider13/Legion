@@ -291,6 +291,8 @@ architecture legion of bladerf is
     signal lg_tx_walk_en    : std_logic;
     signal lg_tx_walk_auto  : std_logic;
     signal lg_tx_walk_hold  : std_logic;
+    signal lg_tx_lb_delay   : unsigned(11 downto 0);
+    signal lg_lb_mux_data   : std_logic_vector(31 downto 0);
     signal lg_wo_cap_i      : signed(15 downto 0);
     signal lg_wo_cap_q      : signed(15 downto 0);
     signal lg_wo_cap_v      : std_logic;
@@ -1512,6 +1514,7 @@ begin
         tx_walk_en    => lg_tx_walk_en,
         tx_walk_auto  => lg_tx_walk_auto,
         tx_walk_hold  => lg_tx_walk_hold,
+        tx_lb_delay   => lg_tx_lb_delay,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1698,6 +1701,16 @@ begin
       );
     lg_wd_ok <= not lg_wd_fired;
 
+    U_legion_delayline : entity work.legion_delayline
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        delay     => lg_tx_lb_delay,
+        din       => lg_lb_data,
+        sample_en => lg_mux_rd_en,
+        dout      => lg_lb_mux_data
+      );
+
     -- Мультиплексор TX-источника
     U_legion_tx_mux : entity work.legion_tx_mux
       port map (
@@ -1718,7 +1731,7 @@ begin
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,
-        lb_data    => lg_lb_data,
+        lb_data    => lg_lb_mux_data,
         lb_empty   => lg_lb_empty,
         lb_rd_en   => lg_mux_rd_en,
         out_i      => lg_mux_i,

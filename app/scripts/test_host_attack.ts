@@ -4,7 +4,11 @@
 // ============================================================================
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
+import { analogCombFromIq, PAL_LINE_HZ } from "../src/sense/analogComb";
 import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import { droneBandLabel, droneSurveyBands } from "../src/sense/droneBands";
+import { classifyFpgaObserve } from "../src/sense/fpgaObserveClass";
+import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
@@ -362,6 +366,9 @@ async function main(): Promise<void> {
   check("5.8 12 МГц sticky — цифра, не аналог", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 12, duty: 0.9, streak: 10,
   }).id === "digital-video");
+  check("5.8 12 + PAL гребёнка — аналог", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 12, duty: 0.9, streak: 10,
+  }, 56, { kind: "pal", score: 4, palScore: 4, ntscScore: 1, hit: true }).id === "analog-video");
   check("5.8 30 МГц sticky — широко", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 30, duty: 0.9, streak: 10,
   }).id === "digital-wide");
@@ -554,6 +561,7 @@ async function main(): Promise<void> {
     clip: false,
     leftover: null,
     source: "iq",
+    analog: { kind: "none", score: 0, palScore: 0, ntscScore: 0, hit: false },
   });
   hopMem.noteScene(1, hopTracks);
   hopMem.noteScene(2, hopTracks);
@@ -2155,7 +2163,7 @@ async function main(): Promise<void> {
   L().disarmTxWave();
   L().setScanPattern("auto");
 
-  // sweep/band/hop сканер не поднимают (scanRefusedReason). Тот же crop, что tickScan без listen.
+  // Хост-скан без class-listen: тот же crop 0.5, что cinema/soapy. Слух классов — другой путь.
   const other = new MockSdrBackend();
   other.setEmulation(true);
   other.open("bladerf-micro-xa4");
@@ -2164,6 +2172,58 @@ async function main(): Promise<void> {
     otherBins.length > 1 ? otherBins[otherBins.length - 1]!.freqMhz - otherBins[0]!.freqMhz : 0;
   check("чужой путь: 1024 × crop 0.5", otherBins.length === 512);
   check("чужой путь: окно ~20, не 56", Math.abs(otherSpan - 20) < 2, `span=${otherSpan.toFixed(2)}`);
+
+  const palN = 8192;
+  const palFs = 2e6;
+  const palIq = new Float64Array(palN * 2);
+  for (let i = 0; i < palN; i++) {
+    const t = i / palFs;
+    const ph = 2 * Math.PI * (palFs / 16) * t + 0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t);
+    palIq[2 * i] = 0.4 * Math.cos(ph);
+    palIq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  const palComb = analogCombFromIq(palIq, palFs);
+  check("гребёнка PAL на ЧМ", palComb.hit && palComb.kind === "pal", JSON.stringify(palComb));
+  const toneIq = new Float64Array(palN * 2);
+  for (let i = 0; i < palN; i++) {
+    const ph = (2 * Math.PI * i) / 16;
+    toneIq[2 * i] = 0.4 * Math.cos(ph);
+    toneIq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  check("тон без гребёнки analog", analogCombFromIq(toneIq, palFs).hit === false);
+
+  const xa4Bands = droneSurveyBands("bladerf-micro-xa4");
+  const x40Bands = droneSurveyBands("bladerf-x40");
+  check("xA4 плейлист 8 полос до 6 ГГц", xa4Bands.length === 8 && xa4Bands.some((b) => b.f2Mhz >= 5900));
+  check("x40 без 5.8", x40Bands.length === 6 && x40Bands.every((b) => b.f2Mhz <= 3800));
+  check("класс-слух xA4 = 61.44/56", classListenPlan(56).fsHz === 61_440_000 && classListenPlan(56).filterMhz === 56);
+  const shelfL = shelfListenPlan({ fsHz: 15e6, filterMhz: 15 });
+  check("слух на полке не 61.44", shelfL.fsHz === 15e6 && shelfL.filterMhz === 15);
+  const silentFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5800, detActive: false, lookMhz: 56 });
+  check("FPGA тишина честная", silentFpga.atlas.id === "silent" && silentFpga.detActive === false);
+  const liveFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5780, detActive: true, lookMhz: 56 });
+  check("FPGA окно 56 = window-fill", liveFpga.atlas.id === "window-fill");
+  check("бирка 5.8", droneBandLabel({ f1Mhz: 5320, f2Mhz: 5950 }) === "5.3–5.95");
+  check("бирка 2.4", droneBandLabel({ f1Mhz: 2400, f2Mhz: 2485 }) === "2.4");
+
+  L().applyDroneSurvey();
+  check("ПОЛОСЫ ДРОНОВ на xA4", L().sdrBands.length === 8 && L().sdrBands.some((b) => b.f2Mhz >= 5900));
+  L().clearSdrBands();
+  L().setSdrAllowField("sdrF1", "2400");
+  L().setSdrAllowField("sdrF2", "2500");
+  L().addSdrBand();
+
+  await L().stopTransmit();
+  L().stopScan();
+  L().setScanPattern("sweep");
+  L().startScan();
+  check("слух в качании без TX", await waitFor("class-scan", () => L().scanRunning));
+  await L().startTransmit();
+  check("ПЕРЕДАТЬ в качании гасит отдельный скан", L().scanRunning === false);
+  L().startScan();
+  check("скан во время полки отказан", L().scanRunning === false);
+  await L().stopTransmit();
+  L().setScanPattern("auto");
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

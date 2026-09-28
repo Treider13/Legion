@@ -288,6 +288,16 @@ export function SignalPanel() {
               <option value="lb_always">Ретрансляция постоянная (RX→TX, без детектора)</option>
             </select>
           </label>
+          <label title="Живая линия задержки RX→TX (lb_gated / lb_always). Не walk-off 0x1F. 0 — обход, до 4095 сэмплов.">
+            DRFM ЗАДЕРЖКА (сэмплы)
+            <input
+              aria-label="Живая задержка loopback в сэмплах"
+              inputMode="numeric"
+              value={s.fpgaLbDelay}
+              onChange={(e) => s.setFpgaLbDelay(e.target.value)}
+              disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+            />
+          </label>
           {s.fpgaMode === "player" && (
             <>
               <label title="Число сэмплов тишины после capture_done до play_en. 0 — сразу. При 2 MSPS 1 сэмпл = 0.5 мкс.">

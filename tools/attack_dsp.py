@@ -38,6 +38,12 @@ ATTACK_THINK_N = 1 << 16  # хвост на разбор; кольцо 2^24 че
 ATTACK_LOOK_FS = 2.0e6  # пол канала AMC, чтобы FAM и решётка не умерли
 ATTACK_LMS_TAPS = 32
 ATTACK_CLIP = 0.92
+PAL_LINE_HZ = 15625.0
+NTSC_LINE_HZ = 15734.0
+ANALOG_COMB_HARMONICS = 4
+ANALOG_COMB_BIN_HZ = 80.0
+ANALOG_COMB_HIT = 2.4
+ANALOG_COMB_MAX_N = 16384
 
 _DPSS: dict[tuple[int, int], np.ndarray] = {}
 
@@ -337,6 +343,78 @@ def cumulants(x: np.ndarray) -> dict[str, float]:
     }
 
 
+def fm_demod(x: np.ndarray) -> np.ndarray:
+    """orecchiette / DragonSig: arg(z[n] · conj(z[n-1]))."""
+    z = np.asarray(x, dtype=np.complex64)
+    if z.size < 2:
+        return np.zeros(0, dtype=np.float64)
+    prod = z[1:] * np.conj(z[:-1])
+    return np.angle(prod).astype(np.float64)
+
+
+def _bin_energy(mag: np.ndarray, freqs: np.ndarray, hz: float, bw: float) -> float:
+    delta = np.abs(freqs - hz)
+    mask = delta <= bw
+    if np.any(mask):
+        return float(np.sum(mag[mask]))
+    return float(mag[int(np.argmin(delta))])
+
+
+def _comb_ratio(mag: np.ndarray, freqs: np.ndarray, f0: float) -> float:
+    num = 0.0
+    den = 0.0
+    for k in range(1, ANALOG_COMB_HARMONICS + 1):
+        num += _bin_energy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ)
+        den += _bin_energy(mag, freqs, f0 * k + f0 / 2.0, ANALOG_COMB_BIN_HZ)
+    return num / (den + 1e-20)
+
+
+def analog_comb(x: np.ndarray, fs: float) -> dict[str, Any]:
+    """Гребёнка PAL/NTSC на FM. Цифра (OFDM) её не даёт."""
+    empty = {
+        "analogKind": "none",
+        "analogScore": 0.0,
+        "palScore": 0.0,
+        "ntscScore": 0.0,
+        "hit": False,
+    }
+    if len(x) < 256 or not (fs and fs > 0):
+        return empty
+    fm = fm_demod(x)
+    if fm.size < 256:
+        return empty
+    if fm.size > ANALOG_COMB_MAX_N:
+        fm = fm[-ANALOG_COMB_MAX_N:]
+    n = int(fm.size)
+    win = np.hanning(n)
+    spec = np.fft.rfft(fm * win)
+    mag = np.abs(spec)
+    freqs = np.fft.rfftfreq(n, d=1.0 / float(fs))
+    pal = _comb_ratio(mag, freqs, PAL_LINE_HZ)
+    ntsc = _comb_ratio(mag, freqs, NTSC_LINE_HZ)
+    score = max(pal, ntsc)
+    hit = score >= ANALOG_COMB_HIT
+    kind = "none"
+    if hit:
+        kind = "pal" if pal >= ntsc else "ntsc"
+    return {
+        "analogKind": kind,
+        "analogScore": float(score),
+        "palScore": float(pal),
+        "ntscScore": float(ntsc),
+        "hit": bool(hit),
+    }
+
+
+def synth_analog_pal(n: int = 8192, fs: float = 2e6) -> np.ndarray:
+    """ЧМ с девиацией на строчной PAL — тот же признак, что ищем в эфире."""
+    t = np.arange(int(n), dtype=np.float64) / float(fs)
+    phase = 2.0 * np.pi * (fs / 16.0) * t
+    phase += 0.85 * np.sin(2.0 * np.pi * PAL_LINE_HZ * t)
+    phase += 0.28 * np.sin(2.0 * np.pi * (2.0 * PAL_LINE_HZ) * t)
+    return (0.4 * np.exp(1j * phase)).astype(np.complex64)
+
+
 def classify_look(flat: float, cep: float, fam_coh: float, c20: float, kurt: float) -> dict[str, Any]:
     """Семья разбора, не имя фирмы. Порядок как lookFromBins: тон → решётка → цикл → шум.
     Иначе OFDM с CP всегда падал в «цикл» (он циклостационарен — факт, не семья для оператора)."""
@@ -514,6 +592,7 @@ def analyze_iq(
         else:
             flat, cep, var = 0.0, 0.0, 0.0
     kind = classify_look(flat, cep, float(fam["coh"]), cum["c20"], cum["kurt"])
+    comb = analog_comb(x, fs)
     return {
         "flatness": float(flat),
         "cepstrum": float(cep),
@@ -526,6 +605,7 @@ def analyze_iq(
         "kurt": cum["kurt"],
         "clip": bool(clip),
         **kind,
+        **comb,
     }
 
 

@@ -2,6 +2,7 @@
 // LEGION — разбор выреза Атаки. Классика AMC (кумулянты / плоскость / FAM),
 // не имя борта. Ответ воркера attack_think или запас с одних бинов.
 // ============================================================================
+import { analogCombRu, ANALOG_COMB_NONE, parseAnalogComb, type AnalogComb } from "./analogComb";
 import { binsAroundPeak, cepstrumPeak, spectralFlatness, type AttackWidths } from "./attackMeasure";
 import { ATTACK_ASSOC_MHZ } from "./attackTracks";
 import type { ScanBin } from "../sdr/types";
@@ -22,6 +23,7 @@ export interface AttackLook {
   clip: boolean;
   leftover: number | null;
   source: "iq" | "bins";
+  analog: AnalogComb;
 }
 
 export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: AttackWidths): AttackLook {
@@ -59,6 +61,7 @@ export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: 
     clip: false,
     leftover: null,
     source: "bins",
+    analog: { ...ANALOG_COMB_NONE },
   };
 }
 
@@ -82,6 +85,7 @@ export function parseWorkerLook(raw: Record<string, unknown>, freqMhz: number): 
     clip: raw.clip === true,
     leftover: raw.leftover == null ? null : Number(raw.leftover),
     source: "iq",
+    analog: parseAnalogComb(raw),
   };
 }
 
@@ -131,5 +135,6 @@ export function lookRu(look: AttackLook | undefined): string {
   if (!look) return "разбор ещё копится";
   const pct = Math.round(look.conf * 100);
   const src = look.source === "iq" ? "по памяти IQ" : "по спектру";
-  return `${look.label} · уверенность ${pct}% · ${src}`;
+  const comb = analogCombRu(look.analog);
+  return comb ? `${look.label} · ${comb} · уверенность ${pct}% · ${src}` : `${look.label} · уверенность ${pct}% · ${src}`;
 }

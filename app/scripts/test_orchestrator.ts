@@ -133,6 +133,8 @@ import {
   planSdrWork,
   runIntentArmsTx,
   scanRefusedReason,
+  classScanBlockedByTx,
+  detectorListens,
   scannerParticipates,
   shouldKeepTransmit,
   walkPatternArmsTx,
@@ -494,6 +496,14 @@ async function main(): Promise<void> {
   check("атака — сканер участвует", scannerParticipates("auto") === true);
   check("случайная — сканер не участвует", scannerParticipates("hop") === false);
   check("сплошная — сканер не участвует", scannerParticipates("band") === false);
+  check("слух классов в Атаке", detectorListens("auto") === true);
+  check("слух классов в качании", detectorListens("sweep") === true);
+  check("слух классов в hop", detectorListens("hop") === true);
+  check("слух классов в сплошной", detectorListens("band") === true);
+  check("FPGA слух — observe, не хост-FFT", detectorListens("fpga") === false);
+  check("скан во время полки качания запрещён", classScanBlockedByTx("sweep", true) !== null);
+  check("скан Атаки с TX разрешён", classScanBlockedByTx("auto", true) === null);
+  check("скан качания без TX разрешён", classScanBlockedByTx("sweep", false) === null);
   check("planSdrWork атака: сканер, не open-loop", planSdrWork("auto").useScanner && !planSdrWork("auto").openLoopTx);
   check("planSdrWork hop: Ethernet TX, без сканера", planSdrWork("hop").openLoopTx && !planSdrWork("hop").useScanner);
   check("planSdrWork качание: Ethernet TX, без сканера", planSdrWork("sweep").openLoopTx && !planSdrWork("sweep").useScanner);
@@ -503,7 +513,7 @@ async function main(): Promise<void> {
   check("СКАНИРОВАТЬ в Атаке можно", scanRefusedReason("auto") === null);
   check("имя атаки", patternLabelRu("auto") === "АТАКА");
   check("опция атаки — сканер → ПЕРЕДАТЬ", patternOptionRu("auto").startsWith("Атака"));
-  check("отказ качания шлёт в АТАКУ", (scanRefusedReason("sweep") ?? "").includes("выберите АТАКА"));
+  check("слух классов в качании разрешён", scanRefusedReason("sweep") === null);
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
   check("умная атака имя", patternLabelRu("fpga") === "УМНАЯ АТАКА");
@@ -518,7 +528,8 @@ async function main(): Promise<void> {
   check("planSdrWork FPGA: плата смотрит эфир, хост-сканер не в круге",
     fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
-  check("СКАНИРОВАТЬ в качании отказано", (scanRefusedReason("sweep") ?? "").includes("КАЧАНИЕ"));
+  check("СКАНИРОВАТЬ в качании — слух классов", scanRefusedReason("sweep") === null);
+  check("TX-сканер по-прежнему только Атака", scannerParticipates("sweep") === false);
   check(
     "пустой эфир не стопает Атаку",
     shouldKeepTransmit({ operatorArmed: true, liveEmpty: true }) === true,
@@ -1502,6 +1513,10 @@ async function main(): Promise<void> {
   check("ARM player walk-off несёт delay/step/auto",
     walkCmd.delay === 16 && walkCmd.walk_step === 2 && walkCmd.walk_max === 64 &&
     walkCmd.walk_auto === true && walkCmd.walk_en === true && walkCmd.det_thr === 5000);
+  const lbCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", lbDelay: 64 });
+  check("ARM несёт живой DRFM lb_delay", lbCmd.lb_delay === 64);
+  const lbClamp = fpgaArmCmd("lb_always", { detThr: 5000, detShift: 4, token: "t", lbDelay: 9000 });
+  check("ARM клампит lb_delay к 4095", lbClamp.lb_delay === 4095);
   const ncoZero = fpgaArmCmd("nco", { detThr: 5000, detShift: 4, token: "", ncoFtw: ncoFtwFromFrac(0) });
   check("ARM nco шлёт FTW", typeof ncoZero.nco_ftw === "number");
   check("fj=0 → fs/8, не DC", ncoZero.nco_ftw === ncoFtwFromFrac(0.125) && ncoZero.nco_ftw !== 0);

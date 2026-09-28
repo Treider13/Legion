@@ -542,6 +542,8 @@ export function fpgaArmCmd(
     walkAuto?: boolean;
     walkHold?: boolean;
     walkEn?: boolean;
+    /** Живая линия задержки loopback, сэмплы. Не walk-off DELAY. */
+    lbDelay?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -579,6 +581,9 @@ export function fpgaArmCmd(
   if (opts.walkHold) cmd.walk_hold = true;
   if (opts.walkEn || opts.walkAuto || (typeof opts.delay === "number" && opts.delay > 0)) {
     cmd.walk_en = true;
+  }
+  if (opts.lbDelay !== undefined && Number.isFinite(opts.lbDelay) && opts.lbDelay >= 0) {
+    cmd.lb_delay = Math.min(4095, Math.round(opts.lbDelay));
   }
   if (opts.scanEnable) {
     cmd.scan_enable = true;
