@@ -92,10 +92,17 @@ async function main(): Promise<void> {
   check("soapy crop чужих режимов 0.5", SOAPY_CROP_FACTOR === 0.5);
   check("RESENSE_MS 1 с как был", RESENSE_MS === 1000);
   const storeSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/state/store.ts"), "utf8");
-  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const armAttackHoldTimer"));
+  const resenseSrc = storeSrc.slice(storeSrc.indexOf("const resenseHeld"), storeSrc.indexOf("const attackAnalogNow"));
   check(
     "resense Атаки не зовёт DIO-40",
     resenseSrc.includes("hostAttackScan") && resenseSrc.includes("attackListenPlan"),
+  );
+  check(
+    "resense рамки не схлопывает часы полкой",
+    resenseSrc.includes("runAttackShelfTx") &&
+      resenseSrc.includes("listenWhileTx") &&
+      resenseSrc.includes("holdMasked: listenWhileTx") &&
+      !resenseSrc.includes("shelfFsNow"),
   );
   check(
     "тик скана сверяет gScanGen после await",
@@ -138,6 +145,11 @@ async function main(): Promise<void> {
     storeSrc.includes("liveCorridorDets") &&
       storeSrc.includes('t.state === "cooled"') &&
       storeSrc.slice(storeSrc.indexOf("const liveCorridorDets"), storeSrc.indexOf("const muteAttackTxKeepSession")).includes("liveWindow"),
+  );
+  const muteSrc = storeSrc.slice(storeSrc.indexOf("const muteAttackTxKeepSession"), storeSrc.indexOf("const runAttackShelfTx"));
+  check(
+    "mute сессии рвёт in-flight TX поколением",
+    muteSrc.includes("gTxGen += 1") && muteSrc.includes("gGate.reset()"),
   );
   check(
     "pickArmed архив по-прежнему пуст",

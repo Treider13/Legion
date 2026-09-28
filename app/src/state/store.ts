@@ -1289,27 +1289,37 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       // Стоп/сброс/закрытие, пока летал hostScan: ничего не восстанавливаем.
       if (gen !== gTxGen) return "gone";
-      const dets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
+      const paintNow = get().attackPaint;
+      const occupyGuard = ownTxBlankMhz(gAttackOccupyMhz, get().txWaveKind !== null);
+      const rawDets = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands);
+      const dets = withoutOwnTx(rawDets, heldMhz, occupyGuard).filter((d) =>
+        paintNow ? freqInCorridor(d.freqMhz, paintNow) : true,
+      );
       const nextHit = pickArmedAutoTarget({
         liveWindow: dets,
         archive: get().detections,
         heldMhz,
-        heldPowerDbm: dets.find((d) => Math.abs(d.freqMhz - heldMhz) <= 0.2)?.powerDbm ?? null,
+        heldPowerDbm: get().lastForwardPowerDbm,
         skipMhz: gSkipMhz,
         dispatch: get().autoDispatch,
-        holdMasked: false,
+        holdMasked: listenWhileTx,
       });
       if (nextHit) {
         // Не dropHold до успеха: иначе тот же тик видит held=null и стомпит цель окном walker.
-        const ok = await runHandoffAsync(nextHit.freqMhz, nextHit.powerDbm);
+        const ok = paintNow
+          ? await runAttackShelfTx(nextHit.freqMhz, nextHit.powerDbm)
+          : await runHandoffAsync(nextHit.freqMhz, nextHit.powerDbm);
         if (ok) return "switch";
+        if (listenWhileTx) return "alive";
         const restored = await restoreHeldTx(heldMhz);
         return restored ? "alive" : "error";
       }
       if (heldHitAlive(dets, heldMhz)) {
-        const ok = await restoreHeldTx(heldMhz);
+        if (listenWhileTx) return "alive";
+        const ok = paintNow ? await runAttackShelfTx(heldMhz, get().lastForwardPowerDbm ?? 0) : await restoreHeldTx(heldMhz);
         return ok ? "alive" : "error";
       }
+      if (listenWhileTx) return "alive";
       gGate.dropHold();
       set({
         lastForwardMhz: null,
@@ -1358,6 +1368,8 @@ export const useLegion = create<LegionStore>((set, get) => {
   };
 
   const muteAttackTxKeepSession = async (why: string): Promise<void> => {
+    gTxGen += 1;
+    gGate.reset();
     gAttackOccupyMhz = 0;
     gAttackTracker.markHeld(null);
     if (gLive) await hostTxOff();
