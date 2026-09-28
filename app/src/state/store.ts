@@ -3886,16 +3886,19 @@ export const useLegion = create<LegionStore>((set, get) => {
               return false;
             }
             if (await abortAirIfRevoked()) return false;
-            const r = await gw({
-              op: "arm",
-              mode: "lb_gated",
-              wd: true,
-              det_thr: get().fpgaDetThr,
-              det_shift: tract.detShift,
-              freq_mhz: mid,
-              fs_hz: tract.fsHz,
-              bw_mhz: tract.bwMhz,
-            });
+            const r = await gw(
+              attachTxGainDb(fpgaArmCmd("lb_gated", {
+                detThr: get().fpgaDetThr,
+                detShift: tract.detShift,
+                token: get().fpgaToken,
+                freqMhz: mid,
+                fsHz: tract.fsHz,
+                bwMhz: tract.bwMhz,
+                ...walkoffArmOpts(get()),
+                walkAuto: false,
+                ...lbDelayArmOpts(get()),
+              }), get().txGainDb),
+            );
             pushLog("sys", `FPGA ARM (ретрансляция): ${r.reason ?? (r.ok ? "ок" : "отказ")}`);
             if (await abortAirIfRevoked(true)) return false;
             if (!r.ok) {

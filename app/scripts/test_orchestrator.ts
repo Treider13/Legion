@@ -1870,7 +1870,8 @@ async function main(): Promise<void> {
     storeSrc.includes("airTractParams(") && storeSrc.includes("parseLocaleNumber(s.fpgaAirBwMhz)"));
   const airBlock = storeSrc.slice(storeSrc.indexOf('set({ fpgaMode: "lb_gated" })'), storeSrc.indexOf("const kind = get().txWaveKind"));
   check("air start шлёт fs_hz/bw_mhz в ARM (NIOS поднимает тракт под канал)",
-    airBlock.includes("fs_hz: tract.fsHz") && airBlock.includes("bw_mhz: tract.bwMhz"));
+    airBlock.includes("fsHz: tract.fsHz") && airBlock.includes("bwMhz: tract.bwMhz") &&
+    airBlock.includes('fpgaArmCmd("lb_gated"'));
   check("air start сверяет поколение после park/ARM", airBlock.includes("abortAirIfRevoked"));
   check("онбордовый ARM несёт fs/bw взгляда",
     storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
@@ -2041,6 +2042,18 @@ async function main(): Promise<void> {
   check("hero: коридор ESP32 → КОРИДОР", heroCorr.kind === "tx" && heroCorr.text === "КОРИДОР");
   check("air start бампает gFpgaAirGen", storeSrc.includes("if (path === \"air\") {\n        gFpgaAirGen += 1"));
   const startFn = storeSrc.slice(storeSrc.indexOf("startFpgaPath: async"), storeSrc.indexOf("abortFpgaSolo:"));
+  {
+    const airPark = startFn.slice(
+      startFn.indexOf("if (!walk.hop)"),
+      startFn.indexOf("Обход с ретрансляцией"),
+    );
+    check("эфир одна стоянка несёт живой DRFM",
+      airPark.includes('fpgaArmCmd("lb_gated"') &&
+      airPark.includes("...walkoffArmOpts(get())") &&
+      airPark.includes("walkAuto: false") &&
+      airPark.includes("...lbDelayArmOpts(get())") &&
+      airPark.includes("attachTxGainDb"));
+  }
   check("air gen после ensureSdrBand, не до валидации",
     startFn.indexOf('if (path === "air" && !ensureSdrBand())') < startFn.indexOf("gFpgaAirGen += 1")
     && startFn.indexOf("gFpgaAirGen += 1") < startFn.indexOf("get().stopScan()"));
