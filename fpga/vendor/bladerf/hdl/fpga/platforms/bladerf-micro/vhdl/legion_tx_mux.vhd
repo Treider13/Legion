@@ -193,11 +193,13 @@ begin
                                 out_q <= lb_q;
                             end if;
                         elsif lb_valid = '1' and ramping = '1' then
-                            -- Спад энергии: (0.9·lb × k)/32, k=31..1.
-                            -- |lb|≤32768 → ×31 < 2^20, 32 бит хватает;
-                            -- shift_right на signed — арифметический.
-                            out_i <= resize(shift_right(resize(gi, 32) * to_integer(ramp_k), 5), 16);
-                            out_q <= resize(shift_right(resize(gq, 32) * to_integer(ramp_k), 5), 16);
+                            -- Спад: сначала (lb × k)/32 как раньше, затем 0.9.
+                            -- Рампа от уже масштабированного ломала I=−Q
+                            -- (ASR отрицательных). |lb|≤32768 → ×31 < 2^20.
+                            gi := resize(shift_right(resize(lb_i, 32) * to_integer(ramp_k), 5), 16);
+                            gq := resize(shift_right(resize(lb_q, 32) * to_integer(ramp_k), 5), 16);
+                            out_i <= lb_amp_q15(gi);
+                            out_q <= lb_amp_q15(gq);
                             if ramp_k = 0 then
                                 ramping <= '0';
                             else
