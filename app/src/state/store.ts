@@ -1227,15 +1227,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     };
   };
 
-  const autoTxLive = (st: {
-    scanPattern: string;
-    attackPaint: AttackPaint | null;
-    transmitArmed: boolean;
-    lastForwardMhz: number | null;
-  }): boolean =>
-    st.scanPattern === "auto" &&
-    st.transmitArmed &&
-    (attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed) || st.lastForwardMhz != null);
+  const autoTxLive = (st: { scanPattern: string; transmitArmed: boolean }): boolean =>
+    st.scanPattern === "auto" && st.transmitArmed;
 
   const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
     const st = get();

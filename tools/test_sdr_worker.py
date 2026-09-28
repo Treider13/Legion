@@ -724,6 +724,7 @@ def main() -> int:
         and lo0 is not None
         and abs(lo0 - (2442e6 - 40e6 / 8)) < 1,
     )
+    bb0 = hop._tone_bb
     second = hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
     check(
         "второй hop в окне — цифра, LO стоит",
@@ -731,6 +732,16 @@ def main() -> int:
         and second.get("digitalHop") is True
         and hop._tx_lo_hz == lo0
         and abs(float(second.get("mixHz") or 0) - (2445e6 - lo0)) < 1,
+    )
+    check("цифровой hop не пересобирает полку", hop._tone_bb is bb0)
+    check(
+        "цифровой hop только меняет mix",
+        hop._tx_mix_hz is not None and abs(float(hop._tx_mix_hz) - (2445e6 - lo0)) < 1,
+    )
+    dc = hop.tx_wave(lo0 / 1e6, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    check(
+        "hop на LO — analog (горбу нельзя сидеть на утечке)",
+        dc.get("ok") is True and dc.get("digitalHop") is False and hop._tx_lo_hz != lo0,
     )
     far = hop.tx_wave(2500.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
     check(
@@ -740,6 +751,8 @@ def main() -> int:
         and hop._tx_lo_hz is not None
         and hop._tx_lo_hz != lo0,
     )
+    hop.tx_off()
+    check("tx_off сбрасывает стоящий LO и опору", hop._tx_lo_hz is None and hop._tone_bb is None)
     check("банк 31 волны на месте", len(w.WAVE_KINDS) == 31 and "p4" in w.WAVE_KINDS)
 
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})

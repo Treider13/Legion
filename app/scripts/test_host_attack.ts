@@ -185,10 +185,20 @@ async function main(): Promise<void> {
       handoffSrc.includes("shelf.fsHz") &&
       handoffSrc.includes("shelf.filterMhz") &&
       handoffSrc.includes("shelf.designFsHz") &&
-      handoffSrc.includes("txLive: true") &&
+      storeSrc.includes("txLive: true") &&
       !handoffSrc.includes("hostTx(") &&
       !handoffSrc.includes("shelfFsNow"),
   );
+  {
+    const liveFn = storeSrc.slice(storeSrc.indexOf("const autoTxLive"), storeSrc.indexOf("const runHandoffAsync"));
+    check(
+      "ПЕРЕДАТЬ в Атаке сразу часы FD, не ждать first hit",
+      liveFn.includes('st.scanPattern === "auto"') &&
+        liveFn.includes("st.transmitArmed") &&
+        !liveFn.includes("lastForwardMhz") &&
+        !liveFn.includes("attackPaintOwnsTx"),
+    );
+  }
   check(
     "restore без рамки не схлопывает BBPLL полкой",
       restoreSrc.includes("attackNoPaintShelf") &&

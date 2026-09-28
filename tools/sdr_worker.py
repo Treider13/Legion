@@ -242,6 +242,7 @@ from attack_dsp import (  # noqa: E402
     channelize_look,
     multitaper_dbm,
     resample_iq,
+    rotator_apply,
     rotator_shift,
     spectral_flatness,
     synth_look_iq,
@@ -583,6 +584,8 @@ def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.9):
 # ============================================================================
 
 WAVE_N = 65536  # буфер TX; OFDM укорачивается до 819×80 = 65520
+# Soapy MTU 4096: rotator в петле по куску — hop не ждёт весь период волны.
+TX_ROT_CHUNK = 4096
 
 WAVE_KINDS = (
     "sine", "tone", "square", "sawtooth", "triangle", "chirp", "awgn",
@@ -1103,6 +1106,9 @@ class Radio:
         self._tx_fs = float(TX_FS)
         # Стоящий TX LO: цифровой hop (GNU Radio rotator) пока цель в окне.
         self._tx_lo_hz: float | None = None
+        self._tx_mix_hz: float | None = None
+        self._tx_phase = 0.0
+        self._tx_off = 0
         self._wave_bank: dict[tuple[Any, ...], Any] = {}
         self._wave_up = None
         self._wave_up_key: tuple[Any, ...] | None = None
@@ -2188,6 +2194,11 @@ class Radio:
         if self.fake:
             self.tx_mhz = freq_mhz
             self.tx_error = None
+            self._tone_bb = None
+            self._tx_mix_hz = None
+            self._tx_phase = 0.0
+            self._tx_off = 0
+            self._tx_lo_hz = cw_lo_hz(freq_mhz * 1e6, TX_FS)
             us = int((time.perf_counter() - t0) * 1e6)
             return {"ok": True, "reason": f"FAKE TX {freq_mhz:.6f} МГц", "latencyUs": us, "freqMhz": freq_mhz}
         if self.dev is None:
@@ -2199,9 +2210,14 @@ class Radio:
         rf_hz = freq_mhz * 1e6
         lo_hz = cw_lo_hz(rf_hz, TX_FS)
         tone = make_cw()
+        self._tone_bb = None
+        self._tx_mix_hz = None
+        self._tx_phase = 0.0
+        self._tx_off = 0
         err = self._tx_prime(tone, lo_hz, self.tx_mhz)
         if err is not None:
             return err
+        self._tx_lo_hz = lo_hz
         return self._tx_commit(
             tone, freq_mhz, t0,
             f"SDR TX {freq_mhz:.6f} МГц (тон fs/8, LO {(lo_hz/1e6):.6f})",
@@ -2258,7 +2274,10 @@ class Radio:
             bb = self._prepare_tx_bb(wave, params, design_fs, tx_fs)
         except Exception as e:
             return {"ok": False, "reason": f"синтез {wave}: {e}", "latencyUs": 0}
-        self._tone_bb = np.asarray(bb, dtype=np.complex64)
+        play = np.asarray(bb, dtype=np.complex64)
+        if play is not self._tone_bb:
+            self._tx_off = 0
+        self._tone_bb = play
         self._design_fs = design_fs
         rf_hz = float(freq_mhz) * 1e6
         analog_hz = float(self.analog_bw) * 1e6
@@ -2277,7 +2296,6 @@ class Radio:
         else:
             lo_hz = cw_lo_hz(rf_hz, tx_fs)
             mix_hz = tx_fs / 8.0
-        buf = rotator_shift(self._tone_bb, mix_hz, tx_fs)
         hop = "цифра" if digital else "аналог"
         label = (
             f"SDR TX {wave} {freq_mhz:.6f} МГц · {hop} mix {mix_hz / 1e6:.3f} "
@@ -2293,7 +2311,12 @@ class Radio:
         if tx_bw_hz and tx_bw_hz > 0:
             extra["txBwHz"] = float(tx_bw_hz)
         if self.fake:
-            self._tone = buf
+            with self._lock:
+                self._tx_mix_hz = float(mix_hz)
+                if not digital:
+                    self._tx_phase = 0.0
+                    self._tx_off = 0
+            self._tone = rotator_shift(self._tone_bb, mix_hz, tx_fs)
             self.tx_mhz = freq_mhz
             self._tx_fs = tx_fs
             self._tx_lo_hz = lo_hz
@@ -2315,12 +2338,17 @@ class Radio:
             return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
         if digital:
             with self._lock:
-                self._tone = buf
-            out = self._tx_commit(buf, freq_mhz, t0, label)
+                self._tx_mix_hz = float(mix_hz)
+            out = self._tx_commit(
+                self._tone if self._tone is not None else self._tone_bb,
+                freq_mhz,
+                t0,
+                label,
+            )
             out.update(extra)
             return out
-        # design_fs задан — occupy цифровой. Analog LPF широкий, иначе
-        # hop на mix ≠ fs/8 срежет полку (AD9361 TX filter = BB LPF до смесителя).
+        # Analog: первый write уже на IF. Петля дальше крутит rotator по кускам.
+        buf = rotator_shift(self._tone_bb, mix_hz, tx_fs)
         analog_tx_bw = (
             min(analog_hz, tx_fs) if design_fs_hz and design_fs_hz > 0 else tx_bw_hz
         )
@@ -2329,26 +2357,50 @@ class Radio:
             self._tone_bb = None
             return err
         self._tx_lo_hz = lo_hz
+        with self._lock:
+            self._tx_mix_hz = float(mix_hz)
+            _, self._tx_phase = rotator_apply(self._tone_bb, mix_hz, tx_fs, 0.0)
+            self._tx_off = 0
         out = self._tx_commit(buf, freq_mhz, t0, label)
         out.update(extra)
         return out
+
+    def _tx_chunk_locked(self) -> tuple[Any, int] | None:
+        """Кусок TX. Вызывать под self._lock. Hop = смена _tx_mix_hz, не 1.3M exp."""
+        fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
+        bb = self._tone_bb
+        if bb is not None and NUMPY:
+            n = int(len(bb))
+            if n <= 0:
+                return None
+            off = int(self._tx_off)
+            if off >= n:
+                off = 0
+            take = min(TX_ROT_CHUNK, n - off)
+            mix = float(self._tx_mix_hz or 0.0)
+            chunk, self._tx_phase = rotator_apply(bb[off : off + take], mix, fs, float(self._tx_phase))
+            self._tx_off = off + take
+            return chunk, stream_timeout_us(take, fs)
+        baked = self._tone
+        if baked is None:
+            return None
+        return baked, stream_timeout_us(len(baked), fs)
 
     def _start_tx_loop(self) -> None:
         if self._thr and self._thr.is_alive():
             return
         self._stop.clear()
-        if self._tone is None:
+        if self._tone is None and self._tone_bb is None:
             self._tone = make_cw()
 
         def loop() -> None:
             while not self._stop.is_set() and self.dev is not None and self.tx is not None:
                 with self._lock:
-                    # Буфер читаем каждый блок: tx_wave на живом TX подменяет
-                    # волну без пересоздания стрима (замыкание бы её не увидело).
-                    buf = self._tone
-                    if buf is None:
+                    # Кусок, не весь период: цифровой hop не ждёт 32 мс WAVE_N.
+                    pulled = self._tx_chunk_locked()
+                    if pulled is None:
                         break
-                    timeout = stream_timeout_us(len(buf), self._tx_fs if self._tx_fs > 0 else TX_FS)
+                    buf, timeout = pulled
                     try:
                         _written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
                     except Exception as e:
@@ -2406,6 +2458,14 @@ class Radio:
         self.tx_error = None
         self.tx_fail = 0
         self._tx_lo_hz = None
+        self._tx_mix_hz = None
+        self._tx_phase = 0.0
+        self._tx_off = 0
+        self._tone_bb = None
+        self._tone = None
+        self._wave_up = None
+        self._wave_up_key = None
+        self._design_fs = 0.0
         if self.dev is not None and self.tx is not None and SOAPY:
             with self._lock:
                 try:

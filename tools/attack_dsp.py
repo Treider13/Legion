@@ -678,20 +678,36 @@ def channelize_decim(
 ATTACK_NYQUIST_FRAC = 0.45
 
 
-def rotator_shift(x: np.ndarray, freq_hz: float, fs: float) -> np.ndarray:
-    """GNU Radio blocks.rotator: y[n] = x[n] · exp(j 2π (f/fs) n).
+def rotator_apply(
+    x: np.ndarray,
+    freq_hz: float,
+    fs: float,
+    phase0: float = 0.0,
+) -> tuple[np.ndarray, float]:
+    """GNU Radio rotator_cc: y[n] = x[n] · exp(j (φ + 2π (f/fs) n)).
 
-    gnuradio/gr-blocks/lib/rotator_cc_impl.cc — phase incr = exp(j 2π f/fs).
-    Тот же сдвиг, что channelize_look / crop_iq, без ФНЧ и децимации.
+    gnuradio/gr-blocks/lib/rotator_cc_impl.cc — incr = exp(j 2π f/fs),
+    фаза живёт между блоками. Hop = смена f, не пересчёт всего буфера.
     """
     src = np.asarray(x, dtype=np.complex64).ravel()
     if src.size == 0 or fs <= 0:
-        return src
+        return src, float(phase0)
     f = float(freq_hz)
+    phi = float(phase0)
     if abs(f) < 1e-9:
-        return np.array(src, copy=True, dtype=np.complex64)
-    n = np.arange(int(src.size), dtype=np.float64)
-    return (src * np.exp(1j * 2.0 * np.pi * (f / float(fs)) * n)).astype(np.complex64)
+        return np.array(src, copy=True, dtype=np.complex64), phi
+    n = int(src.size)
+    omega = 2.0 * math.pi * (f / float(fs))
+    k = np.arange(n, dtype=np.float64)
+    y = (src * np.exp(1j * (phi + omega * k))).astype(np.complex64)
+    phi1 = math.remainder(phi + omega * float(n), 2.0 * math.pi)
+    return y, float(phi1)
+
+
+def rotator_shift(x: np.ndarray, freq_hz: float, fs: float) -> np.ndarray:
+    """GNU Radio blocks.rotator с φ=0: y[n] = x[n] · exp(j 2π (f/fs) n)."""
+    y, _ = rotator_apply(x, freq_hz, fs, 0.0)
+    return y
 
 
 def analog_window_covers(
@@ -702,10 +718,11 @@ def analog_window_covers(
     occupy_hz: float = 0.0,
     frac: float = ATTACK_NYQUIST_FRAC,
 ) -> bool:
-    """Цифровой hop, пока |RF−LO| + occupy/2 внутри 0.45·min(fs, analog).
+    """Цифровой hop, пока горб внутри 0.45·min(fs, analog) и не на DC.
 
-    Analog hop только вне окна: ADI AD9361 Fast Lock ≈ 20 мкс + SPI, не µs
-    (EngineerZone / UG-570). ice9/blue-dragon: стоять в широком окне.
+    Analog hop только вне окна или если occupy кроет утечку LO:
+    ADI AD9361 Fast Lock ≈ 20 мкс + SPI, не µs (EngineerZone / UG-570).
+    ice9/blue-dragon: стоять в широком окне.
     """
     if fs <= 0:
         return False
@@ -713,8 +730,15 @@ def analog_window_covers(
     bw = float(analog_bw_hz)
     if bw > 0:
         limit = min(limit, float(frac) * bw)
-    need = abs(float(rf_hz) - float(lo_hz)) + 0.5 * max(float(occupy_hz), 0.0)
-    return need <= limit
+    offset = abs(float(rf_hz) - float(lo_hz))
+    half = 0.5 * max(float(occupy_hz), 0.0)
+    if offset + half > limit:
+        return False
+    # ADI UG-570 / Deepwave: не ставить горб на утечку LO (DC в baseband).
+    # Analog hop тогда снова ставит LO = RF − fs/8.
+    if offset <= half:
+        return False
+    return True
 
 
 def resample_iq(x: np.ndarray, fs_in: float, fs_out: float) -> np.ndarray:
