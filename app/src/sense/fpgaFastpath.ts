@@ -9,6 +9,10 @@
 // ============================================================================
 import type { AllowBand } from "../policy/allowlist";
 import { catalogById } from "../sdr/catalog";
+import {
+  planDrfmStrategy,
+  type DrfmStrategy,
+} from "./drfmStrategy";
 import { FPGA_AIR_MODE_RU } from "./modes";
 import { planCenters, planParkCenters } from "./scan";
 import {
@@ -354,6 +358,14 @@ export interface OnboardInterceptInput {
   fireBwMhz?: number;
   /** Слух/оператор → карточка 0x51–0x59. Нет — пустая сетка, не ELRS. */
   grid?: SmartGridInput | SmartGridCard;
+  /** Панель DRFM: 0 / пусто = таблица. */
+  lbDelay?: number;
+  lbDelay1?: number;
+  lbShiftHz?: number;
+  lbFtw?: number;
+  lbAmp0?: number;
+  lbAmp1?: number;
+  walkStep?: number;
 }
 
 export interface OnboardInterceptPlan {
@@ -378,6 +390,7 @@ export interface OnboardInterceptPlan {
   settleN: number;
   grid: SmartGridCard;
   xlatWindowMhz: number;
+  drfm: DrfmStrategy;
 }
 
 export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
@@ -410,6 +423,15 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
           sdrId: i.sdrId,
           bands: i.bands,
         });
+  const drfm = planDrfmStrategy(grid, fsHz, {
+    delay0: i.lbDelay,
+    delay1: i.lbDelay1,
+    shiftHz: i.lbShiftHz,
+    ftw: i.lbFtw,
+    amp0: i.lbAmp0,
+    amp1: i.lbAmp1,
+    walkStep: i.walkStep,
+  });
   const fail = (reason: string): OnboardInterceptPlan => ({
     ok: false,
     reason,
@@ -431,6 +453,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     settleN,
     grid,
     xlatWindowMhz: xlatMhz,
+    drfm,
   });
   if (!fpgaAirSupported(i.sdrId)) {
     return fail(`${FPGA_AIR_MODE_RU}: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40`);
@@ -467,8 +490,8 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
   const gridRu = fftEnable
     ? grid.smart
-      ? ` · ${grid.reason} · ${xlatAimRu(fsHz, LEGION_AIM_NONE)}`
-      : ` · ${grid.reason || SMART_GRID_EMPTY_RU}`
+      ? ` · ${grid.reason} · ${xlatAimRu(fsHz, LEGION_AIM_NONE)} · ${drfm.reason}`
+      : ` · ${grid.reason || SMART_GRID_EMPTY_RU} · ${drfm.reason}`
     : "";
   return {
     ok: true,
@@ -491,6 +514,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     settleN,
     grid,
     xlatWindowMhz: xlatMhz,
+    drfm,
   };
 }
 
@@ -729,6 +753,28 @@ export function fpgaArmCmd(
     else if (cmd.walk_en === undefined) cmd.walk_en = true;
     if (opts.walkHold === undefined) cmd.walk_hold = true;
     else cmd.walk_hold = !!opts.walkHold;
+    if (opts.scanEnable && opts.fftEnable) {
+      const strat = planDrfmStrategy(opts.grid ?? emptySmartGrid(), opts.fsHz ?? 56e6, {
+        delay0: opts.lbDelay,
+        delay1: opts.lbDelay1,
+        shiftHz: opts.lbShiftHz,
+        ftw: opts.lbFtw,
+        amp0: opts.lbAmp0,
+        amp1: opts.lbAmp1,
+        walkStep: opts.walkStep,
+      });
+      cmd.lb_delay = strat.delay0;
+      cmd.lb_delay1 = strat.delay1;
+      cmd.lb_amp0 = strat.amp0;
+      cmd.lb_amp1 = strat.amp1;
+      cmd.walk_step = strat.walkStep;
+      cmd.walk_ftw_step = 0;
+      delete cmd.lb_ftw;
+      delete cmd.lb_shift_hz;
+      if (strat.wire === "shift") cmd.lb_shift_hz = strat.shiftHz;
+      else if (strat.wire === "ftw") cmd.lb_ftw = strat.ftw;
+      else cmd.lb_ftw = 0;
+    }
   }
   return cmd;
 }

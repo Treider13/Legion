@@ -2076,6 +2076,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       hopsMhz: gSmartListen.hopsMhz,
       looks: gSmartListen.looks,
     });
+    const lbOpts = lbDelayArmOpts(get());
     const plan = planOnboardIntercept({
       sdrId: s.sdrId,
       analogBwMhz: analog,
@@ -2090,6 +2091,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       surveyPeriodMs: periodRaw,
       fftEnable: true,
       grid,
+      ...lbOpts,
     });
     if (!plan.ok) {
       pushLog("sys", plan.reason);
@@ -2186,7 +2188,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           settleN: plan.settleN,
           scanBands: bands,
           grid: plan.grid,
-          ...lbDelayArmOpts(get()),
+          ...lbOpts,
         }), get().txGainDb),
       );
       if (gFpgaAirGen !== airGen) {

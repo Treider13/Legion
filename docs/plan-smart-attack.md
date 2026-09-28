@@ -262,6 +262,21 @@ ELRS/5.8: `CH_PWR_THR≠0`, `CH_THR=0` (слот выключен). ISM8: нао
 
 Извлечение ~`fs/16` (3.5 МГц @ 56 MSPS), не зарубка. UI: «окно 3.5 МГц вокруг канала N». Live-peak в Smart Attack ARM запрещён.
 
+### 5.8 Host DRFM (не Phase 4 walk)
+
+Хост `planDrfmStrategy` после матчера. NIOS не `switch(kind)`. aim NCO не трогаем. FTW только `LB_FTW0`.
+
+Факты: ExpressLRS `LBT.cpp` — 2.4 500/333 Hz = LoRa SF5 @ BW_0800, символ 39.4 µs, 1/B ≈ 1.23 µs ≈ 64 @ 56 MSPS. Schiller 2023 / proto17 — DroneID SCS 15 кГц, ZC 600/147; CFO ≈ 1 бин ломает пик. ISM8 / OFDM без `GRID_FLAG_ZC` — не OcuSync (CP видео не опубликован). Mux уже ×0.9 (`LEGION_LB_AMP_Q15=29491`) — отвод 0.5 = 16384.
+
+| Карточка | delay0/1 | amp0/1 | сдвиг | walk_step |
+|---|---|---|---|---|
+| ELRS / ISM8 / пусто / analog / OFDM без ZC / O4VID3 без `zc_hit` | 0 / 64 | 16384 / 16384 | 0 | 0 |
+| `GRID_FLAG_ZC` (подтверждённый DroneID) | 0 / 0 | 16384 / 0 | 15 кГц → `lb_shift_hz` → `LB_FTW0` | 0 |
+
+`walk_step=0`: HDL `STEP=0 — застыть`. Lab ARM без FFT оставляет `walk_step=1`. `DRFM_STEP_SRC=0`. `walk_ftw_step=0`.
+
+Оператор бьёт таблицу: `delay0>0`, заданный `delay1` (в т.ч. 0), `|shift|≥0.5`, явный `ftw` / amp / `walk_step`. Панель `0` = таблица.
+
 ---
 
 ## 6. Регистры
