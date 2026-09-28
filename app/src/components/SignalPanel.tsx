@@ -6,6 +6,9 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import {
+  WAVE_AMP_DEF,
+  WAVE_AMP_MAX,
+  WAVE_AMP_MIN,
   WAVE_CATALOG,
   WAVE_FS,
   WAVE_PREVIEW_N,
@@ -213,10 +216,10 @@ export function SignalPanel() {
           <input
             aria-label="Амплитуда сигнала"
             type="number"
-            min={0.05}
-            max={0.9}
+            min={WAVE_AMP_MIN}
+            max={WAVE_AMP_MAX}
             step={0.05}
-            value={params.amp ?? 0.25}
+            value={params.amp ?? WAVE_AMP_DEF}
             onChange={(e) => s.setSignalParam("amp", parseFloat(e.target.value))}
             disabled={busy}
           />
@@ -264,8 +267,9 @@ export function SignalPanel() {
         {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
           <p className="panel-note">
             Сейчас жива умная атака (ретрансляция эфира в FPGA). Детектор открывает
-            TX на амплитуде 0.9 (потолок каталога ЦАП). Волна с этой вкладки в эфир
-            не идёт. Стоп — кнопка ниже или вкладка СКАН.
+            TX на амплитуде 0.9 — тот же дефолт ЦАП, что у волны, CW, NCO и
+            постоянной ретрансляции. Волна с этой вкладки в эфир не идёт.
+            Стоп — кнопка ниже или вкладка СКАН.
           </p>
         ) : (
           <p className="panel-note">

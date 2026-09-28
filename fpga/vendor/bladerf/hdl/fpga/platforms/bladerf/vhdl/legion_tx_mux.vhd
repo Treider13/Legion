@@ -8,8 +8,9 @@
 -- Спад det_active в LB_GATED — не ступенька last→0, а ramp-down:
 -- (lb×k)/32, k=31..1 за валид (~16 мкс на 2 MSPS); возврат энергии рампу
 -- отменяет мгновенно, авария (live=0) рампы не делает — нули сразу.
--- Открытый гейт lb_gated масштабирует IQ на LEGION_LB_AMP_Q15 (0.9 Q15 —
--- потолок каталога AMP.max). lb_always остаётся 1:1.
+-- ЦАП по умолчанию 0.9 Q15 (LEGION_LB_AMP_Q15): NCO, lb_gated и
+-- lb_always масштабирует mux. PASS и PLAYER идут сквозь — хост уже
+-- кладёт дефолт 0.9, повторный масштаб дал бы 0.81.
 -- Loopback CDC: rd_data в нашем dcfifo комбинационна (действительна до
 -- инкремента указателя) — захват на следующем такте после rd_en корректен.
 -- ============================================================================
@@ -171,7 +172,11 @@ begin
                     end if;
                 when LEGION_MODE_NCO =>
                     if live = '1' then
-                        out_i <= nco_i; out_q <= nco_q; out_valid <= nco_valid;
+                        -- LUT NCO ≈ 1.0 (2047<<4). Масштаб на mux, не в
+                        -- entity: legion_nco_tb держит контракт полной шкалы.
+                        out_i <= lb_amp_q15(nco_i);
+                        out_q <= lb_amp_q15(nco_q);
+                        out_valid <= nco_valid;
                     else
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;
@@ -185,13 +190,8 @@ begin
                         gi := lb_amp_q15(lb_i);
                         gq := lb_amp_q15(lb_q);
                         if lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
-                            if mode = LEGION_MODE_LB_GATED then
-                                out_i <= gi;
-                                out_q <= gq;
-                            else
-                                out_i <= lb_i;
-                                out_q <= lb_q;
-                            end if;
+                            out_i <= gi;
+                            out_q <= gq;
                         elsif lb_valid = '1' and ramping = '1' then
                             -- Спад: сначала (lb × k)/32 как раньше, затем 0.9.
                             -- Рампа от уже масштабированного ломала I=−Q

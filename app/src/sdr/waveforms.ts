@@ -33,10 +33,10 @@ export interface WaveMeta {
   params: WaveParam[];
 }
 
-/** Потолок цифровой амплитуды ЦАП (каталог и гейт умной атаки). */
+/** Цифровая амплитуда ЦАП: дефолт и потолок 0.9 во всех режимах. */
 export const WAVE_AMP_MAX = 0.9;
 export const WAVE_AMP_MIN = 0.05;
-export const WAVE_AMP_DEF = 0.25;
+export const WAVE_AMP_DEF = WAVE_AMP_MAX;
 
 const AMP: WaveParam = { key: "amp", label: "АМПЛИТУДА", min: WAVE_AMP_MIN, max: WAVE_AMP_MAX, step: 0.05, def: WAVE_AMP_DEF };
 
@@ -703,7 +703,7 @@ export function previewWaveform(
   n: number = WAVE_PREVIEW_N,
 ): { re: Float64Array; im: Float64Array } {
   const p = clampParams(kind, pr);
-  const amp = p.amp ?? 0.25;
+  const amp = p.amp ?? WAVE_AMP_DEF;
   const re = new Float64Array(n);
   const im = new Float64Array(n);
   const snap = (fHz: number) => (Math.max(1, Math.round((fHz * n) / WAVE_FS)) * WAVE_FS) / n;

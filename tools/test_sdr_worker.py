@@ -75,7 +75,7 @@ def main() -> int:
         tone = w.make_cw()
         check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
         check("CW длина кратна 8", len(tone) % 8 == 0)
-        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.25) < 0.02)
+        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.9) < 0.02)
         freqs = np.linspace(2440, 2444, 1024)
         db = np.linspace(-90, -40, 1024)
         pooled = w._pool_bins(freqs, db, 64)

@@ -24,6 +24,7 @@ import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
 import { markCatalogPresent } from "../src/sdr/hostClient";
 import {
+  WAVE_AMP_DEF,
   WAVE_AMP_MAX,
   WAVE_CATALOG,
   clampParams,
@@ -1171,7 +1172,7 @@ async function main(): Promise<void> {
       if (!Number.isFinite(re[i]) || !Number.isFinite(im[i])) prevOk = false;
       peak = Math.max(peak, Math.hypot(re[i], im[i]));
     }
-    if (peak > (pr.amp ?? 0.25) + 1e-6) {
+    if (peak > (pr.amp ?? WAVE_AMP_DEF) + 1e-6) {
       prevOk = false;
       console.log(`    … пик ${peak} > amp: ${w.id}`);
     }
@@ -1182,6 +1183,10 @@ async function main(): Promise<void> {
   const clamped = clampParams("qpsk", { amp: 99, alpha: -1, sps: 2.7, seed: 5 });
   check("кламп параметров", clamped.amp === WAVE_AMP_MAX && clamped.alpha === 0.03 && clamped.seed === 5);
   check("каталог AMP.max = 0.9 Q15 29491", WAVE_AMP_MAX === 0.9 && waveAmpQ15(0.9) === 29491);
+  check("каталог AMP.def = 0.9 во всех волнах",
+    WAVE_AMP_DEF === 0.9 &&
+    WAVE_CATALOG.every((w) => w.params.find((p) => p.key === "amp")?.def === WAVE_AMP_DEF));
+  check("defaultParams amp = 0.9", defaultParams("qpsk").amp === WAVE_AMP_DEF && defaultParams("sine").amp === 0.9);
   const qp = constellationPoints("qpsk", defaultParams("qpsk"), 256);
   const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
   check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
@@ -2080,6 +2085,10 @@ async function main(): Promise<void> {
   check("FPGA: гейт lb_gated масштабирует на 0.9 Q15",
     pkgSrc.includes("LEGION_LB_AMP_Q15") && pkgSrc.includes("29491") &&
     muxSrc.includes("lb_amp_q15") && muxSrc.includes("LEGION_MODE_LB_GATED"));
+  check("FPGA: NCO и lb_always тоже 0.9 на mux",
+    muxSrc.includes("lb_amp_q15(nco_i)") &&
+    muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
+    !muxSrc.includes("lb_always остаётся 1:1"));
   check("cinema auto: эмуляция не ждёт scanRunning",
     autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
   check("cinema auto: канал, выдержка и период сканирования пишутся в стор",

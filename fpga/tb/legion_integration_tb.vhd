@@ -83,13 +83,14 @@ begin
             wait until rising_edge(tx_clock);
             if out_valid = '1' and out_i /= 0 then
                 got := got + 1;
-                -- Порядок через CDC: каждый следующий на +100
-                assert to_integer(out_i) = last + 100 and to_integer(out_q) = -(last + 100)
+                -- Порядок через CDC. Mux масштабирует ALWAYS на 0.9 Q15:
+                -- I = (k·100 · 29491) / 32768, Q = −I.
+                last := (got * 100 * LEGION_LB_AMP_Q15) / 32768;
+                assert to_integer(out_i) = last and to_integer(out_q) = -last
                     report "FAIL: CDC order at sample " & integer'image(got) &
                            " got I=" & integer'image(to_integer(out_i)) &
-                           " expected " & integer'image(last + 100)
+                           " expected " & integer'image(last)
                     severity failure;
-                last := to_integer(out_i);
             end if;
         end loop;
         assert got = 16 report "FAIL: not all samples" severity failure;

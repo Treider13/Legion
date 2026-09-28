@@ -530,7 +530,7 @@ def write_stream_all(dev: Any, stream: Any, buf: Any, timeout_us: int, underflow
     return total, "ok"
 
 
-def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.25):
+def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.9):
     """Непрерывный синус, не DC. DC на LMS/AD9361 часто давит IQ-коррекция.
     Источник: Deepwave transmit_tone + пример SoapySDR writeStream CF32."""
     if not NUMPY:
@@ -570,7 +570,7 @@ def _pfloat(pr: dict[str, Any], key: str, default: float, lo: float, hi: float) 
 
 
 def _amp(pr: dict[str, Any]) -> float:
-    return _pfloat(pr, "amp", 0.25, 0.01, 0.9)
+    return _pfloat(pr, "amp", 0.9, 0.01, 0.9)
 
 
 def _seed(pr: dict[str, Any]) -> int:

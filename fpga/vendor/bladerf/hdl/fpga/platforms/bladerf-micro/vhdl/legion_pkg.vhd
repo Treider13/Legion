@@ -98,8 +98,9 @@ package legion_pkg is
 
     constant LEGION_RAM_DEPTH      : natural := 4096;   -- 4096×32бит = 16 M9K на EP4CE40
     constant LEGION_LB_FIFO_DEPTH  : natural := 64;     -- CDC RX→TX, Gray-указатели
-    -- Цифровая амплитуда открытого гейта lb_gated: 0.9·2^15.
-    -- Тот же потолок, что каталог волн (AMP.max) — защита ЦАП, не AGC.
+    -- Цифровая амплитуда ЦАП: 0.9·2^15. NCO / lb_gated / lb_always
+    -- масштабирует mux. PASS и PLAYER — хост (дефолт каталога тоже 0.9).
+    -- Защита ЦАП, не AGC и не аналоговый gain.
     constant LEGION_LB_AMP_Q15     : natural := 29491;
 
 end package;
