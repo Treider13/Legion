@@ -28,11 +28,11 @@ architecture tb of legion_lb_walk_tb is
         end loop;
     end procedure;
 
-    procedure pulse_det is
+    procedure pulse_det(signal det : out std_logic) is
     begin
-        det_active <= '1';
+        det <= '1';
         tick(2);
-        det_active <= '0';
+        det <= '0';
         tick(2);
     end procedure;
 begin
@@ -53,7 +53,7 @@ begin
         tick(4);
 
         -- EN=0: отвод = LB_DELAY, фронт не шагает
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(8, 12)
             report "FAIL: bypass tap != init" severity failure;
 
@@ -62,22 +62,22 @@ begin
         assert tap = to_unsigned(8, 12)
             report "FAIL: arm start != init" severity failure;
 
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(12, 12)
             report "FAIL: first rise 8+4" severity failure;
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(16, 12)
             report "FAIL: second rise 12+4" severity failure;
 
         -- потолок 16, HOLD=0 → сброс к init
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(8, 12)
             report "FAIL: wrap to init" severity failure;
 
         hold_max <= '1';
-        pulse_det; -- 12
-        pulse_det; -- 16
-        pulse_det; -- hold 16
+        pulse_det(det_active); -- 12
+        pulse_det(det_active); -- 16
+        pulse_det(det_active); -- hold 16
         assert tap = to_unsigned(16, 12)
             report "FAIL: hold at max" severity failure;
 
@@ -88,7 +88,7 @@ begin
             report "FAIL: new init resets tap" severity failure;
 
         walk_step <= (others => '0');
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(3, 12)
             report "FAIL: step 0 frozen" severity failure;
 
@@ -106,7 +106,7 @@ begin
             report "FAIL: det already high at EN must not step" severity failure;
         det_active <= '0';
         tick(2);
-        pulse_det;
+        pulse_det(det_active);
         assert tap = to_unsigned(12, 12)
             report "FAIL: first real rise after already-high" severity failure;
 

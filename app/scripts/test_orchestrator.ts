@@ -2167,9 +2167,21 @@ async function main(): Promise<void> {
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",
     gwSrc.includes('thr = msg.get("det_thr")') && gwSrc.includes("tune: запись DET_THR не удалась"));
-  check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
-  check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
-  check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  {
+    const cinemaStop = runSrc.slice(
+      runSrc.indexOf("export async function runCinemaStop"),
+      runSrc.indexOf("export function cinemaIsLive"),
+    );
+    check("cinema стоп бампает solo до проверки armed",
+      cinemaStop.includes("abortFpgaSolo()") &&
+      cinemaStop.indexOf("abortFpgaSolo()") < cinemaStop.indexOf("if (s.fpgaArmed"));
+    check("cinema стоп бампает air до проверки armed",
+      cinemaStop.includes("abortFpgaAir()") &&
+      cinemaStop.indexOf("abortFpgaAir()") < cinemaStop.indexOf("if (s.fpgaArmed"));
+    check("cinema стоп бампает arm до проверки armed",
+      cinemaStop.includes("abortFpgaArm()") &&
+      cinemaStop.indexOf("abortFpgaArm()") < cinemaStop.indexOf("if (s.fpgaArmed"));
+  }
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
   const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
   const onboardHead = storeSrc.slice(
@@ -2200,7 +2212,7 @@ async function main(): Promise<void> {
     && armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM",
-    armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));
+    armBlock.includes("if (armRevoked())") && armBlock.includes("await get().fpgaDisarm()"));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
   check("онбордовый старт: startOnboardIntercept, USB не отдаём хост-сканеру",
     storeSrc.includes("const startOnboardIntercept") &&
