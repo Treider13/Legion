@@ -6,6 +6,9 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import {
+  WAVE_AMP_DEF,
+  WAVE_AMP_MAX,
+  WAVE_AMP_MIN,
   WAVE_CATALOG,
   WAVE_FS,
   WAVE_PREVIEW_N,
@@ -213,10 +216,10 @@ export function SignalPanel() {
           <input
             aria-label="Амплитуда сигнала"
             type="number"
-            min={0.05}
-            max={0.9}
+            min={WAVE_AMP_MIN}
+            max={WAVE_AMP_MAX}
             step={0.05}
-            value={params.amp ?? 0.25}
+            value={params.amp ?? WAVE_AMP_DEF}
             onChange={(e) => s.setSignalParam("amp", parseFloat(e.target.value))}
             disabled={busy}
           />
@@ -263,8 +266,12 @@ export function SignalPanel() {
         <span className="panel-title">FPGA (bladeRF micro / x40) // БЕЗ СКАНЕРА · ЗАДАЧА С НОУТБУКА</span>
         {isFpgaAirLive(s.fpgaArmed, s.fpgaMode) ? (
           <p className="panel-note">
-            Сейчас жива умная атака (ретрансляция эфира в FPGA). Эта вкладка задачу не
-            ставит и не притворяется генерацией. Стоп — кнопка ниже или вкладка СКАН.
+            Сейчас жива умная атака (ретрансляция эфира в FPGA). Детектор открывает
+            TX на амплитуде 0.9 — тот же дефолт ЦАП, что у волны, CW, NCO и
+            постоянной ретрансляции. На xA4 — два живых отвода 0 и 64 сэмпла,
+            шаг задержки каждые 4096 сэмплов пока есть энергия; смеситель выкл
+            (FTW=0). Не PRI-lock и не 4 цели на 256 км. Волна с этой вкладки
+            в эфир не идёт. Стоп — кнопка ниже или вкладка СКАН.
           </p>
         ) : (
           <p className="panel-note">

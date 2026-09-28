@@ -32,6 +32,14 @@ architecture tb of legion_regs_tb is
     signal tx_walk_en    : std_logic;
     signal tx_walk_auto  : std_logic;
     signal tx_walk_hold  : std_logic;
+    signal tx_lb_delay   : unsigned(11 downto 0);
+    signal tx_lb_ftw     : unsigned(31 downto 0);
+    signal tx_lb_delay1  : unsigned(11 downto 0);
+    signal tx_lb_ftw1    : unsigned(31 downto 0);
+    signal tx_lb_amp0    : unsigned(15 downto 0);
+    signal tx_lb_amp1    : unsigned(15 downto 0);
+    signal tx_walk_period : unsigned(31 downto 0);
+    signal tx_walk_ftw_step : unsigned(31 downto 0);
     signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
@@ -73,6 +81,10 @@ begin
             tx_cap_arm => tx_cap_arm, tx_wd_kick => tx_wd_kick,
             tx_delay => tx_delay, tx_walk_step => tx_walk_step, tx_walk_max => tx_walk_max,
             tx_walk_en => tx_walk_en, tx_walk_auto => tx_walk_auto, tx_walk_hold => tx_walk_hold,
+            tx_lb_delay => tx_lb_delay, tx_lb_ftw => tx_lb_ftw,
+            tx_lb_delay1 => tx_lb_delay1, tx_lb_ftw1 => tx_lb_ftw1,
+            tx_lb_amp0 => tx_lb_amp0, tx_lb_amp1 => tx_lb_amp1,
+            tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
@@ -180,6 +192,28 @@ begin
         for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
         assert unsigned(pio_status) = to_unsigned(42, 32)
             report "FAIL: WALK_CUR mux" severity failure;
+
+        -- Живой DRFM 0x24–0x2A. Сброс: A0≈1, A1=0.
+        pio_addr <= (others => '0');
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_lb_amp0 = x"7FFF" and tx_lb_amp1 = x"0000"
+            report "FAIL: LB_AMP default A0=7FFF A1=0" severity failure;
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_DELAY, 64);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_FTW, 16#00001000#);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_DELAY1, 128);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_FTW1, 16#00002000#);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_AMP, 16#40004000#);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WALK_PERIOD, 4096);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WALK_FTW_STEP, 3);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_lb_delay = to_unsigned(64, 12) report "FAIL: LB_DELAY CDC" severity failure;
+        assert tx_lb_ftw = x"00001000" report "FAIL: LB_FTW CDC" severity failure;
+        assert tx_lb_delay1 = to_unsigned(128, 12) report "FAIL: LB_DELAY1 CDC" severity failure;
+        assert tx_lb_ftw1 = x"00002000" report "FAIL: LB_FTW1 CDC" severity failure;
+        assert tx_lb_amp0 = x"4000" and tx_lb_amp1 = x"4000"
+            report "FAIL: LB_AMP CDC" severity failure;
+        assert tx_walk_period = to_unsigned(4096, 32) report "FAIL: WALK_PERIOD CDC" severity failure;
+        assert tx_walk_ftw_step = to_unsigned(3, 32) report "FAIL: WALK_FTW_STEP CDC" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;

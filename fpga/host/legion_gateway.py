@@ -415,7 +415,10 @@ class FakeTransport:
                         lf.REG_BAND_F1_KHZ, lf.REG_BAND_F2_KHZ,
                         lf.REG_BAND_COUNT, lf.REG_SETTLE_N,
                         lf.REG_DELAY, lf.REG_WALK_STEP, lf.REG_WALK_MAX,
-                        lf.REG_WALK_CTL, lf.REG_WALK_CUR):
+                        lf.REG_WALK_CTL, lf.REG_WALK_CUR,
+                        lf.REG_LB_DELAY, lf.REG_LB_FTW, lf.REG_LB_DELAY1,
+                        lf.REG_LB_FTW1, lf.REG_LB_AMP, lf.REG_WALK_PERIOD,
+                        lf.REG_WALK_FTW_STEP):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -948,7 +951,39 @@ class LegionGateway:
                 return {"ok": False, "reason": "delay/walk_step/walk_max: не число"}
             walk_auto = bool(msg.get("walk_auto"))
             walk_hold = bool(msg.get("walk_hold"))
+            # Smart Attack (lb_gated): живой 2-tap DRFM на xA4. Не PRI, не 4×256 км.
+            # Ключи из сообщения перекрывают дефолт; player/nco/lb_always — idle.
+            try:
+                if mode == lf.MODE_LB_GATED:
+                    if "walk_step" not in msg:
+                        walk_step = lf.WALK_STEP_LIVE_DEFAULT
+                    if "walk_max" not in msg:
+                        walk_max = lf.WALK_MAX_LIVE_DEFAULT
+                    lb_delay = int(msg["lb_delay"]) if "lb_delay" in msg else 0
+                    lb_delay1 = int(msg["lb_delay1"]) if "lb_delay1" in msg else lf.LB_DELAY1_DEFAULT
+                    lb_ftw = int(msg["lb_ftw"]) if "lb_ftw" in msg else 0
+                    lb_ftw1 = int(msg["lb_ftw1"]) if "lb_ftw1" in msg else 0
+                    lb_amp0 = int(msg["lb_amp0"]) if "lb_amp0" in msg else lf.LB_AMP_Q15_HALF
+                    lb_amp1 = int(msg["lb_amp1"]) if "lb_amp1" in msg else lf.LB_AMP_Q15_HALF
+                    walk_period = int(msg["walk_period"]) if "walk_period" in msg else lf.WALK_PERIOD_DEFAULT
+                    walk_ftw_step = int(msg["walk_ftw_step"]) if "walk_ftw_step" in msg else 0
+                else:
+                    lb_delay = int(msg["lb_delay"]) if "lb_delay" in msg else 0
+                    lb_delay1 = int(msg["lb_delay1"]) if "lb_delay1" in msg else 0
+                    lb_ftw = int(msg["lb_ftw"]) if "lb_ftw" in msg else 0
+                    lb_ftw1 = int(msg["lb_ftw1"]) if "lb_ftw1" in msg else 0
+                    lb_amp0 = int(msg["lb_amp0"]) if "lb_amp0" in msg else lf.LB_AMP_Q15_UNITY
+                    lb_amp1 = int(msg["lb_amp1"]) if "lb_amp1" in msg else 0
+                    walk_period = int(msg["walk_period"]) if "walk_period" in msg else 0
+                    walk_ftw_step = int(msg["walk_ftw_step"]) if "walk_ftw_step" in msg else 0
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "lb_delay/lb_amp/walk_period: не число"}
             walk_en = bool(msg.get("walk_en", walk_auto or walk_delay > 0 or walk_step > 0))
+            if mode == lf.MODE_LB_GATED:
+                if "walk_en" not in msg and "delay" not in msg:
+                    walk_en = True
+                if "walk_hold" not in msg:
+                    walk_hold = True
             if walk_auto and mode != lf.MODE_PLAYER:
                 return {"ok": False, "reason": "walk_auto только в режиме player"}
             if walk_auto and msg.get("det_thr") is None and not self.det_thr_set:
@@ -960,6 +995,11 @@ class LegionGateway:
                 enable=walk_en, auto=walk_auto, hold=walk_hold,
             ):
                 return {"ok": False, "reason": "запись DELAY/WALK_* не удалась"}
+            if not self.fpga.set_live_drfm(
+                delay0=lb_delay, delay1=lb_delay1, ftw0=lb_ftw, ftw1=lb_ftw1,
+                amp0=lb_amp0, amp1=lb_amp1, period=walk_period, ftw_step=walk_ftw_step,
+            ):
+                return {"ok": False, "reason": "запись LB_DELAY/FTW/AMP не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -1135,6 +1175,10 @@ class LegionGateway:
                 "wd_limit": lf.REG_WD_LIMIT,
                 "delay": lf.REG_DELAY, "walk_step": lf.REG_WALK_STEP,
                 "walk_max": lf.REG_WALK_MAX, "walk_ctl": lf.REG_WALK_CTL,
+                "lb_delay": lf.REG_LB_DELAY, "lb_ftw": lf.REG_LB_FTW,
+                "lb_delay1": lf.REG_LB_DELAY1, "lb_ftw1": lf.REG_LB_FTW1,
+                "lb_amp": lf.REG_LB_AMP, "walk_period": lf.REG_WALK_PERIOD,
+                "walk_ftw_step": lf.REG_WALK_FTW_STEP,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,

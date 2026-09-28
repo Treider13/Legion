@@ -158,7 +158,19 @@ begin
         wd_ok <= '1';
         wait until rising_edge(clock);
 
-        -- 5) LB_GATED без детекта → тишина; с детектом → данные FIFO
+        -- 4b) NCO: LUT-шкала на mux × 0.9 Q15.
+        --     555×29491/32768 = 499; 666×29491/32768 = 599.
+        mode <= LEGION_MODE_NCO;
+        nco_valid <= '1';
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        assert out_valid = '1' and out_i = 499 and out_q = 599
+            report "FAIL: NCO not scaled to 0.9 Q15" severity failure;
+        nco_valid <= '0';
+        wait until rising_edge(clock);
+
+        -- 5) LB_GATED без детекта → тишина; с детектом → FIFO × 0.9 Q15
+        --    768 × 29491/32768 = 691 (модуль, знак сохранён).
         mode <= LEGION_MODE_LB_GATED;
         lb_empty <= '0';
         det_active <= '0';
@@ -170,13 +182,13 @@ begin
             wait until rising_edge(clock);
             if out_valid = '1' then
                 -- Контракт: valid-импульс несёт либо нули тишины (переход
-                -- гейта), либо данные FIFO. Мусора быть не должно.
-                assert (out_i = 0 and out_q = 0) or (out_i = 768 and out_q = -768)
+                -- гейта), либо FIFO×0.9. Мусора быть не должно.
+                assert (out_i = 0 and out_q = 0) or (out_i = 691 and out_q = -691)
                     report "FAIL: LB garbage data" severity failure;
-                if out_i = 768 then saw_valid := true; end if;
+                if out_i = 691 then saw_valid := true; end if;
             end if;
         end loop;
-        assert saw_valid report "FAIL: LB_GATED did not open on detect" severity failure;
+        assert saw_valid report "FAIL: LB_GATED did not open on detect at 0.9" severity failure;
 
         -- 6) LB_ALWAYS, FIFO опустел на открытом гейте: каденс valid ЖИВЁТ,
         --    данные — нули (иначе DAC завис бы на последнем сэмпле).
@@ -196,6 +208,19 @@ begin
         end loop;
         assert saw_valid report "FAIL: starved LB lost valid cadence (stale DAC)" severity failure;
 
+        -- 6b) LB_ALWAYS с FIFO: тот же 0.9 Q15, что у открытого гейта.
+        lb_empty <= '0';
+        saw_valid := false;
+        for k in 0 to 9 loop
+            wait until rising_edge(clock);
+            if out_valid = '1' then
+                assert (out_i = 0 and out_q = 0) or (out_i = 691 and out_q = -691)
+                    report "FAIL: LB_ALWAYS not scaled to 0.9" severity failure;
+                if out_i = 691 then saw_valid := true; end if;
+            end if;
+        end loop;
+        assert saw_valid report "FAIL: LB_ALWAYS did not emit 0.9" severity failure;
+
         -- 7) Ramp-down: спад det_active в LB_GATED → затухание k/32 за
         --    валид, а не ступенька last→0. In-flight сэмпл (конвейер)
         --    первые 4 такта может быть полным — его пропускаем.
@@ -207,12 +232,12 @@ begin
         for k in 0 to 3 loop wait until rising_edge(clock); end loop;
         saw_ramp := false;
         saw_full := false;
-        last_abs := 769;  -- |768|+1: первое ненулевое обязано быть меньше
+        last_abs := 692;  -- |691|+1: первое ненулевое обязано быть меньше
         for k in 0 to 90 loop  -- 45 валидов > 31 ступень рампы
             wait until rising_edge(clock);
             if out_valid = '1' then
-                if out_i = 768 or out_i = -768 then
-                    saw_full := true;  -- ступенька: полный шкал после спада
+                if out_i = 691 or out_i = -691 then
+                    saw_full := true;  -- ступенька: полный 0.9 после спада
                 elsif out_i /= 0 then
                     saw_ramp := true;
                     assert abs(to_integer(out_i)) < last_abs
@@ -232,7 +257,7 @@ begin
         saw_valid := false;
         for k in 0 to 9 loop
             wait until rising_edge(clock);
-            if out_valid = '1' and out_i = 768 then saw_valid := true; end if;
+            if out_valid = '1' and out_i = 691 then saw_valid := true; end if;
         end loop;
         assert saw_valid report "FAIL: ramp not cancelled by energy return" severity failure;
 

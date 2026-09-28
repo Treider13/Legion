@@ -3,7 +3,7 @@
 // Слух: 61.44 MSPS + фильтр 56 (Nuand xA4). ПЕРЕДАТЬ: USB FD ≤40, те же часы.
 // FFT 4096/8192. Живой attack_scan — Thomson DPSS×3; эмуляция — спектр эмулятора.
 // ============================================================================
-import { ATTACK_TX_FS_MIN_HZ, ATTACK_TX_MAX_MHZ, paintTxFsHz, type AttackPaint } from "./attackPaint";
+import { ATTACK_TX_FS_MIN_HZ, ATTACK_TX_MAX_MHZ, ATTACK_TX_MIN_MHZ, paintSpanMhz, type AttackPaint } from "./attackPaint";
 
 export const ATTACK_LISTEN_FS_HZ = 61_440_000;
 export const ATTACK_LISTEN_ANALOG_MHZ = 56;
@@ -39,8 +39,16 @@ export function attackListenPlan(opts: {
 }): AttackListenPlan {
   const analog =
     Number.isFinite(opts.analogMhz) && opts.analogMhz > 0 ? opts.analogMhz : ATTACK_LISTEN_ANALOG_MHZ;
-  if (opts.paintOwnsTx && opts.paint) {
-    const fsHz = paintTxFsHz(opts.paint);
+  void opts.paintOwnsTx;
+  // Рамка Атаки = коридор слуха, не горб TX. Часы = окно (USB FD ≤40),
+  // иначе xA4 BBPLL схлопнет RX до полки и соседние засечки пропадут.
+  if (opts.paint) {
+    const windowMhz = Math.min(
+      Math.max(paintSpanMhz(opts.paint), ATTACK_TX_MIN_MHZ),
+      analog,
+      ATTACK_TX_MAX_MHZ,
+    );
+    const fsHz = Math.max(ATTACK_TX_FS_MIN_HZ, Math.round(windowMhz * 1e6));
     const filterMhz = Math.min(analog, fsHz / 1e6, ATTACK_TX_MAX_MHZ);
     const cropFactor = attackCropFactor(fsHz, filterMhz);
     return {

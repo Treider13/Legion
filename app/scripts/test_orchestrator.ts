@@ -24,12 +24,15 @@ import { planFlashCli } from "../src/sdr/flashcli";
 import { flashFileRequired, hostOpenAllowed, usableImagePath } from "../src/sdr/host";
 import { markCatalogPresent } from "../src/sdr/hostClient";
 import {
+  WAVE_AMP_DEF,
+  WAVE_AMP_MAX,
   WAVE_CATALOG,
   clampParams,
   constellationPoints,
   defaultParams,
   previewWaveform,
   spectrumDb,
+  waveAmpQ15,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
 import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
@@ -70,6 +73,12 @@ import {
   planFpgaAir,
   planOnboardIntercept,
   fpgaSettleN,
+  XA4_LB_DELAY0,
+  XA4_LB_DELAY1,
+  XA4_LB_AMP_HALF,
+  XA4_WALK_PERIOD,
+  XA4_WALK_STEP,
+  XA4_WALK_MAX,
 } from "../src/sense/fpgaFastpath";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -1169,7 +1178,7 @@ async function main(): Promise<void> {
       if (!Number.isFinite(re[i]) || !Number.isFinite(im[i])) prevOk = false;
       peak = Math.max(peak, Math.hypot(re[i], im[i]));
     }
-    if (peak > (pr.amp ?? 0.25) + 1e-6) {
+    if (peak > (pr.amp ?? WAVE_AMP_DEF) + 1e-6) {
       prevOk = false;
       console.log(`    … пик ${peak} > amp: ${w.id}`);
     }
@@ -1178,7 +1187,12 @@ async function main(): Promise<void> {
   }
   check("превью: все волны finite, пик ≤ amp, спектр 1024", prevOk);
   const clamped = clampParams("qpsk", { amp: 99, alpha: -1, sps: 2.7, seed: 5 });
-  check("кламп параметров", clamped.amp === 0.9 && clamped.alpha === 0.03 && clamped.seed === 5);
+  check("кламп параметров", clamped.amp === WAVE_AMP_MAX && clamped.alpha === 0.03 && clamped.seed === 5);
+  check("каталог AMP.max = 0.9 Q15 29491", WAVE_AMP_MAX === 0.9 && waveAmpQ15(0.9) === 29491);
+  check("каталог AMP.def = 0.9 во всех волнах",
+    WAVE_AMP_DEF === 0.9 &&
+    WAVE_CATALOG.every((w) => w.params.find((p) => p.key === "amp")?.def === WAVE_AMP_DEF));
+  check("defaultParams amp = 0.9", defaultParams("qpsk").amp === WAVE_AMP_DEF && defaultParams("sine").amp === 0.9);
   const qp = constellationPoints("qpsk", defaultParams("qpsk"), 256);
   const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
   check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
@@ -1494,6 +1508,18 @@ async function main(): Promise<void> {
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
+  check("ARM lb_gated несёт live DRFM xA4",
+    gatedCmd.lb_delay === XA4_LB_DELAY0 && gatedCmd.lb_delay1 === XA4_LB_DELAY1 &&
+    gatedCmd.lb_amp0 === XA4_LB_AMP_HALF && gatedCmd.lb_amp1 === XA4_LB_AMP_HALF &&
+    gatedCmd.walk_period === XA4_WALK_PERIOD && gatedCmd.walk_step === XA4_WALK_STEP &&
+    gatedCmd.walk_max === XA4_WALK_MAX && gatedCmd.walk_en === true &&
+    gatedCmd.walk_hold === true && gatedCmd.lb_ftw === 0 && gatedCmd.walk_ftw_step === 0);
+  const gatedOverride = fpgaArmCmd("lb_gated", {
+    detThr: 5000, detShift: 4, token: "t", lbDelay1: 32, walkPeriod: 128, walkHold: false, walkEn: false,
+  });
+  check("ARM lb_gated явные live-ключи",
+    gatedOverride.lb_delay1 === 32 && gatedOverride.walk_period === 128 &&
+    gatedOverride.walk_hold === false && gatedOverride.walk_en === false);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
   check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
   const walkCmd = fpgaArmCmd("player", {
@@ -1774,6 +1800,8 @@ async function main(): Promise<void> {
   check("кино перехват: scanPattern=fpga, не fpgaArm",
     autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
   check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
+  check("кино умная атака ставит амплитуду 0.9", autoSt.signalParams.amp === WAVE_AMP_MAX);
+  check("0.9 Q15 = 29491 как в FPGA", waveAmpQ15(WAVE_AMP_MAX) === 29491);
   check("кино перехват: канал 5 МГц записан", autoSt.fpgaAirBwMhz === "5");
   useLegion.getState().stopScan();
   const autoTurn = await runSmartStart({
@@ -2015,8 +2043,20 @@ async function main(): Promise<void> {
   check("отзыв после попытки ARM требует DISARM даже при потерянном ответе", storeSrc.includes("abortAirIfRevoked(true)") && storeSrc.includes("abortSoloIfRevoked(true)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
-  check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())"));
+  check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, shelf.waveKind, shelf.waveParams, shelf.fsHz, shelf.filterMhz)"));
   check("зашить передаёт полку в часы TX", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, shelfFsNow())"));
+  check(
+    "Атака без рамки: часы слуха, фильтр полки",
+    storeSrc.includes("const attackNoPaintShelf") &&
+      storeSrc.includes("hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)"),
+  );
+  check(
+    "качание/сплошная/случайная — отдельный TX полки, не CW hostTx",
+    storeSrc.includes("const runOpenLoopShelfTx") &&
+      storeSrc.includes("openLoopShelfTxPlan") &&
+      storeSrc.includes("shelf.filterMhz") &&
+      storeSrc.includes("runOpenLoopShelfTx(step.centerMhz, 0)"),
+  );
   check("прыжок только soloTuneCmd", storeSrc.includes("soloTuneCmd(step.centerMhz, plan, get().fpgaToken)"));
   check("DISARM стопает solo walk", storeSrc.includes("stopSoloWalk()"));
   const wdSolo = storeSrc.slice(storeSrc.indexOf("FPGA: watchdog погасил TX"), storeSrc.indexOf("Автовозврат «энергия"));
@@ -2040,6 +2080,9 @@ async function main(): Promise<void> {
   check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
   const gwSrc = readFileSync(join(here, "../../fpga/host/legion_gateway.py"), "utf8");
   check("шлюз ARM с fs пишет WD_LIMIT", gwSrc.includes("watchdog_limit_for_fs") && gwSrc.includes("set_watchdog"));
+  check("шлюз ARM lb_gated пишет live DRFM",
+    gwSrc.includes("set_live_drfm") && gwSrc.includes("LB_DELAY1_DEFAULT") &&
+    gwSrc.includes("WALK_PERIOD_DEFAULT"));
   check("шлюз tune без ARM отказывает", gwSrc.includes('tune: нет ARM'));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
@@ -2055,6 +2098,20 @@ async function main(): Promise<void> {
   const autoBlock = runSrc.slice(runSrc.indexOf('opts.path === "auto"'), runSrc.indexOf("s.armTxWave"));
   check("cinema auto: startScan, не startFpgaPath",
     autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
+  check("cinema auto: амплитуда гейта 0.9 до startScan",
+    autoBlock.includes("setSignalParam(\"amp\", WAVE_AMP_MAX)") &&
+    autoBlock.indexOf("setSignalParam") < autoBlock.indexOf("s.startScan()"));
+  const muxSrc = readFileSync(join(here, "../../fpga/hdl/legion_tx_mux.vhd"), "utf8");
+  const pkgSrc = readFileSync(join(here, "../../fpga/hdl/legion_pkg.vhd"), "utf8");
+  check("FPGA: гейт lb_gated масштабирует на 0.9 Q15",
+    pkgSrc.includes("LEGION_LB_AMP_Q15") && pkgSrc.includes("29491") &&
+    muxSrc.includes("lb_amp_q15") && muxSrc.includes("LEGION_MODE_LB_GATED"));
+  check("FPGA pkg: live DRFM 0x24–0x2A",
+    pkgSrc.includes("LEGION_REG_LB_DELAY") && pkgSrc.includes("LEGION_REG_WALK_FTW_STEP"));
+  check("FPGA: NCO и lb_always тоже 0.9 на mux",
+    muxSrc.includes("lb_amp_q15(nco_i)") &&
+    muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
+    !muxSrc.includes("lb_always остаётся 1:1"));
   check("cinema auto: эмуляция не ждёт scanRunning",
     autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
   check("cinema auto: канал, выдержка и период сканирования пишутся в стор",

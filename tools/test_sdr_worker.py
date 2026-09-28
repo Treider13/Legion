@@ -75,7 +75,7 @@ def main() -> int:
         tone = w.make_cw()
         check("CW не DC", abs(complex(tone[0]) - complex(tone[1])) > 1e-6)
         check("CW длина кратна 8", len(tone) % 8 == 0)
-        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.25) < 0.02)
+        check("CW пик ~amp", abs(abs(complex(tone[0])) - 0.9) < 0.02)
         freqs = np.linspace(2440, 2444, 1024)
         db = np.linspace(-90, -40, 1024)
         pooled = w._pool_bins(freqs, db, 64)
@@ -738,6 +738,24 @@ def main() -> int:
         buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
         err = rt._tx_prime(buf, 2442e6, None, 10e6)
         check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+
+        class _BwTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bw = None
+
+            def setBandwidth(self, _d, _c, bw):
+                self.bw = bw
+
+        bwtx = w.Radio()
+        bwtx.fake = False
+        bwtx.hardware_key = "bladerf2"
+        bwtx._rx_fs = 40e6
+        bwtx._tx_fs = 40e6
+        bwtx.analog_bw = 56.0
+        bwtx.dev = _BwTx()
+        err_bw = bwtx._tx_prime(buf, 2415e6, None, 40e6, 15e6)
+        check("полка Атаки: фильтр 15 при часах слуха 40", err_bw is None and abs((bwtx.dev.bw or 0) - 15e6) < 1)
         check("AD9361: _tx_fs берёт часы RX", abs(rt._tx_fs - 10e6) < 1)
 
         class _ChunkTx(_TxClk):

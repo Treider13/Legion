@@ -62,6 +62,13 @@
 #define LEGION_REG_WALK_MAX       0x21  /* потолок; 0 = до 2^32−1 */
 #define LEGION_REG_WALK_CTL       0x22  /* bit0 EN, bit1 AUTO, bit2 HOLD */
 #define LEGION_REG_WALK_CUR       0x23  /* STATUS mux: текущая задержка */
+#define LEGION_REG_LB_DELAY       0x24  /* tap0, сэмплы; 0 = без отвода */
+#define LEGION_REG_LB_FTW         0x25  /* tap0 смеситель; 0 = обход */
+#define LEGION_REG_LB_DELAY1      0x26  /* tap1 */
+#define LEGION_REG_LB_FTW1        0x27
+#define LEGION_REG_LB_AMP         0x28  /* [15:0] A0 Q15, [31:16] A1 */
+#define LEGION_REG_WALK_PERIOD    0x29  /* сэмплы между шагами; 0 = фронт det */
+#define LEGION_REG_WALK_FTW_STEP  0x2A  /* прирост FTW0 за шаг */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -83,7 +90,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_WALK_CUR
+#define LEGION_REG_MAX            LEGION_REG_WALK_FTW_STEP
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */

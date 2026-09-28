@@ -202,6 +202,35 @@ architecture legion of bladerf is
     signal lg_tx_walk_en    : std_logic;
     signal lg_tx_walk_auto  : std_logic;
     signal lg_tx_walk_hold  : std_logic;
+    signal lg_tx_lb_delay   : unsigned(11 downto 0);
+    signal lg_tx_lb_ftw     : unsigned(31 downto 0);
+    signal lg_tx_lb_delay1  : unsigned(11 downto 0);
+    signal lg_tx_lb_ftw1    : unsigned(31 downto 0);
+    signal lg_tx_lb_amp0    : unsigned(15 downto 0);
+    signal lg_tx_lb_amp1    : unsigned(15 downto 0);
+    signal lg_tx_walk_period : unsigned(31 downto 0);
+    signal lg_tx_walk_ftw_step : unsigned(31 downto 0);
+    signal lg_lb_dly0       : std_logic_vector(31 downto 0);
+    signal lg_lb_dly1       : std_logic_vector(31 downto 0);
+    signal lg_lb_mix0       : std_logic_vector(31 downto 0);
+    signal lg_lb_mix1       : std_logic_vector(31 downto 0);
+    signal lg_lb_mux_data   : std_logic_vector(31 downto 0);
+    signal lg_mix0_i        : signed(15 downto 0);
+    signal lg_mix0_q        : signed(15 downto 0);
+    signal lg_mix0_valid    : std_logic;
+    signal lg_mix1_i        : signed(15 downto 0);
+    signal lg_mix1_q        : signed(15 downto 0);
+    signal lg_mix1_valid    : std_logic;
+    signal lg_mix0_en       : std_logic;
+    signal lg_mix1_en       : std_logic;
+    signal lg_lbw_tap0      : unsigned(11 downto 0);
+    signal lg_lbw_tap1      : unsigned(11 downto 0);
+    signal lg_lbw_ftw0      : unsigned(31 downto 0);
+    signal lg_lbw_ftw1      : unsigned(31 downto 0);
+    signal lg_lbw_cur       : unsigned(31 downto 0);
+    signal lg_dly0_sel      : unsigned(11 downto 0);
+    signal lg_dly1_sel      : unsigned(11 downto 0);
+    signal lg_walk_cur_mux  : unsigned(31 downto 0);
     signal lg_wo_cap_i      : signed(15 downto 0);
     signal lg_wo_cap_q      : signed(15 downto 0);
     signal lg_wo_cap_v      : std_logic;
@@ -212,6 +241,7 @@ architecture legion of bladerf is
     signal lg_wo_cur        : unsigned(31 downto 0);
     signal lg_mux_rd_en     : std_logic;
     signal lg_mode_player   : std_logic;
+    signal lg_mode_lb       : std_logic;
 
     signal lg_play_i        : signed(15 downto 0);
     signal lg_play_q        : signed(15 downto 0);
@@ -1145,6 +1175,14 @@ begin
         tx_walk_en    => lg_tx_walk_en,
         tx_walk_auto  => lg_tx_walk_auto,
         tx_walk_hold  => lg_tx_walk_hold,
+        tx_lb_delay   => lg_tx_lb_delay,
+        tx_lb_ftw     => lg_tx_lb_ftw,
+        tx_lb_delay1  => lg_tx_lb_delay1,
+        tx_lb_ftw1    => lg_tx_lb_ftw1,
+        tx_lb_amp0    => lg_tx_lb_amp0,
+        tx_lb_amp1    => lg_tx_lb_amp1,
+        tx_walk_period => lg_tx_walk_period,
+        tx_walk_ftw_step => lg_tx_walk_ftw_step,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1152,7 +1190,7 @@ begin
         tx_det_active => lg_det_active_tx,
         tx_det_count  => lg_det_count,
         tx_walk_state => lg_wo_state,
-        tx_walk_cur   => lg_wo_cur,
+        tx_walk_cur   => lg_walk_cur_mux,
         rx_clock      => rx_clock,
         rx_reset      => rx_reset,
         rx_det_thr    => lg_det_thr_rx,
@@ -1254,6 +1292,35 @@ begin
         state        => lg_wo_state
       );
     lg_mode_player <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
+    lg_mode_lb <= '1' when lg_tx_mode = LEGION_MODE_LB_GATED
+                       or lg_tx_mode = LEGION_MODE_LB_ALWAYS else '0';
+
+    U_legion_lb_walk : entity work.legion_lb_walk
+      port map (
+        clock        => tx_clock,
+        reset        => tx_reset,
+        enable       => lg_tx_walk_en,
+        arm          => lg_tx_arm,
+        hold_max     => lg_tx_walk_hold,
+        delay_init   => lg_tx_lb_delay,
+        delay1_init  => lg_tx_lb_delay1,
+        walk_step    => lg_tx_walk_step,
+        walk_max     => lg_tx_walk_max,
+        walk_period  => lg_tx_walk_period,
+        ftw0_init    => lg_tx_lb_ftw,
+        ftw1_init    => lg_tx_lb_ftw1,
+        ftw_step     => lg_tx_walk_ftw_step,
+        det_active   => lg_det_active_tx,
+        sample_en    => lg_mux_rd_en,
+        tap          => lg_lbw_tap0,
+        tap1         => lg_lbw_tap1,
+        ftw0         => lg_lbw_ftw0,
+        ftw1         => lg_lbw_ftw1,
+        cur_delay    => lg_lbw_cur
+      );
+    lg_dly0_sel <= lg_lbw_tap0 when lg_mode_lb = '1' else lg_tx_lb_delay;
+    lg_dly1_sel <= lg_lbw_tap1 when lg_mode_lb = '1' else lg_tx_lb_delay1;
+    lg_walk_cur_mux <= lg_lbw_cur when lg_mode_lb = '1' else lg_wo_cur;
 
     U_legion_player : entity work.legion_player
       port map (
@@ -1316,6 +1383,81 @@ begin
       );
     lg_wd_ok <= not lg_wd_fired;
 
+    -- mesarcik + 2 scatterer: FIFO → 2 delayline → 2 mix → sum ×Q15
+    U_legion_delayline0 : entity work.legion_delayline
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        delay     => lg_dly0_sel,
+        din       => lg_lb_data,
+        sample_en => lg_mux_rd_en,
+        dout      => lg_lb_dly0
+      );
+    U_legion_delayline1 : entity work.legion_delayline
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        delay     => lg_dly1_sel,
+        din       => lg_lb_data,
+        sample_en => lg_mux_rd_en,
+        dout      => lg_lb_dly1
+      );
+    lg_mix0_en <= '1' when lg_lbw_ftw0 /= 0 else '0';
+    lg_mix1_en <= '1' when lg_lbw_ftw1 /= 0 else '0';
+    U_legion_mix_nco0 : entity work.legion_nco
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        enable    => lg_mix0_en,
+        ftw       => lg_lbw_ftw0,
+        out_i     => lg_mix0_i,
+        out_q     => lg_mix0_q,
+        out_valid => lg_mix0_valid
+      );
+    U_legion_mix_nco1 : entity work.legion_nco
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        enable    => lg_mix1_en,
+        ftw       => lg_lbw_ftw1,
+        out_i     => lg_mix1_i,
+        out_q     => lg_mix1_q,
+        out_valid => lg_mix1_valid
+      );
+    U_legion_mixer0 : entity work.legion_mixer
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        mix_en    => lg_mix0_en,
+        sample_en => lg_mux_rd_en,
+        din       => lg_lb_dly0,
+        lo_i      => lg_mix0_i,
+        lo_q      => lg_mix0_q,
+        dout      => lg_lb_mix0
+      );
+    U_legion_mixer1 : entity work.legion_mixer
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        mix_en    => lg_mix1_en,
+        sample_en => lg_mux_rd_en,
+        din       => lg_lb_dly1,
+        lo_i      => lg_mix1_i,
+        lo_q      => lg_mix1_q,
+        dout      => lg_lb_mix1
+      );
+    U_legion_lb_combine : entity work.legion_lb_combine
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        sample_en => lg_mux_rd_en,
+        amp0      => lg_tx_lb_amp0,
+        amp1      => lg_tx_lb_amp1,
+        din0      => lg_lb_mix0,
+        din1      => lg_lb_mix1,
+        dout      => lg_lb_mux_data
+      );
+
     U_legion_tx_mux : entity work.legion_tx_mux
       port map (
         clock      => tx_clock,
@@ -1335,7 +1477,7 @@ begin
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,
-        lb_data    => lg_lb_data,
+        lb_data    => lg_lb_mux_data,
         lb_empty   => lg_lb_empty,
         lb_rd_en   => lg_mux_rd_en,
         out_i      => lg_mux_i,
