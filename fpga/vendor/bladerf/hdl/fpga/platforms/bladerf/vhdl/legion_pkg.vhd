@@ -72,6 +72,15 @@ package legion_pkg is
     constant LEGION_REG_WALK_MAX   : natural := 16#21#; -- потолок; 0 = до 2^32−1
     constant LEGION_REG_WALK_CTL   : natural := 16#22#; -- bit0 EN, bit1 AUTO, bit2 HOLD
     constant LEGION_REG_WALK_CUR   : natural := 16#23#; -- STATUS mux: текущая задержка
+    -- Живой DRFM после CDC (mesarcik: delay + mix + scale). Не DELAY 0x1F.
+    -- xA4: два отвода 4096, не RFSoC 4×256 км.
+    constant LEGION_REG_LB_DELAY   : natural := 16#24#; -- tap0, сэмплы; 0 = без отвода
+    constant LEGION_REG_LB_FTW     : natural := 16#25#; -- tap0 смеситель; 0 = обход
+    constant LEGION_REG_LB_DELAY1  : natural := 16#26#; -- tap1
+    constant LEGION_REG_LB_FTW1    : natural := 16#27#; -- tap1 смеситель
+    constant LEGION_REG_LB_AMP     : natural := 16#28#; -- [15:0] A0 Q15, [31:16] A1
+    constant LEGION_REG_WALK_PERIOD : natural := 16#29#; -- сэмплы между шагами; 0 = фронт det
+    constant LEGION_REG_WALK_FTW_STEP : natural := 16#2A#; -- прирост FTW0 за шаг
 
     constant LEGION_WALK_CTL_EN    : natural := 0;
     constant LEGION_WALK_CTL_AUTO  : natural := 1;

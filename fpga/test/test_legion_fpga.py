@@ -145,6 +145,13 @@ py_map = {
     "LEGION_REG_WALK_MAX": lf.REG_WALK_MAX,
     "LEGION_REG_WALK_CTL": lf.REG_WALK_CTL,
     "LEGION_REG_WALK_CUR": lf.REG_WALK_CUR,
+    "LEGION_REG_LB_DELAY": lf.REG_LB_DELAY,
+    "LEGION_REG_LB_FTW": lf.REG_LB_FTW,
+    "LEGION_REG_LB_DELAY1": lf.REG_LB_DELAY1,
+    "LEGION_REG_LB_FTW1": lf.REG_LB_FTW1,
+    "LEGION_REG_LB_AMP": lf.REG_LB_AMP,
+    "LEGION_REG_WALK_PERIOD": lf.REG_WALK_PERIOD,
+    "LEGION_REG_WALK_FTW_STEP": lf.REG_WALK_FTW_STEP,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -402,6 +409,23 @@ check("set det_thr=0 → отказ (floor), det_thr_set не взведён",
       r.get("ok") is False and gw.det_thr_set is False)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
+check("lb_gated live DRFM: 2 отвода 0+64, A=0.5+0.5, period 4096",
+      gw.fpga._t.regs.get(lf.REG_LB_DELAY) == 0 and
+      gw.fpga._t.regs.get(lf.REG_LB_DELAY1) == lf.LB_DELAY1_DEFAULT and
+      gw.fpga._t.regs.get(lf.REG_LB_AMP) == (lf.LB_AMP_Q15_HALF | (lf.LB_AMP_Q15_HALF << 16)) and
+      gw.fpga._t.regs.get(lf.REG_WALK_PERIOD) == lf.WALK_PERIOD_DEFAULT and
+      gw.fpga._t.regs.get(lf.REG_WALK_STEP) == lf.WALK_STEP_LIVE_DEFAULT and
+      gw.fpga._t.regs.get(lf.REG_WALK_MAX) == lf.WALK_MAX_LIVE_DEFAULT and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL) == (lf.WALK_CTL_EN | lf.WALK_CTL_HOLD) and
+      gw.fpga._t.regs.get(lf.REG_LB_FTW, 0) == 0 and
+      gw.fpga._t.regs.get(lf.REG_WALK_FTW_STEP, 0) == 0)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+         "lb_delay1": 32, "lb_amp0": 20000, "lb_amp1": 10000, "walk_period": 128})
+check("lb_gated явные live-ключи перекрывают дефолт",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_LB_DELAY1) == 32 and
+      gw.fpga._t.regs.get(lf.REG_LB_AMP) == (20000 | (10000 << 16)) and
+      gw.fpga._t.regs.get(lf.REG_WALK_PERIOD) == 128)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
 check("det_shift=4 (окно 16 сэмплов = 8 µs @ 2 МГц)",
       gw.fpga._t.regs.get(lf.REG_DET_SHIFT) == 4)
@@ -415,6 +439,11 @@ check("disarm снимает наш RX-enable", not (gw.fpga._t.control & 0x2))
 check("disarm снимает наш TX-enable", not (gw.fpga._t.control & 0x4))
 # повторный arm для следующего теста
 rpc({"op": "arm", "mode": "player"})
+check("player ARM сбрасывает live DRFM",
+      gw.fpga._t.regs.get(lf.REG_LB_DELAY1, 0) == 0 and
+      gw.fpga._t.regs.get(lf.REG_WALK_PERIOD, 0) == 0 and
+      gw.fpga._t.regs.get(lf.REG_LB_AMP) == lf.LB_AMP_Q15_UNITY and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL, 0) == 0)
 check("player: TX включён через CONTROL (бит2)",
       bool(gw.fpga._t.control & 0x4))
 

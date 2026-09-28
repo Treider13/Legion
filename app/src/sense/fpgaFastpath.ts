@@ -25,6 +25,14 @@ export const FPGA_AIR_SDR_IDS: readonly string[] = [
   "bladerf-x40",
 ];
 
+/** xA4 lab DRFM: два отвода 4096, не RFSoC 4×256 км. Mux потом ×0.9. */
+export const XA4_LB_DELAY0 = 0;
+export const XA4_LB_DELAY1 = 64;
+export const XA4_LB_AMP_HALF = 16384;
+export const XA4_WALK_PERIOD = 4096;
+export const XA4_WALK_STEP = 1;
+export const XA4_WALK_MAX = 4095;
+
 export function fpgaAirSupported(sdrId: string): boolean {
   return FPGA_AIR_SDR_IDS.includes(sdrId);
 }
@@ -542,6 +550,15 @@ export function fpgaArmCmd(
     walkAuto?: boolean;
     walkHold?: boolean;
     walkEn?: boolean;
+    /** Живой DRFM после CDC (не DELAY 0x1F). xA4: два отвода 4096. */
+    lbDelay?: number;
+    lbDelay1?: number;
+    lbFtw?: number;
+    lbFtw1?: number;
+    lbAmp0?: number;
+    lbAmp1?: number;
+    walkPeriod?: number;
+    walkFtwStep?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -613,6 +630,22 @@ export function fpgaArmCmd(
         cmd.scan_bands = opts.scanBands.map((b) => ({ f1_mhz: b.f1Mhz, f2_mhz: b.f2Mhz }));
       }
     }
+  }
+  if (mode === "lb_gated") {
+    cmd.lb_delay = opts.lbDelay ?? XA4_LB_DELAY0;
+    cmd.lb_delay1 = opts.lbDelay1 ?? XA4_LB_DELAY1;
+    cmd.lb_ftw = opts.lbFtw ?? 0;
+    cmd.lb_ftw1 = opts.lbFtw1 ?? 0;
+    cmd.lb_amp0 = opts.lbAmp0 ?? XA4_LB_AMP_HALF;
+    cmd.lb_amp1 = opts.lbAmp1 ?? XA4_LB_AMP_HALF;
+    cmd.walk_period = opts.walkPeriod ?? XA4_WALK_PERIOD;
+    cmd.walk_ftw_step = opts.walkFtwStep ?? 0;
+    if (cmd.walk_step === undefined) cmd.walk_step = XA4_WALK_STEP;
+    if (cmd.walk_max === undefined) cmd.walk_max = XA4_WALK_MAX;
+    if (opts.walkEn === false) cmd.walk_en = false;
+    else if (cmd.walk_en === undefined) cmd.walk_en = true;
+    if (opts.walkHold === undefined) cmd.walk_hold = true;
+    else cmd.walk_hold = !!opts.walkHold;
   }
   return cmd;
 }

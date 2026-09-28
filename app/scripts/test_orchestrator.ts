@@ -73,6 +73,12 @@ import {
   planFpgaAir,
   planOnboardIntercept,
   fpgaSettleN,
+  XA4_LB_DELAY0,
+  XA4_LB_DELAY1,
+  XA4_LB_AMP_HALF,
+  XA4_WALK_PERIOD,
+  XA4_WALK_STEP,
+  XA4_WALK_MAX,
 } from "../src/sense/fpgaFastpath";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -1502,6 +1508,18 @@ async function main(): Promise<void> {
   check("ARM lb_gated несёт freq_mhz для micro", fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", freqMhz: 2442.5 }).freq_mhz === 2442.5);
   const gatedCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
+  check("ARM lb_gated несёт live DRFM xA4",
+    gatedCmd.lb_delay === XA4_LB_DELAY0 && gatedCmd.lb_delay1 === XA4_LB_DELAY1 &&
+    gatedCmd.lb_amp0 === XA4_LB_AMP_HALF && gatedCmd.lb_amp1 === XA4_LB_AMP_HALF &&
+    gatedCmd.walk_period === XA4_WALK_PERIOD && gatedCmd.walk_step === XA4_WALK_STEP &&
+    gatedCmd.walk_max === XA4_WALK_MAX && gatedCmd.walk_en === true &&
+    gatedCmd.walk_hold === true && gatedCmd.lb_ftw === 0 && gatedCmd.walk_ftw_step === 0);
+  const gatedOverride = fpgaArmCmd("lb_gated", {
+    detThr: 5000, detShift: 4, token: "t", lbDelay1: 32, walkPeriod: 128, walkHold: false, walkEn: false,
+  });
+  check("ARM lb_gated явные live-ключи",
+    gatedOverride.lb_delay1 === 32 && gatedOverride.walk_period === 128 &&
+    gatedOverride.walk_hold === false && gatedOverride.walk_en === false);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
   check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
   const walkCmd = fpgaArmCmd("player", {
@@ -2062,6 +2080,9 @@ async function main(): Promise<void> {
   check("store hops x40 через soloHopBlockedReason", storeSrc.includes("soloHopBlockedReason(get().sdrId, walk.hop)"));
   const gwSrc = readFileSync(join(here, "../../fpga/host/legion_gateway.py"), "utf8");
   check("шлюз ARM с fs пишет WD_LIMIT", gwSrc.includes("watchdog_limit_for_fs") && gwSrc.includes("set_watchdog"));
+  check("шлюз ARM lb_gated пишет live DRFM",
+    gwSrc.includes("set_live_drfm") && gwSrc.includes("LB_DELAY1_DEFAULT") &&
+    gwSrc.includes("WALK_PERIOD_DEFAULT"));
   check("шлюз tune без ARM отказывает", gwSrc.includes('tune: нет ARM'));
   const runSrc = readFileSync(join(here, "../src/components/cinema/run.ts"), "utf8");
   check("cinema стоп зовёт fpgaDisarm (тот стопает walk)", runSrc.includes("fpgaDisarm"));
@@ -2085,6 +2106,8 @@ async function main(): Promise<void> {
   check("FPGA: гейт lb_gated масштабирует на 0.9 Q15",
     pkgSrc.includes("LEGION_LB_AMP_Q15") && pkgSrc.includes("29491") &&
     muxSrc.includes("lb_amp_q15") && muxSrc.includes("LEGION_MODE_LB_GATED"));
+  check("FPGA pkg: live DRFM 0x24–0x2A",
+    pkgSrc.includes("LEGION_REG_LB_DELAY") && pkgSrc.includes("LEGION_REG_WALK_FTW_STEP"));
   check("FPGA: NCO и lb_always тоже 0.9 на mux",
     muxSrc.includes("lb_amp_q15(nco_i)") &&
     muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
