@@ -30,6 +30,9 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def main() -> int:
+    proto17_x2 = [((0x12345678 >> i) & 1) for i in range(31)]
+    check("Gold x2 = proto17/36.211 LSB 0x12345678", list(dji.X2_INIT_BITS) == proto17_x2, str(dji.X2_INIT_BITS))
+
     raw = b"LEGION-DRONEID-TEST" + bytes(range(40))
     raw = raw[:173].ljust(173, b"\x00")
     coded = tb.encode_droneid_coded(raw)

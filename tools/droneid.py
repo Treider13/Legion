@@ -7,7 +7,8 @@ ZC: root 600 (символ 4) и 147 (символ 6), длина 601, DC=0.
     Mini 3 Pro) и RUB-SysSec #46 (Mavic 3 Classic, 2026) дают 600 и 147.
 CP: long = fs/192000 = 80, short = 4.6875 мкс · fs = 72 @ 15.36e6
     (proto17 / LTE normal CP 4.69 мкс, extended 5.21 мкс ≈ 1/192000).
-Скремблер: LTE Gold 36.211 7.2, x2 = bit-reverse 0x12345678 (31 бит, MSB→x2[0]).
+Скремблер: LTE Gold 36.211 7.2, c_init=0x12345678, x2(i)=(c_init>>i)&1
+    (proto17 process_file.m: fliplr MSB-записи; не MSB-first).
 Данные: символы 2,3,5,7,8,9 → 7200 бит → turbo D=1412 E=7200 → 176 байт.
     Распаковка 91 байт: anarkiwi/samples2djidroneid decode_djidroneid.py.
 Эквалайзер: H = среднее(Y4/X600, Y6/X147) на 600 несущих (proto17).
@@ -41,8 +42,9 @@ LATLON_SCALE = 174533.0
 DATA_SYMS = (1, 2, 4, 6, 7, 8)  # 0-based: 2,3,5,7,8,9
 # Только подтверждённые корни (proto17 README, issue #25, RUB-SysSec #46).
 ZC_DETECT_ROOTS = ((600, 4), (147, 6))
+# proto17 process_file.m: fliplr([0 0 1, 0 0 1 0, … 1 0 0 0]) == 36.211 x2(i)=(0x12345678>>i)&1
 X2_INIT_BITS = [
-    0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0,
+    0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0,
 ]
 
 
@@ -93,7 +95,7 @@ def create_zc(fs: float, symbol_index: int) -> np.ndarray:
 
 
 def gold_scrambler(num_bits: int, x2_init: list[int] | None = None) -> np.ndarray:
-    """LTE 36.211 7.2. x2_init — 31 бит, bit-reverse 0x12345678 как у proto17."""
+    """LTE 36.211 7.2. x2_init — 31 бит, LSB c_init=0x12345678 (proto17 fliplr)."""
     init = list(X2_INIT_BITS if x2_init is None else x2_init)
     if len(init) != 31:
         raise ValueError("x2_init должен быть 31 бит")
