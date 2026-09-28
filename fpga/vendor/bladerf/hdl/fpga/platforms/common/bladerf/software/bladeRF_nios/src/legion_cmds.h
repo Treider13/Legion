@@ -99,7 +99,7 @@
 #define LEGION_CH_PRESET_ELRS     1u /* ExpressLRS FHSS.cpp ISM2G4 80×1 МГц */
 #define LEGION_CH_PRESET_ISM8     2u /* 2400–2480 / 8×10 МГц, не OcuSync */
 #define LEGION_CH_PRESET_O4VID3   3u /* DJI O4 20/10 МГц: 5768.5/5789.5/5814.5 */
-#define LEGION_XLAT_NULL_BINS     24u /* MA-16 first-null = 256/16 */
+#define LEGION_XLAT_NULL_BINS     16u /* MA-16 first-null: f=fs/N=fs/16 → 256/16 bins */
 #define LEGION_BAND_MAX           8u
 #define LEGION_SURVEY_LOOK_MAX    128u
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u

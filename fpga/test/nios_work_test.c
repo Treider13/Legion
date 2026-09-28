@@ -792,7 +792,7 @@ int main(void)
                             LEGION_CH_N80 | (4u << 8)));
     }
 
-    /* Два тона одного кадра, dist=80 ≥ 24: xlat bypass (Gemini / MA-16). */
+    /* Два тона одного кадра, dist=80 ≥ 16: xlat bypass (Gemini / MA-16). */
     legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
     CHECK("FFT dual: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
@@ -818,6 +818,51 @@ int main(void)
               pio_wrote_reg(LEGION_REG_FFT_CTRL,
                             LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_XLAT_BYPASS));
     }
+
+    /* Корень: first-null = 16, не 24. dist=15 — xlat жив; dist=16 — bypass. */
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    t_status = 0;
+    t_tamer = 2000;
+    t_peak_word = 0;
+    t_peak1_word = 0;
+    legion_work(); /* SEARCH */
+    t_tamer += 8;
+    legion_work(); /* SETTLE → FRAME */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    t_peak1_word = mk_peak(1, 1, 0x1000, 31); /* circ_dist=15 */
+    pio_n = 0;
+    legion_work();
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_FFT_CTRL, &v);
+        CHECK("FFT dual: dist=15 < first-null — без bypass",
+              (v & LEGION_FFT_CTRL_XLAT_BYPASS) == 0);
+    }
+
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    t_status = 0;
+    t_tamer = 3000;
+    t_peak_word = 0;
+    t_peak1_word = 0;
+    legion_work(); /* SEARCH */
+    t_tamer += 8;
+    legion_work(); /* SETTLE → FRAME */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 2, 0x2000, 16);
+    t_peak1_word = mk_peak(1, 2, 0x1000, 32); /* circ_dist=16 */
+    pio_n = 0;
+    legion_work();
+    {
+        uint32_t v = 0;
+        legion_reg_read(LEGION_REG_FFT_CTRL, &v);
+        CHECK("FFT dual: dist=16 = first-null — bypass",
+              (v & LEGION_FFT_CTRL_XLAT_BYPASS) != 0);
+        CHECK("FFT dual: HDL bypass на 16",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_XLAT_BYPASS));
+    }
+
     t_peak1_word = 0;
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
     legion_reg_write(LEGION_REG_CH_CTRL, 0);

@@ -1012,6 +1012,8 @@ static void legion_dual_from_peak1(uint32_t w0)
         return;
     }
     dist = legion_circ_dist_u8(w0, w1);
+    /* MA-16: H(f)=sinc(N f/fs), первый нуль f=fs/16 = 16 бинов FFT-256.
+     * 24 — это пик первого бокового лепестка sinc(1.5), не нуль. */
     if (dist < (int)LEGION_XLAT_NULL_BINS) {
         if (legion_xlat_bypass_auto) {
             legion_fft_ctrl &= ~LEGION_FFT_CTRL_XLAT_BYPASS;
