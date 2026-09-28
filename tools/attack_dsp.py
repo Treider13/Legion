@@ -42,7 +42,11 @@ PAL_LINE_HZ = 15625.0
 NTSC_LINE_HZ = 15734.0
 ANALOG_COMB_HARMONICS = 4
 ANALOG_COMB_BIN_HZ = 80.0
+ANALOG_COMB_FS = 250_000.0  # после channelize xA4 (~20 МГц) строчная ≪ Найквиста
 ANALOG_COMB_HIT = 2.4
+ANALOG_COMB_SHARP_F0 = 1.55
+ANALOG_COMB_SHARP_H2 = 1.4
+ANALOG_COMB_STRONG = 80.0
 ANALOG_COMB_MAX_N = 16384
 
 _DPSS: dict[tuple[int, int], np.ndarray] = {}
@@ -359,19 +363,79 @@ def _bin_energy(mag: np.ndarray, freqs: np.ndarray, hz: float, bw: float) -> flo
     return float(np.sum(mag[mask]))
 
 
-def _comb_ratio(mag: np.ndarray, freqs: np.ndarray, f0: float) -> float:
+def _comb_half_hz(freqs: np.ndarray) -> float:
+    """orecchiette: пик на строчной. Фиксированные 80 Гц пусты, если Δf ≫ 80
+    (channelize xA4 ≈ 20.48 МГц / 16384 = 1250 Гц)."""
+    if freqs.size < 2:
+        return ANALOG_COMB_BIN_HZ
+    df = abs(float(freqs[1] - freqs[0]))
+    return max(ANALOG_COMB_BIN_HZ, 0.55 * df)
+
+
+def _decimate_mean(x: np.ndarray, decim: int) -> np.ndarray:
+    if decim <= 1:
+        return x
+    n = (int(x.size) // decim) * decim
+    if n < 2:
+        return x
+    return x[:n].reshape(-1, decim).mean(axis=1)
+
+
+def _band_floor(mag: np.ndarray, freqs: np.ndarray) -> float:
+    """orecchiette: медиана бинов 1–80 кГц, не дырка между гармониками."""
+    mask = (freqs >= 1000.0) & (freqs <= 80_000.0)
+    band = mag[mask]
+    if band.size == 0:
+        return 1e-20
+    med = float(np.median(band))
+    return med if med > 0 else 1e-20
+
+
+def _line_peak_hz(mag: np.ndarray, freqs: np.ndarray) -> float | None:
+    mask = (freqs >= 14_000.0) & (freqs <= 18_000.0)
+    if not np.any(mask):
+        return None
+    idx = int(np.argmax(mag[mask]))
+    return float(freqs[mask][idx])
+
+
+def _local_ratio(mag: np.ndarray, freqs: np.ndarray, hz: float, rad: int = 2) -> float:
+    """1/f шум выглядит как гребёнка f,2f,3f. Analog — локальный пик (orecchiette)."""
+    i = int(np.argmin(np.abs(freqs - hz)))
+    if i <= 0 or i >= mag.size - 1:
+        return 0.0
+    neigh = 0.0
+    for d in range(1, rad + 1):
+        if i - d >= 0:
+            neigh = max(neigh, float(mag[i - d]))
+        if i + d < mag.size:
+            neigh = max(neigh, float(mag[i + d]))
+    return float(mag[i]) / (neigh + 1e-20)
+
+
+def _comb_ratio(mag: np.ndarray, freqs: np.ndarray, f0: float, half_hz: float, floor: float) -> float:
     """Гребёнка строчной: нужна сама f0. OFDM @ 2 МГц имеет шаг fs/64 = 31250
     (2×PAL) — чётные гармоники без фундаментальной это не analog FPV."""
     peaks = [
-        _bin_energy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ)
+        _bin_energy(mag, freqs, f0 * k, half_hz)
         for k in range(1, ANALOG_COMB_HARMONICS + 1)
     ]
-    if peaks[0] < 0.2 * max(peaks):
+    fund = peaks[0]
+    if fund < 0.2 * max(peaks):
         return 0.0
-    den = 0.0
-    for k in range(1, ANALOG_COMB_HARMONICS + 1):
-        den += _bin_energy(mag, freqs, f0 * k + f0 / 2.0, ANALOG_COMB_BIN_HZ)
-    return sum(peaks) / (den + 1e-20)
+    if fund < ANALOG_COMB_HIT * floor:
+        return 0.0
+    strong = sum(1 for p in peaks if p >= 1.5 * floor)
+    if strong < 2:
+        return 0.0
+    sharp = (
+        _local_ratio(mag, freqs, f0) >= ANALOG_COMB_SHARP_F0
+        and _local_ratio(mag, freqs, f0 * 2.0) >= ANALOG_COMB_SHARP_H2
+    )
+    strong = fund >= ANALOG_COMB_STRONG * floor and peaks[1] >= 10.0 * floor
+    if not sharp and not strong:
+        return 0.0
+    return fund / floor
 
 
 def analog_comb(x: np.ndarray, fs: float) -> dict[str, Any]:
@@ -388,20 +452,34 @@ def analog_comb(x: np.ndarray, fs: float) -> dict[str, Any]:
     fm = fm_demod(x)
     if fm.size < 256:
         return empty
+    work_fs = float(fs)
+    decim = max(1, int(work_fs // ANALOG_COMB_FS))
+    if decim > 1 and fm.size // decim >= 256:
+        fm = _decimate_mean(fm, decim)
+        work_fs = work_fs / float(decim)
+    if fm.size < 256:
+        return empty
     if fm.size > ANALOG_COMB_MAX_N:
         fm = fm[-ANALOG_COMB_MAX_N:]
     n = int(fm.size)
+    fm = fm - float(np.mean(fm))
     win = np.hanning(n)
     spec = np.fft.rfft(fm * win)
     mag = np.abs(spec)
-    freqs = np.fft.rfftfreq(n, d=1.0 / float(fs))
-    pal = _comb_ratio(mag, freqs, PAL_LINE_HZ)
-    ntsc = _comb_ratio(mag, freqs, NTSC_LINE_HZ)
+    freqs = np.fft.rfftfreq(n, d=1.0 / work_fs)
+    half = _comb_half_hz(freqs)
+    floor = _band_floor(mag, freqs)
+    pal = _comb_ratio(mag, freqs, PAL_LINE_HZ, half, floor)
+    ntsc = _comb_ratio(mag, freqs, NTSC_LINE_HZ, half, floor)
     score = max(pal, ntsc)
     hit = score >= ANALOG_COMB_HIT
     kind = "none"
     if hit:
-        kind = "pal" if pal >= ntsc else "ntsc"
+        pk = _line_peak_hz(mag, freqs)
+        if pk is not None:
+            kind = "pal" if abs(pk - PAL_LINE_HZ) <= abs(pk - NTSC_LINE_HZ) else "ntsc"
+        else:
+            kind = "pal" if pal >= ntsc else "ntsc"
     return {
         "analogKind": kind,
         "analogScore": float(score),

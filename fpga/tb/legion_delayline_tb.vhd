@@ -59,6 +59,27 @@ begin
         assert dout = sample(9) report "FAIL: bypass with sample_en" severity failure;
         sample_en <= '0';
 
+        -- delay=1: регистр din. Первый захват — ноль, дальше предыдущий сэмпл.
+        delay <= to_unsigned(1, 12);
+        wait until rising_edge(clock);
+        din <= sample(20);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        sample_en <= '0';
+        wait until rising_edge(clock);
+        assert unsigned(captured) = 0 report "FAIL: delay=1 first not silent" severity failure;
+        din <= sample(21);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        sample_en <= '0';
+        wait until rising_edge(clock);
+        assert captured = sample(20) report "FAIL: delay=1 not previous sample" severity failure;
+
+        reset <= '1';
+        wait until rising_edge(clock);
+        reset <= '0';
+        wait until rising_edge(clock);
+
         -- delay=4: первые 4 выдачи — нули, затем din[k-4]
         delay <= to_unsigned(4, 12);
         wait until rising_edge(clock);

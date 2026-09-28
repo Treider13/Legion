@@ -11,6 +11,7 @@ function familyTone(id: string): string {
   if (id.startsWith("hop") || id.startsWith("rc-") || id === "digital-burst") return "rfclass-hop";
   if (id === "two-floor") return "rfclass-two";
   if (id === "silent") return "rfclass-silent";
+  if (id === "fpga-energy" || id === "energy") return "rfclass-unknown";
   return "rfclass-unknown";
 }
 

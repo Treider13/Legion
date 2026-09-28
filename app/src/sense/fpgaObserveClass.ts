@@ -1,8 +1,10 @@
 // ============================================================================
 // LEGION — класс с observe FPGA. Без retune и без DISARM.
-// IQ-гребёнки нет: USB не в круге µs. Полоса + ширина взгляда + энергия.
+// IQ-гребёнки нет: USB не в круге µs. Плата отдаёт I²+Q² и пик FFT,
+// не занятость канала. width=взгляд подставлять в classifyAttackFamily нельзя:
+// тогда любой гейт становится window-fill / analog-video.
 // ============================================================================
-import { ATTACK_SILENT_HINT, classifyAttackFamily, type AttackAtlasRow } from "./attackAtlas";
+import { ATTACK_SILENT_HINT, bandBucket, type AttackAtlasRow } from "./attackAtlas";
 import type { AttackRow } from "./attackScene";
 
 export interface FpgaObserveClass {
@@ -44,20 +46,17 @@ export function classifyFpgaObserve(opts: {
       note: "детекция I²+Q² · частота пика не готова",
     };
   }
-  const atlas = classifyAttackFamily(
-    { freqMhz: hz, widthMhz: look, duty: 1, streak: 8 },
-    look,
-    null,
-  );
+  const band = bandBucket(hz);
   return {
     atlas: {
-      ...atlas,
-      hint: `${atlas.hint} · FPGA observe, без FM-гребёнки`,
+      id: "fpga-energy",
+      label: "энергия в окне FPGA",
+      hint: `I²+Q² гейт · корзина ${band} · ширина канала неизвестна · FM-гребёнки нет`,
     },
     freqMhz: hz,
     detActive: true,
     lookMhz: look,
-    note: `взгляд ${look.toFixed(1)} МГц · ${hz.toFixed(3)} МГц`,
+    note: `взгляд ${look.toFixed(1)} МГц · ${hz.toFixed(3)} МГц · без IQ`,
   };
 }
 

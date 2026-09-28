@@ -407,6 +407,15 @@ async function main(): Promise<void> {
   check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
   }).id === "digital-burst");
+  check("mid-C 12 МГц без гребёнки — не цифровой линк O4", classifyAttackFamily({
+    freqMhz: 5400, widthMhz: 12, duty: 0.9, streak: 10,
+  }).id !== "digital-video");
+  check("mid-C 20 МГц — не цифровой линк", classifyAttackFamily({
+    freqMhz: 5400, widthMhz: 20, duty: 0.9, streak: 10,
+  }).id !== "digital-video");
+  check("5.8 8 МГц IQ без гребёнки — не аналог по ширине", classifyAttackFamily({
+    freqMhz: 5800, widthMhz: 8, duty: 0.9, streak: 10,
+  }, 56, { kind: "none", score: 0, palScore: 0, ntscScore: 0, hit: false }).id !== "analog-video");
   const floors = atlasForTracks([
     {
       id: 1, freqMhz: 5800, fLowMhz: 5785, fHighMhz: 5815, widthMhz: 30,
@@ -2178,7 +2187,10 @@ async function main(): Promise<void> {
   const palIq = new Float64Array(palN * 2);
   for (let i = 0; i < palN; i++) {
     const t = i / palFs;
-    const ph = 2 * Math.PI * (palFs / 16) * t + 0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t);
+    const ph =
+      2 * Math.PI * (palFs / 16) * t +
+      0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t) +
+      0.28 * Math.sin(2 * Math.PI * 2 * PAL_LINE_HZ * t);
     palIq[2 * i] = 0.4 * Math.cos(ph);
     palIq[2 * i + 1] = 0.4 * Math.sin(ph);
   }
@@ -2191,6 +2203,35 @@ async function main(): Promise<void> {
     toneIq[2 * i + 1] = 0.4 * Math.sin(ph);
   }
   check("тон без гребёнки analog", analogCombFromIq(toneIq, palFs).hit === false);
+  const ofdmN = 8192;
+  const ofdmFs = 2e6;
+  const ofdmIq = new Float64Array(ofdmN * 2);
+  for (let i = 0; i < ofdmN; i++) {
+    let re = 0;
+    let im = 0;
+    for (let k = -16; k <= 16; k++) {
+      if (k === 0) continue;
+      const ph = 2 * Math.PI * k * (ofdmFs / 64) * (i / ofdmFs);
+      re += Math.cos(ph);
+      im += Math.sin(ph);
+    }
+    ofdmIq[2 * i] = 0.04 * re;
+    ofdmIq[2 * i + 1] = 0.04 * im;
+  }
+  check("OFDM 2 МГц (2×PAL бин) не analog", analogCombFromIq(ofdmIq, ofdmFs).hit === false);
+  const xa4Fs = 20.48e6;
+  const xa4N = 32768;
+  const xa4Iq = new Float64Array(xa4N * 2);
+  for (let i = 0; i < xa4N; i++) {
+    const t = i / xa4Fs;
+    const ph =
+      2 * Math.PI * (xa4Fs / 16) * t +
+      0.85 * Math.sin(2 * Math.PI * PAL_LINE_HZ * t) +
+      0.28 * Math.sin(2 * Math.PI * 2 * PAL_LINE_HZ * t);
+    xa4Iq[2 * i] = 0.4 * Math.cos(ph);
+    xa4Iq[2 * i + 1] = 0.4 * Math.sin(ph);
+  }
+  check("гребёнка PAL на канале xA4 20.48", analogCombFromIq(xa4Iq, xa4Fs).hit === true);
 
   const xa4Bands = droneSurveyBands("bladerf-micro-xa4");
   const x40Bands = droneSurveyBands("bladerf-x40");
@@ -2202,7 +2243,10 @@ async function main(): Promise<void> {
   const silentFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5800, detActive: false, lookMhz: 56 });
   check("FPGA тишина честная", silentFpga.atlas.id === "silent" && silentFpga.detActive === false);
   const liveFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5780, detActive: true, lookMhz: 56 });
-  check("FPGA окно 56 = window-fill", liveFpga.atlas.id === "window-fill");
+  check("FPGA окно 56 = энергия, не window-fill", liveFpga.atlas.id === "fpga-energy");
+  check("FPGA не выдумывает analog без IQ", liveFpga.atlas.id !== "analog-video");
+  const narrowFpga = classifyFpgaObserve({ peakMhz: 5800, loMhz: 5800, detActive: true, lookMhz: 2 });
+  check("FPGA взгляд 2 МГц тоже не analog/fill", narrowFpga.atlas.id === "fpga-energy");
   check("бирка 5.8", droneBandLabel({ f1Mhz: 5320, f2Mhz: 5950 }) === "5.3–5.95");
   check("бирка 2.4", droneBandLabel({ f1Mhz: 2400, f2Mhz: 2485 }) === "2.4");
 

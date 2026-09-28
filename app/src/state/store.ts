@@ -1667,13 +1667,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         });
       }
       const st = get();
-      const analogNow = catalogCaps(st.sdrId).analogBwMhz;
-      const listenNow = attackListenPlan({
-        analogMhz: analogNow,
-        paintOwnsTx: attackPaintOwnsTx(st.scanPattern, st.attackPaint, st.transmitArmed),
-        paint: st.attackPaint,
-      });
-      set(attackBrainPatch(st, gAttackTracker.snapshot(), st.scanBins, listenNow.spanMhz));
+      // span — тот, с которым звали think (полка open-loop ≠ 56 МГц слуха Атаки).
+      set(attackBrainPatch(st, gAttackTracker.snapshot(), st.scanBins, spanMhz));
     } finally {
       gAttackThinkBusy = false;
       const pend = gAttackThinkResidual;

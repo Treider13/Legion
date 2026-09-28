@@ -9,11 +9,18 @@
 export const PAL_LINE_HZ = 15625;
 export const NTSC_LINE_HZ = 15734;
 export const ANALOG_COMB_HARMONICS = 4;
-/** Половина бина вокруг гармоники, Гц. 80 Гц << 109 Гц (NTSC−PAL). */
+/** Нижняя половина окна, Гц. PAL/NTSC (109 Гц) различимы только если bin < 109. */
 export const ANALOG_COMB_BIN_HZ = 80;
+/** После channelize xA4 fs≈20 МГц: строчная ≪ Найквиста, 250 кГц хватает на 4-ю гармонику. */
+export const ANALOG_COMB_FS_HZ = 250_000;
 /** Отношение гармоник к межгармоническому полу. Синтез PAL даёт ≫ 3. */
 export const ANALOG_COMB_HIT = 2.4;
-/** Потолок FFT гребёнки: 16384 @ 2 МГц ≈ 8 мс (PAL bin 128). Не весь ring 2^24. */
+/** Локальный пик на f0 / 2f0. Ниже — 1/f (OFDM FM) похож на гребёнку. */
+export const ANALOG_COMB_SHARP_F0 = 1.55;
+export const ANALOG_COMB_SHARP_H2 = 1.4;
+/** Грубый бин (channelize 1 мс) размазывает пик; сильный fund/floor всё равно analog. */
+export const ANALOG_COMB_STRONG = 80;
+/** Потолок FFT гребёнки после децимации FM. Не весь ring 2^24. */
 export const ANALOG_COMB_MAX_N = 16384;
 
 export type AnalogCombKind = "pal" | "ntsc" | "none";
@@ -51,61 +58,156 @@ export function fmDemod(iq: ArrayLike<number>): Float64Array {
   return fm;
 }
 
+function decimateMean(x: Float64Array, decim: number): Float64Array {
+  if (decim <= 1) return x;
+  const n = Math.floor(x.length / decim);
+  if (n < 1) return x;
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    const base = i * decim;
+    for (let k = 0; k < decim; k++) s += x[base + k]!;
+    out[i] = s / decim;
+  }
+  return out;
+}
+
+function combHalfHz(freqs: Float64Array): number {
+  // 80 Гц << bin @ 20.48 МГц/16384 (1250 Гц) — окно пустое, analog на xA4 молчал.
+  // orecchiette: пик на строчной, не маска уже бина. half ≥ 0.55·Δf ловит ближайший бин.
+  const df = freqs.length > 1 ? Math.abs(freqs[1]! - freqs[0]!) : ANALOG_COMB_BIN_HZ;
+  return Math.max(ANALOG_COMB_BIN_HZ, 0.55 * df);
+}
+
 function binEnergy(mag: Float64Array, freqs: Float64Array, hz: number, bw: number): number {
   let s = 0;
   for (let i = 0; i < mag.length; i++) {
-    if (Math.abs(freqs[i] - hz) <= bw) s += mag[i];
+    if (Math.abs(freqs[i]! - hz) <= bw) s += mag[i]!;
   }
   return s;
 }
 
-function combRatio(mag: Float64Array, freqs: Float64Array, f0: number): number {
+function medianOf(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const a = xs.slice().sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m]! : 0.5 * (a[m - 1]! + a[m]!);
+}
+
+/** orecchiette: пол — медиана бинов 1–80 кГц, не дырка между гармониками. */
+function bandFloor(mag: Float64Array, freqs: Float64Array): number {
+  const vals: number[] = [];
+  for (let i = 1; i < mag.length; i++) {
+    const f = freqs[i]!;
+    if (f >= 1000 && f <= 80_000) vals.push(mag[i]!);
+  }
+  return medianOf(vals) || 1e-20;
+}
+
+function linePeakHz(mag: Float64Array, freqs: Float64Array): number | null {
+  let bestI = -1;
+  let bestM = -1;
+  for (let i = 0; i < mag.length; i++) {
+    const f = freqs[i]!;
+    if (f < 14_000 || f > 18_000) continue;
+    if (mag[i]! > bestM) {
+      bestM = mag[i]!;
+      bestI = i;
+    }
+  }
+  return bestI < 0 ? null : freqs[bestI]!;
+}
+
+/** 1/f шум даёт «гребёнку» на f,2f,3f против 1.5f. Нужен локальный пик. */
+function localRatio(mag: Float64Array, freqs: Float64Array, hz: number, rad = 2): number {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < freqs.length; i++) {
+    const d = Math.abs(freqs[i]! - hz);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best <= 0 || best >= mag.length - 1) return 0;
+  let neigh = 0;
+  for (let d = 1; d <= rad; d++) {
+    if (best - d >= 0) neigh = Math.max(neigh, mag[best - d]!);
+    if (best + d < mag.length) neigh = Math.max(neigh, mag[best + d]!);
+  }
+  return mag[best]! / (neigh + 1e-20);
+}
+
+function combRatio(mag: Float64Array, freqs: Float64Array, f0: number, halfHz: number, floor: number): number {
   // Строчная f0 обязана быть. OFDM на 2 МГц даёт шаг fs/64 = 2×PAL без 15625.
   const peaks: number[] = [];
-  let den = 0;
   for (let k = 1; k <= ANALOG_COMB_HARMONICS; k++) {
-    peaks.push(binEnergy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ));
-    den += binEnergy(mag, freqs, f0 * k + f0 / 2, ANALOG_COMB_BIN_HZ);
+    peaks.push(binEnergy(mag, freqs, f0 * k, halfHz));
   }
   const fund = peaks[0] ?? 0;
   const peak = Math.max(...peaks);
   if (fund < 0.2 * peak) return 0;
-  return peaks.reduce((s, v) => s + v, 0) / (den + 1e-20);
+  if (fund < ANALOG_COMB_HIT * floor) return 0;
+  const nStrong = peaks.filter((p) => p >= 1.5 * floor).length;
+  if (nStrong < 2) return 0;
+  const sharp =
+    localRatio(mag, freqs, f0) >= ANALOG_COMB_SHARP_F0 &&
+    localRatio(mag, freqs, f0 * 2) >= ANALOG_COMB_SHARP_H2;
+  const loud = fund >= ANALOG_COMB_STRONG * floor && (peaks[1] ?? 0) >= 10 * floor;
+  if (!sharp && !loud) return 0;
+  return fund / floor;
 }
 
-/** Спектр FM: окно Ханна + rFFT. Нужен fs ≫ 2·3·15734 (канал AMC 2 МГц хватает). */
+/** Спектр FM: DC-block + Ханна + rFFT. orecchiette: пик на 15625/15734, не окно 80 Гц. */
 export function analogCombFromFm(fm: ArrayLike<number>, fsHz: number): AnalogComb {
-  const n0 = fm.length;
-  if (n0 < 256 || !(fsHz > 0)) return { ...ANALOG_COMB_NONE };
+  if (fm.length < 256 || !(fsHz > 0)) return { ...ANALOG_COMB_NONE };
+  let work = new Float64Array(fm.length);
+  for (let i = 0; i < fm.length; i++) work[i] = fm[i]!;
+  let fs = fsHz;
+  const decim = Math.max(1, Math.floor(fs / ANALOG_COMB_FS_HZ));
+  if (decim > 1 && Math.floor(work.length / decim) >= 256) {
+    work = decimateMean(work, decim);
+    fs = fs / decim;
+  }
+  const n0 = work.length;
+  if (n0 < 256) return { ...ANALOG_COMB_NONE };
   const start = n0 > ANALOG_COMB_MAX_N ? n0 - ANALOG_COMB_MAX_N : 0;
   const n = n0 - start;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += work[start + i]!;
+  mean /= n;
   const win = new Float64Array(n);
   let acc = 0;
   for (let i = 0; i < n; i++) {
     const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
-    win[i] = fm[start + i] * w;
+    win[i] = (work[start + i]! - mean) * w;
     acc += w * w;
   }
   const nfft = 1 << Math.ceil(Math.log2(Math.max(n, 8)));
   const re = new Float64Array(nfft);
   const im = new Float64Array(nfft);
-  for (let i = 0; i < n; i++) re[i] = win[i];
+  for (let i = 0; i < n; i++) re[i] = win[i]!;
   fftRadix2(re, im);
   const half = nfft / 2 + 1;
   const mag = new Float64Array(half);
   const freqs = new Float64Array(half);
   const norm = Math.sqrt(acc) || 1;
   for (let k = 0; k < half; k++) {
-    mag[k] = Math.hypot(re[k], im[k]) / norm;
-    freqs[k] = (k * fsHz) / nfft;
+    mag[k] = Math.hypot(re[k]!, im[k]!) / norm;
+    freqs[k] = (k * fs) / nfft;
   }
-  const palScore = combRatio(mag, freqs, PAL_LINE_HZ);
-  const ntscScore = combRatio(mag, freqs, NTSC_LINE_HZ);
+  const halfHz = combHalfHz(freqs);
+  const floor = bandFloor(mag, freqs);
+  const palScore = combRatio(mag, freqs, PAL_LINE_HZ, halfHz, floor);
+  const ntscScore = combRatio(mag, freqs, NTSC_LINE_HZ, halfHz, floor);
   const score = Math.max(palScore, ntscScore);
   const hit = score >= ANALOG_COMB_HIT;
   let kind: AnalogCombKind = "none";
-  if (hit && palScore >= ntscScore) kind = "pal";
-  else if (hit) kind = "ntsc";
+  if (hit) {
+    const pk = linePeakHz(mag, freqs);
+    if (pk != null) kind = Math.abs(pk - PAL_LINE_HZ) <= Math.abs(pk - NTSC_LINE_HZ) ? "pal" : "ntsc";
+    else kind = palScore >= ntscScore ? "pal" : "ntsc";
+  }
   return { kind, score, palScore, ntscScore, hit };
 }
 

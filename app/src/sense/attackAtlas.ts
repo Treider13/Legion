@@ -40,8 +40,10 @@ export function bandBucket(mhz: number): AttackBand {
   return "other";
 }
 
-const DIGITAL_BANDS: readonly AttackBand[] = ["s14", "s24", "c51", "c53", "c58"];
-const ANALOG_BANDS: readonly AttackBand[] = ["l12", "c33", "c58"];
+// O4 — 5170–5250 и 5725–5850 (DJI specs / Oscar Liang). Mid-C 5250–5640
+// это analog LOWRACE/U/D (5333–5613), не цифровой линк дрона.
+const DIGITAL_BANDS: readonly AttackBand[] = ["s14", "s24", "c51", "c58"];
+const ANALOG_BANDS: readonly AttackBand[] = ["l12", "c33", "c53", "c58"];
 
 export function classifyAttackFamily(
   t: Pick<AttackTrack, "freqMhz" | "widthMhz" | "duty" | "streak">,
@@ -112,7 +114,13 @@ export function classifyAttackFamily(
       hint: "9–22 МГц класс (FCC 10/20) — не имя модели",
     };
   }
-  if (sticky && t.widthMhz >= ATTACK_VIDEO_BW_MHZ && t.widthMhz <= 16 && ANALOG_BANDS.includes(band)) {
+  if (
+    comb == null &&
+    sticky &&
+    t.widthMhz >= ATTACK_VIDEO_BW_MHZ &&
+    t.widthMhz <= 16 &&
+    ANALOG_BANDS.includes(band)
+  ) {
     return {
       id: "analog-video",
       label: "похоже на аналоговое видео",
