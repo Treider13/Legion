@@ -61,6 +61,7 @@ architecture rtl of legion_walkoff is
     signal play_cnt    : unsigned(11 downto 0);
     signal phase       : std_logic;
     signal cap_arm_r   : std_logic;
+    signal cap_flush   : std_logic; -- слили хвост FIFO до живого захвата
     signal cap_seen_lo : std_logic; -- фронт arm сбросил липкий capture_done
     signal play_en_r   : std_logic;
     signal lb_rd_r     : std_logic;
@@ -100,7 +101,12 @@ begin
     cap_q       <= host_q       when (run = '0' or auto = '0') else cap_q_r;
     cap_valid   <= host_valid   when (run = '0' or auto = '0') else cap_v_r;
     lb_rd_en    <= lb_rd_r      when (run = '1' and auto = '1') else '0';
-    lb_need     <= run and auto;
+    -- Пишем FIFO только когда CAPTURE уже слил хвост. Иначе 64 слова с
+    -- момента ARM/прошлого play застывают (full) и уходят в RAM вместо
+    -- сигнала на фронте det — это не «обнаружил → захватил».
+    lb_need     <= '1' when (run = '1' and auto = '1'
+                             and st = LEGION_WALK_ST_CAPTURE
+                             and cap_flush = '1') else '0';
     delaying    <= '1' when (run = '1' and st = LEGION_WALK_ST_DELAY) else '0';
     cur_delay   <= delay_now;
     state       <= st when run = '1' else LEGION_WALK_ST_IDLE;
@@ -114,6 +120,7 @@ begin
             play_cnt  <= (others => '0');
             phase     <= '0';
             cap_arm_r   <= '0';
+            cap_flush   <= '0';
             cap_seen_lo <= '0';
             play_en_r   <= '0';
             lb_rd_r     <= '0';
@@ -131,12 +138,14 @@ begin
                 play_cnt    <= (others => '0');
                 phase       <= '0';
                 cap_arm_r   <= '0';
+                cap_flush   <= '0';
                 cap_seen_lo <= '0';
                 play_en_r   <= '0';
             else
                 case st is
                     when LEGION_WALK_ST_IDLE =>
                         cap_arm_r   <= '0';
+                        cap_flush   <= '0';
                         cap_seen_lo <= '0';
                         play_en_r   <= '0';
                         delay_now   <= delay_init;
@@ -151,6 +160,7 @@ begin
 
                     when LEGION_WALK_ST_WAIT_DET =>
                         cap_arm_r   <= '0';
+                        cap_flush   <= '0';
                         cap_seen_lo <= '0';
                         play_en_r   <= '0';
                         phase       <= '0';
@@ -159,33 +169,45 @@ begin
                         end if;
 
                     when LEGION_WALK_ST_CAPTURE =>
-                        cap_arm_r <= '1';
                         play_en_r <= '0';
-                        -- capture_done липкий: новый фронт arm сбрасывает его
-                        -- на следующем такте. Иначе повторный AUTO-цикл видит
-                        -- старый done=1 и прыгает в DELAY без нового захвата.
-                        -- FIFO не читаем, пока плеер не принял новый arm
-                        -- (иначе сливаем слова в никуда).
-                        if capture_done = '0' then
-                            cap_seen_lo <= '1';
-                            phase <= not phase;
-                            if phase = '1' and lb_empty = '0' then
+                        -- Сначала слить хвост (запись FIFO в этом такте ещё
+                        -- выкл: cap_flush=0). Потом писать живой RX и
+                        -- кормить плеер.
+                        if cap_flush = '0' then
+                            cap_arm_r <= '0';
+                            if lb_empty = '1' then
+                                cap_flush <= '1';
+                                phase     <= '0';
+                            else
                                 lb_rd_r <= '1';
                             end if;
-                            if lb_rd_r = '1' then
-                                cap_i_r <= shift_left(signed(lb_data(31 downto 16)),
-                                                      to_integer(lb_shift));
-                                cap_q_r <= shift_left(signed(lb_data(15 downto 0)),
-                                                      to_integer(lb_shift));
-                                cap_v_r <= '1';
+                        else
+                            cap_arm_r <= '1';
+                            -- capture_done липкий: новый фронт arm сбрасывает
+                            -- его на следующем такте. Иначе повторный AUTO
+                            -- видит старый done=1 и прыгает в DELAY без RAM.
+                            if capture_done = '0' then
+                                cap_seen_lo <= '1';
+                                phase <= not phase;
+                                if phase = '1' and lb_empty = '0' then
+                                    lb_rd_r <= '1';
+                                end if;
+                                if lb_rd_r = '1' then
+                                    cap_i_r <= shift_left(signed(lb_data(31 downto 16)),
+                                                          to_integer(lb_shift));
+                                    cap_q_r <= shift_left(signed(lb_data(15 downto 0)),
+                                                          to_integer(lb_shift));
+                                    cap_v_r <= '1';
+                                end if;
                             end if;
-                        end if;
-                        if cap_seen_lo = '1' and capture_done = '1' then
-                            cap_arm_r   <= '0';
-                            cap_seen_lo <= '0';
-                            phase       <= '0';
-                            delay_cnt   <= delay_now;
-                            st          <= LEGION_WALK_ST_DELAY;
+                            if cap_seen_lo = '1' and capture_done = '1' then
+                                cap_arm_r   <= '0';
+                                cap_flush   <= '0';
+                                cap_seen_lo <= '0';
+                                phase       <= '0';
+                                delay_cnt   <= delay_now;
+                                st          <= LEGION_WALK_ST_DELAY;
+                            end if;
                         end if;
 
                     when LEGION_WALK_ST_DELAY =>
@@ -217,6 +239,7 @@ begin
 
                     when LEGION_WALK_ST_STEP =>
                         cap_arm_r   <= '0';
+                        cap_flush   <= '0';
                         cap_seen_lo <= '0';
                         play_en_r   <= '0';
                         delay_now <= next_delay(delay_now, walk_step, delay_init,
@@ -234,6 +257,7 @@ begin
                     when others =>
                         st          <= LEGION_WALK_ST_IDLE;
                         cap_arm_r   <= '0';
+                        cap_flush   <= '0';
                         cap_seen_lo <= '0';
                         play_en_r   <= '0';
                 end case;

@@ -85,6 +85,11 @@ begin
                 fifo_n   <= 0;
                 lb_empty <= '1';
                 lb_data  <= (others => '0');
+            elsif lb_need = '0' then
+                -- Запись стоп. Хвост прячем; счётчик сбрасываем, чтобы
+                -- следующий живой захват снова начался с (10,−10).
+                lb_empty <= '1';
+                fifo_n   <= 0;
             else
                 n := fifo_n;
                 if n = 0 and fifo_stock > 0 then
@@ -242,7 +247,9 @@ begin
         wait until rising_edge(clock);
         assert wstate = LEGION_WALK_ST_WAIT_DET
             report "FAIL: AUTO not waiting detect" severity failure;
-        assert lb_need = '1' report "FAIL: lb_need in AUTO" severity failure;
+        assert lb_need = '0'
+            report "FAIL: FIFO write before detect freezes ARM-time samples"
+            severity failure;
         assert play_en = '0' report "FAIL: play before detect" severity failure;
 
         det_active <= '1';
@@ -251,6 +258,9 @@ begin
             wait until rising_edge(clock);
             if capture_arm = '1' then
                 saw_arm := true;
+                assert lb_need = '1'
+                    report "FAIL: FIFO write must be on while AUTO capturing"
+                    severity failure;
             end if;
             exit when wstate = LEGION_WALK_ST_PLAY;
         end loop;
