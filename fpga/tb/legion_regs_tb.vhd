@@ -239,7 +239,7 @@ begin
         assert tx_proto_pulse = to_unsigned(58000, 32) report "FAIL: PROTO_PULSE CDC" severity failure;
         assert tx_step_src = '1' report "FAIL: DRFM_STEP_SRC CDC" severity failure;
         assert tx_ch_target = to_unsigned(2, 2) report "FAIL: CH_TARGET CDC" severity failure;
-        assert tx_ch_bins = ch_bins report "FAIL: CH_BINS rx→tx CDC" severity failure;
+        assert tx_ch_bins = ch_bins report "FAIL: CH_BINS rx-tx CDC" severity failure;
 
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE, 7));
         pio_we <= '0';

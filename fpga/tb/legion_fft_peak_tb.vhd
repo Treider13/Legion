@@ -117,6 +117,12 @@ begin
         assert bin = 240
             report "FAIL: bin240 got " & integer'image(bin) severity failure;
         assert fr2 /= fr1 report "FAIL: frame did not advance" severity failure;
+        assert unsigned(bins(31 downto 24)) = 240
+            report "FAIL: group3 peak bin" severity failure;
+        assert act(3) = '1'
+            report "FAIL: group3 active on bin240" severity failure;
+        assert unsigned(e23(31 downto 16)) /= 0
+            report "FAIL: group3 energy" severity failure;
 
         -- DC + bin16, notch: пик 16 (не 0)
         en <= '0';

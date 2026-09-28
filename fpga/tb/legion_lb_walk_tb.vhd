@@ -206,6 +206,24 @@ begin
         assert tap = to_unsigned(2, 12)
             report "FAIL: proto continues across det=0" severity failure;
 
+        -- SRC=1 и PROTO_PERIOD=0: как лабораторные часы (WALK_PERIOD, det-gate).
+        enable <= '0';
+        delay_init <= to_unsigned(0, 12);
+        walk_period <= to_unsigned(2, 32);
+        proto_period <= to_unsigned(0, 32);
+        step_src <= '1';
+        det_active <= '0';
+        tick(2);
+        enable <= '1';
+        tick(2);
+        pulse_sample(sample_en, 4);
+        assert tap = to_unsigned(0, 12)
+            report "FAIL: proto=0 must not free-run" severity failure;
+        det_active <= '1';
+        pulse_sample(sample_en, 2);
+        assert tap = to_unsigned(1, 12)
+            report "FAIL: proto=0 falls back to WALK_PERIOD" severity failure;
+
         report "legion_lb_walk_tb: PASS" severity note;
         done <= true;
         wait;
