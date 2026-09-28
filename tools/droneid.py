@@ -13,6 +13,12 @@ CP: long = fs/192000 = 80, short = 4.6875 мкс · fs = 72 @ 15.36e6
 Эквалайзер: H = среднее(Y4/X600, Y6/X147) на 600 несущих (proto17).
 CFO: угол CP-корреляции / (2π N_fft) · fs (coarse, proto17; fine skipped).
 O3+/O4: ZC есть, CRC/кадр не сходится — детект без plaintext (не decrypt).
+Период вспышки 640 мс (NDSS 2023); proto17 README ≈600 мс.
+Mavic 2 / старый OcuSync без символа 1 → 576 мкс, сетка CP: 7×short + long
+    (NDSS: CP 72, у символов 1 и 9 — 80; без символа 1 остаётся 7×72 + 80).
+Частоты proto17 README: 2.3995…2.4595 и 5.7565…5.7965 (не «только 2.4»).
+Длинное кольцо xA4: энергия ±7 МГц, NCC только вокруг вспышки — полный FIR/NCC
+    на 2^24 @ 61.44 не укладывается в think 220 мс.
 """
 from __future__ import annotations
 
@@ -28,7 +34,9 @@ DRONEID_FS = 15_360_000.0
 DRONEID_SCS = 15_000.0
 DRONEID_CARRIERS = 600
 DRONEID_CORR = 0.45
-DRONEID_MAX_S = 0.160  # кольцо RC: вспышка ~0.64 мс раз в ~0.6 с, 1 мс think её почти не ловит
+DRONEID_MAX_S = 0.420  # кольцо 2^24 @ 40 MSPS; @ 61.44 ≈ 273 мс. NDSS: период 640 мс
+DRONEID_LONG_S = 0.016  # длиннее вспышки: энергия, не FIR/NCC на всё кольцо
+DRONEID_PAD_S = 0.0025
 LATLON_SCALE = 174533.0
 DATA_SYMS = (1, 2, 4, 6, 7, 8)  # 0-based: 2,3,5,7,8,9
 # Только подтверждённые корни (proto17 README, issue #25, RUB-SysSec #46).
@@ -176,13 +184,12 @@ def resample_to_droneid(x: np.ndarray, fs: float) -> tuple[np.ndarray, float]:
     return _fft_resample(filt, n_out), DRONEID_FS
 
 
-def prepare_droneid_iq(
+def _clip_and_mix(
     x: np.ndarray,
     fs: float,
     center_mhz: float = 0.0,
     lo_mhz: float = 0.0,
 ) -> tuple[np.ndarray, float]:
-    """Сдвиг на DC и ресэмпл к 15.36 (ФНЧ + /4 или FFT на 20/40 MSPS)."""
     z = np.asarray(x, dtype=np.complex64).ravel()
     rate = float(fs)
     if z.size < 64 or rate <= 0:
@@ -194,6 +201,19 @@ def prepare_droneid_iq(
         df = (float(center_mhz) - float(lo_mhz)) * 1e6
         t = np.arange(int(z.size), dtype=np.float64) / rate
         z = (z * np.exp(-1j * 2.0 * math.pi * df * t)).astype(np.complex64)
+    return z, rate
+
+
+def prepare_droneid_iq(
+    x: np.ndarray,
+    fs: float,
+    center_mhz: float = 0.0,
+    lo_mhz: float = 0.0,
+) -> tuple[np.ndarray, float]:
+    """Сдвиг на DC и ресэмпл к 15.36 (ФНЧ + /4 или FFT на 20/40 MSPS)."""
+    z, rate = _clip_and_mix(x, fs, center_mhz, lo_mhz)
+    if z.size < 64 or rate <= 0:
+        return np.zeros(0, dtype=np.complex64), 0.0
     return resample_to_droneid(z, rate)
 
 
@@ -249,6 +269,62 @@ def burst_start_from_zc(zc_body: int, fs: float, symbol_1based: int) -> int:
     return int(zc_body) - (long_cp + i * (short_cp + nfft))
 
 
+def burst_start_from_zc_eight(zc_body: int, fs: float, symbol_1based: int) -> int:
+    """8-символ NDSS: без символа 1, короткие CP до последнего. ZC 4→лок.2, 6→лок.4."""
+    _, short_cp = cyclic_prefix_lengths(fs)
+    nfft = fft_size(fs)
+    local = int(symbol_1based) - 2
+    if local < 0:
+        return int(zc_body)
+    return int(zc_body) - (local * (short_cp + nfft) + short_cp)
+
+
+def _band_energy_offsets(z: np.ndarray, fs: float) -> list[int]:
+    """Канальная энергия ±7 МГц после DC. Не полный NCC по 273 мс."""
+    x = np.ascontiguousarray(np.asarray(z, dtype=np.complex64).ravel())
+    rate = float(fs)
+    nfft = 4096 if rate >= 8e6 else 1024
+    if x.size < nfft or rate <= 0:
+        return [0]
+    hop = max(nfft // 2, int(round(rate * 0.0004)))
+    nframes = 1 + (int(x.size) - nfft) // hop
+    win = np.hanning(nfft).astype(np.float32)
+    freqs = np.fft.fftfreq(nfft, d=1.0 / rate)
+    mask = np.abs(freqs) <= 7.0e6
+    if not np.any(mask):
+        mask = np.ones(nfft, dtype=bool)
+    views = np.lib.stride_tricks.sliding_window_view(x, nfft)[::hop]
+    powers = np.empty(nframes, dtype=np.float64)
+    batch = 128
+    for b0 in range(0, nframes, batch):
+        b1 = min(nframes, b0 + batch)
+        spec = np.fft.fft(views[b0:b1] * win, axis=1)
+        powers[b0:b1] = np.sum(np.abs(spec[:, mask]) ** 2, axis=1)
+    med = float(np.median(powers))
+    peak = float(np.max(powers))
+    if peak < 5.0 * (med + 1e-18):
+        return []
+    thr = max(med * 6.0, peak * 0.20)
+    idx = np.flatnonzero(powers >= thr)
+    if idx.size == 0:
+        return []
+    min_gap = max(1, int(round(0.0008 * rate / hop)))
+    out: list[int] = []
+    i = 0
+    n = int(idx.size)
+    while i < n and len(out) < 8:
+        start = int(idx[i])
+        lim = start + min_gap
+        j = i + 1
+        while j < n and int(idx[j]) < lim:
+            j += 1
+        window = idx[i:j]
+        fi = int(window[int(np.argmax(powers[window]))])
+        out.append(int(fi * hop))
+        i = j
+    return out
+
+
 def find_zc(x: np.ndarray, fs: float, threshold: float = DRONEID_CORR) -> list[dict[str, Any]]:
     """Сначала root 600 (символ 4) — по нему ровняем кадр. 147 — запас, если 600 обрезан."""
     z = np.asarray(x, dtype=np.complex128).ravel()
@@ -294,9 +370,10 @@ def _bits_to_qpsk(bits: np.ndarray) -> np.ndarray:
 
 
 def symbol_schedule(fs: float, eight: bool = False) -> list[int]:
+    """9 символов: long + 7×short + long. 8: без первого (NDSS 576 мкс)."""
     long_cp, short_cp = cyclic_prefix_lengths(fs)
     if eight:
-        return [short_cp] * 8
+        return [short_cp, short_cp, short_cp, short_cp, short_cp, short_cp, short_cp, long_cp]
     return [long_cp, short_cp, short_cp, short_cp, short_cp, short_cp, short_cp, short_cp, long_cp]
 
 
@@ -466,14 +543,8 @@ def demod_burst(burst: np.ndarray, fs: float, eight: bool = False) -> dict[str, 
     }
 
 
-def analyze_droneid(
-    x: np.ndarray,
-    fs: float,
-    center_mhz: float = 0.0,
-    lo_mhz: float = 0.0,
-) -> dict[str, Any]:
-    """Поиск ZC и plaintext. Сдвиг на DC + только /4 /2 /1 к 15.36."""
-    none = {
+def _empty_droneid() -> dict[str, Any]:
+    return {
         "hit": False,
         "zcScore": 0.0,
         "ok": False,
@@ -482,7 +553,11 @@ def analyze_droneid(
         "encrypted": False,
         "zcRoot": 0,
     }
-    work, work_fs = prepare_droneid_iq(x, fs, center_mhz, lo_mhz)
+
+
+def decode_zc_window(work: np.ndarray, work_fs: float) -> dict[str, Any]:
+    """ZC → 9-символ, иначе 8-символ (NDSS без первого)."""
+    none = _empty_droneid()
     if work.size < 2048 or work_fs <= 0:
         none["reason"] = "нужен 15.36 или часы xA4 10/19.2/20/20.48/23.04/30.72/40/61.44"
         return none
@@ -490,7 +565,6 @@ def analyze_droneid(
     if not hits:
         return none
     best = max(hits, key=lambda h: h["score"])
-    _, short_cp = cyclic_prefix_lengths(work_fs)
     zc_start = int(best["offset"])
     symbol = int(best.get("symbol") or 4)
     start9 = max(0, burst_start_from_zc(zc_start, work_fs, symbol))
@@ -499,8 +573,8 @@ def analyze_droneid(
     dec = {"ok": False, "reason": "burst обрезан", "encrypted": False}
     if burst9.size >= need9:
         dec = demod_burst(burst9, work_fs, False)
-    if not dec.get("ok") and symbol == 4:
-        start8 = max(0, zc_start - (2 * (short_cp + fft_size(work_fs)) + short_cp))
+    if not dec.get("ok") and symbol in (4, 6):
+        start8 = max(0, burst_start_from_zc_eight(zc_start, work_fs, symbol))
         need8 = burst_len(work_fs, True)
         burst8 = work[start8 : start8 + need8]
         if burst8.size >= need8:
@@ -519,6 +593,36 @@ def analyze_droneid(
         "zcRoot": int(best.get("root") or 0),
         "zcSymbol": symbol,
     }
+
+
+def analyze_droneid(
+    x: np.ndarray,
+    fs: float,
+    center_mhz: float = 0.0,
+    lo_mhz: float = 0.0,
+) -> dict[str, Any]:
+    """Поиск ZC и plaintext. Длинное кольцо — энергия, потом короткое окно."""
+    none = _empty_droneid()
+    z, rate = _clip_and_mix(x, fs, center_mhz, lo_mhz)
+    if z.size < 64 or rate <= 0:
+        none["reason"] = "нужен 15.36 или часы xA4 10/19.2/20/20.48/23.04/30.72/40/61.44"
+        return none
+    if z.size > int(rate * DRONEID_LONG_S):
+        best = none
+        pad = int(rate * DRONEID_PAD_S)
+        native_need = int(round(burst_len(DRONEID_FS, False) * rate / DRONEID_FS)) + pad
+        for off in reversed(_band_energy_offsets(z, rate)):
+            a = max(0, int(off) - pad)
+            b = min(int(z.size), int(off) + native_need)
+            work, work_fs = resample_to_droneid(z[a:b], rate)
+            got = decode_zc_window(work, work_fs)
+            if got.get("ok"):
+                return got
+            if got.get("hit") and float(got.get("zcScore") or 0) >= float(best.get("zcScore") or 0):
+                best = got
+        return best
+    work, work_fs = resample_to_droneid(z, rate)
+    return decode_zc_window(work, work_fs)
 
 
 def pack_droneid_91(

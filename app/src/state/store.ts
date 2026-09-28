@@ -1635,7 +1635,15 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       return;
     }
-    if (!residual && Date.now() - gAttackThinkAt < 450) return;
+    const droneidListen = tracks.some((t) => {
+      if (t.state === "cooled" || t.widthMhz < 6) return false;
+      const f = t.freqMhz;
+      return (f >= 2395 && f <= 2505) || (f >= 5725 && f <= 5875);
+    });
+    // NDSS: вспышка раз в 640 мс. Think 450 + окно 160 оставляли дыру.
+    // Кольцо ≈273 мс @ 61.44 — think ≤220 мс перекрывает хвост.
+    const thinkGapMs = droneidListen ? 220 : 450;
+    if (!residual && Date.now() - gAttackThinkAt < thinkGapMs) return;
     const live = pickAttackThinkTracks(tracks, centerMhz, spanMhz, 3);
     if (live.length === 0 && !residual) return;
     const thinkGen = gAttackThinkGen;

@@ -44,22 +44,26 @@ def _nfft_for(fs: float) -> tuple[int, int]:
 
 
 def stft_db(x: np.ndarray, nfft: int, hop: int) -> tuple[np.ndarray, np.ndarray]:
-    """Сдвинутая мощность STFT, дБ. Кадры × бины."""
-    z = np.asarray(x, dtype=np.complex64).ravel()
+    """Сдвинутая мощность STFT, дБ. Кадры × бины. Пачки FFT, не Python-цикл по кадру."""
+    z = np.ascontiguousarray(np.asarray(x, dtype=np.complex64).ravel())
     nfft = int(nfft)
     hop = int(max(1, hop))
     if z.size < nfft:
         return np.zeros((0, nfft), dtype=np.float64), np.zeros(0)
     nframes = 1 + (int(z.size) - nfft) // hop
-    win = np.hanning(nfft).astype(np.float64)
-    scale = float(np.sum(win * win)) + 1e-20
-    out = np.empty((nframes, nfft), dtype=np.float64)
-    for i in range(nframes):
-        sl = z[i * hop : i * hop + nfft]
-        spec = np.fft.fft(sl * win)
+    win = np.hanning(nfft).astype(np.float32)
+    scale = float(np.sum(np.square(win, dtype=np.float64))) + 1e-20
+    views = np.lib.stride_tricks.sliding_window_view(z, nfft)[::hop]
+    out = np.empty((nframes, nfft), dtype=np.float32)
+    batch = 128 if nfft >= 2048 else 256
+    for b0 in range(0, nframes, batch):
+        b1 = min(nframes, b0 + batch)
+        spec = np.fft.fft(views[b0:b1] * win, axis=1)
         p = (np.abs(spec) ** 2) / scale
-        out[i] = 10.0 * np.log10(np.maximum(p, 1e-20))
-    return np.fft.fftshift(out, axes=1), np.fft.fftshift(np.fft.fftfreq(nfft, d=1.0 / 1.0))
+        out[b0:b1] = 10.0 * np.log10(np.maximum(p, 1e-20))
+    return np.fft.fftshift(out, axes=1).astype(np.float64), np.fft.fftshift(
+        np.fft.fftfreq(nfft, d=1.0 / 1.0)
+    )
 
 
 def _clusters(row: np.ndarray, freqs_mhz: np.ndarray, thr: float) -> list[tuple[float, float, float]]:

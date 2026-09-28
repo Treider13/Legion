@@ -259,8 +259,14 @@ def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
 
 
 def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:
-    # proto17 / NDSS / RUB-SysSec: OFDM DroneID на 2.4, не на 5.8 video.
-    if not (2400.0 <= float(freq_mhz) <= 2500.0):
+    # proto17 README: 2.3995…2.4595 и 5.7565…5.7965. Не «только 2.4».
+    # analog PAL/NTSC — не DroneID. Непрерывное видео 5.8 режет энергия (peak≈median).
+    if parsed.get("analogKind") in ("pal", "ntsc"):
+        return False
+    f = float(freq_mhz)
+    in24 = 2395.0 <= f <= 2505.0
+    in58 = 5725.0 <= f <= 5875.0
+    if not (in24 or in58):
         return False
     if parsed.get("kind") == "ofdm":
         return True
@@ -1705,11 +1711,13 @@ class Radio:
         iq_rc = None
         iq_long = None
         if not self.fake and src is not None:
-            want_long = min(int(src.available()), int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
-            if want_long >= int(work_fs * ATTACK_DRONEID_S):
-                iq_long = src.latest(want_long)
-            if want_long >= int(work_fs * ATTACK_FHSS_S):
-                iq_rc = iq_long
+            have = int(src.available())
+            want_d = min(have, ATTACK_MEM_CAP)
+            want_rc = min(have, int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+            if want_d >= int(work_fs * ATTACK_DRONEID_S):
+                iq_long = src.latest(want_d)
+            if want_rc >= int(work_fs * ATTACK_FHSS_S):
+                iq_rc = iq_long if want_rc == want_d else src.latest(want_rc)
         elif self.fake:
             iq_rc = work
             iq_long = work

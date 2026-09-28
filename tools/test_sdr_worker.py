@@ -412,7 +412,9 @@ def main() -> int:
             think_ok.get("leftover") is not None and float(think_ok["leftover"]) < 0.5,
         )
         check("tx_wave хранит baseband реплику", "_tone_bb" in src and "channelize_look" in src)
-        check("DroneID только 2.4", w._want_droneid(5800.0, 20.0, {"kind": "ofdm"}) is False)
+        check("DroneID 5.8 proto17", w._want_droneid(5756.5, 10.0, {"kind": "ofdm"}) is True)
+        check("DroneID не analog PAL", w._want_droneid(5800.0, 20.0, {"analogKind": "pal"}) is False)
+        check("DroneID 2.3995 proto17", w._want_droneid(2399.5, 10.0, {"kind": "unknown"}) is True)
         check("DroneID 2.4 + 10 МГц", w._want_droneid(2442.0, 10.0, {"kind": "unknown"}) is True)
         import droneid as dji_w
 

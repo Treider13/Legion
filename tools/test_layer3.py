@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -88,6 +89,33 @@ def main() -> int:
     tail147 = burst[start147:]
     hits147 = dji.find_zc(tail147, dji.DRONEID_FS)
     check("обрезанный кадр → root 147", bool(hits147) and hits147[0]["root"] == 147, str(hits147[:1]))
+
+    drop = long_cp + nfft
+    eight = burst[drop:]
+    check(
+        "8-символ NDSS 576 мкс",
+        eight.size == dji.burst_len(dji.DRONEID_FS, True),
+        str((eight.size, dji.burst_len(dji.DRONEID_FS, True))),
+    )
+    got8 = dji.analyze_droneid(eight, dji.DRONEID_FS)
+    check("без 1-го символа plaintext", got8.get("ok") is True, str(got8.get("reason")))
+    zc147 = 4 * (short_cp + nfft) + short_cp
+    check(
+        "старт 8 от root 147",
+        dji.burst_start_from_zc_eight(zc147, dji.DRONEID_FS, 6) == 0,
+        str(dji.burst_start_from_zc_eight(zc147, dji.DRONEID_FS, 6)),
+    )
+    pad_l = np.zeros(int(dji.DRONEID_FS * 0.04), dtype=np.complex64)
+    pad_r = np.zeros(int(dji.DRONEID_FS * 0.04), dtype=np.complex64)
+    longb = np.concatenate([pad_l, burst, pad_r])
+    t0 = time.perf_counter()
+    got_l = dji.analyze_droneid(longb, dji.DRONEID_FS)
+    dt_l = time.perf_counter() - t0
+    check("длинное окно энергия plaintext", got_l.get("ok") is True, str(got_l.get("reason")))
+    check("длинное окно < 1.2 с", dt_l < 1.2, f"{dt_l:.3f}s")
+    eight_long = np.concatenate([pad_l, eight, pad_r])
+    got8l = dji.analyze_droneid(eight_long, dji.DRONEID_FS)
+    check("8-символ в длинном окне", got8l.get("ok") is True, str(got8l.get("reason")))
 
     basic = od.encode_basic_id("TEST-UAS-001", 1, 2)
     loc = od.encode_location(55.75, 37.62, 150.0, 40.0, 2)
