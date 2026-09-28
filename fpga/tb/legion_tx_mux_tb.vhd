@@ -54,6 +54,10 @@ begin
         variable saw_ramp  : boolean;
         variable saw_full  : boolean;
         variable last_abs  : integer;
+        variable prev_v    : std_logic;
+        variable saw_iq    : boolean;
+        variable stuffed   : boolean;
+        variable dbl       : boolean;
     begin
         wait for 20 ns;
         reset <= '0';
@@ -114,37 +118,33 @@ begin
         for k in 0 to 3 loop
             wait until rising_edge(clock);
         end loop;
-        declare
-            variable prev_v  : std_logic := '0';
-            variable saw_iq  : boolean := false;
-            variable stuffed : boolean := false;
-            variable dbl     : boolean := false;
-        begin
-            prev_v := '0';
-            for k in 0 to 15 loop
-                play_valid <= '1' when (k mod 2 = 0) else '0';
-                wait until rising_edge(clock);
-                if out_valid = '1' and out_i = 0 and out_q = 0 then
-                    stuffed := true;
-                end if;
-                if out_valid = '1' and out_i = 333 then
-                    saw_iq := true;
-                end if;
-                if out_valid = '1' and prev_v = '1' then
-                    dbl := true;
-                end if;
-                prev_v := out_valid;
-            end loop;
-            assert not stuffed
-                report "FAIL: PLAY stuffed zero-I between player samples"
-                severity failure;
-            assert not dbl
-                report "FAIL: PLAY two consecutive valids (LMS Q slot eaten)"
-                severity failure;
-            assert saw_iq
-                report "FAIL: PLAY did not pass player I/Q"
-                severity failure;
-        end;
+        prev_v := '0';
+        saw_iq := false;
+        stuffed := false;
+        dbl := false;
+        for k in 0 to 15 loop
+            play_valid <= '1' when (k mod 2 = 0) else '0';
+            wait until rising_edge(clock);
+            if out_valid = '1' and out_i = 0 and out_q = 0 then
+                stuffed := true;
+            end if;
+            if out_valid = '1' and out_i = 333 then
+                saw_iq := true;
+            end if;
+            if out_valid = '1' and prev_v = '1' then
+                dbl := true;
+            end if;
+            prev_v := out_valid;
+        end loop;
+        assert not stuffed
+            report "FAIL: PLAY stuffed zero-I between player samples"
+            severity failure;
+        assert not dbl
+            report "FAIL: PLAY two consecutive valids (LMS Q slot eaten)"
+            severity failure;
+        assert saw_iq
+            report "FAIL: PLAY did not pass player I/Q"
+            severity failure;
         play_en <= '0';
         play_valid <= '1';
         wait until rising_edge(clock);
