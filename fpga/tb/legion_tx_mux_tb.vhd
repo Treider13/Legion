@@ -87,6 +87,24 @@ begin
         assert out_valid = '1' and out_i = 333 and out_q = 444
             report "FAIL: PLAYER armed does not pass player" severity failure;
 
+        -- 3b) PLAYER ARM, play_valid=0 (DELAY): нули с каденсом, не hold last
+        play_valid <= '0';
+        wait until rising_edge(clock); -- регистр mux: старый сэмпл ещё один такт
+        saw_valid := false;
+        for k in 0 to 7 loop
+            wait until rising_edge(clock);
+            assert out_i = 0 and out_q = 0
+                report "FAIL: DELAY gap not zero (PLAYER armed, play_valid=0)"
+                severity failure;
+            if out_valid = '1' then saw_valid := true; end if;
+        end loop;
+        assert saw_valid
+            report "FAIL: DELAY gap w/o valid cadence (DAC holds last sample!)"
+            severity failure;
+        play_valid <= '1';
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+
         -- 4) Watchdog expired → снова тишина
         wd_ok <= '0';
         wait until rising_edge(clock);

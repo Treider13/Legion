@@ -121,8 +121,11 @@ begin
                     out_q     <= host_q;
                     out_valid <= host_valid;
                 when LEGION_MODE_PLAYER =>
-                    if live = '1' then
-                        out_i <= play_i; out_q <= play_q; out_valid <= play_valid;
+                    -- play_valid=0 (DELAY walk-off / пауза между кругами) —
+                    -- не отдаём valid=0: LMS/ADI тогда держат последний сэмпл,
+                    -- и «задержка» превращается в DC, а не в увод по дальности.
+                    if live = '1' and play_valid = '1' then
+                        out_i <= play_i; out_q <= play_q; out_valid <= '1';
                     else
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;
