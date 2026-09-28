@@ -353,20 +353,25 @@ def fm_demod(x: np.ndarray) -> np.ndarray:
 
 
 def _bin_energy(mag: np.ndarray, freqs: np.ndarray, hz: float, bw: float) -> float:
-    delta = np.abs(freqs - hz)
-    mask = delta <= bw
-    if np.any(mask):
-        return float(np.sum(mag[mask]))
-    return float(mag[int(np.argmin(delta))])
+    mask = np.abs(freqs - hz) <= bw
+    if not np.any(mask):
+        return 0.0
+    return float(np.sum(mag[mask]))
 
 
 def _comb_ratio(mag: np.ndarray, freqs: np.ndarray, f0: float) -> float:
-    num = 0.0
+    """Гребёнка строчной: нужна сама f0. OFDM @ 2 МГц имеет шаг fs/64 = 31250
+    (2×PAL) — чётные гармоники без фундаментальной это не analog FPV."""
+    peaks = [
+        _bin_energy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ)
+        for k in range(1, ANALOG_COMB_HARMONICS + 1)
+    ]
+    if peaks[0] < 0.2 * max(peaks):
+        return 0.0
     den = 0.0
     for k in range(1, ANALOG_COMB_HARMONICS + 1):
-        num += _bin_energy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ)
         den += _bin_energy(mag, freqs, f0 * k + f0 / 2.0, ANALOG_COMB_BIN_HZ)
-    return num / (den + 1e-20)
+    return sum(peaks) / (den + 1e-20)
 
 
 def analog_comb(x: np.ndarray, fs: float) -> dict[str, Any]:

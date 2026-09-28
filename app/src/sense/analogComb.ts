@@ -53,31 +53,24 @@ export function fmDemod(iq: ArrayLike<number>): Float64Array {
 
 function binEnergy(mag: Float64Array, freqs: Float64Array, hz: number, bw: number): number {
   let s = 0;
-  let found = false;
-  let best = 0;
-  let bestD = Infinity;
   for (let i = 0; i < mag.length; i++) {
-    const d = Math.abs(freqs[i] - hz);
-    if (d <= bw) {
-      s += mag[i];
-      found = true;
-    }
-    if (d < bestD) {
-      bestD = d;
-      best = mag[i];
-    }
+    if (Math.abs(freqs[i] - hz) <= bw) s += mag[i];
   }
-  return found ? s : best;
+  return s;
 }
 
 function combRatio(mag: Float64Array, freqs: Float64Array, f0: number): number {
-  let num = 0;
+  // Строчная f0 обязана быть. OFDM на 2 МГц даёт шаг fs/64 = 2×PAL без 15625.
+  const peaks: number[] = [];
   let den = 0;
   for (let k = 1; k <= ANALOG_COMB_HARMONICS; k++) {
-    num += binEnergy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ);
+    peaks.push(binEnergy(mag, freqs, f0 * k, ANALOG_COMB_BIN_HZ));
     den += binEnergy(mag, freqs, f0 * k + f0 / 2, ANALOG_COMB_BIN_HZ);
   }
-  return num / (den + 1e-20);
+  const fund = peaks[0] ?? 0;
+  const peak = Math.max(...peaks);
+  if (fund < 0.2 * peak) return 0;
+  return peaks.reduce((s, v) => s + v, 0) / (den + 1e-20);
 }
 
 /** Спектр FM: окно Ханна + rFFT. Нужен fs ≫ 2·3·15734 (канал AMC 2 МГц хватает). */

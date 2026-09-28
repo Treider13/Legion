@@ -156,8 +156,8 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
     openLoopTx: true,
     useFpgaAir: false,
     reason:
-      `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер Атаки не участвует. ` +
-      "Слух классов — СКАНИРОВАТЬ без TX (analog платы) или на часах полки после ПЕРЕДАТЬ",
+      `ноутбук задаёт ${patternLabelRu(pattern)} TX LO по Ethernet, сканер Атаки не участвует, пока оператор не стопнет. ` +
+      "Слух классов — СКАНИРОВАТЬ без TX или на часах полки после ПЕРЕДАТЬ",
   };
 }
 
