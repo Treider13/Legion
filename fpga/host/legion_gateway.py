@@ -421,7 +421,10 @@ class FakeTransport:
                         lf.REG_WALK_FTW_STEP,
                         lf.REG_CH_CTRL, lf.REG_CH_IDX, lf.REG_CH_PWR,
                         lf.REG_PEAK1, lf.REG_PEAK2, lf.REG_PEAK3,
-                        lf.REG_CH_LUT):
+                        lf.REG_CH_LUT,
+                        lf.REG_GRID_META, lf.REG_GRID_F0_HZ, lf.REG_GRID_STEP_HZ,
+                        lf.REG_GRID_PRI_US, lf.REG_GRID_SHIFT_HZ, lf.REG_GRID_FLAGS,
+                        lf.REG_CH_PWR_THR, lf.REG_AIM_CH):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -687,6 +690,14 @@ class LegionGateway:
             return True, ""
         if msg.get("scan_f1_mhz") is None or msg.get("scan_f2_mhz") is None:
             return False, "scan_enable: нужны scan_f1_mhz и scan_f2_mhz"
+        try:
+            f1 = float(msg.get("scan_f1_mhz"))
+            f2 = float(msg.get("scan_f2_mhz"))
+        except (TypeError, ValueError):
+            return False, "scan_f1_mhz/scan_f2_mhz: не число"
+        if self.board == "bladerf1" and (f1 >= lf.C58_MHZ or f2 >= lf.C58_MHZ):
+            return False, ("x40 / LMS6002D не видит 5.8 ГГц — "
+                           "умная атака на C58 только на xA4")
         dwell, why = self._scan_dwell_us(msg)
         if dwell is None:
             return False, why
@@ -771,6 +782,36 @@ class LegionGateway:
                 return False, "запись BAND_* не удалась"
         elif not self.fpga.write_reg(lf.REG_BAND_COUNT, 0):
             return False, "запись BAND_COUNT=0 не удалась"
+        grid_ok, grid_why = self._program_grid(msg)
+        if not grid_ok:
+            return False, grid_why
+        return True, ""
+
+    def _program_grid(self, msg: dict) -> tuple[bool, str]:
+        """0x51–0x58. Нет ключей — нули (не leftover прошлой сетки)."""
+        try:
+            meta = int(msg["grid_meta"]) if "grid_meta" in msg else 0
+            f0 = int(msg["grid_f0_hz"]) if "grid_f0_hz" in msg else 0
+            step = int(msg["grid_step_hz"]) if "grid_step_hz" in msg else 0
+            pri = int(msg["grid_pri_us"]) if "grid_pri_us" in msg else 0
+            shift = int(msg["grid_shift_hz"]) if "grid_shift_hz" in msg else 0
+            flags = int(msg["grid_flags"]) if "grid_flags" in msg else 0
+            pwr_thr = int(msg["ch_pwr_thr"]) if "ch_pwr_thr" in msg else 0
+        except (TypeError, ValueError):
+            return False, "grid_*/ch_pwr_thr: не число"
+        if not self.fpga.set_grid(
+                meta=meta, f0_hz=f0, step_hz=step, pri_us=pri,
+                shift_hz=shift, flags=flags, pwr_thr=pwr_thr):
+            return False, "запись GRID_*/CH_PWR_THR не удалась"
+        # Пресет всегда явно: leftover ELRS иначе оживёт на пустой сетке.
+        try:
+            preset = int(msg["ch_preset"]) if "ch_preset" in msg else 0
+        except (TypeError, ValueError):
+            return False, "ch_preset: не число"
+        if preset < 0 or preset > 3:
+            return False, "ch_preset: 0..3"
+        if not self.fpga.set_channelize(preset=preset):
+            return False, "запись CH_CTRL не удалась"
         return True, ""
 
     def _detect_legion(self) -> None:
@@ -1030,7 +1071,7 @@ class LegionGateway:
                 drfm_step_src = int(msg["drfm_step_src"]) if "drfm_step_src" in msg else 0
                 ch_thr = int(msg["ch_thr"]) if "ch_thr" in msg else 0
                 ch_hyst = int(msg["ch_hyst"]) if "ch_hyst" in msg else 0
-                ch_target = int(msg["ch_target"]) if "ch_target" in msg else 0
+                ch_target = int(msg["ch_target"]) if "ch_target" in msg else lf.AIM_NONE
                 ch_mode = int(msg["ch_mode"]) if "ch_mode" in msg else 0
             except (TypeError, ValueError):
                 return {"ok": False, "reason": "proto_*/ch_*: не число"}
@@ -1038,6 +1079,10 @@ class LegionGateway:
                 return {"ok": False, "reason": "запись PROTO_* не удалась"}
             if not self.fpga.set_channel_map(ch_thr, ch_hyst, ch_target, ch_mode):
                 return {"ok": False, "reason": "запись CH_* не удалась"}
+            if not bool(msg.get("fft_enable")):
+                grid_ok, grid_why = self._program_grid(msg)
+                if not grid_ok:
+                    return {"ok": False, "reason": grid_why}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -1241,6 +1286,10 @@ class LegionGateway:
                 "ch_pwr": lf.REG_CH_PWR, "peak1": lf.REG_PEAK1,
                 "peak2": lf.REG_PEAK2, "peak3": lf.REG_PEAK3,
                 "ch_lut": lf.REG_CH_LUT,
+                "grid_meta": lf.REG_GRID_META, "grid_f0_hz": lf.REG_GRID_F0_HZ,
+                "grid_step_hz": lf.REG_GRID_STEP_HZ, "grid_pri_us": lf.REG_GRID_PRI_US,
+                "grid_shift_hz": lf.REG_GRID_SHIFT_HZ, "grid_flags": lf.REG_GRID_FLAGS,
+                "ch_pwr_thr": lf.REG_CH_PWR_THR, "aim_ch": lf.REG_AIM_CH,
             }
             if reg not in regmap:
                 return {"ok": False, "reason": f"неизвестный reg {reg}"}

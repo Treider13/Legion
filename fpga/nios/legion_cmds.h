@@ -107,6 +107,16 @@
 #define LEGION_REG_CH_BINS_47     0x4E  /* пики слотов 4..7 */
 #define LEGION_REG_CH_FS_HZ       0x4F  /* NIOS → HDL */
 #define LEGION_REG_CH_LO_KHZ      0x50  /* центр взгляда → HDL */
+/* Сетка умной атаки — только NIOS (HDL when others => null). Не 0x32–0x50. */
+#define LEGION_REG_GRID_META      0x51  /* n, n_used, conf, source, kind */
+#define LEGION_REG_GRID_F0_HZ     0x52  /* uint32: Hz если влезает; 5.8 → кГц */
+#define LEGION_REG_GRID_STEP_HZ   0x53
+#define LEGION_REG_GRID_PRI_US    0x54  /* 0 = не часы walk */
+#define LEGION_REG_GRID_SHIFT_HZ  0x55  /* int32 residual FreqCorrection */
+#define LEGION_REG_GRID_FLAGS     0x56
+#define LEGION_REG_GRID_RSV       0x57  /* reserved, 0 */
+#define LEGION_REG_CH_PWR_THR     0x58  /* [15:0] порог канала CH_PWR */
+#define LEGION_REG_AIM_CH         0x59  /* [7:0] канал или 0xFF, [31] armed */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -145,7 +155,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_CH_LO_KHZ
+#define LEGION_REG_MAX            LEGION_REG_AIM_CH
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u
@@ -156,6 +166,33 @@
 #define LEGION_ELRS_SPACING_KHZ   1000u
 #define LEGION_DRFM_STEP_SRC_LAB  0u
 #define LEGION_DRFM_STEP_SRC_PROTO 1u
+#define LEGION_AIM_NONE           0xFFu /* нет цели; 0 = валидный DC */
+#define LEGION_PWR_STRIDE_FRAMES  64u   /* 64×256/56e6 ≈ 293 мкс; ≥16 снимков / 5 мс */
+#define LEGION_FRAME_MASK         0x7fu
+#define LEGION_DROP_FR_NONE       0x80u /* не кадр 0..127 */
+#define LEGION_GRID_KIND_UNKNOWN  0u
+#define LEGION_GRID_KIND_FHSS     1u    /* fhss-narrow */
+#define LEGION_GRID_KIND_OFDM     2u    /* ofdm-wide */
+#define LEGION_GRID_KIND_ANALOG   3u
+#define LEGION_GRID_KIND_ZC       4u    /* droneid-zc */
+#define LEGION_GRID_KIND_CW       5u
+#define LEGION_GRID_SRC_NONE      0u
+#define LEGION_GRID_SRC_MATCHER   1u
+#define LEGION_GRID_SRC_PRESET    2u
+#define LEGION_GRID_SRC_OPERATOR  3u
+#define LEGION_GRID_SRC_TILE2     4u
+#define LEGION_GRID_FLAG_WINLIM   (1u << 0)
+#define LEGION_GRID_FLAG_F0UNC    (1u << 1)
+#define LEGION_GRID_FLAG_ZC       (1u << 2)
+#define LEGION_GRID_FLAG_FCORR    (1u << 3)
+#define LEGION_C58_KHZ            5100000u
+#define LEGION_CH_PWR_VALID(w)    (((w) & 0x80000000u) != 0)
+#define LEGION_CH_PWR_FRAME(w)    (((w) >> 24) & LEGION_FRAME_MASK)
+#define LEGION_CH_PWR_MAG(w)      (((w) >> 8) & 0xffffu)
+#define LEGION_CH_PWR_IDX(w)      ((w) & 0xffu)
+#define LEGION_GRID_META_N(m)     ((m) & 0xffu)
+#define LEGION_GRID_META_KIND(m)  (((m) >> 28) & 0xfu)
+#define LEGION_GRID_META_SRC(m)   (((m) >> 24) & 0xfu)
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -207,12 +244,14 @@ bool legion_air_down(void);
  * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
  * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
  * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
- * узжаем. CH_THR≠0: HOLD читает карту 8×10 МГц каждый SETTLE; цель погасла →
- * CHANNEL_SCAN (max energy, CH_HITS≥N) → CH_TARGET=бин без ARM/сброса DRFM.
+ * узжаем. Умная сетка: TILE = occupancy CH_PWR за look (stride 64 кадра);
+ * aim = центр канала. CH_TARGET=0xFF — нет цели (0 = DC). После hop
+ * drop_fr после unmute, не stale_fr за 6 мс. Пустая сетка — max mag, без
+ * aim_en. CH_THR — слот 10 МГц; CH_PWR_THR — канал. Ноль = уровень выкл.
  * Пока бит 31 CH_TARGET снят, хоп внутри взгляда = live FFT → xlat.
  * Пока он вооружён, downmix и произведение стоят на [7:0]
  * (иначе TX = эмиттер − live + aim). Два тона ≥ 16 бинов: xlat bypass,
- * синтез не вооружается. Readback CH_TARGET — голый бин.
+ * синтез не вооружается. Readback CH_TARGET — голый бин (0xFF = нет).
  * HOLD: TURN = выдержка, затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.

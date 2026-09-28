@@ -60,7 +60,7 @@ import { attackListenPlan, classListenPlan, shelfListenPlan } from "../sense/att
 import { droneSurveyBands, droneSurveyLine } from "../sense/droneBands";
 import { classifyFpgaObserve, type FpgaObserveClass } from "../sense/fpgaObserveClass";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
-import { matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../sense/attackLook";
+import { matchAttackLook, parseWorkerLook, pickAttackThinkTracks, type AttackLook } from "../sense/attackLook";
 import { AttackSessionMemory } from "../sense/attackMemory";
 import { buildAttackScene, type AttackRow, type AttackSceneView } from "../sense/attackScene";
 import { type AttackAdvice, type AttackHintKind } from "../sense/attackAdvisor";
@@ -109,6 +109,7 @@ import {
   planFpgaAir,
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
+import { matchSmartGrid, type SmartGridCard } from "../sense/smartGrid";
 import { openLoopShelfTxPlan, shelfFsHz } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
@@ -866,6 +867,15 @@ let gTxGen = 0;
 /** Хост-Атака: трекер и выдержка рамки. Не трогает FPGA / ESP32 / sweep. */
 const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
+/** Слух до Старта умной атаки: снимок hop/look при уходе с Атаки на FPGA. */
+let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
+
+function snapshotSmartListen(): void {
+  gSmartListen = {
+    hopsMhz: gAttackMemory.hops.map((h) => h.mhz),
+    looks: [...gAttackMemory.looks.values()],
+  };
+}
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
 let gClassBusy = false;
@@ -2060,6 +2070,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте период сканирования числом (например 5)`);
       return;
     }
+    const grid: SmartGridCard = matchSmartGrid({
+      sdrId: s.sdrId,
+      bands: get().sdrBands,
+      hopsMhz: gSmartListen.hopsMhz,
+      looks: gSmartListen.looks,
+    });
     const plan = planOnboardIntercept({
       sdrId: s.sdrId,
       analogBwMhz: analog,
@@ -2073,6 +2089,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       dwellMs: dwellRaw,
       surveyPeriodMs: periodRaw,
       fftEnable: true,
+      grid,
     });
     if (!plan.ok) {
       pushLog("sys", plan.reason);
@@ -2168,6 +2185,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
           scanBands: bands,
+          grid: plan.grid,
           ...lbDelayArmOpts(get()),
         }), get().txGainDb),
       );
@@ -2576,6 +2594,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({ scanPattern: p, fpgaClass: null });
         return;
       }
+      if (p === "fpga") snapshotSmartListen();
+      else gSmartListen = { hopsMhz: [], looks: [] };
       clearAttackHoldTimer();
       gAttackTracker.reset();
       bumpAttackThinkGen();

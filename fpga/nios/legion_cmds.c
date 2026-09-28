@@ -135,7 +135,7 @@ static uint32_t legion_inner_peak;
 static uint64_t legion_inner_t0;
 static uint32_t legion_ch_thr;
 static uint32_t legion_ch_hyst;
-static uint32_t legion_ch_target;
+static uint32_t legion_ch_target = LEGION_AIM_NONE;
 static bool     legion_aim_on;
 static void legion_aim_clear(void);
 static uint32_t legion_ch_mode;
@@ -152,6 +152,26 @@ static uint32_t legion_ch_active2;
 static uint32_t legion_ch_active3;
 static uint32_t legion_ch_fs_hz;
 static uint32_t legion_ch_lo_shadow;
+static uint32_t legion_grid_meta;
+static uint32_t legion_grid_f0_hz;
+static uint32_t legion_grid_step_hz;
+static uint32_t legion_grid_pri_us;
+static int32_t  legion_grid_shift_hz;
+static uint32_t legion_grid_flags;
+static uint32_t legion_ch_pwr_thr;
+static uint32_t legion_aim_ch = LEGION_AIM_NONE;
+static uint16_t legion_pwr[LEGION_CH_N];
+static uint16_t legion_pwr_hits[LEGION_CH_N];
+static uint8_t  legion_pwr_hyst[LEGION_CH_N];
+static uint16_t legion_slot_hits[LEGION_CH_SLOT_N];
+static uint16_t legion_survey_count[LEGION_SURVEY_LOOK_MAX];
+static uint16_t legion_survey_sum[LEGION_SURVEY_LOOK_MAX];
+static bool     legion_pwr_ready;
+static bool     legion_sweep_have;
+static uint32_t legion_last_sweep_fr;
+static uint32_t legion_drop_fr = LEGION_DROP_FR_NONE;
+static uint32_t legion_stale_fr = LEGION_DROP_FR_NONE;
+static bool     legion_wl_second;
 
 #define LEGION_SCAN_QUIET_MS     5u
 #define LEGION_SCAN_DWELL_DEFAULT_US 3000000u
@@ -252,6 +272,8 @@ static void legion_air_fail_rollback(void)
 }
 #endif
 
+static void legion_occ_zero(void);
+
 static void legion_survey_clear_hits(void)
 {
     unsigned i;
@@ -260,7 +282,10 @@ static void legion_survey_clear_hits(void)
         legion_survey_hit[i] = 0;
         legion_survey_mag[i] = 0;
         legion_survey_peak[i] = 0;
+        legion_survey_count[i] = 0;
+        legion_survey_sum[i] = 0;
     }
+    legion_wl_second = false;
 }
 
 static void legion_scan_reset(void)
@@ -291,6 +316,7 @@ static void legion_scan_reset(void)
     legion_scan_event = 0;
     legion_survey_clear_hits();
     legion_aim_clear();
+    legion_occ_zero();
     legion_ch_map_t0 = 0;
     {
         unsigned i;
@@ -913,11 +939,172 @@ static int64_t legion_bin_hz(uint32_t bin, uint32_t lo_khz, uint32_t fs)
     return (int64_t)lo_khz * 1000LL + off;
 }
 
+static uint32_t legion_ch_preset(void)
+{
+    return (legion_ch_ctrl >> LEGION_CH_PRESET_SHIFT) & LEGION_CH_PRESET_MASK;
+}
+
+static bool legion_grid_card(void)
+{
+    return legion_grid_f0_hz != 0 && legion_grid_step_hz != 0 &&
+           LEGION_GRID_META_N(legion_grid_meta) != 0;
+}
+
+/* 5.8 ГГц в Hz не влезает в uint32: хост пишет кГц (<10e6). 2.4 — Hz. */
+static int64_t legion_u32_as_hz(uint32_t v)
+{
+    if (v == 0) {
+        return 0;
+    }
+    if (v < 10000000u) {
+        return (int64_t)v * 1000LL;
+    }
+    return (int64_t)v;
+}
+
+static int64_t legion_grid_f0_as_hz(void)
+{
+    return legion_u32_as_hz(legion_grid_f0_hz);
+}
+
+static uint32_t legion_grid_n_eff(void)
+{
+    uint32_t n;
+    uint32_t const preset = legion_ch_preset();
+
+    if (legion_grid_card()) {
+        n = LEGION_GRID_META_N(legion_grid_meta);
+        if (n > LEGION_CH_N) {
+            n = LEGION_CH_N;
+        }
+        return n;
+    }
+    if (preset == LEGION_CH_PRESET_ELRS) {
+        return LEGION_CH_ELRS_N;
+    }
+    if (preset == LEGION_CH_PRESET_ISM8) {
+        return LEGION_CH_SLOT_N;
+    }
+    if (preset == LEGION_CH_PRESET_O4VID3) {
+        return 3u;
+    }
+    return 0;
+}
+
+static bool legion_grid_empty(void)
+{
+    uint32_t const n = LEGION_GRID_META_N(legion_grid_meta);
+    uint32_t const preset = legion_ch_preset();
+
+    if (n == 0 && !legion_grid_card() && preset == LEGION_CH_PRESET_MANUAL) {
+        return true;
+    }
+    if (legion_grid_n_eff() == 0) {
+        return true;
+    }
+    return false;
+}
+
+static bool legion_use_c58(void)
+{
+    uint32_t const preset = legion_ch_preset();
+    int64_t const f0 = legion_grid_f0_as_hz();
+    uint32_t lo = legion_ch_lo_now();
+
+    if (preset == LEGION_CH_PRESET_O4VID3) {
+        return true;
+    }
+    if (f0 >= 5100000000LL) {
+        return true;
+    }
+    if (lo >= LEGION_C58_KHZ) {
+        return true;
+    }
+    return false;
+}
+
+static bool legion_use_slot(void)
+{
+    uint32_t const kind = LEGION_GRID_META_KIND(legion_grid_meta);
+    uint32_t const preset = legion_ch_preset();
+
+    if (legion_grid_empty() || legion_use_c58() || legion_ch_thr == 0) {
+        return false;
+    }
+    if (kind == LEGION_GRID_KIND_OFDM) {
+        return true;
+    }
+    if (legion_grid_card() && legion_grid_step_hz >= 10000000u) {
+        return true;
+    }
+    if (!legion_grid_card() && preset == LEGION_CH_PRESET_ISM8) {
+        return true;
+    }
+    return false;
+}
+
+static bool legion_use_pwr(void)
+{
+    if (legion_grid_empty() || legion_ch_pwr_thr == 0) {
+        return false;
+    }
+    if (legion_use_c58()) {
+        return true;
+    }
+    if (legion_use_slot()) {
+        return false;
+    }
+    return true;
+}
+
+static bool legion_smart_live(void)
+{
+    return !legion_grid_empty() && (legion_use_pwr() || legion_use_slot());
+}
+
+static uint8_t legion_ch_map_arith(int64_t hz, int64_t f0, int64_t step, uint32_t n)
+{
+    int64_t rel;
+    int64_t ch;
+    int64_t center;
+    int64_t dist;
+    int64_t half;
+
+    if (step <= 0 || n == 0) {
+        return 0xffu;
+    }
+    rel = hz - f0;
+    half = step / 2;
+    if (rel >= 0) {
+        ch = (rel + half) / step;
+    } else {
+        ch = (rel - half) / step;
+    }
+    if (ch < 0 || ch >= (int64_t)n) {
+        return 0xffu;
+    }
+    center = f0 + ch * step;
+    dist = hz - center;
+    if (dist < 0) {
+        dist = -dist;
+    }
+    if (dist > half) {
+        return 0xffu;
+    }
+    return (uint8_t)ch;
+}
+
 static uint8_t legion_ch_map_bin(uint32_t preset, uint32_t bin,
                                 uint32_t lo_khz, uint32_t fs)
 {
     int64_t const hz = legion_bin_hz(bin, lo_khz, fs);
 
+    /* Карточка бьёт пресет, в том числе O4VID3. */
+    if (legion_grid_card()) {
+        return legion_ch_map_arith(hz,
+            legion_grid_f0_as_hz() + (int64_t)legion_grid_shift_hz,
+            (int64_t)legion_grid_step_hz, legion_grid_n_eff());
+    }
     if (preset == LEGION_CH_PRESET_ELRS) {
         /* ExpressLRS FHSS.cpp ISM2G4: 2400.4 + i·1.000 МГц, i=0..79 */
         int64_t rel = hz - 2400400000LL;
@@ -992,13 +1179,12 @@ static void legion_ch_lut_poke(uint8_t bin, uint8_t ch)
 
 static void legion_ch_rebuild_lut(void)
 {
-    uint32_t const preset = (legion_ch_ctrl >> LEGION_CH_PRESET_SHIFT) &
-                            LEGION_CH_PRESET_MASK;
+    uint32_t const preset = legion_ch_preset();
     uint32_t const lo = legion_ch_lo_now();
     uint32_t const fs = legion_fs_hz();
     uint32_t i;
 
-    if (preset == LEGION_CH_PRESET_MANUAL) {
+    if (!legion_grid_card() && preset == LEGION_CH_PRESET_MANUAL) {
         return;
     }
     if (lo == 0 || fs == 0) {
@@ -1015,13 +1201,22 @@ static uint32_t legion_ch_hdl_word(uint32_t data)
                             LEGION_CH_PRESET_MASK;
     uint32_t w = data & 0xffffu;
     uint32_t excl;
+    uint32_t n;
 
-    if (preset == LEGION_CH_PRESET_MANUAL) {
+    if (preset == LEGION_CH_PRESET_MANUAL && !legion_grid_card()) {
         return w;
     }
     w = (w & ~LEGION_CH_MAP_MASK) | LEGION_CH_MAP_LUT;
     w |= LEGION_CH_DC_SKIP;
-    if (preset == LEGION_CH_PRESET_ELRS) {
+    n = legion_grid_n_eff();
+    if (legion_grid_card()) {
+        if (n > 8u) {
+            w |= LEGION_CH_N80;
+        } else {
+            w &= ~LEGION_CH_N80;
+        }
+        excl = legion_excl_bins(legion_grid_step_hz ? legion_grid_step_hz : 1000000u);
+    } else if (preset == LEGION_CH_PRESET_ELRS) {
         w |= LEGION_CH_N80;
         excl = legion_excl_bins(1000000u);
     } else if (preset == LEGION_CH_PRESET_ISM8) {
@@ -1388,48 +1583,35 @@ static void legion_ch_elrs_set(uint32_t idx)
     }
 }
 
-/* 10 МГц слот кроет ~10 хопов ISM2G4 (шаг 1 МГц). Пик один не есть маска. */
-static void legion_ch_elrs_mark_slot(uint32_t slot)
-{
-    uint32_t s_lo;
-    uint32_t s_hi;
-    uint32_t k;
-    uint32_t f;
-
-    if (slot >= LEGION_CH_SLOT_N) {
-        return;
-    }
-    s_lo = LEGION_OCUSYNC_F0_KHZ + slot * LEGION_OCUSYNC_BW_KHZ;
-    s_hi = s_lo + LEGION_OCUSYNC_BW_KHZ;
-    for (k = 0; k < LEGION_CH_ELRS_N; k++) {
-        f = LEGION_ELRS_F0_KHZ + k * LEGION_ELRS_SPACING_KHZ;
-        if (f >= s_lo && f < s_hi) {
-            legion_ch_elrs_set(k);
-        }
-    }
-}
-
 static void legion_ch_update_hits(void)
 {
     uint32_t i;
 
     legion_ch_active0 = 0;
-    legion_ch_active1 = 0;
-    legion_ch_active2 = 0;
-    legion_ch_active3 = 0;
+    /* ACTIVE_1..3 только из CH_PWR. mark_slot вырезан: слот ≠ маска каналов. */
     for (i = 0; i < LEGION_CH_SLOT_N; i++) {
         if (!legion_ch_slot_in_look(i)) {
             continue;
         }
-        if (legion_ch_e[i] >= legion_ch_thr) {
+        if (legion_ch_thr != 0 && legion_ch_e[i] >= legion_ch_thr) {
             if (legion_ch_hits[i] < 255u) {
                 legion_ch_hits[i]++;
             }
+            if (legion_slot_hits[i] < 0xffffu) {
+                legion_slot_hits[i]++;
+            }
             legion_ch_active0 |= 1u << i;
-            legion_ch_elrs_mark_slot(i);
         } else {
             legion_ch_hits[i] = 0;
         }
+    }
+}
+
+static void legion_aim_ch_poke(uint32_t ch, bool armed)
+{
+    legion_aim_ch = ch & 0xffu;
+    if (armed) {
+        legion_aim_ch |= 0x80000000u;
     }
 }
 
@@ -1440,8 +1622,7 @@ static void legion_ch_write_target(uint32_t bin)
     legion_pio_poke(LEGION_REG_CH_TARGET, legion_ch_target);
 }
 
-/* Readback — голый бин. Бит 31 только в PIO: вооружает произведение
- * DRFM×NCO. Следующий sample_en уже с новым FTW, фаза не сбрасывается. */
+/* Readback — голый бин. 0xFF = нет цели, 0 = DC. Бит 31 только в PIO. */
 static void legion_aim_set(uint32_t bin)
 {
     legion_ch_target = bin & 0xffu;
@@ -1451,12 +1632,351 @@ static void legion_aim_set(uint32_t bin)
 
 static void legion_aim_clear(void)
 {
-    if (!legion_aim_on && legion_ch_target == 0) {
+    if (!legion_aim_on && legion_ch_target == LEGION_AIM_NONE &&
+        (legion_aim_ch & 0xffu) == LEGION_AIM_NONE) {
         return;
     }
-    legion_ch_target = 0;
+    legion_ch_target = LEGION_AIM_NONE;
     legion_aim_on = false;
-    legion_pio_poke(LEGION_REG_CH_TARGET, 0);
+    legion_aim_ch_poke(LEGION_AIM_NONE, false);
+    legion_pio_poke(LEGION_REG_CH_TARGET, LEGION_AIM_NONE);
+}
+
+static void legion_occ_zero(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < LEGION_CH_N; i++) {
+        legion_pwr[i] = 0;
+        legion_pwr_hits[i] = 0;
+        legion_pwr_hyst[i] = 0;
+    }
+    for (i = 0; i < LEGION_CH_SLOT_N; i++) {
+        legion_slot_hits[i] = 0;
+        legion_ch_hits[i] = 0;
+    }
+    legion_ch_active1 = 0;
+    legion_ch_active2 = 0;
+    legion_ch_active3 = 0;
+    legion_pwr_ready = false;
+    legion_sweep_have = false;
+    legion_last_sweep_fr = 0;
+    legion_drop_fr = LEGION_DROP_FR_NONE;
+    legion_stale_fr = LEGION_DROP_FR_NONE;
+}
+
+static int64_t legion_ch_freq_hz(uint32_t ch)
+{
+    uint32_t const preset = legion_ch_preset();
+    static const int64_t o4[3] = {
+        5768500000LL, 5789500000LL, 5814500000LL
+    };
+
+    if (legion_grid_card()) {
+        return legion_grid_f0_as_hz() + (int64_t)ch * (int64_t)legion_grid_step_hz +
+               (int64_t)legion_grid_shift_hz;
+    }
+    if (preset == LEGION_CH_PRESET_ELRS) {
+        return 2400400000LL + (int64_t)ch * 1000000LL +
+               (int64_t)legion_grid_shift_hz;
+    }
+    if (preset == LEGION_CH_PRESET_ISM8) {
+        return 2400000000LL + (int64_t)ch * 10000000LL + 5000000LL;
+    }
+    if (preset == LEGION_CH_PRESET_O4VID3) {
+        if (ch >= 3u) {
+            return -1;
+        }
+        return o4[ch];
+    }
+    return -1;
+}
+
+static uint8_t legion_ch_center_bin(uint32_t ch)
+{
+    int64_t f;
+    int64_t lo;
+    int64_t fs;
+    int64_t num;
+    int64_t k;
+
+    f = legion_ch_freq_hz(ch);
+    if (f < 0) {
+        return LEGION_AIM_NONE;
+    }
+    lo = (int64_t)legion_ch_lo_now() * 1000LL;
+    fs = (int64_t)legion_fs_hz();
+    if (fs <= 0) {
+        return LEGION_AIM_NONE;
+    }
+    num = (f - lo) * 256LL;
+    if (num >= 0) {
+        k = (num + fs / 2) / fs;
+    } else {
+        k = (num - fs / 2) / fs;
+    }
+    if (k < -128 || k > 127) {
+        return LEGION_AIM_NONE;
+    }
+    return (uint8_t)(k & 0xff);
+}
+
+static void legion_ch_read_pwr(uint32_t n)
+{
+    uint32_t ch;
+    uint32_t t;
+
+    if (n > LEGION_CH_N) {
+        n = LEGION_CH_N;
+    }
+    for (ch = 0; ch < n; ch++) {
+        legion_pwr[ch] = 0;
+        for (t = 0; t < 4u; t++) {
+            uint32_t w;
+
+            legion_pio_poke(LEGION_REG_CH_IDX, ch);
+            w = legion_mux_word(LEGION_REG_CH_PWR);
+            if (LEGION_CH_PWR_VALID(w) && LEGION_CH_PWR_IDX(w) == ch) {
+                legion_pwr[ch] = (uint16_t)LEGION_CH_PWR_MAG(w);
+                break;
+            }
+        }
+    }
+}
+
+/* argmax(count)==0 → 0xFF, не канал 0 (пустой эфир не целится в DC). */
+static uint8_t legion_argmax_count(const uint16_t *c, uint32_t n,
+                                  const uint16_t *tie_sum)
+{
+    uint32_t i;
+    uint16_t best_c = 0;
+    uint16_t best_s = 0;
+    uint8_t best = LEGION_AIM_NONE;
+
+    if (c == NULL || n == 0) {
+        return LEGION_AIM_NONE;
+    }
+    for (i = 0; i < n; i++) {
+        uint16_t const ci = c[i];
+        uint16_t const si = tie_sum ? tie_sum[i] : 0;
+
+        if (ci == 0) {
+            continue;
+        }
+        if (best == LEGION_AIM_NONE || ci > best_c ||
+            (ci == best_c && si > best_s) ||
+            (ci == best_c && si == best_s && i < (uint32_t)best)) {
+            best_c = ci;
+            best_s = si;
+            best = (uint8_t)i;
+        }
+    }
+    return best;
+}
+
+static void legion_ch_paint_active_pwr(uint32_t n)
+{
+    uint32_t ch;
+
+    legion_ch_active1 = 0;
+    legion_ch_active2 = 0;
+    legion_ch_active3 = 0;
+    if (n > LEGION_CH_N) {
+        n = LEGION_CH_N;
+    }
+    for (ch = 0; ch < n; ch++) {
+        if (legion_pwr[ch] >= (uint16_t)legion_ch_pwr_thr) {
+            legion_ch_elrs_set(ch);
+        }
+    }
+}
+
+static void legion_ch_accum_pwr(uint32_t n)
+{
+    uint32_t ch;
+
+    if (n > LEGION_CH_N) {
+        n = LEGION_CH_N;
+    }
+    for (ch = 0; ch < n; ch++) {
+        if (legion_pwr[ch] >= (uint16_t)legion_ch_pwr_thr) {
+            if (legion_pwr_hits[ch] < 0xffffu) {
+                legion_pwr_hits[ch]++;
+            }
+            if (legion_pwr_hyst[ch] < 255u) {
+                legion_pwr_hyst[ch]++;
+            }
+        } else {
+            legion_pwr_hyst[ch] = 0;
+        }
+    }
+    legion_ch_paint_active_pwr(n);
+}
+
+static uint8_t legion_ch_pick_channel(uint32_t n)
+{
+    uint32_t ch;
+    uint32_t need;
+    int best = -1;
+    uint16_t best_p = 0;
+
+    if (n == 0 || n > LEGION_CH_N) {
+        n = legion_grid_n_eff();
+    }
+    if (n == 0 || n > LEGION_CH_N) {
+        return LEGION_AIM_NONE;
+    }
+    if (legion_argmax_count(legion_pwr_hits, n, NULL) == LEGION_AIM_NONE) {
+        return LEGION_AIM_NONE;
+    }
+    need = legion_ch_hyst;
+    for (ch = 0; ch < n; ch++) {
+        if (legion_pwr[ch] < (uint16_t)legion_ch_pwr_thr) {
+            continue;
+        }
+        if ((uint32_t)legion_pwr_hyst[ch] < need) {
+            continue;
+        }
+        if (legion_ch_center_bin(ch) == LEGION_AIM_NONE) {
+            continue;
+        }
+        if (best < 0 || legion_pwr[ch] > best_p ||
+            (legion_pwr[ch] == best_p && ch < (uint32_t)best)) {
+            best_p = legion_pwr[ch];
+            best = (int)ch;
+        }
+    }
+    if (best < 0) {
+        return LEGION_AIM_NONE;
+    }
+    return (uint8_t)best;
+}
+
+static void legion_aim_to_channel(uint32_t ch)
+{
+    uint8_t bin;
+
+    bin = legion_ch_center_bin(ch);
+    if (bin == LEGION_AIM_NONE) {
+        return;
+    }
+    legion_aim_ch_poke(ch, (legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0);
+    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+        legion_aim_set(bin);
+    } else {
+        legion_ch_write_target(bin);
+    }
+}
+
+static uint32_t legion_drop_from_pwr(void)
+{
+    uint32_t w = legion_mux_word(LEGION_REG_CH_PWR);
+
+    if (LEGION_CH_PWR_VALID(w)) {
+        return LEGION_CH_PWR_FRAME(w);
+    }
+    return LEGION_DROP_FR_NONE;
+}
+
+static void legion_settle_latch_drop(void)
+{
+    /* drop_fr после unmute живёт ~585 мкс — этого хватает.
+     * stale_fr за 6 мс settle обёрнется ~10 раз и не маркер. */
+    legion_drop_fr = legion_drop_from_pwr();
+    legion_pwr_ready = false;
+    legion_sweep_have = false;
+}
+
+static bool legion_pwr_gate(uint32_t w)
+{
+    uint32_t fr;
+
+    if (!LEGION_CH_PWR_VALID(w)) {
+        return false;
+    }
+    fr = LEGION_CH_PWR_FRAME(w);
+    if (!legion_pwr_ready) {
+        if (fr == legion_drop_fr) {
+            return false;
+        }
+        legion_pwr_ready = true;
+        legion_sweep_have = false;
+    }
+    if (legion_sweep_have &&
+        ((fr - legion_last_sweep_fr) & LEGION_FRAME_MASK) <
+            LEGION_PWR_STRIDE_FRAMES) {
+        return false;
+    }
+    legion_last_sweep_fr = fr;
+    legion_sweep_have = true;
+    return true;
+}
+
+static void legion_occ_score_look(void)
+{
+    uint32_t const i = legion_survey_i;
+    uint32_t n;
+    uint32_t ch;
+    uint16_t count = 0;
+    uint16_t sum = 0;
+
+    if (i >= LEGION_SURVEY_LOOK_MAX) {
+        return;
+    }
+    if (legion_use_pwr()) {
+        n = legion_grid_n_eff();
+        if (n > LEGION_CH_N) {
+            n = LEGION_CH_N;
+        }
+        for (ch = 0; ch < n; ch++) {
+            if (legion_pwr_hits[ch] > 0) {
+                count++;
+                sum = (uint16_t)(sum + (legion_pwr_hits[ch] > 0xffffu - sum
+                    ? (uint16_t)(0xffffu - sum) : legion_pwr_hits[ch]));
+            }
+        }
+    } else if (legion_use_slot()) {
+        for (ch = 0; ch < LEGION_CH_SLOT_N; ch++) {
+            if (legion_slot_hits[ch] > 0) {
+                count++;
+                sum = (uint16_t)(sum + legion_slot_hits[ch]);
+            }
+        }
+    } else {
+        return;
+    }
+    legion_survey_count[i] = count;
+    legion_survey_sum[i] = sum;
+    if (count > 0) {
+        legion_survey_hit[i] = 1;
+    }
+}
+
+static bool legion_occ_poll(void)
+{
+    uint32_t w;
+    uint32_t n;
+
+    if (!legion_smart_live()) {
+        return false;
+    }
+    w = legion_mux_word(LEGION_REG_CH_PWR);
+    if (!legion_pwr_gate(w)) {
+        return false;
+    }
+    n = legion_grid_n_eff();
+    if (legion_use_pwr()) {
+        legion_ch_read_pwr(n);
+        legion_ch_accum_pwr(n);
+    }
+    if (legion_use_slot() && !legion_use_c58()) {
+        legion_ch_read_map();
+        legion_ch_update_hits();
+    }
+    if (legion_survey_ph == LEGION_SURVEY_PH_PASS) {
+        legion_occ_score_look();
+    }
+    return true;
 }
 
 static int legion_ch_pick(void)
@@ -1466,9 +1986,13 @@ static int legion_ch_pick(void)
     uint32_t i;
     uint32_t need;
 
+    if (legion_use_pwr()) {
+        uint8_t ch = legion_ch_pick_channel(legion_grid_n_eff());
+        return (ch == LEGION_AIM_NONE) ? -1 : (int)ch;
+    }
     need = legion_ch_hyst;
     for (i = 0; i < LEGION_CH_SLOT_N; i++) {
-        if (legion_ch_e[i] < legion_ch_thr) {
+        if (legion_ch_thr == 0 || legion_ch_e[i] < legion_ch_thr) {
             continue;
         }
         if (legion_ch_hits[i] < need) {
@@ -1495,11 +2019,15 @@ static void legion_ch_apply(uint32_t slot)
 {
     uint32_t bin;
 
+    if (legion_use_pwr()) {
+        legion_aim_to_channel(slot);
+        return;
+    }
     if (slot >= LEGION_CH_SLOT_N) {
         return;
     }
     bin = legion_ch_bin[slot];
-    /* CTRL, PLL и LB_DELAY не трогаем. Bypass: сырой IQ × FTW нельзя. */
+    legion_aim_ch_poke(slot, (legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0);
     if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
         legion_aim_set(bin);
     } else {
@@ -1516,6 +2044,20 @@ static bool legion_channel_scan(void)
     int pick;
 
     legion_fft_st = LEGION_FFT_ST_CHANNEL_SCAN;
+    if (legion_use_pwr()) {
+        uint8_t ch = legion_ch_pick_channel(legion_grid_n_eff());
+        if (ch == LEGION_AIM_NONE) {
+            legion_aim_clear();
+            return false;
+        }
+        legion_aim_to_channel(ch);
+        if (!legion_set_tx_mute(false)) {
+            return false;
+        }
+        legion_fft_st = LEGION_FFT_ST_HOLD;
+        legion_event(LEGION_EVT_SWITCH);
+        return true;
+    }
     pick = legion_ch_pick();
     if (pick < 0) {
         return false;
@@ -1611,11 +2153,22 @@ static bool legion_fft_enter_search(uint32_t center_khz)
         return false;
     }
     if (!legion_hop_lo_ex(center_khz, false)) {
+        legion_aim_clear();
         return false;
     }
-    /* После успешного hop. Раньше — откат индекса оставил бы синтез
-     * снятым на старом LO. */
+    /* После успешного hop. Отказ hop тоже снимает aim (не FTW старого LO). */
     legion_aim_clear();
+    legion_occ_zero();
+    {
+        uint32_t w = legion_mux_word(LEGION_REG_CH_PWR);
+        /* stale_fr только для короткого settle. За 6 мс 7-бит frame
+         * обернётся ~10 раз — не сравниваем его после unmute. */
+        legion_stale_fr = LEGION_CH_PWR_VALID(w)
+            ? LEGION_CH_PWR_FRAME(w) : LEGION_DROP_FR_NONE;
+        legion_drop_fr = LEGION_DROP_FR_NONE;
+        legion_pwr_ready = false;
+        legion_sweep_have = false;
+    }
     legion_fft_invalidate_peak();
     legion_look_center_khz = center_khz;
     legion_ch_push_lo_fs();
@@ -1681,16 +2234,17 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag, uint32_t bin)
             legion_ch_hits[slot] = 1u;
         }
     }
-    /* Сначала снять FTW. Bypass решаем, пока синтез выключен:
-     * passthrough × FTW сдвинул бы сырой IQ. Один тон: LOCK и
-     * CH_TARGET на одном bin, PLL не трогаем. */
+    /* Сетка жива: первый aim только из pick_channel после pwr_ready.
+     * Live peak запрещён. Gemini по-прежнему снимает bit31. */
     legion_aim_clear();
     legion_dual_from_peak1(legion_peak_word());
-    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
-        legion_fft_lock_hdl(true);
-        legion_aim_set(bin);
-    } else {
-        legion_ch_write_target(bin);
+    if (!legion_smart_live()) {
+        if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+            legion_fft_lock_hdl(true);
+            legion_aim_set(bin);
+        } else {
+            legion_ch_write_target(bin);
+        }
     }
     legion_ch_map_t0 = time_tamer_read(BLADERF_MODULE_RX);
     legion_scan_mark_look();
@@ -1749,6 +2303,8 @@ static void legion_fft_walk(void)
         legion_quiet_t0 = now;
         legion_snap_have = false;
         legion_snap_frame = 0;
+        /* drop_fr ПОСЛЕ unmute. stale_fr за 6 мс не сравниваем. */
+        legion_settle_latch_drop();
         /* Кадр, уже сидевший в регистре на выходе SETTLE — stale FFT.
          * Первый НОВЫЙ valid после этого целит. Не жжём лишний живой кадр. */
         {
@@ -1767,6 +2323,30 @@ static void legion_fft_walk(void)
         uint32_t mag;
         uint32_t peak;
 
+        if (legion_smart_live()) {
+            legion_dual_from_peak1(legion_peak_word());
+            (void)legion_occ_poll();
+            if (legion_pwr_ready && legion_sweep_have) {
+                uint8_t ch;
+
+                legion_fft_st = LEGION_FFT_ST_HOLD;
+                legion_ch_map_t0 = now;
+                if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+                    ch = legion_ch_pick_channel(legion_grid_n_eff());
+                    if (ch == LEGION_AIM_NONE) {
+                        legion_aim_clear();
+                    } else {
+                        legion_aim_to_channel(ch);
+                    }
+                }
+                legion_scan_mark_look();
+            }
+            if (!det && n > 1u && now - legion_quiet_t0 >= quiet &&
+                !legion_sweep_have) {
+                legion_fft_try_next();
+            }
+            return;
+        }
         if (!det) {
             /* Энергия первая: шумовой max-bin не шагаем. */
             if (n <= 1u) {
@@ -1803,7 +2383,7 @@ static void legion_fft_walk(void)
         return;
     }
 
-    if (legion_ch_thr != 0 &&
+    if ((legion_use_pwr() || legion_ch_thr != 0) &&
         (legion_fft_st == LEGION_FFT_ST_HOLD ||
          legion_fft_st == LEGION_FFT_ST_CHANNEL_SCAN)) {
         if (now - legion_ch_map_t0 < (uint64_t)settle &&
@@ -1818,6 +2398,40 @@ static void legion_fft_walk(void)
             return;
         }
         legion_ch_map_t0 = now;
+        legion_dual_from_peak1(legion_peak_word());
+        if (legion_use_pwr()) {
+            uint8_t ch;
+
+            (void)legion_occ_poll();
+            if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) != 0) {
+                if (det && !legion_hold_armed) {
+                    legion_hold_armed = true;
+                    legion_hold_t0 = now;
+                }
+                if (det) {
+                    legion_quiet_t0 = now;
+                }
+                return;
+            }
+            ch = legion_ch_pick_channel(legion_grid_n_eff());
+            if (ch == LEGION_AIM_NONE) {
+                legion_aim_clear();
+                if (legion_channel_scan()) {
+                    return;
+                }
+                legion_fft_st = LEGION_FFT_ST_HOLD;
+            } else if ((legion_aim_ch & 0xffu) != ch) {
+                legion_aim_to_channel(ch);
+            }
+            if (det && !legion_hold_armed) {
+                legion_hold_armed = true;
+                legion_hold_t0 = now;
+            }
+            if (det) {
+                legion_quiet_t0 = now;
+            }
+            return;
+        }
         legion_ch_read_map();
         legion_ch_update_hits();
         {
@@ -1827,6 +2441,10 @@ static void legion_fft_walk(void)
             if (slot < LEGION_CH_SLOT_N &&
                 legion_ch_e[slot] >= legion_ch_thr &&
                 legion_ch_hits[slot] >= need) {
+                /* Слот жив: обновить g_bin если argmax слота сменился. */
+                if (legion_ch_bin[slot] != (legion_ch_target & 0xffu)) {
+                    legion_ch_apply(slot);
+                }
                 if (det && !legion_hold_armed) {
                     legion_hold_armed = true;
                     legion_hold_t0 = now;
@@ -1960,22 +2578,42 @@ static uint32_t legion_survey_pick(uint32_t n)
     uint32_t i;
     uint32_t best_i = 0xffffffffu;
     uint32_t best_mag = 0;
-    uint32_t first_hit = 0xffffffffu;
-    uint32_t next_after = 0xffffffffu;
+    uint16_t best_c = 0;
+    uint16_t best_s = 0;
     int have = 0;
+    int have_occ = 0;
 
+    if (n > LEGION_SURVEY_LOOK_MAX) {
+        n = LEGION_SURVEY_LOOK_MAX;
+    }
+    if (legion_smart_live()) {
+        for (i = 0; i < n; i++) {
+            if (legion_survey_count[i] == 0) {
+                continue;
+            }
+            have_occ = 1;
+            if (best_i == 0xffffffffu ||
+                legion_survey_count[i] > best_c ||
+                (legion_survey_count[i] == best_c &&
+                 legion_survey_sum[i] > best_s) ||
+                (legion_survey_count[i] == best_c &&
+                 legion_survey_sum[i] == best_s && i < best_i)) {
+                best_c = legion_survey_count[i];
+                best_s = legion_survey_sum[i];
+                best_i = i;
+            }
+        }
+        /* argmax(count)=0 → не плитка 0. */
+        if (!have_occ) {
+            return 0xffffffffu;
+        }
+        return best_i;
+    }
     for (i = 0; i < n; i++) {
         if (legion_survey_hit[i] == 0) {
             continue;
         }
         have = 1;
-        if (first_hit == 0xffffffffu) {
-            first_hit = i;
-        }
-        if (legion_survey_last_i != 0xffffffffu && i > legion_survey_last_i &&
-            next_after == 0xffffffffu) {
-            next_after = i;
-        }
         if (best_i == 0xffffffffu ||
             legion_survey_mag[i] > best_mag ||
             (legion_survey_mag[i] == best_mag && i < best_i)) {
@@ -1986,13 +2624,7 @@ static uint32_t legion_survey_pick(uint32_t n)
     if (!have) {
         return 0xffffffffu;
     }
-    if (legion_survey_last_i == 0xffffffffu) {
-        return best_i;
-    }
-    if (next_after != 0xffffffffu) {
-        return next_after;
-    }
-    return first_hit;
+    return best_i;
 }
 
 static void legion_survey_try_score(void)
@@ -2030,6 +2662,9 @@ static void legion_survey_try_score(void)
         legion_survey_mag[i] = (uint16_t)mag;
         legion_survey_peak[i] = peak;
         legion_peak_khz = peak;
+    }
+    if (legion_smart_live()) {
+        (void)legion_occ_poll();
     }
 }
 
@@ -2152,7 +2787,19 @@ static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
     legion_dual_from_peak1(legion_peak_word());
-    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+    if (legion_smart_live()) {
+        uint8_t ch;
+
+        if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+            legion_fft_stare_hdl(true);
+            ch = legion_ch_pick_channel(legion_grid_n_eff());
+            if (ch == LEGION_AIM_NONE) {
+                legion_aim_clear();
+            } else {
+                legion_aim_to_channel(ch);
+            }
+        }
+    } else if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
         legion_fft_stare_hdl(true);
         legion_aim_set(bin);
     } else {
@@ -2174,6 +2821,23 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
     uint32_t bin = 0;
     bool have = false;
 
+    if (legion_smart_live()) {
+        (void)now;
+        (void)det;
+        (void)dwell;
+        (void)ordinary;
+        legion_dual_from_peak1(legion_peak_word());
+        (void)legion_occ_poll();
+        if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+            uint8_t ch = legion_ch_pick_channel(legion_grid_n_eff());
+            if (ch == LEGION_AIM_NONE) {
+                legion_aim_clear();
+            } else if ((legion_aim_ch & 0xffu) != ch) {
+                legion_aim_to_channel(ch);
+            }
+        }
+        return;
+    }
     if (det) {
         have = legion_survey_two_frame(&mag, &peak, &bin);
     }
@@ -2293,12 +2957,16 @@ static void legion_survey_walk(void)
         legion_quiet_t0 = now;
         legion_snap_have = false;
         legion_snap_frame = 0;
+        legion_settle_latch_drop();
         return;
     }
 
     if (legion_survey_ph == LEGION_SURVEY_PH_PASS) {
         if (legion_fft_st != LEGION_FFT_ST_FRAME) {
             return;
+        }
+        if (legion_smart_live()) {
+            (void)legion_occ_poll();
         }
         if (det) {
             legion_survey_try_score();
@@ -2312,9 +2980,21 @@ static void legion_survey_walk(void)
         }
         {
             uint32_t const picked = legion_survey_pick(n);
+            uint32_t const flags = legion_grid_flags;
 
             if (picked == 0xffffffffu) {
                 legion_survey_begin_pass((uint8_t)LEGION_EVT_PASS);
+                return;
+            }
+            if ((flags & LEGION_GRID_FLAG_WINLIM) != 0 &&
+                (flags & LEGION_GRID_FLAG_F0UNC) != 0 &&
+                !legion_wl_second) {
+                /* Второй проход: score обеих, stare нет. */
+                legion_wl_second = true;
+                legion_survey_ph = LEGION_SURVEY_PH_PASS;
+                legion_stare_on = false;
+                legion_event((uint8_t)LEGION_EVT_PASS);
+                legion_survey_enter_look(0, n);
                 return;
             }
             legion_survey_begin_stare(picked, n);
@@ -2659,6 +3339,57 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             legion_ch_hits[addr - LEGION_REG_CH_HITS_0] = data & 0xffu;
             return true;
 
+        case LEGION_REG_GRID_META:
+            legion_grid_meta = data;
+            legion_ch_rebuild_lut();
+            {
+                uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
+                legion_pio_poke(LEGION_REG_CH_CTRL, h);
+            }
+            return true;
+
+        case LEGION_REG_GRID_F0_HZ:
+            legion_grid_f0_hz = data;
+            legion_ch_rebuild_lut();
+            {
+                uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
+                legion_pio_poke(LEGION_REG_CH_CTRL, h);
+            }
+            return true;
+
+        case LEGION_REG_GRID_STEP_HZ:
+            legion_grid_step_hz = data;
+            legion_ch_rebuild_lut();
+            {
+                uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
+                legion_pio_poke(LEGION_REG_CH_CTRL, h);
+            }
+            return true;
+
+        case LEGION_REG_GRID_PRI_US:
+            legion_grid_pri_us = data;
+            return true;
+
+        case LEGION_REG_GRID_SHIFT_HZ:
+            legion_grid_shift_hz = (int32_t)data;
+            legion_ch_rebuild_lut();
+            return true;
+
+        case LEGION_REG_GRID_FLAGS:
+            legion_grid_flags = data;
+            return true;
+
+        case LEGION_REG_GRID_RSV:
+            return true;
+
+        case LEGION_REG_CH_PWR_THR:
+            legion_ch_pwr_thr = data & 0xffffu;
+            return true;
+
+        case LEGION_REG_AIM_CH:
+            legion_aim_ch = data;
+            return true;
+
         case LEGION_REG_AIR_PREP:
             if (data & 0x1) {
                 return legion_air_up((data & 0x2) != 0, (data & 0x4) != 0);
@@ -2894,6 +3625,42 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_CH_LO_KHZ) {
         *data = legion_ch_lo_shadow;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_META) {
+        *data = legion_grid_meta;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_F0_HZ) {
+        *data = legion_grid_f0_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_STEP_HZ) {
+        *data = legion_grid_step_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_PRI_US) {
+        *data = legion_grid_pri_us;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_SHIFT_HZ) {
+        *data = (uint32_t)legion_grid_shift_hz;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_FLAGS) {
+        *data = legion_grid_flags;
+        return true;
+    }
+    if (addr == LEGION_REG_GRID_RSV) {
+        *data = 0;
+        return true;
+    }
+    if (addr == LEGION_REG_CH_PWR_THR) {
+        *data = legion_ch_pwr_thr;
+        return true;
+    }
+    if (addr == LEGION_REG_AIM_CH) {
+        *data = legion_aim_ch;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

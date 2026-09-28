@@ -11,6 +11,18 @@ import type { AllowBand } from "../policy/allowlist";
 import { catalogById } from "../sdr/catalog";
 import { FPGA_AIR_MODE_RU } from "./modes";
 import { planCenters, planParkCenters } from "./scan";
+import {
+  bandTouchesC58,
+  emptySmartGrid,
+  LEGION_AIM_NONE,
+  matchSmartGrid,
+  SMART_GRID_EMPTY_RU,
+  SMART_X40_C58_RU,
+  type SmartGridCard,
+  type SmartGridInput,
+  xlatAimRu,
+  xlatWindowMhz,
+} from "./smartGrid";
 
 export const LEGION_FPGA_FS_HZ = 2_000_000;
 /** Окно 16 сэмплов @ 2 МГц = 8 µs. Минимум HDL (win_shift 4..12). */
@@ -340,6 +352,8 @@ export interface OnboardInterceptInput {
   /** Точный Гц: FFT-пик на FPGA. Дефолт false — walker как раньше. */
   fftEnable?: boolean;
   fireBwMhz?: number;
+  /** Слух/оператор → карточка 0x51–0x59. Нет — пустая сетка, не ELRS. */
+  grid?: SmartGridInput | SmartGridCard;
 }
 
 export interface OnboardInterceptPlan {
@@ -362,6 +376,8 @@ export interface OnboardInterceptPlan {
   fftEnable: boolean;
   fireBwMhz: number;
   settleN: number;
+  grid: SmartGridCard;
+  xlatWindowMhz: number;
 }
 
 export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
@@ -384,6 +400,16 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     ? clampAirBwMhz(i.fireBwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog)
     : FPGA_AIR_BW_DEFAULT_MHZ;
   const settleN = fftEnable ? fpgaSettleN(fsHz) : 0;
+  const xlatMhz = xlatWindowMhz(fsHz);
+  const gridIn = i.grid;
+  const grid: SmartGridCard =
+    gridIn && "packedF0" in gridIn && "meta" in gridIn && "smart" in gridIn
+      ? gridIn
+      : matchSmartGrid({
+          ...(gridIn && !("packedF0" in gridIn) ? gridIn : {}),
+          sdrId: i.sdrId,
+          bands: i.bands,
+        });
   const fail = (reason: string): OnboardInterceptPlan => ({
     ok: false,
     reason,
@@ -403,6 +429,8 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     fftEnable,
     fireBwMhz,
     settleN,
+    grid,
+    xlatWindowMhz: xlatMhz,
   });
   if (!fpgaAirSupported(i.sdrId)) {
     return fail(`${FPGA_AIR_MODE_RU}: ревизия legion на bladeRF 2.0 micro xA4/xA9 и bladeRF 1 x40`);
@@ -414,6 +442,9 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     return fail(
       `${FPGA_AIR_MODE_RU}: x40 взгляд ${lookMhz} МГц ниже фильтра LMS ${FPGA_X40_ANALOG_MIN_MHZ} МГц — отказ до ARM`,
     );
+  }
+  if (i.sdrId === "bladerf-x40" && bandTouchesC58(i.bands)) {
+    return fail(`${FPGA_AIR_MODE_RU}: ${SMART_X40_C58_RU}`);
   }
   if (!(i.detThr > 0) || !Number.isFinite(i.detThr)) {
     return fail(`${FPGA_AIR_MODE_RU}: задайте порог чувствительности больше нуля (нулевой порог — гейт на шум)`);
@@ -434,9 +465,14 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     : hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
+  const gridRu = fftEnable
+    ? grid.smart
+      ? ` · ${grid.reason} · ${xlatAimRu(fsHz, LEGION_AIM_NONE)}`
+      : ` · ${grid.reason || SMART_GRID_EMPTY_RU}`
+    : "";
   return {
     ok: true,
-    reason: `плата смотрит эфир сама · ${how} · USB не в круге увидел→усилитель`,
+    reason: `плата смотрит эфир сама · ${how}${gridRu} · USB не в круге увидел→усилитель`,
     lookMhz,
     fsHz,
     windowUs,
@@ -453,6 +489,8 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     fftEnable,
     fireBwMhz,
     settleN,
+    grid,
+    xlatWindowMhz: xlatMhz,
   };
 }
 
@@ -569,6 +607,13 @@ export function fpgaArmCmd(
     walkFtwStep?: number;
     /** Частотный сдвиг DRFM, Гц. 0 = обход. Если задан lbFtw — не пишем. */
     lbShiftHz?: number;
+    grid?: SmartGridCard;
+    chPreset?: number;
+    chThr?: number;
+    chHyst?: number;
+    chPwrThr?: number;
+    chMode?: number;
+    chTarget?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -647,6 +692,20 @@ export function fpgaArmCmd(
       if (opts.scanBands && opts.scanBands.length > 0) {
         cmd.scan_bands = opts.scanBands.map((b) => ({ f1_mhz: b.f1Mhz, f2_mhz: b.f2Mhz }));
       }
+      const g = opts.grid ?? emptySmartGrid();
+      cmd.drfm_step_src = 0;
+      cmd.ch_target = opts.chTarget ?? LEGION_AIM_NONE;
+      cmd.ch_preset = opts.chPreset ?? g.preset;
+      cmd.ch_thr = opts.chThr ?? g.chThr;
+      cmd.ch_hyst = opts.chHyst ?? g.chHyst;
+      cmd.ch_pwr_thr = opts.chPwrThr ?? g.chPwrThr;
+      cmd.ch_mode = opts.chMode ?? g.chMode;
+      cmd.grid_meta = g.meta;
+      cmd.grid_f0_hz = g.packedF0;
+      cmd.grid_step_hz = g.stepHz;
+      cmd.grid_pri_us = g.priUs;
+      cmd.grid_shift_hz = g.shiftHz;
+      cmd.grid_flags = g.flags;
     }
   }
   if (mode === "lb_gated") {

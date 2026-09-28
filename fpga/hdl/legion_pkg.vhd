@@ -146,6 +146,16 @@ package legion_pkg is
     constant LEGION_REG_CH_BINS_47    : natural := 16#4E#; -- пики слотов 4..7
     constant LEGION_REG_CH_FS_HZ      : natural := 16#4F#; -- NIOS → HDL
     constant LEGION_REG_CH_LO_KHZ     : natural := 16#50#; -- центр взгляда
+    -- Сетка умной атаки: только NIOS (HDL when others => null). Не 0x32–0x50.
+    constant LEGION_REG_GRID_META      : natural := 16#51#;
+    constant LEGION_REG_GRID_F0_HZ     : natural := 16#52#;
+    constant LEGION_REG_GRID_STEP_HZ   : natural := 16#53#;
+    constant LEGION_REG_GRID_PRI_US    : natural := 16#54#;
+    constant LEGION_REG_GRID_SHIFT_HZ  : natural := 16#55#;
+    constant LEGION_REG_GRID_FLAGS     : natural := 16#56#;
+    constant LEGION_REG_GRID_RSV       : natural := 16#57#;
+    constant LEGION_REG_CH_PWR_THR     : natural := 16#58#; -- [15:0] канал
+    constant LEGION_REG_AIM_CH         : natural := 16#59#; -- [7:0] или 0xFF
 
     constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
     constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;
