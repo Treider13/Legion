@@ -249,6 +249,16 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
+            <label title="Частотный сдвиг после delayline (mesarcik). FTW=round(Гц/fs·2³²). 0 — обход смесителя.">
+              DRFM СДВИГ Гц
+              <input
+                aria-label="Частотный сдвиг loopback в герцах"
+                inputMode="numeric"
+                value={s.fpgaLbShiftHz}
+                onChange={(e) => s.setFpgaLbShiftHz(e.target.value)}
+                disabled={busy || s.fpgaBusy}
+              />
+            </label>
           </>
         )}
         {interceptSetup && (

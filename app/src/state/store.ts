@@ -422,6 +422,8 @@ interface LegionStore {
   fpgaWalkHold: boolean;
   /** Живая линия задержки loopback, сэмплы. Не walk-off. */
   fpgaLbDelay: string;
+  /** Частотный сдвиг живого DRFM, Гц. 0 — обход смесителя. */
+  fpgaLbShiftHz: string;
   // журнал
   log: LogEntry[];
 
@@ -528,6 +530,7 @@ interface LegionStore {
   setFpgaWalkAuto(v: boolean): void;
   setFpgaWalkHold(v: boolean): void;
   setFpgaLbDelay(v: string): void;
+  setFpgaLbShiftHz(v: string): void;
   fpgaArm(): Promise<void>;
   /** Главный кадр: ARM ревизии legion. air = lb_gated, solo = nco/player. */
   startFpgaPath(path: "solo" | "air"): Promise<boolean>;
@@ -787,8 +790,17 @@ function parseLbDelay(raw: string): number {
   return Math.min(4095, Math.round(n));
 }
 
-function lbDelayArmOpts(s: { fpgaLbDelay: string }): { lbDelay: number } {
-  return { lbDelay: parseLbDelay(s.fpgaLbDelay) };
+function parseLbShiftHz(raw: string): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-30e6, Math.min(30e6, n));
+}
+
+function lbDelayArmOpts(s: { fpgaLbDelay: string; fpgaLbShiftHz: string }): {
+  lbDelay: number;
+  lbShiftHz: number;
+} {
+  return { lbDelay: parseLbDelay(s.fpgaLbDelay), lbShiftHz: parseLbShiftHz(s.fpgaLbShiftHz) };
 }
 
 /** 16 сэмплов. Время окна = 2^shift / fs, не константа 8 мкс. */
@@ -2389,6 +2401,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaWalkAuto: false,
     fpgaWalkHold: false,
     fpgaLbDelay: "0",
+    fpgaLbShiftHz: "0",
     log: [],
 
     setTransportKind: (k) =>
@@ -3480,6 +3493,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaWalkAuto: (v) => set({ fpgaWalkAuto: v }),
     setFpgaWalkHold: (v) => set({ fpgaWalkHold: v }),
     setFpgaLbDelay: (v) => set({ fpgaLbDelay: v }),
+    setFpgaLbShiftHz: (v) => set({ fpgaLbShiftHz: v }),
 
     fpgaArm: async () => {
       const s = get();

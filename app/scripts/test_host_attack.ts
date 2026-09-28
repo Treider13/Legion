@@ -5,14 +5,14 @@
 import { caCfar1d, detectAttackHits, ATTACK_MIN_BW_MHZ, ATTACK_MAX_BW_MHZ } from "../src/sense/attackDetect";
 import { AttackTracker, ATTACK_MIN_HITS, type AttackTrack } from "../src/sense/attackTracks";
 import { analogCombFromIq, PAL_LINE_HZ } from "../src/sense/analogComb";
-import { atlasForTracks, classifyAttackFamily, bandBucket } from "../src/sense/attackAtlas";
+import { atlasForTracks, classifyAttackFamily, bandBucket, extraFromLook } from "../src/sense/attackAtlas";
 import { droneBandLabel, droneSurveyBands } from "../src/sense/droneBands";
 import { classifyFpgaObserve } from "../src/sense/fpgaObserveClass";
 import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { matchAttackLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -387,9 +387,8 @@ async function main(): Promise<void> {
   check("корзина 5.8", bandBucket(5805) === "c58");
   check("корзина 169", bandBucket(169) === "vhf");
   check("корзина 470", bandBucket(470) === "uhf");
-  const rc24 = classifyAttackFamily({
-    freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1,
-  });
+  const rc24Track = { freqMhz: 2442, widthMhz: 0.8, duty: 0.2, streak: 1 };
+  const rc24 = classifyAttackFamily(rc24Track);
   check("2.4 hop ≤2 — rc-24", rc24.id === "rc-24");
   check(
     "2.4 класс: ELRS, mLRS и не разделить",
@@ -404,6 +403,52 @@ async function main(): Promise<void> {
     rc900.hint.includes("Crossfire") && rc900.hint.includes("не разделить"),
     rc900.hint,
   );
+  check(
+    "2.4 + IQ 250 Гц CSS = ELRS",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "elrs", label: "ELRS LoRa 250 Гц", hint: "CSS + скорость ELRS" },
+    }).id === "elrs",
+  );
+  check(
+    "2.4 + IQ 31 Гц CSS = mLRS",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "mlrs", label: "mLRS LoRa 31 Гц", hint: "CSS + 19/31 Гц" },
+    }).id === "mlrs",
+  );
+  check(
+    "2.4 + IQ 50 Гц CSS не уникален",
+    classifyAttackFamily(rc24Track, undefined, undefined, {
+      rc: { id: "elrs-mlrs-50", label: "LoRa 50 Гц (ELRS или mLRS)", hint: "50 Гц CSS" },
+    }).id === "elrs-mlrs-50",
+  );
+  check(
+    "Layer 3 DroneID перекрывает hop-корзину",
+    classifyAttackFamily(
+      { freqMhz: 2442, widthMhz: 10, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { layer3: { id: "droneid", label: "DroneID 1581F5", hint: "plaintext" } },
+    ).id === "droneid",
+  );
+  const workerLook = parseWorkerLook(
+    {
+      kind: "cycle",
+      label: "есть цикл",
+      conf: 0.7,
+      droneid: {
+        hit: true,
+        ok: true,
+        zcScore: 0.8,
+        plain: { serial: "1581F5YHD228Q00A", latitude: 47.1, longitude: 8.2 },
+      },
+      rc: { id: "elrs", label: "ELRS LoRa 250 Гц", hint: "CSS", rateHz: 250, css: true },
+    },
+    2442,
+  );
+  check("parseWorkerLook serial", workerLook.droneid?.plain?.serial === "1581F5YHD228Q00A");
+  check("parseWorkerLook rc elrs", workerLook.rc?.id === "elrs");
+  check("lookRu несёт DroneID", lookRu(workerLook).includes("DroneID 1581F5YHD228Q00A"), lookRu(workerLook));
+  check("extraFromLook droneid", extraFromLook(workerLook)?.layer3?.id === "droneid");
   check("5.8 hop 10 — вспышки, не липкое видео", classifyAttackFamily({
     freqMhz: 5800, widthMhz: 10, duty: 0.2, streak: 1,
   }).id === "digital-burst");

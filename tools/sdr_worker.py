@@ -237,11 +237,30 @@ from attack_dsp import (  # noqa: E402
     analyze_iq,
     cancel_own,
     leftover_ratio,
+    channelize_decim,
     channelize_look,
     multitaper_dbm,
     spectral_flatness,
     synth_look_iq,
 )
+from droneid import analyze_droneid  # noqa: E402
+from opendroneid import parse_opendroneid  # noqa: E402
+from rc_spectrum import analyze_rc, band_of  # noqa: E402
+
+ATTACK_RC_S = 0.16  # 160 мс: два интервала 19 Гц mLRS
+DRONEID_THINK_N = 1 << 16
+
+
+def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
+    return band_of(freq_mhz) in ("s24", "p900") and float(bw_mhz) <= 2.5
+
+
+def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:
+    if parsed.get("kind") == "ofdm":
+        return True
+    if float(bw_mhz) >= 8.0:
+        return True
+    return 2400.0 <= float(freq_mhz) <= 2500.0 and float(bw_mhz) >= 6.0
 
 
 def rx_stream_samples(fs: float) -> int:
@@ -1646,6 +1665,7 @@ class Radio:
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
         iq = None
+        src = None
         if self.fake:
             n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
             if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
@@ -1678,6 +1698,13 @@ class Radio:
         if same_clock:
             work, clip_all = cancel_own(iq, np.asarray(replica))
             leftover = leftover_ratio(iq, work)
+        iq_rc = None
+        if not self.fake and src is not None:
+            want_rc = min(int(src.available()), int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+            if want_rc >= int(work_fs * 0.04):
+                iq_rc = src.latest(want_rc)
+        elif self.fake:
+            iq_rc = work
         out_looks = []
         for row in looks[:4]:
             freq = float(row.get("freqMhz") or center_mhz)
@@ -1689,6 +1716,28 @@ class Radio:
             parsed["clip"] = bool(parsed.get("clip") or clip_all)
             if leftover_row is not None:
                 parsed["leftover"] = leftover_row
+            if _want_rc(freq, bw):
+                src_rc = iq_rc if iq_rc is not None else work
+                ch_rc, fs_rc = channelize_decim(src_rc, work_fs, freq, center_mhz, 2.0e6)
+                if ch_rc.size >= 128 and fs_rc > 0:
+                    parsed["rc"] = analyze_rc(ch_rc, fs_rc, freq)
+            if _want_droneid(freq, bw, parsed):
+                ch_d, fs_d = channelize_look(
+                    work,
+                    work_fs,
+                    freq,
+                    center_mhz,
+                    max(bw, 12.0),
+                    n=min(int(work.size), DRONEID_THINK_N),
+                    target_fs=15.36e6,
+                )
+                if ch_d.size >= 2048 and fs_d > 0:
+                    parsed["droneid"] = analyze_droneid(ch_d, fs_d)
+                elif abs(work_fs - 15.36e6) < 1.0 or abs(work_fs - 30.72e6) < 1.0 or abs(work_fs - 61.44e6) < 1.0:
+                    parsed["droneid"] = analyze_droneid(work, work_fs)
+            frames = row.get("odidFrames") or row.get("odid_frames")
+            if frames:
+                parsed["opendroneid"] = parse_opendroneid(frames)
             out_looks.append(parsed)
         clip_all = bool(clip_all or any(bool(x.get("clip")) for x in out_looks))
         extra["thinkFsHz"] = work_fs
@@ -2614,6 +2663,10 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
             [x for x in looks if isinstance(x, dict)],
             bool(msg.get("residual")),
         )
+    if op == "opendroneid_parse":
+        frames = msg.get("frames") or msg.get("odidFrames") or msg.get("hex")
+        parsed = parse_opendroneid(frames)
+        return {"ok": bool(parsed.get("hit")), **parsed}
     if op == "park":
         return radio.park(
             float(msg["centerMhz"]),

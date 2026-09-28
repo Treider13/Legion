@@ -292,7 +292,13 @@ architecture legion of bladerf is
     signal lg_tx_walk_auto  : std_logic;
     signal lg_tx_walk_hold  : std_logic;
     signal lg_tx_lb_delay   : unsigned(11 downto 0);
+    signal lg_tx_lb_ftw     : unsigned(31 downto 0);
+    signal lg_lb_dly_data   : std_logic_vector(31 downto 0);
     signal lg_lb_mux_data   : std_logic_vector(31 downto 0);
+    signal lg_mix_i         : signed(15 downto 0);
+    signal lg_mix_q         : signed(15 downto 0);
+    signal lg_mix_valid     : std_logic;
+    signal lg_mix_nco_en    : std_logic;
     signal lg_wo_cap_i      : signed(15 downto 0);
     signal lg_wo_cap_q      : signed(15 downto 0);
     signal lg_wo_cap_v      : std_logic;
@@ -1515,6 +1521,7 @@ begin
         tx_walk_auto  => lg_tx_walk_auto,
         tx_walk_hold  => lg_tx_walk_hold,
         tx_lb_delay   => lg_tx_lb_delay,
+        tx_lb_ftw     => lg_tx_lb_ftw,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1708,6 +1715,29 @@ begin
         delay     => lg_tx_lb_delay,
         din       => lg_lb_data,
         sample_en => lg_mux_rd_en,
+        dout      => lg_lb_dly_data
+      );
+
+    lg_mix_nco_en <= '1' when lg_tx_lb_ftw /= 0 else '0';
+    U_legion_mix_nco : entity work.legion_nco
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        enable    => lg_mix_nco_en,
+        ftw       => lg_tx_lb_ftw,
+        out_i     => lg_mix_i,
+        out_q     => lg_mix_q,
+        out_valid => lg_mix_valid
+      );
+    U_legion_mixer : entity work.legion_mixer
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        mix_en    => lg_mix_nco_en,
+        sample_en => lg_mux_rd_en,
+        din       => lg_lb_dly_data,
+        lo_i      => lg_mix_i,
+        lo_q      => lg_mix_q,
         dout      => lg_lb_mux_data
       );
 

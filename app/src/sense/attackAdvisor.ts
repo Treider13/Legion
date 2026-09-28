@@ -266,9 +266,9 @@ export function buildAttackAdvice(input: {
     const fw = input.widths.get(top.id);
     honest = fw ? honestWidthMhz(fw, top.widthMhz) : top.widthMhz;
   }
-  const atlas = top ? classifyAttackFamily(top, input.windowMhz) : null;
+  const atlas = top ? classifyAttackFamily(top, input.windowMhz, undefined, undefined) : null;
   const topAtlas = top
-    ? atlasForTracks(live, input.windowMhz).find((t) => t.id === top.id)?.atlas ?? atlas
+    ? atlasForTracks(live, input.windowMhz, undefined, input.looks).find((t) => t.id === top.id)?.atlas ?? atlas
     : null;
   const windowFill =
     topAtlas?.id === "window-fill" ||

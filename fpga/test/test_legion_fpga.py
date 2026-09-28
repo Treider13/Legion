@@ -146,6 +146,7 @@ py_map = {
     "LEGION_REG_WALK_CTL": lf.REG_WALK_CTL,
     "LEGION_REG_WALK_CUR": lf.REG_WALK_CUR,
     "LEGION_REG_LB_DELAY": lf.REG_LB_DELAY,
+    "LEGION_REG_LB_FTW": lf.REG_LB_FTW,
 }
 
 v, n = vhdl_consts(), nios_consts()

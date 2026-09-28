@@ -652,6 +652,28 @@ def channelize_look(
     return np.asarray(filtered[::decim], dtype=np.complex64), fs_out
 
 
+def channelize_decim(
+    x: np.ndarray,
+    fs: float,
+    center_mhz: float,
+    lo_mhz: float,
+    want_fs: float = ATTACK_LOOK_FS,
+) -> tuple[np.ndarray, float]:
+    """Сдвиг + блочная децимация без гигантского FFT. Для 160 мс RC @ 61.44."""
+    if len(x) == 0 or fs <= 0:
+        return np.zeros(0, dtype=np.complex64), 0.0
+    block = np.asarray(x, dtype=np.complex64)
+    df = (float(center_mhz) - float(lo_mhz)) * 1e6
+    decim = max(1, int(round(fs / max(float(want_fs), 1.0))))
+    fs_out = float(fs) / float(decim)
+    t = np.arange(int(block.size), dtype=np.float64) / fs
+    shifted = block * np.exp(-1j * 2.0 * np.pi * df * t)
+    n = (int(shifted.size) // decim) * decim
+    if n < decim:
+        return np.asarray(shifted, dtype=np.complex64), float(fs)
+    return np.asarray(shifted[:n].reshape(-1, decim).mean(axis=1), dtype=np.complex64), fs_out
+
+
 def analyze_iq(
     x: np.ndarray,
     fs: float,

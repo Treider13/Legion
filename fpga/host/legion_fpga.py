@@ -65,6 +65,7 @@ REG_WALK_MAX = 0x21
 REG_WALK_CTL = 0x22  # bit0 EN, bit1 AUTO, bit2 HOLD
 REG_WALK_CUR = 0x23  # STATUS mux: текущая задержка
 REG_LB_DELAY = 0x24  # живая линия задержки loopback, сэмплы; 0=обход
+REG_LB_FTW = 0x25  # частотный сдвиг DRFM, FTW = round(f/fs * 2^32); 0=обход
 
 WALK_CTL_EN = 1 << 0
 WALK_CTL_AUTO = 1 << 1
@@ -294,6 +295,18 @@ class LegionFpga:
         if n > 4095:
             n = 4095
         return self.write_reg(REG_LB_DELAY, n & 0xFFF)
+
+    def set_lb_ftw(self, ftw: int) -> bool:
+        """Частотный сдвиг после delayline. 0 = обход смесителя."""
+        return self.write_reg(REG_LB_FTW, int(ftw) & 0xFFFFFFFF)
+
+    def set_lb_shift_hz(self, hz: float, fs_hz: float) -> bool:
+        """FTW = round(hz/fs · 2³²), знак как uint32 wrap. |hz|<0.5 → 0."""
+        fs = float(fs_hz) if fs_hz else 0.0
+        f = float(hz) if hz is not None else 0.0
+        if fs <= 0.0 or abs(f) < 0.5:
+            return self.set_lb_ftw(0)
+        return self.set_lb_ftw(int(round(f / fs * (1 << 32))) & 0xFFFFFFFF)
 
     def set_watchdog(self, limit: int) -> bool:
         return self.write_reg(REG_WD_LIMIT, limit & 0xFFFF)

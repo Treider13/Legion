@@ -968,6 +968,20 @@ class LegionGateway:
                 return {"ok": False, "reason": "lb_delay: 0…4095 сэмплов"}
             if not self.fpga.set_lb_delay(lb_delay):
                 return {"ok": False, "reason": "запись LB_DELAY не удалась"}
+            try:
+                if msg.get("lb_ftw") is not None:
+                    lb_ftw = int(msg.get("lb_ftw") or 0) & 0xFFFFFFFF
+                else:
+                    lb_shift_hz = float(msg.get("lb_shift_hz") or 0.0)
+                    fs_mix = float(fs_for_wd) if fs_for_wd else 2_000_000.0
+                    if abs(lb_shift_hz) < 0.5 or fs_mix <= 0:
+                        lb_ftw = 0
+                    else:
+                        lb_ftw = int(round(lb_shift_hz / fs_mix * (1 << 32))) & 0xFFFFFFFF
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "lb_ftw/lb_shift_hz: не число"}
+            if not self.fpga.set_lb_ftw(lb_ftw):
+                return {"ok": False, "reason": "запись LB_FTW не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -1142,6 +1156,7 @@ class LegionGateway:
                 "player_ctl": lf.REG_PLAYER_CTL, "lb_shift": lf.REG_LB_SHIFT,
                 "wd_limit": lf.REG_WD_LIMIT,
                 "delay": lf.REG_DELAY, "lb_delay": lf.REG_LB_DELAY,
+                "lb_ftw": lf.REG_LB_FTW,
                 "walk_step": lf.REG_WALK_STEP,
                 "walk_max": lf.REG_WALK_MAX, "walk_ctl": lf.REG_WALK_CTL,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,

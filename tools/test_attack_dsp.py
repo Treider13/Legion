@@ -162,6 +162,8 @@ def main() -> int:
     check("PAL после channelize 61.44→канал", ac_ch["hit"] is True, str(ac_ch) + f" fs={ch_fs}")
     pal_look = d.analyze_iq(pal, 2e6)
     check("analyze_iq несёт analogKind", pal_look.get("analogKind") == "pal", str(pal_look))
+    dec, dfs = d.channelize_decim(pal_native, native, 5800.0, 5800.0, 2e6)
+    check("channelize_decim fs ~2e6", 1.5e6 <= dfs <= 2.5e6 and dec.size > 100, f"fs={dfs} n={dec.size}")
     print("ATTACK DSP:", "ALL PASS" if fail == 0 else f"{fail} FAILURES")
     return 0 if fail == 0 else 1
 

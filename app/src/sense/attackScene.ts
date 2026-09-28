@@ -86,7 +86,7 @@ export function buildAttackScene(input: {
   for (const [id, look] of looks) {
     if (look.analog?.hit) combs.set(id, look.analog);
   }
-  const atlas = atlasForTracks(input.tracks, input.windowMhz, combs);
+  const atlas = atlasForTracks(input.tracks, input.windowMhz, combs, looks);
   const info = readAttackInfo({
     tracks: input.tracks,
     snaps: input.memory.powerSnaps(),

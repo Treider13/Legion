@@ -494,6 +494,14 @@ export function ncoFtwFromFrac(fj: number): number {
   return Math.round(frac * 2 ** 32) >>> 0;
 }
 
+/** FTW смесителя DRFM: hz/fs·2³². 0 Гц → 0 (обход, не DC-LO). */
+export function lbFtwFromHz(hz: number, fsHz: number): number {
+  if (!Number.isFinite(hz) || !Number.isFinite(fsHz) || fsHz <= 0 || Math.abs(hz) < 0.5) {
+    return 0;
+  }
+  return (Math.round((hz / fsHz) * 2 ** 32) >>> 0);
+}
+
 /** Дописывает усиление TX (дБ тракта) в команду ARM. null — не трогаем init AD9361. */
 export function attachTxGainDb(
   cmd: Record<string, unknown>,
@@ -544,6 +552,10 @@ export function fpgaArmCmd(
     walkEn?: boolean;
     /** Живая линия задержки loopback, сэмплы. Не walk-off DELAY. */
     lbDelay?: number;
+    /** Частотный сдвиг DRFM, Гц. 0 = обход смесителя. */
+    lbShiftHz?: number;
+    /** Готовый FTW смесителя. Если задан, lbShiftHz не пишем. */
+    lbFtw?: number;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -584,6 +596,11 @@ export function fpgaArmCmd(
   }
   if (opts.lbDelay !== undefined && Number.isFinite(opts.lbDelay) && opts.lbDelay >= 0) {
     cmd.lb_delay = Math.min(4095, Math.round(opts.lbDelay));
+  }
+  if (opts.lbFtw !== undefined && Number.isFinite(opts.lbFtw)) {
+    cmd.lb_ftw = Math.round(opts.lbFtw) >>> 0;
+  } else if (opts.lbShiftHz !== undefined && Number.isFinite(opts.lbShiftHz)) {
+    cmd.lb_shift_hz = opts.lbShiftHz;
   }
   if (opts.scanEnable) {
     cmd.scan_enable = true;

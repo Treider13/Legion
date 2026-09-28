@@ -9,6 +9,50 @@ import type { ScanBin } from "../sdr/types";
 
 export type AttackLookKind = "tone" | "ofdm" | "cycle" | "noise" | "unknown";
 
+export interface DroneidPlain {
+  serial?: string;
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+  height?: number;
+  uuid?: string;
+  product_type?: number;
+}
+
+export interface DroneidLook {
+  hit: boolean;
+  ok: boolean;
+  zcScore: number;
+  plain: DroneidPlain | null;
+  reason?: string | null;
+  encrypted?: boolean;
+}
+
+export interface OpendroneidLook {
+  hit: boolean;
+  ok: boolean;
+  uas: {
+    uasId?: string;
+    latitude?: number;
+    longitude?: number;
+    altGeo?: number;
+    operatorId?: string;
+    status?: string;
+  } | null;
+  reason?: string | null;
+}
+
+export interface RcLook {
+  id: "elrs" | "mlrs" | "elrs-mlrs-50" | "rc-unknown";
+  label: string;
+  hint: string;
+  rateHz: number;
+  intervalMs?: number;
+  css: boolean;
+  cssScore?: number;
+  packets?: number;
+}
+
 export interface AttackLook {
   freqMhz: number;
   kind: AttackLookKind;
@@ -24,6 +68,9 @@ export interface AttackLook {
   leftover: number | null;
   source: "iq" | "bins";
   analog: AnalogComb;
+  droneid?: DroneidLook | null;
+  opendroneid?: OpendroneidLook | null;
+  rc?: RcLook | null;
 }
 
 export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: AttackWidths): AttackLook {
@@ -62,6 +109,9 @@ export function lookFromBins(bins: readonly ScanBin[], freqMhz: number, widths: 
     leftover: null,
     source: "bins",
     analog: { ...ANALOG_COMB_NONE },
+    droneid: null,
+    opendroneid: null,
+    rc: null,
   };
 }
 
@@ -86,6 +136,79 @@ export function parseWorkerLook(raw: Record<string, unknown>, freqMhz: number): 
     leftover: raw.leftover == null ? null : Number(raw.leftover),
     source: "iq",
     analog: parseAnalogComb(raw),
+    droneid: parseDroneidLook(raw.droneid),
+    opendroneid: parseOpendroneidLook(raw.opendroneid),
+    rc: parseRcLook(raw.rc),
+  };
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function parseDroneidLook(raw: unknown): DroneidLook | null {
+  const o = asRecord(raw);
+  if (!o || o.hit !== true) return null;
+  const plainRaw = asRecord(o.plain);
+  const plain: DroneidPlain | null = plainRaw
+    ? {
+        serial: typeof plainRaw.serial === "string" ? plainRaw.serial : undefined,
+        latitude: Number(plainRaw.latitude),
+        longitude: Number(plainRaw.longitude),
+        altitude: Number(plainRaw.altitude),
+        height: Number(plainRaw.height),
+        uuid: typeof plainRaw.uuid === "string" ? plainRaw.uuid : undefined,
+        product_type: Number(plainRaw.product_type),
+      }
+    : null;
+  return {
+    hit: true,
+    ok: o.ok === true,
+    zcScore: Number(o.zcScore) || 0,
+    plain: plain && plain.serial ? plain : null,
+    reason: typeof o.reason === "string" ? o.reason : null,
+    encrypted: o.encrypted === true,
+  };
+}
+
+function parseOpendroneidLook(raw: unknown): OpendroneidLook | null {
+  const o = asRecord(raw);
+  if (!o || o.hit !== true) return null;
+  const uasRaw = asRecord(o.uas);
+  return {
+    hit: true,
+    ok: o.ok === true,
+    uas: uasRaw
+      ? {
+          uasId: typeof uasRaw.uasId === "string" ? uasRaw.uasId : undefined,
+          latitude: Number(uasRaw.latitude),
+          longitude: Number(uasRaw.longitude),
+          altGeo: Number(uasRaw.altGeo),
+          operatorId: typeof uasRaw.operatorId === "string" ? uasRaw.operatorId : undefined,
+          status: typeof uasRaw.status === "string" ? uasRaw.status : undefined,
+        }
+      : null,
+    reason: typeof o.reason === "string" ? o.reason : null,
+  };
+}
+
+function parseRcLook(raw: unknown): RcLook | null {
+  const o = asRecord(raw);
+  if (!o) return null;
+  const idRaw = String(o.id ?? "rc-unknown");
+  const id: RcLook["id"] =
+    idRaw === "elrs" || idRaw === "mlrs" || idRaw === "elrs-mlrs-50" || idRaw === "rc-unknown"
+      ? idRaw
+      : "rc-unknown";
+  return {
+    id,
+    label: String(o.label ?? "узкий RC"),
+    hint: String(o.hint ?? ""),
+    rateHz: Number(o.rateHz) || 0,
+    intervalMs: Number(o.intervalMs) || 0,
+    css: o.css === true,
+    cssScore: Number(o.cssScore) || 0,
+    packets: Number(o.packets) || 0,
   };
 }
 
@@ -136,5 +259,15 @@ export function lookRu(look: AttackLook | undefined): string {
   const pct = Math.round(look.conf * 100);
   const src = look.source === "iq" ? "по памяти IQ" : "по спектру";
   const comb = analogCombRu(look.analog);
-  return comb ? `${look.label} · ${comb} · уверенность ${pct}% · ${src}` : `${look.label} · уверенность ${pct}% · ${src}`;
+  const bits = [look.label];
+  if (comb) bits.push(comb);
+  if (look.droneid?.ok && look.droneid.plain?.serial) {
+    bits.push(`DroneID ${look.droneid.plain.serial}`);
+  } else if (look.droneid?.hit) {
+    bits.push(look.droneid.encrypted ? "DroneID без plaintext" : "DroneID ZC");
+  }
+  if (look.opendroneid?.uas?.uasId) bits.push(`RID ${look.opendroneid.uas.uasId}`);
+  if (look.rc && look.rc.id !== "rc-unknown") bits.push(look.rc.label);
+  bits.push(`уверенность ${pct}%`, src);
+  return bits.join(" · ");
 }

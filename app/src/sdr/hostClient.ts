@@ -46,6 +46,9 @@ export interface HostAttackLook {
   palScore?: number;
   ntscScore?: number;
   hit?: boolean;
+  droneid?: Record<string, unknown>;
+  opendroneid?: Record<string, unknown>;
+  rc?: Record<string, unknown>;
 }
 
 export interface HostAttackThinkResult {

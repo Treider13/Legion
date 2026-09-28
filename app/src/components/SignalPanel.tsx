@@ -298,6 +298,16 @@ export function SignalPanel() {
               disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
             />
           </label>
+          <label title="Частотный сдвиг DRFM после delayline. 0 — обход. Знак: плюс вверх по спектру, минус вниз.">
+            DRFM СДВИГ (Гц)
+            <input
+              aria-label="Частотный сдвиг loopback в герцах"
+              inputMode="numeric"
+              value={s.fpgaLbShiftHz}
+              onChange={(e) => s.setFpgaLbShiftHz(e.target.value)}
+              disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+            />
+          </label>
           {s.fpgaMode === "player" && (
             <>
               <label title="Число сэмплов тишины после capture_done до play_en. 0 — сразу. При 2 MSPS 1 сэмпл = 0.5 мкс.">

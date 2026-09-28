@@ -1513,10 +1513,13 @@ async function main(): Promise<void> {
   check("ARM player walk-off несёт delay/step/auto",
     walkCmd.delay === 16 && walkCmd.walk_step === 2 && walkCmd.walk_max === 64 &&
     walkCmd.walk_auto === true && walkCmd.walk_en === true && walkCmd.det_thr === 5000);
-  const lbCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", lbDelay: 64 });
+  const lbCmd = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", lbDelay: 64, lbShiftHz: -25000 });
   check("ARM несёт живой DRFM lb_delay", lbCmd.lb_delay === 64);
+  check("ARM несёт DRFM сдвиг Гц", lbCmd.lb_shift_hz === -25000);
   const lbClamp = fpgaArmCmd("lb_always", { detThr: 5000, detShift: 4, token: "t", lbDelay: 9000 });
   check("ARM клампит lb_delay к 4095", lbClamp.lb_delay === 4095);
+  const lbFtw = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", lbFtw: 0x80000000 });
+  check("ARM несёт готовый LB_FTW", lbFtw.lb_ftw === 0x80000000);
   const ncoZero = fpgaArmCmd("nco", { detThr: 5000, detShift: 4, token: "", ncoFtw: ncoFtwFromFrac(0) });
   check("ARM nco шлёт FTW", typeof ncoZero.nco_ftw === "number");
   check("fj=0 → fs/8, не DC", ncoZero.nco_ftw === ncoFtwFromFrac(0.125) && ncoZero.nco_ftw !== 0);

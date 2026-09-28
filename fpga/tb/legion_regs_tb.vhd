@@ -33,6 +33,7 @@ architecture tb of legion_regs_tb is
     signal tx_walk_auto  : std_logic;
     signal tx_walk_hold  : std_logic;
     signal tx_lb_delay   : unsigned(11 downto 0);
+    signal tx_lb_ftw     : unsigned(31 downto 0);
     signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
@@ -74,7 +75,7 @@ begin
             tx_cap_arm => tx_cap_arm, tx_wd_kick => tx_wd_kick,
             tx_delay => tx_delay, tx_walk_step => tx_walk_step, tx_walk_max => tx_walk_max,
             tx_walk_en => tx_walk_en, tx_walk_auto => tx_walk_auto, tx_walk_hold => tx_walk_hold,
-            tx_lb_delay => tx_lb_delay,
+            tx_lb_delay => tx_lb_delay, tx_lb_ftw => tx_lb_ftw,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
@@ -177,8 +178,10 @@ begin
             report "FAIL: WALK_CTL CDC" severity failure;
 
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_DELAY, 64);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_LB_FTW, 16#12345678#);
         for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
         assert tx_lb_delay = to_unsigned(64, 12) report "FAIL: LB_DELAY CDC" severity failure;
+        assert tx_lb_ftw = x"12345678" report "FAIL: LB_FTW CDC" severity failure;
 
         -- STATUS mux 0x23 = текущая задержка
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_WALK_CUR, 7));

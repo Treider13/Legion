@@ -8,6 +8,8 @@ import { detectorListens, HOST_ATTACK_MODE_RU_CAPS, patternLabelRu, type SdrWalk
 function familyTone(id: string): string {
   if (id === "analog-video") return "rfclass-analog";
   if (id.startsWith("digital") || id === "window-fill") return "rfclass-digital";
+  if (id === "elrs" || id === "mlrs" || id === "elrs-mlrs-50") return "rfclass-hop";
+  if (id === "droneid" || id === "opendroneid") return "rfclass-digital";
   if (id.startsWith("hop") || id.startsWith("rc-") || id === "digital-burst") return "rfclass-hop";
   if (id === "two-floor") return "rfclass-two";
   if (id === "silent") return "rfclass-silent";

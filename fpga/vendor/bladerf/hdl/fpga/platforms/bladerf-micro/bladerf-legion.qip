@@ -57,4 +57,5 @@ set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legi
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_tx_mux.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_walkoff.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_delayline.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_mixer.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/legion_regs.vhd]]

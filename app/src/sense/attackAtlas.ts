@@ -26,6 +26,25 @@ export interface AttackAtlasRow {
   hint: string;
 }
 
+export interface RcClassHint {
+  id: "elrs" | "mlrs" | "elrs-mlrs-50" | "rc-unknown";
+  label: string;
+  hint: string;
+  rateHz?: number;
+  css?: boolean;
+}
+
+export interface Layer3Hint {
+  id: "droneid" | "opendroneid";
+  label: string;
+  hint: string;
+}
+
+export interface AttackClassExtra {
+  rc?: RcClassHint | null;
+  layer3?: Layer3Hint | null;
+}
+
 export function bandBucket(mhz: number): AttackBand {
   if (mhz >= 134 && mhz <= 175) return "vhf";
   if (mhz >= 380 && mhz <= 525) return "uhf";
@@ -49,6 +68,7 @@ export function classifyAttackFamily(
   t: Pick<AttackTrack, "freqMhz" | "widthMhz" | "duty" | "streak">,
   windowMhz?: number,
   comb?: AnalogComb | null,
+  extra?: AttackClassExtra | null,
 ): AttackAtlasRow {
   const band = bandBucket(t.freqMhz);
   const hopLike = t.duty < 0.45 && t.streak <= 2;
@@ -63,6 +83,15 @@ export function classifyAttackFamily(
       label: "аналоговое видео (гребёнка)",
       hint: `${std} на FM — orecchiette/DragonSig, не имя борта`,
     };
+  }
+
+  if (extra?.layer3 && (extra.layer3.id === "droneid" || extra.layer3.id === "opendroneid")) {
+    return extra.layer3;
+  }
+
+  const rc = extra?.rc;
+  if (rc && rc.id !== "rc-unknown" && (band === "s24" || band === "p900") && t.widthMhz <= 2.5) {
+    return { id: rc.id, label: rc.label, hint: rc.hint };
   }
 
   if (t.widthMhz < 6 && band === "p900") {
@@ -162,13 +191,61 @@ function videoPeer(t: Pick<AttackTrack, "widthMhz" | "duty">): boolean {
   return t.duty >= 0.7 && t.widthMhz >= ATTACK_VIDEO_BW_MHZ;
 }
 
+export function extraFromLook(look?: {
+  rc?: RcClassHint | null;
+  droneid?: { hit?: boolean; ok?: boolean; plain?: { serial?: string; latitude?: number; longitude?: number } | null; encrypted?: boolean; zcScore?: number } | null;
+  opendroneid?: { hit?: boolean; ok?: boolean; uas?: { uasId?: string; latitude?: number; longitude?: number } | null } | null;
+} | null): AttackClassExtra | undefined {
+  if (!look) return undefined;
+  let layer3: Layer3Hint | undefined;
+  const did = look.droneid;
+  if (did?.ok && did.plain?.serial) {
+    const lat = did.plain.latitude;
+    const lon = did.plain.longitude;
+    const pos =
+      lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)
+        ? ` · ${lat.toFixed(5)}, ${lon.toFixed(5)}`
+        : "";
+    layer3 = {
+      id: "droneid",
+      label: `DroneID ${did.plain.serial}`,
+      hint: `Layer 3 DJI O2/O3 plaintext (proto17/anarkiwi)${pos}. Не вход в ПЕРЕДАТЬ`,
+    };
+  } else if (did?.hit) {
+    layer3 = {
+      id: "droneid",
+      label: did.encrypted ? "DroneID (без plaintext)" : "DroneID ZC",
+      hint: did.encrypted
+        ? "ZC root 600/147 есть, CRC не сошёлся — O3+/O4 так и задумано, не decrypt"
+        : "ZC DroneID, кадр ещё не собран",
+    };
+  }
+  const od = look.opendroneid;
+  if (!layer3 && od?.hit) {
+    const id = od.uas?.uasId || "Remote ID";
+    const lat = od.uas?.latitude;
+    const lon = od.uas?.longitude;
+    const pos =
+      lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)
+        ? ` · ${lat.toFixed(5)}, ${lon.toFixed(5)}`
+        : "";
+    layer3 = {
+      id: "opendroneid",
+      label: `OpenDroneID ${id}`,
+      hint: `ASTM F3411 / IE 221 FA:0B:BC${pos}. PHY 802.11 на xA4 не демодулируем`,
+    };
+  }
+  return { rc: look.rc ?? undefined, layer3 };
+}
+
 export function atlasForTracks(
   tracks: readonly AttackTrack[],
   windowMhz?: number,
   combs?: ReadonlyMap<number, AnalogComb>,
+  looks?: ReadonlyMap<number, Parameters<typeof extraFromLook>[0]>,
 ): Array<AttackTrack & { atlas: AttackAtlasRow }> {
   return tracks.map((t) => {
-    const atlas = classifyAttackFamily(t, windowMhz, combs?.get(t.id));
+    const atlas = classifyAttackFamily(t, windowMhz, combs?.get(t.id), extraFromLook(looks?.get(t.id)));
     const band = bandBucket(t.freqMhz);
     const peers = tracks.filter((p) => p.id !== t.id && bandBucket(p.freqMhz) === band);
     const two =

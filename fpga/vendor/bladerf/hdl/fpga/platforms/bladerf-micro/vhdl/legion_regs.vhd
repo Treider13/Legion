@@ -39,6 +39,7 @@ entity legion_regs is
         tx_walk_auto  : out std_logic;
         tx_walk_hold  : out std_logic;
         tx_lb_delay   : out unsigned(11 downto 0);
+        tx_lb_ftw     : out unsigned(31 downto 0);
         -- Домен RX (пороги детектора)
         rx_clock      : in  std_logic;
         rx_reset      : in  std_logic;
@@ -76,6 +77,7 @@ architecture rtl of legion_regs is
     signal r_walk_max   : std_logic_vector(31 downto 0);
     signal r_walk_ctl   : std_logic_vector(2 downto 0);
     signal r_lb_delay   : std_logic_vector(11 downto 0);
+    signal r_lb_ftw     : std_logic_vector(31 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -93,6 +95,7 @@ architecture rtl of legion_regs is
     signal wmx_meta, wmx_tx     : std_logic_vector(31 downto 0);
     signal wct_meta, wct_tx     : std_logic_vector(2 downto 0);
     signal lbd_meta, lbd_tx     : std_logic_vector(11 downto 0);
+    signal lbf_meta, lbf_tx     : std_logic_vector(31 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -144,6 +147,7 @@ begin
             r_walk_max   <= (others => '0');
             r_walk_ctl   <= "000";
             r_lb_delay   <= (others => '0');
+            r_lb_ftw     <= (others => '0');
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -170,6 +174,7 @@ begin
                     when LEGION_REG_WALK_MAX   => r_walk_max   <= pio_wdata;
                     when LEGION_REG_WALK_CTL   => r_walk_ctl   <= pio_wdata(2 downto 0);
                     when LEGION_REG_LB_DELAY   => r_lb_delay   <= pio_wdata(11 downto 0);
+                    when LEGION_REG_LB_FTW     => r_lb_ftw     <= pio_wdata;
                     when others => null;
                 end case;
             end if;
@@ -192,6 +197,7 @@ begin
             wmx_meta  <= (others => '0'); wmx_tx <= (others => '0');
             wct_meta  <= (others => '0'); wct_tx <= (others => '0');
             lbd_meta  <= (others => '0'); lbd_tx <= (others => '0');
+            lbf_meta  <= (others => '0'); lbf_tx <= (others => '0');
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -210,6 +216,7 @@ begin
             wmx_meta  <= r_walk_max;   wmx_tx  <= wmx_meta;
             wct_meta  <= r_walk_ctl;   wct_tx  <= wct_meta;
             lbd_meta  <= r_lb_delay;   lbd_tx  <= lbd_meta;
+            lbf_meta  <= r_lb_ftw;     lbf_tx  <= lbf_meta;
         end if;
     end process;
 
@@ -229,6 +236,7 @@ begin
     tx_walk_auto  <= wct_tx(1);
     tx_walk_hold  <= wct_tx(2);
     tx_lb_delay   <= unsigned(lbd_tx);
+    tx_lb_ftw     <= unsigned(lbf_tx);
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
     -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
