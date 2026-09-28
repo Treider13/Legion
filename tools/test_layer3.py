@@ -126,8 +126,8 @@ def main() -> int:
     )
     y4, hold4 = dji.decimate_droneid_block(np.ones(61, dtype=np.complex64), 61.44e6)
     check("decim 61.44 leftover %4", y4.size == 15 and hold4.size == 1, str((y4.size, hold4.size)))
-    y4b, hold4b = dji.decimate_droneid_block(np.ones(7, dtype=np.complex64), 61.44e6, hold4)
-    check("decim hold склейка", y4b.size == 2 and hold4b.size == 0, str((y4b.size, hold4b.size)))
+    y4b, hold4b = dji.decimate_droneid_block(np.ones(4095, dtype=np.complex64), 61.44e6, hold4)
+    check("decim hold склейка", y4b.size == 1024 and hold4b.size == 0, str((y4b.size, hold4b.size)))
 
     n40 = int(round(burst.size * 40.0e6 / dji.DRONEID_FS))
     x40 = dji._fft_resample(burst, n40)

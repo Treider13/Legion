@@ -455,6 +455,11 @@ def match_spacing(
 FREQCORR_MAX_MHZ = 0.20  # ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
 
 
+def _mhz_to_khz(x: float) -> int:
+    """Каталог в 0.1 МГц / 1 кГц. IEEE 2400.4 * 1e6 ломает порог 200 кГц."""
+    return int(round(float(x) * 1000.0))
+
+
 def fhss_residual_f0(
     hops_mhz: list[float] | tuple[float, ...],
     step_mhz: float,
@@ -463,6 +468,7 @@ def fhss_residual_f0(
     """Дробная часть сетки в [0, step). f_ref=2400 на 2.4, иначе min hop.
 
     ELRS ISM2G4 2400.4+i → 0.4. mLRS 2401+i → 0.0. Не GRID_N.
+    Счёт в кГц: 2400.4 как float даёт 0.40000000000009 и срывает 0.20.
     """
     hops = [float(h) for h in hops_mhz if h and float(h) > 0]
     step = float(step_mhz)
@@ -473,24 +479,29 @@ def fhss_residual_f0(
         f_ref = 2400.0 if 2390.0 <= mid <= 2510.0 else float(min(hops))
     else:
         f_ref = float(f_ref_mhz)
-    rs: list[float] = []
+    step_k = _mhz_to_khz(step)
+    ref_k = _mhz_to_khz(f_ref)
+    if step_k <= 0:
+        return 0.0, f_ref
+    rs: list[int] = []
     for f in hops:
-        k = round((f - f_ref) / step)
-        r = (f - f_ref) - k * step
-        r = r % step
+        fk = _mhz_to_khz(f)
+        k = int(round((fk - ref_k) / step_k))
+        r = (fk - ref_k) - k * step_k
+        r %= step_k
         if r < 0:
-            r += step
+            r += step_k
         rs.append(r)
     rs.sort()
-    return float(rs[len(rs) // 2]), f_ref
+    return rs[len(rs) // 2] / 1000.0, ref_k / 1000.0
 
 
 def fhss_circ_dist_mhz(a: float, b: float, step: float) -> float:
-    s = float(step)
+    s = _mhz_to_khz(step)
     if s <= 0:
         return abs(float(a) - float(b))
-    d = abs(float(a) - float(b)) % s
-    return min(d, s - d)
+    d = abs(_mhz_to_khz(a) - _mhz_to_khz(b)) % s
+    return min(d, s - d) / 1000.0
 
 
 def classify_fhss_domain(

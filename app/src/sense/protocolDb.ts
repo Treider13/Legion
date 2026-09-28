@@ -111,6 +111,10 @@ export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
 const SPACING_TOL = 0.18;
 export const FREQCORR_MAX_MHZ = 0.20; // ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
 
+function mhzToKhz(x: number): number {
+  return Math.round(x * 1000);
+}
+
 export function fhssResidualF0(
   hopsMhz: readonly number[],
   stepMhz: number,
@@ -123,20 +127,25 @@ export function fhssResidualF0(
     ? hops[Math.floor(hops.length / 2)]!
     : [...hops].sort((a, b) => a - b)[Math.floor(hops.length / 2)]!;
   const fRef = fRefMhz ?? (mid >= 2390 && mid <= 2510 ? 2400 : Math.min(...hops));
+  const stepK = mhzToKhz(step);
+  const refK = mhzToKhz(fRef);
+  if (!(stepK > 0)) return { residualMhz: 0, fRefMhz: refK / 1000 };
   const rs = hops.map((f) => {
-    const k = Math.round((f - fRef) / step);
-    let r = (f - fRef) - k * step;
-    r %= step;
-    if (r < 0) r += step;
+    const fk = mhzToKhz(f);
+    const k = Math.round((fk - refK) / stepK);
+    let r = (fk - refK) - k * stepK;
+    r %= stepK;
+    if (r < 0) r += stepK;
     return r;
   }).sort((a, b) => a - b);
-  return { residualMhz: rs[Math.floor(rs.length / 2)]!, fRefMhz: fRef };
+  return { residualMhz: rs[Math.floor(rs.length / 2)]! / 1000, fRefMhz: refK / 1000 };
 }
 
 export function fhssCircDistMhz(a: number, b: number, step: number): number {
-  if (!(step > 0)) return Math.abs(a - b);
-  const d = Math.abs(a - b) % step;
-  return Math.min(d, step - d);
+  const s = mhzToKhz(step);
+  if (!(s > 0)) return Math.abs(a - b);
+  const d = Math.abs(mhzToKhz(a) - mhzToKhz(b)) % s;
+  return Math.min(d, s - d) / 1000;
 }
 
 export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: string; hint: string }[] = [
