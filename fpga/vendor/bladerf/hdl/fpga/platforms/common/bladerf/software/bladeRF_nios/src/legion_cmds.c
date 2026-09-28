@@ -123,7 +123,7 @@ static uint8_t  legion_survey_hit[LEGION_SURVEY_LOOK_MAX];
 static uint16_t legion_survey_mag[LEGION_SURVEY_LOOK_MAX];
 static uint32_t legion_survey_peak[LEGION_SURVEY_LOOK_MAX];
 static bool     legion_stare_on;
-static uint64_t legion_stare_t0;
+static uint64_t legion_last_live_tick;
 static uint32_t legion_scan_survey_us;
 static uint32_t legion_scan_event;
 static uint32_t legion_scan_event_seq;
@@ -307,7 +307,7 @@ static void legion_scan_reset(void)
     legion_survey_i = 0;
     legion_survey_last_i = 0xffffffffu;
     legion_stare_on = false;
-    legion_stare_t0 = 0;
+    legion_last_live_tick = 0;
     legion_inner_on = false;
     legion_inner_bin = 0;
     legion_inner_mag = 0;
@@ -2725,7 +2725,7 @@ static void legion_survey_begin_stare(uint32_t picked, uint32_t n)
     legion_survey_last_i = picked;
     legion_survey_ph = LEGION_SURVEY_PH_STARE;
     legion_stare_on = false;
-    legion_stare_t0 = 0;
+    legion_last_live_tick = 0;
     legion_inner_on = false;
     legion_inner_bin = 0;
     legion_inner_mag = 0;
@@ -2884,13 +2884,43 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
     }
 }
 
+static bool legion_survey_target_live(bool det)
+{
+    uint32_t n;
+    uint32_t i;
+
+    /* Текущая занятость, не pwr_hits (липкие до survey_clear_hits). */
+    if (legion_smart_live()) {
+        if (legion_use_pwr()) {
+            n = legion_grid_n_eff();
+            if (n > LEGION_CH_N) {
+                n = LEGION_CH_N;
+            }
+            for (i = 0; i < n; i++) {
+                if (legion_pwr[i] >= (uint16_t)legion_ch_pwr_thr) {
+                    return true;
+                }
+            }
+        }
+        if (legion_use_slot()) {
+            for (i = 0; i < LEGION_CH_SLOT_N; i++) {
+                if (legion_ch_thr != 0 && legion_ch_e[i] >= legion_ch_thr) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    return det;
+}
+
 static void legion_survey_begin_pass(uint8_t evt)
 {
     legion_aim_clear();
     legion_survey_clear_hits();
     legion_survey_ph = LEGION_SURVEY_PH_PASS;
     legion_stare_on = false;
-    legion_stare_t0 = 0;
+    legion_last_live_tick = 0;
     legion_inner_clear();
     legion_event(evt);
     legion_survey_enter_look(0, legion_survey_n());
@@ -2902,9 +2932,8 @@ static void legion_survey_walk(void)
     uint64_t now;
     uint64_t quiet;
     uint64_t dwell;
-    uint64_t survey;
+    uint64_t gone;
     uint32_t dwell_us;
-    uint32_t survey_us;
     uint32_t settle;
     bool det;
     bool ordinary;
@@ -2928,11 +2957,9 @@ static void legion_survey_walk(void)
     if (dwell == 0) {
         dwell = 1;
     }
-    survey_us = legion_scan_survey_us ? legion_scan_survey_us
-                                     : LEGION_SCAN_SURVEY_DEFAULT_US;
-    survey = ((uint64_t)legion_fs_hz() * (uint64_t)survey_us) / 1000000u;
-    if (survey == 0) {
-        survey = 1;
+    gone = ((uint64_t)legion_fs_hz() * (uint64_t)LEGION_SURVEY_GONE_MS) / 1000u;
+    if (gone == 0) {
+        gone = 1;
     }
     settle = legion_settle_samples();
     if (settle == 0) {
@@ -2950,8 +2977,8 @@ static void legion_survey_walk(void)
             if (!legion_set_tx_mute(false)) {
                 return;
             }
-            legion_stare_t0 = now;
             legion_stare_on = true;
+            legion_last_live_tick = now;
         }
         legion_fft_st = LEGION_FFT_ST_FRAME;
         legion_quiet_t0 = now;
@@ -3002,14 +3029,18 @@ static void legion_survey_walk(void)
         return;
     }
 
-    if (legion_stare_on && now - legion_stare_t0 >= survey) {
-        /* Один код на work(): PASS следом стёр бы RESURVEY — хост видит один. */
-        legion_survey_begin_pass((uint8_t)LEGION_EVT_RESURVEY);
-        return;
-    }
-
     if (legion_fft_st == LEGION_FFT_ST_FRAME) {
         legion_survey_inner(now, det, dwell, ordinary);
+    }
+    if (legion_stare_on) {
+        if (legion_survey_target_live(det)) {
+            legion_last_live_tick = now;
+        }
+        if (legion_last_live_tick != 0 && now - legion_last_live_tick >= gone) {
+            /* Один код на work(): PASS следом стёр бы RESURVEY — хост видит один. */
+            legion_survey_begin_pass((uint8_t)LEGION_EVT_RESURVEY);
+            return;
+        }
     }
 }
 

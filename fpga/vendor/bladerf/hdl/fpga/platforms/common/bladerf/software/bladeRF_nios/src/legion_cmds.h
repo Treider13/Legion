@@ -147,6 +147,7 @@
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
 #define LEGION_SETTLE_N_DEFAULT   4096u
 #define LEGION_SCAN_SURVEY_DEFAULT_US 5000000u
+#define LEGION_SURVEY_GONE_MS     1500u /* current occupancy; не SCAN_SURVEY_US */
 #define LEGION_EVT_PASS           1u
 #define LEGION_EVT_STARE          2u
 #define LEGION_EVT_LOCK           3u
@@ -256,7 +257,8 @@ bool legion_air_down(void);
  * PRIORITY: пока det — взгляд не шагаем;
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.
  * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
- * HDL DC-notch снят, SCAN_SURVEY_US от unmute — снова обзор.
+ * HDL DC-notch снят. RESURVEY: current occupancy gone 1.5 с
+ * (CH_PWR/слот сейчас, иначе det). Не SCAN_SURVEY_US и не pwr_hits.
  * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой
  * пик), иначе приоритет (сильнее — перескок и новая выдержка).
  * F1/F2 не пишет. Отказ hop не переводит в stare (не unmute на старом LO).
