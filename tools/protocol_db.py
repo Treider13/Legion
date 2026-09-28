@@ -452,11 +452,54 @@ def match_spacing(
     return hits
 
 
+FREQCORR_MAX_MHZ = 0.20  # ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
+
+
+def fhss_residual_f0(
+    hops_mhz: list[float] | tuple[float, ...],
+    step_mhz: float,
+    f_ref_mhz: float | None = None,
+) -> tuple[float, float]:
+    """Дробная часть сетки в [0, step). f_ref=2400 на 2.4, иначе min hop.
+
+    ELRS ISM2G4 2400.4+i → 0.4. mLRS 2401+i → 0.0. Не GRID_N.
+    """
+    hops = [float(h) for h in hops_mhz if h and float(h) > 0]
+    step = float(step_mhz)
+    if not hops or step <= 0:
+        return 0.0, 2400.0
+    mid = hops[len(hops) // 2] if len(hops) < 3 else sorted(hops)[len(hops) // 2]
+    if f_ref_mhz is None:
+        f_ref = 2400.0 if 2390.0 <= mid <= 2510.0 else float(min(hops))
+    else:
+        f_ref = float(f_ref_mhz)
+    rs: list[float] = []
+    for f in hops:
+        k = round((f - f_ref) / step)
+        r = (f - f_ref) - k * step
+        r = r % step
+        if r < 0:
+            r += step
+        rs.append(r)
+    rs.sort()
+    return float(rs[len(rs) // 2]), f_ref
+
+
+def fhss_circ_dist_mhz(a: float, b: float, step: float) -> float:
+    s = float(step)
+    if s <= 0:
+        return abs(float(a) - float(b))
+    d = abs(float(a) - float(b)) % s
+    return min(d, s - d)
+
+
 def classify_fhss_domain(
     spacing_mhz: float,
     freq_mhz: float,
     f_low: float = 0.0,
     f_high: float = 0.0,
+    residual_mhz: float | None = None,
+    f_ref_mhz: float | None = None,
 ) -> dict[str, Any]:
     band = band_of(freq_mhz)
     hits = match_spacing(spacing_mhz, band, freq_mhz, f_low, f_high)
@@ -471,8 +514,23 @@ def classify_fhss_domain(
     }
     if not hits:
         return empty
+    if residual_mhz is not None and hits:
+        step = float(spacing_mhz)
+        f_ref = float(f_ref_mhz) if f_ref_mhz is not None else (
+            2400.0 if 2390.0 <= float(freq_mhz) <= 2510.0 else float(f_low or freq_mhz)
+        )
+        tight = []
+        for h in hits:
+            d_step = float(h.get("spacing") or 0.0)
+            if d_step <= 0:
+                continue
+            expect, _ = fhss_residual_f0([float(h["f0"])], d_step, f_ref)
+            if fhss_circ_dist_mhz(float(residual_mhz), expect, d_step) <= FREQCORR_MAX_MHZ:
+                tight.append(h)
+        if tight:
+            hits = tight
     families = {str(h["family"]) for h in hits}
-    unique = len(families) == 1 and all(h.get("unique") for h in hits)
+    unique = len(families) == 1 and (all(h.get("unique") for h in hits) or residual_mhz is not None)
     labels = ", ".join(sorted({str(h["label"]) for h in hits}))
     if unique:
         fam = next(iter(families))

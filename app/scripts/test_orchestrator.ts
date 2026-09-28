@@ -94,6 +94,7 @@ import {
   CH_PRESET_ISM8,
   CH_PRESET_O4VID3,
   GRID_FLAG_FCORR,
+  GRID_FLAG_F0UNC,
   GRID_FLAG_ZC,
   GRID_KIND_OFDM,
   GRID_KIND_ZC,
@@ -1533,7 +1534,16 @@ async function main(): Promise<void> {
   })());
   check("матчер: FreqCorrection +150 кГц", (() => {
     const g = matchSmartGrid({ hopsMhz: [2400.55, 2401.55, 2410.55] });
-    return g.smart && g.shiftHz === 150_000 && (g.flags & GRID_FLAG_FCORR) !== 0;
+    return g.smart && g.shiftHz === 150_000 && (g.flags & GRID_FLAG_FCORR) !== 0
+      && g.f0Hz === 2_400_400_000 && g.n === 80;
+  })());
+  check("матчер: 2440+i → одна карточка mLRS n=80", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2440, 2441, 2442, 2443] });
+    return g.smart && g.f0Hz === 2_401_000_000 && g.n === 80 && (g.flags & GRID_FLAG_F0UNC) === 0;
+  })());
+  check("матчер: ±200 кГц обеих сеток — одна карточка F0UNC", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2440.2, 2441.2, 2442.2] });
+    return g.smart && g.n === 80 && (g.flags & GRID_FLAG_F0UNC) !== 0;
   })());
   check("матчер: x40+5.8 отказ", matchSmartGrid({
     sdrId: "bladerf-x40", bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],

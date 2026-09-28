@@ -18,8 +18,8 @@ O3+/O4: ZC есть, CRC/кадр не сходится — детект без 
 Mavic 2 / старый OcuSync без символа 1 → 576 мкс, сетка CP: 7×short + long
     (NDSS: CP 72, у символов 1 и 9 — 80; без символа 1 остаётся 7×72 + 80).
 Частоты proto17 README: 2.3995…2.4595 и 5.7565…5.7965 (не «только 2.4»).
-Длинное кольцо xA4: энергия ±7 МГц, NCC только вокруг вспышки — полный FIR/NCC
-    на 2^24 @ 61.44 не укладывается в think 220 мс.
+Длинное кольцо: 1.30 с @ 15.36 (NDSS live --duration 1.3, два периода 640 мс).
+    Энергия ±7 МГц, NCC только вокруг вспышки — не FIR/NCC на всю секунду.
 """
 from __future__ import annotations
 
@@ -36,7 +36,9 @@ DRONEID_FS = 15_360_000.0
 DRONEID_SCS = 15_000.0
 DRONEID_CARRIERS = 600
 DRONEID_CORR = 0.45
-DRONEID_MAX_S = 0.420  # кольцо 2^24 @ 40 MSPS; @ 61.44 ≈ 273 мс. NDSS: период 640 мс
+DRONEID_RING_S = 1.30  # NDSS live 1.3 с; два периода 640 мс. Не 0.42 @ native.
+DRONEID_MAX_S = DRONEID_RING_S
+DRONEID_RING_CAP = 1 << 25  # 2.18 с @ 15.36; clip на чтении = RING_S
 DRONEID_LONG_S = 0.016  # длиннее вспышки: энергия, не FIR/NCC на всё кольцо
 DRONEID_PAD_S = 0.0025
 LATLON_SCALE = 174533.0
@@ -197,7 +199,7 @@ def _clip_and_mix(
     rate = float(fs)
     if z.size < 64 or rate <= 0:
         return np.zeros(0, dtype=np.complex64), 0.0
-    max_n = int(rate * DRONEID_MAX_S)
+    max_n = int(rate * DRONEID_RING_S)
     if z.size > max_n:
         z = z[-max_n:]
     if center_mhz and lo_mhz and abs(float(center_mhz) - float(lo_mhz)) > 0.001:
@@ -218,6 +220,42 @@ def prepare_droneid_iq(
     if z.size < 64 or rate <= 0:
         return np.zeros(0, dtype=np.complex64), 0.0
     return resample_to_droneid(z, rate)
+
+
+def decimate_droneid_block(
+    x: np.ndarray,
+    fs: float,
+    hold: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Один USB-блок → 15.36 + хвост для следующего. Не triggered dump."""
+    z = np.asarray(x, dtype=np.complex64).ravel()
+    if hold is not None and int(getattr(hold, "size", 0)) > 0:
+        z = np.concatenate([np.asarray(hold, dtype=np.complex64).ravel(), z])
+    rate = float(fs)
+    empty = np.zeros(0, dtype=np.complex64)
+    if z.size < 8 or rate <= 0:
+        return empty, z.astype(np.complex64) if z.size else empty
+    ratio = rate / DRONEID_FS
+    if abs(ratio - 4.0) < 1e-6:
+        rem = int(z.size) % 4
+        body = z[:-rem] if rem else z
+        hold_out = z[-rem:].astype(np.complex64) if rem else empty
+        if body.size < 8:
+            return empty, z.astype(np.complex64)
+        return _lowpass_decim(body, 4, 7.0e6, rate), hold_out
+    if abs(ratio - 2.0) < 1e-6:
+        rem = int(z.size) % 2
+        body = z[:-rem] if rem else z
+        hold_out = z[-rem:].astype(np.complex64) if rem else empty
+        if body.size < 8:
+            return empty, z.astype(np.complex64)
+        return _lowpass_decim(body, 2, 7.0e6, rate), hold_out
+    if abs(ratio - 1.0) < 1e-6:
+        return z.astype(np.complex64), empty
+    y, out_fs = resample_to_droneid(z, rate)
+    if out_fs <= 0:
+        return empty, empty
+    return y, empty
 
 
 def _norm_xcorr(x: np.ndarray, ref: np.ndarray) -> np.ndarray:

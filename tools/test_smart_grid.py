@@ -71,4 +71,13 @@ check("несколько гипотез → f0_unconfirmed или одна се
       overlap["smart"] and (
           (overlap["flags"] & GRID_FLAG_F0UNC) != 0 or overlap["n"] == 80))
 
+mlrs_int = match_smart_grid({"hops_mhz": [2440.0, 2441.0, 2442.0, 2443.0]})
+check("residual 0.0 → одна карточка mLRS n=80",
+      mlrs_int["smart"] and mlrs_int["f0_hz"] == 2_401_000_000 and
+      mlrs_int["n"] == 80 and (mlrs_int["flags"] & GRID_FLAG_F0UNC) == 0)
+
+amb = match_smart_grid({"hops_mhz": [2440.2, 2441.2, 2442.2]})
+check("residual ±200 кГц обеих сеток → F0UNC, одна карточка n=80",
+      amb["smart"] and amb["n"] == 80 and (amb["flags"] & GRID_FLAG_F0UNC) != 0)
+
 print("smart_grid: ALL PASS")

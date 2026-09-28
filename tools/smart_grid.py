@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from protocol_db import ANALOG_CHANNELS, FHSS_DOMAINS
+from protocol_db import (
+    ANALOG_CHANNELS,
+    FREQCORR_MAX_MHZ,
+    FHSS_DOMAINS,
+    fhss_circ_dist_mhz,
+    fhss_residual_f0,
+)
 
 AIM_NONE = 0xFF
 CH_PWR_THR_DEFAULT = 0x40
@@ -266,6 +272,17 @@ def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
                 scored.append({"d": d, **m})
         scored.sort(key=lambda s: (-s["hits"], abs(s["shift_hz"])))
         if scored:
+            residual, f_ref = fhss_residual_f0(hops, float(scored[0]["d"]["spacing"]))
+            tight = []
+            for s in scored:
+                d_step = float(s["d"].get("spacing") or 0.0)
+                if d_step <= 0:
+                    continue
+                expect, _ = fhss_residual_f0([float(s["d"]["f0"])], d_step, f_ref)
+                if fhss_circ_dist_mhz(residual, expect, d_step) <= FREQCORR_MAX_MHZ:
+                    tight.append(s)
+            if tight:
+                scored = tight
             best = scored[0]
             families = {s["d"]["family"] for s in scored if s["hits"] == best["hits"]}
             unconf = len(families) > 1

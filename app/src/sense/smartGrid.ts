@@ -5,7 +5,16 @@
 // Occupancy на плате: CH_PWR vs порог + hyst, как Sandia gr-fhss_utils /
 // muccc gr-iridium fft_burst_tagger (бин vs пол, не max-mag).
 // ============================================================================
-import { FHSS_DOMAINS, XA4_IBW_MHZ, nearestAnalogChannel, type FhssDomain, type FhssLook } from "./protocolDb";
+import {
+  FREQCORR_MAX_MHZ,
+  FHSS_DOMAINS,
+  XA4_IBW_MHZ,
+  fhssCircDistMhz,
+  fhssResidualF0,
+  nearestAnalogChannel,
+  type FhssDomain,
+  type FhssLook,
+} from "./protocolDb";
 import type { AttackLook } from "./attackLook";
 import type { AllowBand } from "../policy/allowlist";
 
@@ -329,13 +338,20 @@ export function matchSmartGrid(i: SmartGridInput): SmartGridCard {
   const cropped = winLim || hopSpan > ibw + 0.5;
 
   if (hops.length >= 2) {
-    const scored: Array<{ d: FhssDomain; shiftHz: number; hits: number }> = [];
+    let scored: Array<{ d: FhssDomain; shiftHz: number; hits: number }> = [];
     for (const d of FHSS_DOMAINS) {
       const m = hopMatch(hops, d);
       if (m) scored.push({ d, ...m });
     }
     scored.sort((a, b) => b.hits - a.hits || Math.abs(a.shiftHz) - Math.abs(b.shiftHz));
     if (scored.length > 0) {
+      const { residualMhz, fRefMhz } = fhssResidualF0(hops, scored[0]!.d.spacing);
+      const tight = scored.filter((s) => {
+        if (!(s.d.spacing > 0)) return false;
+        const expect = fhssResidualF0([s.d.f0], s.d.spacing, fRefMhz).residualMhz;
+        return fhssCircDistMhz(residualMhz, expect, s.d.spacing) <= FREQCORR_MAX_MHZ;
+      });
+      if (tight.length > 0) scored = tight;
       const best = scored[0]!;
       const families = new Set(scored.filter((s) => s.hits === best.hits).map((s) => s.d.family));
       const unconf = families.size > 1;

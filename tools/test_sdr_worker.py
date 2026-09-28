@@ -371,10 +371,22 @@ def main() -> int:
         import numpy as np_atk
         radio = w.Radio()
         radio._ensure_attack_mem()
+        check("droneid кольцо ленивое", radio._droneid_mem is None)
         radio._attack_mem.push_block(np_atk.ones(1024, dtype=np_atk.complex64))
         check("память Атаки живая", radio._attack_mem_live is True and radio._attack_mem.available() == 1024)
+        radio._feed_droneid_ring(np_atk.ones(4096, dtype=np_atk.complex64), 61.44e6)
+        check(
+            "droneid 61.44/4 в кольце",
+            radio._droneid_mem is not None and radio._droneid_mem.available() == 1024,
+        )
         radio._pause_attack_mem()
         check("пауза обнуляет IQ Атаки", radio._attack_mem_live is False and radio._attack_mem.available() == 0)
+        check(
+            "пауза сбрасывает droneid",
+            radio._droneid_mem_live is False
+            and radio._droneid_mem is not None
+            and radio._droneid_mem.available() == 0,
+        )
         radio.scan(2442, 20, 32)
         check("scan() оставляет флаг выключенным", radio._attack_mem_live is False)
 

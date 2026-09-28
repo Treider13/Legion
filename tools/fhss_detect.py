@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from protocol_db import XA4_IBW_MHZ, classify_fhss_domain, classify_rc
+from protocol_db import XA4_IBW_MHZ, classify_fhss_domain, classify_rc, fhss_residual_f0
 
 FHSS_NFFT_FAST = 4096
 FHSS_HOP_FAST = 2048
@@ -106,6 +106,9 @@ def analyze_fhss(x: np.ndarray, fs: float, lo_mhz: float) -> dict[str, Any]:
         "ibwMhz": min(XA4_IBW_MHZ, float(fs) / 1e6 if fs else 0.0),
         "hint": "мало IQ или нет смены частоты",
         "domain": None,
+        "f0ResidualMhz": 0.0,
+        "f0AbsMhz": 0.0,
+        "nSlots": 0,
     }
     z = np.asarray(x, dtype=np.complex64).ravel()
     rate = float(fs)
@@ -199,8 +202,11 @@ def analyze_fhss(x: np.ndarray, fs: float, lo_mhz: float) -> dict[str, Any]:
     dwell = float(np.median(durs)) if durs else 0.0
     rate_hz = (1.0 / interval) if interval > 0 else 0.0
     mid = float(np.median(centers))
+    residual, f_ref = fhss_residual_f0(uniq, spacing) if spacing > 0 else (0.0, 2400.0)
     domain = (
-        classify_fhss_domain(spacing, mid, float(min(uniq)), float(max(uniq))) if spacing > 0 else None
+        classify_fhss_domain(
+            spacing, mid, float(min(uniq)), float(max(uniq)), residual, f_ref,
+        ) if spacing > 0 else None
     )
     hint = "FHSS: смена частоты в кадре"
     if domain:
@@ -225,6 +231,9 @@ def analyze_fhss(x: np.ndarray, fs: float, lo_mhz: float) -> dict[str, Any]:
         "hint": hint,
         "domain": domain,
         "pathMhz": [round(centers_s[i], 4) for i in range(min(32, len(centers_s)))],
+        "f0ResidualMhz": float(residual),
+        "f0AbsMhz": float(f_ref + residual),
+        "nSlots": int(len(uniq)),
     }
 
 
