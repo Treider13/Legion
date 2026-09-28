@@ -214,7 +214,11 @@ architecture legion of bladerf is
     signal lg_tx_proto_pulse  : unsigned(31 downto 0);
     signal lg_tx_step_src     : std_logic;
     signal lg_tx_ch_target    : unsigned(7 downto 0);
-    signal lg_aim_ftw         : unsigned(31 downto 0);
+    signal lg_tx_aim_en       : std_logic;
+    signal lg_rx_aim_en       : std_logic;
+    signal lg_rx_aim_bin      : std_logic_vector(7 downto 0);
+    signal lg_aim_word        : std_logic_vector(31 downto 0);
+    signal lg_tone_ftw        : unsigned(31 downto 0);
     signal lg_nco_ftw_sel     : unsigned(31 downto 0);
     signal lg_ch_energy       : legion_ch_energy_t;
     signal lg_ch_bins_rx      : std_logic_vector(63 downto 0);
@@ -265,6 +269,10 @@ architecture legion of bladerf is
     signal lg_nco_valid     : std_logic;
 
     signal lg_lb_data       : std_logic_vector(31 downto 0);
+    signal lg_lb_word       : std_logic_vector(63 downto 0);
+    signal lg_aim_dly       : std_logic_vector(31 downto 0);
+    signal lg_aim_data      : std_logic_vector(31 downto 0);
+    signal lg_lb_to_mux     : std_logic_vector(31 downto 0);
     signal lg_lb_empty      : std_logic;
     signal lg_lb_full       : std_logic;
     signal lg_lb_rd_en      : std_logic;
@@ -303,6 +311,8 @@ architecture legion of bladerf is
     signal lg_xlat_i        : signed(15 downto 0);
     signal lg_xlat_q        : signed(15 downto 0);
     signal lg_xlat_v        : std_logic;
+    signal lg_xlat_bb_i     : signed(15 downto 0);
+    signal lg_xlat_bb_q     : signed(15 downto 0);
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1215,6 +1225,7 @@ begin
         tx_proto_pulse  => lg_tx_proto_pulse,
         tx_drfm_step_src => lg_tx_step_src,
         tx_ch_target    => lg_tx_ch_target,
+        tx_aim_en       => lg_tx_aim_en,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1230,6 +1241,8 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
+        rx_aim_en     => lg_rx_aim_en,
+        rx_aim_bin    => lg_rx_aim_bin,
         rx_fft_xlat_bypass => lg_fft_xlat_bypass,
         rx_fft_excl   => lg_fft_excl,
         rx_ch_ctrl    => lg_ch_ctrl,
@@ -1316,13 +1329,17 @@ begin
         reset     => rx_reset,
         enable    => lg_xlat_en,
         lock      => lg_fft_lock,
+        aim_en    => lg_rx_aim_en,
+        aim_bin   => lg_rx_aim_bin,
         peak_word => lg_peak_word,
         in_i      => adc_streams(0).data_i,
         in_q      => adc_streams(0).data_q,
         in_valid  => adc_streams(0).data_v,
         out_i     => lg_xlat_i,
         out_q     => lg_xlat_q,
-        out_valid => lg_xlat_v
+        out_valid => lg_xlat_v,
+        bb_i      => lg_xlat_bb_i,
+        bb_q      => lg_xlat_bb_q
       );
 
     U_legion_det_sync : entity work.synchronizer
@@ -1436,29 +1453,28 @@ begin
         out_q     => lg_nco_q,
         out_valid => lg_nco_valid
       );
-    U_legion_lb_aim : entity work.legion_lb_aim
-      port map (
-        ch_target => lg_tx_ch_target,
-        ftw       => lg_aim_ftw
-      );
-    lg_nco_ftw_sel <= lg_aim_ftw when lg_tx_mode = LEGION_MODE_AIM else lg_tx_nco_ftw;
+    lg_tone_ftw <= legion_bin_ftw(std_logic_vector(lg_tx_ch_target));
+    lg_nco_ftw_sel <= lg_tone_ftw when lg_tx_mode = LEGION_MODE_AIM else lg_tx_nco_ftw;
     lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO
                        or lg_tx_mode = LEGION_MODE_AIM else '0';
 
     U_legion_dcfifo : entity work.legion_dcfifo
+      generic map ( WIDTH => 64 )
       port map (
         wr_clk   => rx_clock,
         wr_reset => rx_reset,
-        wr_data  => std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
+        wr_data  => std_logic_vector(lg_xlat_bb_i) & std_logic_vector(lg_xlat_bb_q)
+                    & std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
         wr_en    => lg_lb_wr_en,
         wr_full  => lg_lb_full,
         rd_clk   => tx_clock,
         rd_reset => tx_reset,
-        rd_data  => lg_lb_data,
+        rd_data  => lg_lb_word,
         rd_en    => lg_lb_rd_en,
         rd_empty => lg_lb_empty,
         rd_level => lg_lb_level
       );
+    lg_lb_data <= lg_lb_word(31 downto 0);
     lg_lb_wr_en <= lg_xlat_v
                    when lg_lb_active_rx = '1' and lg_rx_arm = '1' and lg_lb_full = '0'
                    else '0';
@@ -1483,6 +1499,15 @@ begin
         din       => lg_lb_data,
         sample_en => lg_mux_rd_en,
         dout      => lg_lb_dly0
+      );
+    U_legion_aim_delay : entity work.legion_delayline
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        delay     => lg_dly0_sel,
+        din       => lg_lb_word(63 downto 32),
+        sample_en => lg_mux_rd_en,
+        dout      => lg_aim_dly
       );
     U_legion_delayline1 : entity work.legion_delayline
       port map (
@@ -1549,6 +1574,20 @@ begin
         dout      => lg_lb_mux_data
       );
 
+    lg_aim_word(31) <= lg_tx_aim_en;
+    lg_aim_word(30 downto 8) <= (others => '0');
+    lg_aim_word(7 downto 0) <= std_logic_vector(lg_tx_ch_target);
+    U_legion_lb_aim : entity work.legion_lb_aim
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        ch_target => lg_aim_word,
+        sample_en => lg_mux_rd_en,
+        din       => lg_aim_dly,
+        dout      => lg_aim_data
+      );
+    lg_lb_to_mux <= lg_aim_data when lg_tx_aim_en = '1' else lg_lb_mux_data;
+
     U_legion_tx_mux : entity work.legion_tx_mux
       port map (
         clock      => tx_clock,
@@ -1568,7 +1607,7 @@ begin
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,
-        lb_data    => lg_lb_mux_data,
+        lb_data    => lg_lb_to_mux,
         lb_empty   => lg_lb_empty,
         lb_rd_en   => lg_mux_rd_en,
         out_i      => lg_mux_i,

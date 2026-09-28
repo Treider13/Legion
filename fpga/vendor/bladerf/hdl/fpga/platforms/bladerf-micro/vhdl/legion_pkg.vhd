@@ -25,6 +25,10 @@ package legion_pkg is
     constant LEGION_MODE_LB_ALWAYS : std_logic_vector(2 downto 0) := "100"; -- RX→TX всегда
     constant LEGION_MODE_AIM       : std_logic_vector(2 downto 0) := "101"; -- NCO по CH_TARGET
 
+    -- f = signed(bin)·fs/256. Тон MODE_AIM и произведение DRFM×NCO
+    -- берут одну величину: FTW = bin≪24 = FTW·fs/2^32.
+    function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned;
+
     -- Адреса регистров (адрес на отдельном PIO, данные 32 бита на wdata-PIO)
     -- CTRL: bit0=ARM, bits3:1=MODE, bit4=WD_EN
     constant LEGION_REG_CTRL       : natural := 16#00#;
@@ -105,7 +109,10 @@ package legion_pkg is
     --   CH_MODE 1 = ELRS ISM2G4: 2400.4…2479.4 / 80 / 1 МГц (FHSS.cpp).
     --   CH_ACTIVE_0: 8 бит слотов 10 МГц. ACTIVE_1..3: 80 бит ELRS.
     --   CH_ENERGY_0..7 / CH_HITS_0..7: энергия и окна подряд ≥ CH_THR.
-    --   CH_TARGET: номер FFT-бина (не индекс группы). CH_HYST = N хитов.
+    --   CH_TARGET [7:0]: signed FFT-бин (не индекс группы). [31]=arm
+    --   произведения DRFM×NCO в режиме LB. Запись 80 без бита 31
+    --   оставляет aim выключенным (тон MODE_AIM читает только [7:0]).
+    --   0x32 — PROTO_PERIOD, не этот регистр. CH_HYST = N хитов.
     --   CH_FS_HZ / CH_LO_KHZ: NIOS → HDL для абсолютной сетки 2.4.
     --   fs=0 или lo=0: 8 октантов по 32 бина (стенд без LO).
     constant LEGION_REG_PROTO_PERIOD  : natural := 16#32#;
@@ -113,7 +120,7 @@ package legion_pkg is
     constant LEGION_REG_DRFM_STEP_SRC : natural := 16#34#; -- bit0
     constant LEGION_REG_CH_THR        : natural := 16#35#; -- порог энергии (NIOS)
     constant LEGION_REG_CH_HYST       : natural := 16#36#; -- N окон подряд (NIOS)
-    constant LEGION_REG_CH_TARGET     : natural := 16#37#; -- FFT bin 0..255
+    constant LEGION_REG_CH_TARGET     : natural := 16#37#; -- [31]=arm, [7:0]=bin
     constant LEGION_REG_CH_MODE       : natural := 16#38#; -- 0 OcuSync / 1 ELRS
     constant LEGION_REG_CH_ACTIVE_0   : natural := 16#39#; -- [7:0] 10 МГц
     constant LEGION_REG_CH_ACTIVE_1   : natural := 16#3A#; -- ELRS bits 0..31
@@ -210,4 +217,8 @@ package legion_pkg is
 end package;
 
 package body legion_pkg is
+    function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned is
+    begin
+        return unsigned(shift_left(resize(signed(bin8), 32), 24));
+    end function;
 end package body;

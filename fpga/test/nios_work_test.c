@@ -759,7 +759,8 @@ int main(void)
     t_status = LEGION_STATUS_DET_ACTIVE;
     t_peak_word = mk_peak(1, 0, 0x2000, 16); /* frame=0 валиден (обёртка 7 бит) */
     rfic_n = 0;
-    legion_work(); /* первый новый valid+энергия → FIRE */
+    pio_n = 0;
+    legion_work(); /* первый новый valid+энергия → FIRE bin16 */
     CHECK("FFT: первый новый кадр (в т.ч. frame=0) целит",
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
     t_peak_word = mk_peak(1, 1, 0x2000, 16);
@@ -780,6 +781,13 @@ int main(void)
         CHECK("FFT n==1: AIR_FREQ = центр взгляда", khz == 2450000);
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT n==1: PEAK_KHZ = пик", khz == 2453500);
+        legion_reg_read(LEGION_REG_CH_TARGET, &khz);
+        CHECK("FFT n==1: CH_TARGET bin16, PIO arm, LO на месте",
+              khz == 16u &&
+              pio_wrote_reg(LEGION_REG_CH_TARGET, 0x80000010u));
+        CHECK("FFT n==1: HDL lock на тот же bin",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
     }
     rfic_n = 0;
     t_status = LEGION_STATUS_DET_ACTIVE;

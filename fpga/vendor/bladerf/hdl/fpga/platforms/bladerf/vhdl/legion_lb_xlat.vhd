@@ -13,6 +13,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.legion_pkg.all;
 
 entity legion_lb_xlat is
     port (
@@ -20,13 +21,22 @@ entity legion_lb_xlat is
         reset     : in  std_logic;
         enable    : in  std_logic;
         lock      : in  std_logic;
+        -- aim_en=1: downmix = CH_TARGET[7:0], не защёлка пика. Иначе
+        -- произведение на новом bin и вырез на старом дают
+        -- TX = эмиттер − lock + target.
+        aim_en    : in  std_logic;
+        aim_bin   : in  std_logic_vector(7 downto 0);
         peak_word : in  std_logic_vector(31 downto 0);
         in_i      : in  signed(15 downto 0);
         in_q      : in  signed(15 downto 0);
         in_valid  : in  std_logic;
         out_i     : out signed(15 downto 0);
         out_q     : out signed(15 downto 0);
-        out_valid : out std_logic
+        out_valid : out std_logic;
+        -- База после MA, до обратного смесителя. Старшая половина того же
+        -- CDC-слова, что и out; NCO синтеза читает только её.
+        bb_i      : out signed(15 downto 0);
+        bb_q      : out signed(15 downto 0)
     );
 end entity;
 
@@ -80,6 +90,8 @@ architecture rtl of legion_lb_xlat is
     signal out_i_r   : signed(15 downto 0) := (others => '0');
     signal out_q_r   : signed(15 downto 0) := (others => '0');
     signal out_v_r   : std_logic := '0';
+    signal bb_i_r    : signed(15 downto 0) := (others => '0');
+    signal bb_q_r    : signed(15 downto 0) := (others => '0');
 
     function sine_lookup(phase10 : unsigned(9 downto 0)) return signed is
         variable quad : unsigned(1 downto 0);
@@ -117,6 +129,8 @@ begin
     out_i     <= out_i_r;
     out_q     <= out_q_r;
     out_valid <= out_v_r;
+    bb_i      <= bb_i_r;
+    bb_q      <= bb_q_r;
 
     process(clock, reset)
         variable bin  : signed(7 downto 0);
@@ -144,29 +158,44 @@ begin
             out_i_r   <= (others => '0');
             out_q_r   <= (others => '0');
             out_v_r   <= '0';
+            bb_i_r    <= (others => '0');
+            bb_q_r    <= (others => '0');
         elsif rising_edge(clock) then
             out_v_r <= '0';
             if enable = '0' then
                 out_i_r   <= in_i;
                 out_q_r   <= in_q;
                 out_v_r   <= in_valid;
+                bb_i_r    <= in_i;
+                bb_q_r    <= in_q;
                 ma_have   <= '0';
                 lock_have <= '0';
                 acc_i     <= (others => '0');
                 acc_q     <= (others => '0');
                 ma_i      <= (others => (others => '0'));
                 ma_q      <= (others => (others => '0'));
-            elsif peak_word(31) = '0' and not (lock = '1' and lock_have = '1') then
+            elsif aim_en = '0' and peak_word(31) = '0'
+                  and not (lock = '1' and lock_have = '1') then
                 out_i_r <= (others => '0');
                 out_q_r <= (others => '0');
                 out_v_r <= in_valid;
+                bb_i_r  <= (others => '0');
+                bb_q_r  <= (others => '0');
                 ma_have <= '0';
                 acc_i   <= (others => '0');
                 acc_q   <= (others => '0');
                 ma_i    <= (others => (others => '0'));
                 ma_q    <= (others => (others => '0'));
             elsif in_valid = '1' then
-                if lock = '1' and lock_have = '1' then
+                if aim_en = '1' then
+                    bin := signed(aim_bin);
+                    -- Пока синтез вооружён, защёлка = тот же bin. Снятие
+                    -- arm до снятия lock не возвращает вырез на старый пик.
+                    if lock = '1' then
+                        lock_bin  <= bin;
+                        lock_have <= '1';
+                    end if;
+                elsif lock = '1' and lock_have = '1' then
                     bin := lock_bin;
                 else
                     bin := signed(peak_word(7 downto 0));
@@ -177,7 +206,7 @@ begin
                         lock_have <= '0';
                     end if;
                 end if;
-                ftw := unsigned(shift_left(resize(bin, 32), 24));
+                ftw := legion_bin_ftw(std_logic_vector(bin));
                 flush := (ma_have = '0') or (bin /= ma_bin);
                 c_i := sine_lookup(phase_acc(31 downto 22) + 256);
                 s_q := sine_lookup(phase_acc(31 downto 22));
@@ -208,6 +237,8 @@ begin
                 b_i := resize(shift_right(a_i, 4), 16);
                 b_q := resize(shift_right(a_q, 4), 16);
                 -- up: (I'+jQ')(cos+j sin)
+                bb_i_r  <= b_i;
+                bb_q_r  <= b_q;
                 out_i_r <= mix_sum(b_i, b_q, c_i, s_q, true);
                 out_q_r <= mix_sum(b_i, b_q, s_q, c_i, false);
                 out_v_r <= '1';

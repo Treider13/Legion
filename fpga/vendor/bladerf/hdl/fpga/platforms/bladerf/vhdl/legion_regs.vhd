@@ -50,6 +50,7 @@ entity legion_regs is
         tx_proto_pulse  : out unsigned(31 downto 0);
         tx_drfm_step_src : out std_logic;
         tx_ch_target    : out unsigned(7 downto 0);
+        tx_aim_en       : out std_logic;
         -- Домен RX (пороги детектора)
         rx_clock      : in  std_logic;
         rx_reset      : in  std_logic;
@@ -58,6 +59,8 @@ entity legion_regs is
         rx_fft_en     : out std_logic;
         rx_fft_dc_notch : out std_logic;
         rx_fft_lock   : out std_logic;
+        rx_aim_en     : out std_logic;
+        rx_aim_bin    : out std_logic_vector(7 downto 0);
         rx_fft_xlat_bypass : out std_logic;
         rx_fft_excl   : out unsigned(7 downto 0);
         rx_ch_ctrl    : out std_logic_vector(15 downto 0);
@@ -117,7 +120,7 @@ architecture rtl of legion_regs is
     signal r_proto_period : std_logic_vector(31 downto 0);
     signal r_proto_pulse  : std_logic_vector(31 downto 0);
     signal r_step_src     : std_logic;
-    signal r_ch_target    : std_logic_vector(7 downto 0);
+    signal r_ch_target    : std_logic_vector(31 downto 0);
     signal r_ch_fs        : std_logic_vector(31 downto 0);
     signal r_ch_lo        : std_logic_vector(31 downto 0);
 
@@ -146,7 +149,7 @@ architecture rtl of legion_regs is
     signal pper_meta, pper_tx   : std_logic_vector(31 downto 0);
     signal ppul_meta, ppul_tx   : std_logic_vector(31 downto 0);
     signal src_meta, src_tx     : std_logic;
-    signal cht_meta, cht_tx     : std_logic_vector(7 downto 0);
+    signal cht_meta, cht_tx     : std_logic_vector(31 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -172,6 +175,7 @@ architecture rtl of legion_regs is
     signal act_meta, act_nios   : std_logic_vector(7 downto 0);
     signal fs_meta, fs_rx       : std_logic_vector(31 downto 0);
     signal lo_meta, lo_rx       : std_logic_vector(31 downto 0);
+    signal aim_meta, aim_rx     : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
     signal det_gray_rx   : std_logic_vector(15 downto 0);
@@ -270,7 +274,7 @@ begin
                     when LEGION_REG_PROTO_PERIOD => r_proto_period <= pio_wdata;
                     when LEGION_REG_PROTO_PULSE => r_proto_pulse <= pio_wdata;
                     when LEGION_REG_DRFM_STEP_SRC => r_step_src <= pio_wdata(0);
-                    when LEGION_REG_CH_TARGET => r_ch_target <= pio_wdata(7 downto 0);
+                    when LEGION_REG_CH_TARGET => r_ch_target <= pio_wdata;
                     when LEGION_REG_CH_FS_HZ  => r_ch_fs     <= pio_wdata;
                     when LEGION_REG_CH_LO_KHZ => r_ch_lo     <= pio_wdata;
                     when others => null;
@@ -362,7 +366,8 @@ begin
     tx_proto_period <= unsigned(pper_tx);
     tx_proto_pulse  <= unsigned(ppul_tx);
     tx_drfm_step_src <= src_tx;
-    tx_ch_target    <= unsigned(cht_tx);
+    tx_ch_target    <= unsigned(cht_tx(7 downto 0));
+    tx_aim_en       <= cht_tx(31);
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
     -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
@@ -401,6 +406,7 @@ begin
             lutt_meta <= '0'; lutt_rx <= '0'; lutt_rx_d <= '0';
             fs_meta  <= (others => '0'); fs_rx  <= (others => '0');
             lo_meta  <= (others => '0'); lo_rx  <= (others => '0');
+            aim_meta <= (others => '0'); aim_rx <= (others => '0');
         elsif rising_edge(rx_clock) then
             thr_meta <= r_det_thr;   thr_rx <= thr_meta;
             sh_meta  <= r_det_shift; sh_rx  <= sh_meta;
@@ -414,6 +420,8 @@ begin
             lutt_rx_d <= lutt_rx;
             fs_meta  <= r_ch_fs;     fs_rx  <= fs_meta;
             lo_meta  <= r_ch_lo;     lo_rx  <= lo_meta;
+            -- arm и bin одним словом: 2FF не разводит их на такт.
+            aim_meta <= r_ch_target; aim_rx <= aim_meta;
         end if;
     end process;
 
@@ -422,6 +430,8 @@ begin
     rx_fft_en       <= fft_rx(0);
     rx_fft_dc_notch <= fft_rx(1);
     rx_fft_lock     <= fft_rx(2);
+    rx_aim_en       <= aim_rx(31);
+    rx_aim_bin      <= aim_rx(7 downto 0);
     rx_fft_xlat_bypass <= fft_rx(3);
     rx_fft_excl     <= unsigned(chctl_rx(15 downto 8));
     rx_ch_ctrl      <= chctl_rx;

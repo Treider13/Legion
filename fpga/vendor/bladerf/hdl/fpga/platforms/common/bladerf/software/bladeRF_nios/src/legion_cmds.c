@@ -136,6 +136,8 @@ static uint64_t legion_inner_t0;
 static uint32_t legion_ch_thr;
 static uint32_t legion_ch_hyst;
 static uint32_t legion_ch_target;
+static bool     legion_aim_on;
+static void legion_aim_clear(void);
 static uint32_t legion_ch_mode;
 static uint32_t legion_proto_period;
 static uint32_t legion_proto_pulse;
@@ -288,6 +290,7 @@ static void legion_scan_reset(void)
     legion_inner_t0 = 0;
     legion_scan_event = 0;
     legion_survey_clear_hits();
+    legion_aim_clear();
     legion_ch_map_t0 = 0;
     {
         unsigned i;
@@ -1433,7 +1436,27 @@ static void legion_ch_update_hits(void)
 static void legion_ch_write_target(uint32_t bin)
 {
     legion_ch_target = bin & 0xffu;
+    legion_aim_on = false;
     legion_pio_poke(LEGION_REG_CH_TARGET, legion_ch_target);
+}
+
+/* Readback — голый бин. Бит 31 только в PIO: вооружает произведение
+ * DRFM×NCO. Следующий sample_en уже с новым FTW, фаза не сбрасывается. */
+static void legion_aim_set(uint32_t bin)
+{
+    legion_ch_target = bin & 0xffu;
+    legion_aim_on = true;
+    legion_pio_poke(LEGION_REG_CH_TARGET, 0x80000000u | legion_ch_target);
+}
+
+static void legion_aim_clear(void)
+{
+    if (!legion_aim_on && legion_ch_target == 0) {
+        return;
+    }
+    legion_ch_target = 0;
+    legion_aim_on = false;
+    legion_pio_poke(LEGION_REG_CH_TARGET, 0);
 }
 
 static int legion_ch_pick(void)
@@ -1476,7 +1499,12 @@ static void legion_ch_apply(uint32_t slot)
         return;
     }
     bin = legion_ch_bin[slot];
-    legion_ch_write_target(bin);
+    /* CTRL, PLL и LB_DELAY не трогаем. Bypass: сырой IQ × FTW нельзя. */
+    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+        legion_aim_set(bin);
+    } else {
+        legion_ch_write_target(bin);
+    }
     legion_peak_khz = legion_peak_from_word(bin);
     legion_fire_khz = legion_peak_khz;
     legion_fire_mag = legion_ch_e[slot];
@@ -1538,6 +1566,22 @@ static void legion_fft_stare_hdl(bool lock)
 
     if (lock) {
         c |= LEGION_FFT_CTRL_LOCK;
+        /* Защёлка одного bin и passthrough вместе не живут. */
+        c &= ~LEGION_FFT_CTRL_XLAT_BYPASS;
+    } else {
+        c &= ~LEGION_FFT_CTRL_LOCK;
+    }
+    legion_fft_ctrl_hdl(c);
+}
+
+/* Тот же LOCK, notch из тени хоста. Тень не пишем. */
+static void legion_fft_lock_hdl(bool lock)
+{
+    uint32_t c = legion_fft_ctrl;
+
+    if (lock) {
+        c |= LEGION_FFT_CTRL_LOCK;
+        c &= ~LEGION_FFT_CTRL_XLAT_BYPASS;
     } else {
         c &= ~LEGION_FFT_CTRL_LOCK;
     }
@@ -1569,6 +1613,9 @@ static bool legion_fft_enter_search(uint32_t center_khz)
     if (!legion_hop_lo_ex(center_khz, false)) {
         return false;
     }
+    /* После успешного hop. Раньше — откат индекса оставил бы синтез
+     * снятым на старом LO. */
+    legion_aim_clear();
     legion_fft_invalidate_peak();
     legion_look_center_khz = center_khz;
     legion_ch_push_lo_fs();
@@ -1634,10 +1681,19 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag, uint32_t bin)
             legion_ch_hits[slot] = 1u;
         }
     }
-    legion_ch_write_target(bin);
+    /* Сначала снять FTW. Bypass решаем, пока синтез выключен:
+     * passthrough × FTW сдвинул бы сырой IQ. Один тон: LOCK и
+     * CH_TARGET на одном bin, PLL не трогаем. */
+    legion_aim_clear();
+    legion_dual_from_peak1(legion_peak_word());
+    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+        legion_fft_lock_hdl(true);
+        legion_aim_set(bin);
+    } else {
+        legion_ch_write_target(bin);
+    }
     legion_ch_map_t0 = time_tamer_read(BLADERF_MODULE_RX);
     legion_scan_mark_look();
-    legion_dual_from_peak1(legion_peak_word());
 }
 
 static void legion_fft_walk(void)
@@ -2085,6 +2141,7 @@ static bool legion_survey_two_frame(uint32_t *mag_out, uint32_t *peak_out,
 static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
                                    uint32_t bin, uint8_t evt)
 {
+    legion_aim_clear();
     legion_fft_stare_hdl(false);
     legion_inner_on = true;
     legion_inner_bin = bin;
@@ -2094,14 +2151,19 @@ static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
     legion_peak_khz = peak_khz;
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
-    legion_fft_stare_hdl(true);
+    legion_dual_from_peak1(legion_peak_word());
+    if ((legion_fft_ctrl & LEGION_FFT_CTRL_XLAT_BYPASS) == 0) {
+        legion_fft_stare_hdl(true);
+        legion_aim_set(bin);
+    } else {
+        legion_ch_write_target(bin);
+    }
     if (!legion_set_tx_mute(false)) {
         return;
     }
     legion_fft_st = LEGION_FFT_ST_FRAME;
     legion_scan_mark_look();
     legion_event(evt);
-    legion_dual_from_peak1(legion_peak_word());
 }
 
 static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
@@ -2118,7 +2180,6 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
     if (ordinary) {
         if (legion_inner_on) {
             if (now - legion_inner_t0 >= dwell) {
-                legion_fft_stare_hdl(false);
                 legion_inner_on = false;
                 if (have) {
                     uint8_t const evt = (bin != legion_inner_bin)
@@ -2136,6 +2197,9 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
                         legion_survey_lock_fire(legion_peak_from_word(w1),
                                                 (w1 >> 8) & 0xffffu, b1,
                                                 (uint8_t)LEGION_EVT_SWITCH);
+                    } else {
+                        legion_aim_clear();
+                        legion_fft_stare_hdl(false);
                     }
                 }
             }
@@ -2158,6 +2222,7 @@ static void legion_survey_inner(uint64_t now, bool det, uint64_t dwell,
 
 static void legion_survey_begin_pass(uint8_t evt)
 {
+    legion_aim_clear();
     legion_survey_clear_hits();
     legion_survey_ph = LEGION_SURVEY_PH_PASS;
     legion_stare_on = false;
@@ -2540,6 +2605,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
 
         case LEGION_REG_CH_TARGET:
             legion_ch_target = data & 0xffu;
+            legion_aim_on = (data & 0x80000000u) != 0;
+            if (legion_aim_on) {
+                legion_fft_lock_hdl(true);
+            }
             break;
 
         case LEGION_REG_CH_MODE:
@@ -2626,6 +2695,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 /* DISARM: цифру гасим сразу (mux нули), эфир — честно.
                  * STANDBY отказ → запись CTRL=0 уже ушла, write не ok. */
                 legion_armed = false;
+                legion_aim_clear();
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80 | addr);
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);

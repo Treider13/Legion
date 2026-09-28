@@ -209,10 +209,13 @@ bool legion_air_down(void);
  * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
  * узжаем. CH_THR≠0: HOLD читает карту 8×10 МГц каждый SETTLE; цель погасла →
  * CHANNEL_SCAN (max energy, CH_HITS≥N) → CH_TARGET=бин без ARM/сброса DRFM.
+ * Пока бит 31 CH_TARGET снят, хоп внутри взгляда = live FFT → xlat.
+ * Пока он вооружён, downmix и произведение стоят на [7:0]
+ * (иначе TX = эмиттер − live + aim). Два тона ≥ 16 бинов: xlat bypass,
+ * синтез не вооружается. Readback CH_TARGET — голый бин.
  * HOLD: TURN = выдержка, затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;
- * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
- * хоп внутри взгляда = live FFT → xlat.
+ * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.
  * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
  * HDL DC-notch снят, SCAN_SURVEY_US от unmute — снова обзор.
  * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой

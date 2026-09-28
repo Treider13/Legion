@@ -44,6 +44,9 @@ architecture tb of legion_regs_tb is
     signal tx_proto_pulse  : unsigned(31 downto 0);
     signal tx_step_src     : std_logic;
     signal tx_ch_target    : unsigned(7 downto 0);
+    signal tx_aim_en       : std_logic;
+    signal rx_aim_en       : std_logic;
+    signal rx_aim_bin      : std_logic_vector(7 downto 0);
     signal ch_energy       : legion_ch_energy_t := (
         0 => x"00000011", 1 => x"00000022", 2 => x"00000033", 3 => x"00000044",
         4 => x"00000055", 5 => x"00000066", 6 => x"00000077", 7 => x"00000088");
@@ -107,10 +110,12 @@ begin
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
             tx_proto_period => tx_proto_period, tx_proto_pulse => tx_proto_pulse,
             tx_drfm_step_src => tx_step_src, tx_ch_target => tx_ch_target,
+            tx_aim_en => tx_aim_en,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
             rx_fft_lock => rx_fft_lock,
+            rx_aim_en => rx_aim_en, rx_aim_bin => rx_aim_bin,
             rx_fft_xlat_bypass => rx_fft_bypass,
             rx_fft_excl => rx_fft_excl,
             rx_ch_ctrl => rx_ch_ctrl, rx_ch_idx => rx_ch_idx,
@@ -258,6 +263,19 @@ begin
         assert tx_proto_pulse = to_unsigned(58000, 32) report "FAIL: PROTO_PULSE CDC" severity failure;
         assert tx_step_src = '1' report "FAIL: DRFM_STEP_SRC CDC" severity failure;
         assert tx_ch_target = to_unsigned(80, 8) report "FAIL: CH_TARGET CDC" severity failure;
+        assert tx_aim_en = '0' report "FAIL: bare bin arms product" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_TARGET, 7));
+        pio_wdata <= x"80000010";
+        pio_we <= '1';
+        wait until rising_edge(nios_clk);
+        pio_we <= '0';
+        wait until rising_edge(nios_clk);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
+        assert tx_ch_target = to_unsigned(16, 8) report "FAIL: aim bin slice" severity failure;
+        assert tx_aim_en = '1' report "FAIL: aim arm CDC" severity failure;
+        assert rx_aim_en = '1' and rx_aim_bin = x"10"
+            report "FAIL: rx aim word CDC" severity failure;
 
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE_0, 7));
         pio_we <= '0';

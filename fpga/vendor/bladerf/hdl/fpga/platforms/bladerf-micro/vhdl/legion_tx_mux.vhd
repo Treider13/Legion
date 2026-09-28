@@ -174,7 +174,7 @@ begin
                     if live = '1' then
                         -- LUT NCO ≈ 1.0 (2047<<4). Масштаб на mux, не в
                         -- entity: legion_nco_tb держит контракт полной шкалы.
-                        -- AIM — тот же тракт, FTW снаружи от legion_lb_aim.
+                        -- AIM — тот же тракт, FTW снаружи: legion_bin_ftw(CH_TARGET).
                         out_i <= lb_amp_q15(nco_i);
                         out_q <= lb_amp_q15(nco_q);
                         out_valid <= nco_valid;

@@ -13,7 +13,7 @@ use ieee.numeric_std.all;
 entity legion_dcfifo is
     generic (
         DEPTH : natural := 64;   -- степень двойки
-        WIDTH : natural := 32
+        WIDTH : natural := 32  -- loopback top passes 64: baseband & cutout, one pointer
     );
     port (
         -- Запись (rx_clock)
