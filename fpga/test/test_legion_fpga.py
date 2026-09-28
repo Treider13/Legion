@@ -140,6 +140,11 @@ py_map = {
     "LEGION_REG_SCAN_SURVEY_US": lf.REG_SCAN_SURVEY_US,
     "LEGION_REG_SCAN_EVENT": lf.REG_SCAN_EVENT,
     "LEGION_REG_AIR_TX_GAIN_DB": lf.REG_AIR_TX_GAIN_DB,
+    "LEGION_REG_DELAY": lf.REG_DELAY,
+    "LEGION_REG_WALK_STEP": lf.REG_WALK_STEP,
+    "LEGION_REG_WALK_MAX": lf.REG_WALK_MAX,
+    "LEGION_REG_WALK_CTL": lf.REG_WALK_CTL,
+    "LEGION_REG_WALK_CUR": lf.REG_WALK_CUR,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -306,6 +311,31 @@ r = rpc({"op": "arm", "mode": "player"})
 check("gateway arm player", r.get("ok") is True)
 check("fake: CTRL записан", gw.fpga._t.regs.get(lf.REG_CTRL) ==
       lf.CTRL_ARM | (lf.MODE_PLAYER << 1) | lf.CTRL_WD_EN)
+check("arm player без walk → DELAY/CTL сброшены",
+      gw.fpga._t.regs.get(lf.REG_DELAY, 0) == 0 and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL, 0) == 0)
+
+r = rpc({"op": "arm", "mode": "player", "delay": 16, "walk_step": 2, "walk_max": 64})
+check("arm player delay+walk пишет регистры",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_DELAY) == 16 and
+      gw.fpga._t.regs.get(lf.REG_WALK_STEP) == 2 and
+      gw.fpga._t.regs.get(lf.REG_WALK_MAX) == 64 and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL) == lf.WALK_CTL_EN)
+
+r = rpc({"op": "arm", "mode": "player", "walk_auto": True})
+check("arm player walk_auto без порога → отказ", r.get("ok") is False)
+
+r = rpc({"op": "arm", "mode": "player", "walk_auto": True, "det_thr": 5000, "det_shift": 4})
+check("arm player walk_auto с порогом",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_WALK_CTL) == (lf.WALK_CTL_EN | lf.WALK_CTL_AUTO))
+# Не оставлять det_thr_set: ниже suite проверяет отказ lb_gated без порога.
+gw.det_thr_set = False
+
+r = rpc({"op": "set", "reg": "delay", "value": 8})
+check("gateway set delay", r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_DELAY) == 8)
 
 r = rpc({"op": "status"})
 check("gateway status playing", r.get("ok") is True and r.get("playing") is True)

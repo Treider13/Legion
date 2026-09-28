@@ -32,6 +32,12 @@ entity legion_regs is
         tx_player_len : out unsigned(11 downto 0);
         tx_cap_arm    : out std_logic;
         tx_wd_kick    : out std_logic;  -- строб heartbeat в tx_clock
+        tx_delay      : out unsigned(31 downto 0);
+        tx_walk_step  : out unsigned(31 downto 0);
+        tx_walk_max   : out unsigned(31 downto 0);
+        tx_walk_en    : out std_logic;
+        tx_walk_auto  : out std_logic;
+        tx_walk_hold  : out std_logic;
         -- Домен RX (пороги детектора)
         rx_clock      : in  std_logic;
         rx_reset      : in  std_logic;
@@ -47,7 +53,9 @@ entity legion_regs is
         tx_wd_fired   : in  std_logic;
         tx_lb_level   : in  unsigned(7 downto 0);
         tx_det_active : in  std_logic;
-        tx_det_count  : in  unsigned(15 downto 0)
+        tx_det_count  : in  unsigned(15 downto 0);
+        tx_walk_state : in  std_logic_vector(2 downto 0);
+        tx_walk_cur   : in  unsigned(31 downto 0)
     );
 end entity;
 
@@ -62,6 +70,10 @@ architecture rtl of legion_regs is
     signal r_lb_shift   : std_logic_vector(3 downto 0);
     signal r_wd_limit   : std_logic_vector(15 downto 0);
     signal r_fft_ctrl   : std_logic_vector(2 downto 0);
+    signal r_delay      : std_logic_vector(31 downto 0);
+    signal r_walk_step  : std_logic_vector(31 downto 0);
+    signal r_walk_max   : std_logic_vector(31 downto 0);
+    signal r_walk_ctl   : std_logic_vector(2 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -74,6 +86,10 @@ architecture rtl of legion_regs is
     signal kick_meta, kick_tx   : std_logic;
     signal kick_tx_d            : std_logic;
     signal cap_meta, cap_tx     : std_logic;
+    signal dly_meta, dly_tx     : std_logic_vector(31 downto 0);
+    signal wst_meta, wst_tx     : std_logic_vector(31 downto 0);
+    signal wmx_meta, wmx_tx     : std_logic_vector(31 downto 0);
+    signal wct_meta, wct_tx     : std_logic_vector(2 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -84,6 +100,7 @@ architecture rtl of legion_regs is
     signal sh_meta, sh_rx       : std_logic_vector(3 downto 0);
     signal fft_meta, fft_rx     : std_logic_vector(2 downto 0);
     signal pk_meta, pk_nios     : std_logic_vector(31 downto 0);
+    signal wcur_meta, wcur_nios : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
     signal det_gray_rx   : std_logic_vector(15 downto 0);
@@ -119,6 +136,10 @@ begin
             r_lb_shift   <= (others => '0');
             r_wd_limit   <= x"003D";        -- 61 × 16.4 мс ≈ 1 с
             r_fft_ctrl   <= "000";          -- FFT выкл: walker как раньше
+            r_delay      <= (others => '0');
+            r_walk_step  <= (others => '0');
+            r_walk_max   <= (others => '0');
+            r_walk_ctl   <= "000";
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -140,6 +161,10 @@ begin
                         end if;
                     when LEGION_REG_WD_KICK    => kick_toggle  <= not kick_toggle;
                     when LEGION_REG_FFT_CTRL   => r_fft_ctrl   <= pio_wdata(2 downto 0);
+                    when LEGION_REG_DELAY      => r_delay      <= pio_wdata;
+                    when LEGION_REG_WALK_STEP  => r_walk_step  <= pio_wdata;
+                    when LEGION_REG_WALK_MAX   => r_walk_max   <= pio_wdata;
+                    when LEGION_REG_WALK_CTL   => r_walk_ctl   <= pio_wdata(2 downto 0);
                     when others => null;
                 end case;
             end if;
@@ -157,6 +182,10 @@ begin
             wdl_meta  <= (others => '0'); wdl_tx  <= (others => '0');
             kick_meta <= '0'; kick_tx <= '0'; kick_tx_d <= '0';
             cap_meta  <= '0'; cap_tx  <= '0';
+            dly_meta  <= (others => '0'); dly_tx <= (others => '0');
+            wst_meta  <= (others => '0'); wst_tx <= (others => '0');
+            wmx_meta  <= (others => '0'); wmx_tx <= (others => '0');
+            wct_meta  <= (others => '0'); wct_tx <= (others => '0');
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -170,6 +199,10 @@ begin
             -- capture_arm: квазистатик, но плеер ловит фронт — двойной триггер
             cap_meta  <= r_cap_arm;
             cap_tx    <= cap_meta;
+            dly_meta  <= r_delay;      dly_tx  <= dly_meta;
+            wst_meta  <= r_walk_step;  wst_tx  <= wst_meta;
+            wmx_meta  <= r_walk_max;   wmx_tx  <= wmx_meta;
+            wct_meta  <= r_walk_ctl;   wct_tx  <= wct_meta;
         end if;
     end process;
 
@@ -182,6 +215,12 @@ begin
     tx_player_len <= unsigned(len_tx);
     tx_cap_arm    <= cap_tx;
     tx_wd_kick    <= kick_tx and not kick_tx_d;
+    tx_delay      <= unsigned(dly_tx);
+    tx_walk_step  <= unsigned(wst_tx);
+    tx_walk_max   <= unsigned(wmx_tx);
+    tx_walk_en    <= wct_tx(0);
+    tx_walk_auto  <= wct_tx(1);
+    tx_walk_hold  <= wct_tx(2);
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
     -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
@@ -190,7 +229,8 @@ begin
     status_tx(1)           <= tx_cap_done;
     status_tx(2)           <= tx_det_active;
     status_tx(3)           <= tx_wd_fired;
-    status_tx(7 downto 4)  <= (others => '0');
+    status_tx(4)           <= '0';  -- NIOS подмешивает wd_latch
+    status_tx(7 downto 5)  <= tx_walk_state;
     status_tx(15 downto 8) <= std_logic_vector(tx_lb_level);
     status_tx(31 downto 16) <= (others => '0');
 
@@ -258,9 +298,24 @@ begin
         end if;
     end process;
 
-    -- Чтение 0x15: IOWR(AWS,0x15) we=0 → STATUS = peak, не playing/det.
-    -- we=1 или другой addr — прежний STATUS (биты 7:4 по-прежнему 0).
+    -- Текущая задержка walk-off: квазистатична между циклами play.
+    cdc_walk_cur : process(nios_clk, nios_reset)
+    begin
+        if nios_reset = '1' then
+            wcur_meta <= (others => '0');
+            wcur_nios <= (others => '0');
+        elsif rising_edge(nios_clk) then
+            wcur_meta <= std_logic_vector(tx_walk_cur);
+            wcur_nios <= wcur_meta;
+        end if;
+    end process;
+
+    -- Чтение 0x15: IOWR(AWS,0x15) we=0 → STATUS = peak.
+    -- Чтение 0x23: текущая задержка walk-off.
+    -- we=1 или другой addr — прежний STATUS (бит 4 = 0 в HDL).
     pio_status <= pk_nios when (pio_we = '0' and
                                  to_integer(unsigned(pio_addr)) = LEGION_REG_PEAK_BIN)
+                  else wcur_nios when (pio_we = '0' and
+                                 to_integer(unsigned(pio_addr)) = LEGION_REG_WALK_CUR)
                   else (gray2bin(det_gray_nios) & st_nios(15 downto 0));
 end architecture;

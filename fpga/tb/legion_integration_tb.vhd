@@ -49,6 +49,7 @@ begin
             det_active => '0', lb_shift => "0000",
             host_i => (others => '0'), host_q => (others => '0'), host_valid => '0',
             play_i => (others => '0'), play_q => (others => '0'), play_valid => '0',
+            play_en => '0',
             nco_i => (others => '0'), nco_q => (others => '0'), nco_valid => '0',
             lb_data => rd_data, lb_empty => rd_empty, lb_rd_en => lb_rd_en,
             out_i => out_i, out_q => out_q, out_valid => out_valid

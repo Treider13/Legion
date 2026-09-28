@@ -998,6 +998,22 @@ button:disabled {
   letter-spacing: 0.2em;
 }
 
+.corr-grid .walk-flags {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+}
+
+.corr-grid label.walk-flag {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
 .corr-grid label.shelf-mark {
   font-size: 13px;
   letter-spacing: 0.06em;

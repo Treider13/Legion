@@ -34,6 +34,7 @@ entity legion_tx_mux is
         play_i       : in  signed(15 downto 0);
         play_q       : in  signed(15 downto 0);
         play_valid   : in  std_logic;
+        play_en      : in  std_logic;  -- 1 = плеер крутит RAM (каденс его)
         -- Источник 2: NCO
         nco_i        : in  signed(15 downto 0);
         nco_q        : in  signed(15 downto 0);
@@ -61,6 +62,8 @@ architecture rtl of legion_tx_mux is
     signal det_d    : std_logic;
     signal ramping  : std_logic;
     signal ramp_k   : unsigned(4 downto 0);
+    -- Предыдущий play_valid: слот Q после последнего сэмпла (play_en уже 0).
+    signal play_valid_d : std_logic;
 begin
     live <= arm and wd_ok;
 
@@ -75,12 +78,14 @@ begin
             out_i     <= (others => '0');
             out_q     <= (others => '0');
             out_valid <= '0';
-            det_d     <= '0';
-            ramping   <= '0';
-            ramp_k    <= (others => '0');
+            det_d        <= '0';
+            ramping      <= '0';
+            ramp_k       <= (others => '0');
+            play_valid_d <= '0';
         elsif rising_edge(clock) then
             lb_rd_en <= '0';
             lb_valid <= '0';
+            play_valid_d <= play_valid;
 
             -- Фронт/спад det_active (уже синхронизирован к tx_clock снаружи).
             -- Спад → старт рампы; возврат энергии отменяет её мгновенно.
@@ -121,8 +126,20 @@ begin
                     out_q     <= host_q;
                     out_valid <= host_valid;
                 when LEGION_MODE_PLAYER =>
-                    if live = '1' then
-                        out_i <= play_i; out_q <= play_q; out_valid <= play_valid;
+                    -- Три разных «play_valid=0», их нельзя склеивать:
+                    --   play_valid=1           — сэмпл плеера, каденс его;
+                    --   play_en / play_valid_d — межсэмпловый слот Q
+                    --     (lms6002d tx_sample: valid=0 + enable → Q из регистра;
+                    --      valid=1 здесь сожрал бы Q и вставил лишний I=0);
+                    --   иначе DELAY/пауза      — нули с каденсом mux, иначе
+                    --     DAC держит последний сэмпл (увод → DC).
+                    -- Фаза mux крутится всё время MODE_PLAYER, фаза плеера
+                    -- сбрасывается при play_en=0. После DELAY они не совпадают.
+                    if live = '1' and play_valid = '1' then
+                        out_i <= play_i; out_q <= play_q; out_valid <= '1';
+                    elsif live = '1' and (play_en = '1' or play_valid_d = '1') then
+                        out_i <= (others => '0'); out_q <= (others => '0');
+                        out_valid <= '0';
                     else
                         out_i <= (others => '0'); out_q <= (others => '0');
                         out_valid <= phase;

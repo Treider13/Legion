@@ -196,6 +196,22 @@ architecture legion of bladerf is
     signal lg_tx_player_len : unsigned(11 downto 0);
     signal lg_tx_cap_arm    : std_logic;
     signal lg_tx_wd_kick    : std_logic;
+    signal lg_tx_delay      : unsigned(31 downto 0);
+    signal lg_tx_walk_step  : unsigned(31 downto 0);
+    signal lg_tx_walk_max   : unsigned(31 downto 0);
+    signal lg_tx_walk_en    : std_logic;
+    signal lg_tx_walk_auto  : std_logic;
+    signal lg_tx_walk_hold  : std_logic;
+    signal lg_wo_cap_i      : signed(15 downto 0);
+    signal lg_wo_cap_q      : signed(15 downto 0);
+    signal lg_wo_cap_v      : std_logic;
+    signal lg_wo_cap_arm    : std_logic;
+    signal lg_wo_rd_en      : std_logic;
+    signal lg_wo_lb_need    : std_logic;
+    signal lg_wo_state      : std_logic_vector(2 downto 0);
+    signal lg_wo_cur        : unsigned(31 downto 0);
+    signal lg_mux_rd_en     : std_logic;
+    signal lg_mode_player   : std_logic;
 
     signal lg_play_i        : signed(15 downto 0);
     signal lg_play_q        : signed(15 downto 0);
@@ -1123,12 +1139,20 @@ begin
         tx_player_len => lg_tx_player_len,
         tx_cap_arm    => lg_tx_cap_arm,
         tx_wd_kick    => lg_tx_wd_kick,
+        tx_delay      => lg_tx_delay,
+        tx_walk_step  => lg_tx_walk_step,
+        tx_walk_max   => lg_tx_walk_max,
+        tx_walk_en    => lg_tx_walk_en,
+        tx_walk_auto  => lg_tx_walk_auto,
+        tx_walk_hold  => lg_tx_walk_hold,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
         tx_lb_level   => lg_lb_level,
         tx_det_active => lg_det_active_tx,
         tx_det_count  => lg_det_count,
+        tx_walk_state => lg_wo_state,
+        tx_walk_cur   => lg_wo_cur,
         rx_clock      => rx_clock,
         rx_reset      => rx_reset,
         rx_det_thr    => lg_det_thr_rx,
@@ -1195,14 +1219,50 @@ begin
       port map ( reset => rx_reset, clock => rx_clock,
                  async => lg_lb_active_tx, sync => lg_lb_active_rx );
 
+    U_legion_walkoff : entity work.legion_walkoff
+      port map (
+        clock        => tx_clock,
+        reset        => tx_reset,
+        enable       => lg_tx_walk_en,
+        auto         => lg_tx_walk_auto,
+        hold_max     => lg_tx_walk_hold,
+        delay_init   => lg_tx_delay,
+        walk_step    => lg_tx_walk_step,
+        walk_max     => lg_tx_walk_max,
+        len_m1       => lg_tx_player_len,
+        lb_shift     => lg_tx_lb_shift,
+        arm          => lg_tx_arm,
+        mode_player  => lg_mode_player,
+        det_active   => lg_det_active_tx,
+        host_cap_arm => lg_tx_cap_arm,
+        host_i       => dac_streams_host(0).data_i,
+        host_q       => dac_streams_host(0).data_q,
+        host_valid   => dac_streams_host(0).data_v,
+        lb_data      => lg_lb_data,
+        lb_empty     => lg_lb_empty,
+        lb_rd_en     => lg_wo_rd_en,
+        cap_i        => lg_wo_cap_i,
+        cap_q        => lg_wo_cap_q,
+        cap_valid    => lg_wo_cap_v,
+        capture_arm  => lg_wo_cap_arm,
+        play_en      => lg_play_en,
+        capture_done => lg_cap_done,
+        play_valid   => lg_play_valid,
+        delaying     => open,
+        lb_need      => lg_wo_lb_need,
+        cur_delay    => lg_wo_cur,
+        state        => lg_wo_state
+      );
+    lg_mode_player <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
+
     U_legion_player : entity work.legion_player
       port map (
         clock        => tx_clock,
         reset        => tx_reset,
-        cap_i        => dac_streams_host(0).data_i,
-        cap_q        => dac_streams_host(0).data_q,
-        cap_valid    => dac_streams_host(0).data_v,
-        capture_arm  => lg_tx_cap_arm,
+        cap_i        => lg_wo_cap_i,
+        cap_q        => lg_wo_cap_q,
+        cap_valid    => lg_wo_cap_v,
+        capture_arm  => lg_wo_cap_arm,
         capture_done => lg_cap_done,
         play_en      => lg_play_en,
         len_m1       => lg_tx_player_len,
@@ -1211,9 +1271,9 @@ begin
         out_valid    => lg_play_valid,
         playing      => lg_playing
       );
-    lg_play_en <= '1' when lg_tx_mode = LEGION_MODE_PLAYER else '0';
     lg_lb_active_tx <= '1' when lg_tx_mode = LEGION_MODE_LB_GATED
-                            or lg_tx_mode = LEGION_MODE_LB_ALWAYS else '0';
+                            or lg_tx_mode = LEGION_MODE_LB_ALWAYS
+                            or lg_wo_lb_need = '1' else '0';
 
     U_legion_nco : entity work.legion_nco
       port map (
@@ -1271,16 +1331,18 @@ begin
         play_i     => lg_play_i,
         play_q     => lg_play_q,
         play_valid => lg_play_valid,
+        play_en    => lg_play_en,
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,
         lb_data    => lg_lb_data,
         lb_empty   => lg_lb_empty,
-        lb_rd_en   => lg_lb_rd_en,
+        lb_rd_en   => lg_mux_rd_en,
         out_i      => lg_mux_i,
         out_q      => lg_mux_q,
         out_valid  => lg_mux_valid
       );
+    lg_lb_rd_en <= lg_mux_rd_en or lg_wo_rd_en;
 
     -- Канал 0 — через мукс LEGION; остальные каналы (MIMO) — напрямую от хоста
     dac_streams(0).data_i <= lg_mux_i;

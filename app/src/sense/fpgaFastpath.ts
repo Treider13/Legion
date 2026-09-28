@@ -503,7 +503,7 @@ export function attachTxGainDb(
   return cmd;
 }
 
-/** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco.
+/** Команда ARM для шлюза. det_thr/shift — lb_gated и walk-off AUTO. nco_ftw — только nco.
  *  freq_mhz — LO парковки: на micro без неё шлюз честно отказывает (AD9361
  *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */
 export function fpgaArmCmd(
@@ -535,6 +535,13 @@ export function fpgaArmCmd(
     searchBwMhz?: number;
     settleN?: number;
     scanBands?: readonly { f1Mhz: number; f2Mhz: number }[];
+    /** Лабораторный walk-off: задержка capture→play в сэмплах. */
+    delay?: number;
+    walkStep?: number;
+    walkMax?: number;
+    walkAuto?: boolean;
+    walkHold?: boolean;
+    walkEn?: boolean;
   },
 ): Record<string, unknown> {
   const cmd: Record<string, unknown> = {
@@ -543,7 +550,7 @@ export function fpgaArmCmd(
     wd: opts.wd !== false,
     token: opts.token,
   };
-  if (mode === "lb_gated") {
+  if (mode === "lb_gated" || opts.walkAuto) {
     cmd.det_thr = opts.detThr;
     cmd.det_shift = clampDetShift(opts.detShift);
   }
@@ -559,7 +566,21 @@ export function fpgaArmCmd(
   if (opts.bwMhz !== undefined && Number.isFinite(opts.bwMhz) && opts.bwMhz > 0) {
     cmd.bw_mhz = opts.bwMhz;
   }
-    if (opts.scanEnable) {
+  if (opts.delay !== undefined && Number.isFinite(opts.delay) && opts.delay >= 0) {
+    cmd.delay = Math.round(opts.delay);
+  }
+  if (opts.walkStep !== undefined && Number.isFinite(opts.walkStep) && opts.walkStep >= 0) {
+    cmd.walk_step = Math.round(opts.walkStep);
+  }
+  if (opts.walkMax !== undefined && Number.isFinite(opts.walkMax) && opts.walkMax >= 0) {
+    cmd.walk_max = Math.round(opts.walkMax);
+  }
+  if (opts.walkAuto) cmd.walk_auto = true;
+  if (opts.walkHold) cmd.walk_hold = true;
+  if (opts.walkEn || opts.walkAuto || (typeof opts.delay === "number" && opts.delay > 0)) {
+    cmd.walk_en = true;
+  }
+  if (opts.scanEnable) {
     cmd.scan_enable = true;
     if (opts.scanF1Mhz !== undefined) cmd.scan_f1_mhz = opts.scanF1Mhz;
     if (opts.scanF2Mhz !== undefined) cmd.scan_f2_mhz = opts.scanF2Mhz;

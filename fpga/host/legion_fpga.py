@@ -59,6 +59,15 @@ REG_SETTLE_N = 0x1B  # сэмплы после hop; 0 = 4096
 REG_SCAN_SURVEY_US = 0x1C  # период глухого прохода, мкс; 0 = 5e6
 REG_SCAN_EVENT = 0x1D  # [7:0] код, [31:8] seq
 REG_AIR_TX_GAIN_DB = 0x1E  # ручной TX gain, дБ; код = gain+1000; только NIOS
+REG_DELAY = 0x1F  # начальная задержка, сэмплы
+REG_WALK_STEP = 0x20
+REG_WALK_MAX = 0x21
+REG_WALK_CTL = 0x22  # bit0 EN, bit1 AUTO, bit2 HOLD
+REG_WALK_CUR = 0x23  # STATUS mux: текущая задержка
+
+WALK_CTL_EN = 1 << 0
+WALK_CTL_AUTO = 1 << 1
+WALK_CTL_HOLD = 1 << 2
 
 SCAN_CTRL_EN = 1 << 0
 SCAN_CTRL_TURN = 1 << 1
@@ -179,6 +188,8 @@ class LegionFpga:
             # автономного DISARM (legion_work) HDL-бит гаснет за мкс
             # (enable=0 сбрасывает expired), хост читает латч.
             "wd_fired": bool(data & 0x18),
+            "walk_state": (data >> 5) & 0x7,
+            "delaying": ((data >> 5) & 0x7) == 3,
             "lb_level": (data >> 8) & 0xFF,
             "det_count": (data >> 16) & 0xFFFF,
         }
@@ -258,6 +269,18 @@ class LegionFpga:
 
     def capture_arm(self, on: bool = True) -> bool:
         return self.write_reg(REG_PLAYER_CTL, 1 if on else 0)
+
+    def set_walkoff(self, delay: int = 0, step: int = 0, maximum: int = 0,
+                    enable: bool = False, auto: bool = False,
+                    hold: bool = False) -> bool:
+        """Лабораторный walk-off: задержка (сэмплы) и наращивание после play."""
+        ctl = ((WALK_CTL_EN if enable else 0) |
+               (WALK_CTL_AUTO if auto else 0) |
+               (WALK_CTL_HOLD if hold else 0))
+        return (self.write_reg(REG_DELAY, int(delay) & 0xFFFFFFFF) and
+                self.write_reg(REG_WALK_STEP, int(step) & 0xFFFFFFFF) and
+                self.write_reg(REG_WALK_MAX, int(maximum) & 0xFFFFFFFF) and
+                self.write_reg(REG_WALK_CTL, ctl))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

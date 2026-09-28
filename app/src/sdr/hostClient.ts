@@ -368,6 +368,9 @@ export interface FpgaStatus {
   wd_fired?: boolean;
   lb_level?: number;
   det_count?: number;
+  walk_state?: number;
+  walk_delay?: number;
+  delaying?: boolean;
   fake?: boolean;
   /** Шлюз распознал ревизию legion (0x80 отвечает). null/undefined — неизвестно. */
   legion?: boolean | null;

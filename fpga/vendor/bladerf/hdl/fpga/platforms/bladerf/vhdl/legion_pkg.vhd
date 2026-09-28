@@ -65,6 +65,25 @@ package legion_pkg is
     constant LEGION_REG_SCAN_EVENT   : natural := 16#1D#; -- [7:0] код, [31:8] seq
     -- Только NIOS (HDL when others => null). Код = gain+1000, 0xFFFFFFFF = не задан.
     constant LEGION_REG_AIR_TX_GAIN_DB : natural := 16#1E#; -- ручной TX gain, дБ
+    -- Лабораторный walk-off: задержка capture_done → play_en и наращивание.
+    -- Единица — период сэмпла (2 такта tx_clock, каденс LMS/ADI valid).
+    constant LEGION_REG_DELAY      : natural := 16#1F#; -- начальная задержка, сэмплы
+    constant LEGION_REG_WALK_STEP  : natural := 16#20#; -- прирост задержки за цикл
+    constant LEGION_REG_WALK_MAX   : natural := 16#21#; -- потолок; 0 = до 2^32−1
+    constant LEGION_REG_WALK_CTL   : natural := 16#22#; -- bit0 EN, bit1 AUTO, bit2 HOLD
+    constant LEGION_REG_WALK_CUR   : natural := 16#23#; -- STATUS mux: текущая задержка
+
+    constant LEGION_WALK_CTL_EN    : natural := 0;
+    constant LEGION_WALK_CTL_AUTO  : natural := 1;
+    constant LEGION_WALK_CTL_HOLD  : natural := 2;
+
+    -- Состояния автомата walk-off (STATUS bits 7:5, когда EN=1)
+    constant LEGION_WALK_ST_IDLE     : std_logic_vector(2 downto 0) := "000";
+    constant LEGION_WALK_ST_WAIT_DET : std_logic_vector(2 downto 0) := "001";
+    constant LEGION_WALK_ST_CAPTURE  : std_logic_vector(2 downto 0) := "010";
+    constant LEGION_WALK_ST_DELAY    : std_logic_vector(2 downto 0) := "011";
+    constant LEGION_WALK_ST_PLAY     : std_logic_vector(2 downto 0) := "100";
+    constant LEGION_WALK_ST_STEP     : std_logic_vector(2 downto 0) := "101";
 
     constant LEGION_FFT_CTRL_EN      : natural := 0;
     constant LEGION_FFT_CTRL_DC_NOTCH : natural := 1;
@@ -72,9 +91,10 @@ package legion_pkg is
 
     -- Статус (читается NIOS по STATUS-PIO), биты:
     --   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (живой expired),
-    --   15..8 lb_fifo_level, 31..16 det_count; 7..4 в HDL нули.
+    --   15..8 lb_fifo_level, 31..16 det_count.
     --   Бит 4 подмешивает NIOS (липкий латч deadman, legion_cmds.c) — после
     --   автономного DISARM expired гаснет за мкс (enable=0), хост читает латч.
+    --   7:5 — состояние walk-off (LEGION_WALK_ST_*), 000 если EN=0.
 
     constant LEGION_RAM_DEPTH      : natural := 4096;   -- 4096×32бит = 16 M9K на EP4CE40
     constant LEGION_LB_FIFO_DEPTH  : natural := 64;     -- CDC RX→TX, Gray-указатели
