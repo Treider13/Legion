@@ -44,8 +44,8 @@ LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
 
 | Каталог | Содержимое |
 |---|---|
-| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
-| `tb/` | GHDL-тестбенчи + `run_ghdl.sh` (8/8 PASS) |
+| `hdl/` | Модули VHDL-2008: `legion_pkg`, `legion_detector`, `legion_player`, `legion_walkoff`, `legion_nco`, `legion_dcfifo`, `legion_watchdog`, `legion_tx_mux`, `legion_regs` |
+| `tb/` | GHDL-тестбенчи + `run_ghdl.sh` |
 | `nios/` | `legion_cmds.c/h` — обработчик регистров на NIOS II (target 0x80) |
 | `host/` | `legion_fpga.py` (регистровый API), `legion_gateway.py` (TCP↔USB агент шлюза), `gen_sine_lut.py` |
 | `integration/` | Патчи к дереву Nuand: топ-левел, `bladerf_p.vhd`, `pkt_8x32.c`, сниппет `nios_system.tcl` |
@@ -53,10 +53,11 @@ LMS (`lms_set_precalculated_frequency` + `band_select`). На время PLL
 
 ## Проверено без железа (факты этой ревизии)
 
-1. **GHDL-симуляция всех модулей: 8/8 PASS** (`fpga/tb/run_ghdl.sh`):
+1. **GHDL-симуляция всех модулей** (`fpga/tb/run_ghdl.sh`):
    детектор (порог/окно/счётчик/кламп shift), плеер (capture→play по кругу,
    каденс valid каждый 2-й такт — контракт LMS6002D, тишина-с-каденсом до
-   capture), NCO (частота по нулям Q, амплитуда), watchdog (expiry/heartbeat),
+   capture), walk-off (обход / DELAY / шаг / AUTO detect→capture→play),
+   NCO (частота по нулям Q, амплитуда), watchdog (expiry/heartbeat),
    dcfifo (CDC, порядок), мультиплексор (PASS/тишина-с-каденсом/гейтинг/
    ramp-down на спаде det_active/отмена рампы/watchdog посреди рампы/
    голодание FIFO), регистры (CDC, heartbeat-toggle, кламп WD_LIMIT,
@@ -142,6 +143,10 @@ commit и лицензия — в `fpga/vendor/UPSTREAM.txt`, FPGA HDL = MIT).
 3. Загрузка волны в RAM: capture_arm=1 → обычный TX-стрим волной
    (существующая ЗАШИТЬ) → capture_done=1 → режим `player`.
    Во время capture поток идёт и на LMS (слышно, что грузим — в нагрузку).
+   Лабораторный walk-off (нагрузка 50 Ом): регистры `DELAY` / `WALK_STEP` /
+   `WALK_MAX` / `WALK_CTL`. Автомат в FPGA: `capture_arm` → `capture_done`
+   → тишина `DELAY` сэмплов → `play_en`; после круга RAM задержка += STEP.
+   `WALK_CTL.AUTO` — старт по детектору, захват с RX FIFO, не с хоста.
 
 ## Эксплуатационные факты (сверены с форумами/даташитами)
 

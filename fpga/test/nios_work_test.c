@@ -317,6 +317,12 @@ int main(void)
     /* ARM lb_* без эфира — существующий guard не сломан */
     CHECK("ARM lb_gated без эфира → отказ (guard цел)",
           !legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    CHECK("WALK_CTL пишется",
+          legion_reg_write(LEGION_REG_WALK_CTL, LEGION_WALK_CTL_EN | LEGION_WALK_CTL_AUTO));
+    CHECK("ARM player AUTO без эфира → отказ",
+          !legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_PLAYER));
+    CHECK("WALK_CTL сброс", legion_reg_write(LEGION_REG_WALK_CTL, 0));
+    CHECK("DELAY пишется в HDL", legion_reg_write(LEGION_REG_DELAY, 16));
     /* Изоляция guard'а: отклонённый ARM не должен взвести legion_armed —
      * иначе wd_fired сейчас вызвал бы DISARM (найдено перепроверкой,
      * раунд 6: без этого шага баг маскировался бы последующим re-ARM). */

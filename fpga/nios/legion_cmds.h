@@ -57,6 +57,11 @@
 #define LEGION_REG_SCAN_SURVEY_US 0x1C  /* период глухого прохода, мкс; 0 = 5e6 */
 #define LEGION_REG_SCAN_EVENT     0x1D  /* [7:0] код, [31:8] seq — лог хоста */
 #define LEGION_REG_AIR_TX_GAIN_DB 0x1E  /* ручной TX gain, дБ; код = gain+1000; 0xFFFFFFFF = не задан */
+#define LEGION_REG_DELAY          0x1F  /* начальная задержка, сэмплы (HDL) */
+#define LEGION_REG_WALK_STEP      0x20  /* прирост задержки за цикл play */
+#define LEGION_REG_WALK_MAX       0x21  /* потолок; 0 = до 2^32−1 */
+#define LEGION_REG_WALK_CTL       0x22  /* bit0 EN, bit1 AUTO, bit2 HOLD */
+#define LEGION_REG_WALK_CUR       0x23  /* STATUS mux: текущая задержка */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -75,7 +80,10 @@
 #define LEGION_EVT_LOCK           3u
 #define LEGION_EVT_SWITCH         4u
 #define LEGION_EVT_RESURVEY       5u
-#define LEGION_REG_MAX            LEGION_REG_AIR_TX_GAIN_DB
+#define LEGION_WALK_CTL_EN        (1u << 0)
+#define LEGION_WALK_CTL_AUTO      (1u << 1)
+#define LEGION_WALK_CTL_HOLD      (1u << 2)
+#define LEGION_REG_MAX            LEGION_REG_WALK_CUR
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -89,11 +97,14 @@
  *   4 wd_latch (NIOS, липкий до следующего ARM — HDL 7..4 = 0, бит
  *   подмешивается в legion_reg_read: после автономного DISARM по deadman
  *   HDL-бит 3 гаснет за мкс, enable=0 сбрасывает expired),
- *   15..8 lb_fifo_level, 31..16 det_count
+ *   15..8 lb_fifo_level, 31..16 det_count;
+ *   7:5 — состояние walk-off (HDL), бит 4 = 0 в HDL (латч NIOS)
  * (зеркало legion_regs.vhd, процесс status_tx) */
 #define LEGION_STATUS_DET_ACTIVE  (1u << 2)
 #define LEGION_STATUS_WD_FIRED    (1u << 3)
 #define LEGION_STATUS_WD_LATCH    (1u << 4)
+#define LEGION_STATUS_WALK_SHIFT  5
+#define LEGION_STATUS_WALK_MASK   (7u << 5)
 
 /* Запись/чтение регистра LEGION в FPGA (через PIO legion_wdata/legion_aws).
  * Реализация — в legion_cmds.c; вызывается из pkt_8x32.c (case 0x80). */

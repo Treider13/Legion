@@ -122,6 +122,7 @@ static uint64_t legion_stare_t0;
 static uint32_t legion_scan_survey_us;
 static uint32_t legion_scan_event;
 static uint32_t legion_scan_event_seq;
+static uint32_t legion_walk_ctl;
 static bool     legion_inner_on;
 static uint32_t legion_inner_bin;
 static uint16_t legion_inner_mag;
@@ -788,6 +789,16 @@ static uint32_t legion_peak_word(void)
     uint32_t w;
 
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, LEGION_REG_PEAK_BIN);
+    w = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+    return w;
+}
+
+static uint32_t legion_walk_cur_word(void)
+{
+    uint32_t w;
+
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, LEGION_REG_WALK_CUR);
     w = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
     return w;
@@ -1901,6 +1912,13 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             legion_air_tx_gain_db = data;
             return true;
 
+        case LEGION_REG_WALK_CTL:
+            legion_walk_ctl = data;
+            break;
+
+        case LEGION_REG_WALK_CUR:
+            return true;
+
         case LEGION_REG_AIR_PREP:
             if (data & 0x1) {
                 return legion_air_up((data & 0x2) != 0, (data & 0x4) != 0);
@@ -1916,6 +1934,13 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 if ((mode == LEGION_MODE_LB_GATED ||
                      mode == LEGION_MODE_LB_ALWAYS) && !legion_air_is_up) {
                     DBG("LEGION: ARM lb_* без AIR_PREP — отказ\n");
+                    return false;
+                }
+                /* AUTO walk-off захватывает RX — тот же эфир, что lb_*. */
+                if (mode == LEGION_MODE_PLAYER &&
+                    (legion_walk_ctl & LEGION_WALK_CTL_AUTO) != 0 &&
+                    !legion_air_is_up) {
+                    DBG("LEGION: ARM player AUTO без AIR_PREP — отказ\n");
                     return false;
                 }
             }
@@ -2039,6 +2064,14 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_AIR_TX_GAIN_DB) {
         *data = legion_air_tx_gain_db;
+        return true;
+    }
+    if (addr == LEGION_REG_WALK_CTL) {
+        *data = legion_walk_ctl;
+        return true;
+    }
+    if (addr == LEGION_REG_WALK_CUR) {
+        *data = legion_walk_cur_word();
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

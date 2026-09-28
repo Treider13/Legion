@@ -32,7 +32,7 @@ import {
   spectrumDb,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -1496,6 +1496,12 @@ async function main(): Promise<void> {
   check("ARM lb_gated несёт det_thr и shift=4", gatedCmd.det_thr === 5000 && gatedCmd.det_shift === 4);
   const playerCmd = fpgaArmCmd("player", { detThr: 5000, detShift: 4, token: "" });
   check("ARM player без det_thr", playerCmd.det_thr === undefined && playerCmd.mode === "player");
+  const walkCmd = fpgaArmCmd("player", {
+    detThr: 5000, detShift: 4, token: "", delay: 16, walkStep: 2, walkMax: 64, walkAuto: true,
+  });
+  check("ARM player walk-off несёт delay/step/auto",
+    walkCmd.delay === 16 && walkCmd.walk_step === 2 && walkCmd.walk_max === 64 &&
+    walkCmd.walk_auto === true && walkCmd.walk_en === true && walkCmd.det_thr === 5000);
   const ncoZero = fpgaArmCmd("nco", { detThr: 5000, detShift: 4, token: "", ncoFtw: ncoFtwFromFrac(0) });
   check("ARM nco шлёт FTW", typeof ncoZero.nco_ftw === "number");
   check("fj=0 → fs/8, не DC", ncoZero.nco_ftw === ncoFtwFromFrac(0.125) && ncoZero.nco_ftw !== 0);
@@ -1685,6 +1691,12 @@ async function main(): Promise<void> {
   const st0 = useLegion.getState();
   check("store: окно по умолчанию 10", st0.fpgaSoloWindowMhz === "10");
   check("store: задержка по умолчанию 500", st0.fpgaSoloDwellMs === "500");
+  check("store: walk-off по умолчанию выкл",
+    st0.fpgaWalkDelay === "0" && st0.fpgaWalkStep === "0" && st0.fpgaWalkAuto === false);
+  check("walkoffArmOpts нули → EN выкл",
+    walkoffArmOpts({ fpgaWalkDelay: "0", fpgaWalkStep: "0", fpgaWalkMax: "0", fpgaWalkAuto: false, fpgaWalkHold: false }).walkEn === false);
+  check("walkoffArmOpts delay>0 → EN",
+    walkoffArmOpts({ fpgaWalkDelay: "16", fpgaWalkStep: "2", fpgaWalkMax: "64", fpgaWalkAuto: false, fpgaWalkHold: true }).walkEn === true);
   check("store: ход по умолчанию sweep", st0.fpgaSoloPattern === "sweep");
   st0.setFpgaSoloWindowMhz("50");
   st0.setFpgaSoloDwellMs("800");

@@ -413,7 +413,9 @@ class FakeTransport:
                         lf.REG_SEARCH_BW_HZ, lf.REG_FIRE_BW_HZ, lf.REG_PEAK_KHZ,
                         lf.REG_PEAK_BIN, lf.REG_FFT_CTRL, lf.REG_BAND_IDX,
                         lf.REG_BAND_F1_KHZ, lf.REG_BAND_F2_KHZ,
-                        lf.REG_BAND_COUNT, lf.REG_SETTLE_N):
+                        lf.REG_BAND_COUNT, lf.REG_SETTLE_N,
+                        lf.REG_DELAY, lf.REG_WALK_STEP, lf.REG_WALK_MAX,
+                        lf.REG_WALK_CTL, lf.REG_WALK_CUR):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -564,7 +566,10 @@ class LegionGateway:
         """
         if mode == lf.MODE_PASS:
             return True, ""
-        rx = mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS)
+        walk_auto = bool(msg.get("walk_auto"))
+        rx = mode in (lf.MODE_LB_GATED, lf.MODE_LB_ALWAYS) or (
+            mode == lf.MODE_PLAYER and walk_auto
+        )
         if self.board == "bladerf2":
             freq = msg.get("freq_mhz")
             if freq is None:
@@ -935,6 +940,26 @@ class LegionGateway:
             limit = lf.watchdog_limit_for_fs(fs_for_wd, self.board)
             if not self.fpga.set_watchdog(limit):
                 return {"ok": False, "reason": "запись WD_LIMIT не удалась"}
+            try:
+                walk_delay = int(msg.get("delay") or 0)
+                walk_step = int(msg.get("walk_step") or 0)
+                walk_max = int(msg.get("walk_max") or 0)
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "delay/walk_step/walk_max: не число"}
+            walk_auto = bool(msg.get("walk_auto"))
+            walk_hold = bool(msg.get("walk_hold"))
+            walk_en = bool(msg.get("walk_en", walk_auto or walk_delay > 0 or walk_step > 0))
+            if walk_auto and mode != lf.MODE_PLAYER:
+                return {"ok": False, "reason": "walk_auto только в режиме player"}
+            if walk_auto and msg.get("det_thr") is None and not self.det_thr_set:
+                return {"ok": False,
+                        "reason": "walk-off AUTO: не задан порог детектора (поле «Порог чувствительности»)"}
+            # Всегда пишем: leftover EN с прошлой сессии иначе ломал бы player.
+            if not self.fpga.set_walkoff(
+                delay=walk_delay, step=walk_step, maximum=walk_max,
+                enable=walk_en, auto=walk_auto, hold=walk_hold,
+            ):
+                return {"ok": False, "reason": "запись DELAY/WALK_* не удалась"}
             if msg.get("nco_ftw") is not None:
                 if not self.fpga.write_reg(lf.REG_NCO_FTW, int(msg["nco_ftw"]) & 0xFFFFFFFF):
                     return {"ok": False, "reason": "запись NCO_FTW не удалась"}
@@ -1038,6 +1063,9 @@ class LegionGateway:
                     st["scan_event"] = ev
                     st["scan_event_code"] = ev & 0xFF
                     st["scan_event_seq"] = ev >> 8
+                okw, wcur = self.fpga.read_reg(lf.REG_WALK_CUR)
+                if okw:
+                    st["walk_delay"] = wcur
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)
@@ -1105,6 +1133,8 @@ class LegionGateway:
                 "det_shift": lf.REG_DET_SHIFT, "player_len": lf.REG_PLAYER_LEN,
                 "player_ctl": lf.REG_PLAYER_CTL, "lb_shift": lf.REG_LB_SHIFT,
                 "wd_limit": lf.REG_WD_LIMIT,
+                "delay": lf.REG_DELAY, "walk_step": lf.REG_WALK_STEP,
+                "walk_max": lf.REG_WALK_MAX, "walk_ctl": lf.REG_WALK_CTL,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,

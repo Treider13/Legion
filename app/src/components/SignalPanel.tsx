@@ -288,6 +288,58 @@ export function SignalPanel() {
               <option value="lb_always">Ретрансляция постоянная (RX→TX, без детектора)</option>
             </select>
           </label>
+          {s.fpgaMode === "player" && (
+            <>
+              <label title="Число сэмплов тишины после capture_done до play_en. 0 — сразу. При 2 MSPS 1 сэмпл = 0.5 мкс.">
+                ЗАДЕРЖКА (сэмплы)
+                <input
+                  aria-label="Задержка walk-off в сэмплах"
+                  inputMode="numeric"
+                  value={s.fpgaWalkDelay}
+                  onChange={(e) => s.setFpgaWalkDelay(e.target.value)}
+                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                />
+              </label>
+              <label title="После каждого круга RAM задержка увеличивается на этот шаг (walk-off).">
+                ШАГ WALK-OFF
+                <input
+                  aria-label="Шаг walk-off в сэмплах"
+                  inputMode="numeric"
+                  value={s.fpgaWalkStep}
+                  onChange={(e) => s.setFpgaWalkStep(e.target.value)}
+                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                />
+              </label>
+              <label title="Потолок задержки. 0 — без потолка (до 2³²−1).">
+                ПОТОЛОК ЗАДЕРЖКИ
+                <input
+                  aria-label="Потолок задержки в сэмплах"
+                  inputMode="numeric"
+                  value={s.fpgaWalkMax}
+                  onChange={(e) => s.setFpgaWalkMax(e.target.value)}
+                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                />
+              </label>
+              <label title="На потолке держать задержку, не сбрасывать к начальной.">
+                <input
+                  type="checkbox"
+                  checked={s.fpgaWalkHold}
+                  onChange={(e) => s.setFpgaWalkHold(e.target.checked)}
+                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                />
+                HOLD на потолке
+              </label>
+              <label title="Автоцикл: детектор → захват с RX → задержка → переизлучение → шаг задержки. Порог — тот же, что у ретрансляции.">
+                <input
+                  type="checkbox"
+                  checked={s.fpgaWalkAuto}
+                  onChange={(e) => s.setFpgaWalkAuto(e.target.checked)}
+                  disabled={s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending}
+                />
+                АВТО: обнаружил → захват → задержка → play
+              </label>
+            </>
+          )}
           <label title="Пароль агента на шлюзе, если там задан LEGION_FPGA_TOKEN. Без пароля на агенте поле оставьте пустым.">
             ТОКЕН ШЛЮЗА (если задан на агенте)
             <input
@@ -334,7 +386,7 @@ export function SignalPanel() {
           <div className="sdr-facts">
             <div>
               {s.fpgaStatus.ok
-                ? `воспроизведение: ${s.fpgaStatus.playing ? "да" : "нет"} · волна в памяти: ${s.fpgaStatus.capture_done ? "да" : "нет"} · детектор: ${s.fpgaStatus.det_active ? "энергия" : "тишина"} · сторож: ${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · детектов: ${s.fpgaStatus.det_count ?? 0} · буфер FPGA: ${s.fpgaStatus.lb_level ?? 0}`
+                ? `воспроизведение: ${s.fpgaStatus.playing ? "да" : "нет"} · волна в памяти: ${s.fpgaStatus.capture_done ? "да" : "нет"} · детектор: ${s.fpgaStatus.det_active ? "энергия" : "тишина"} · сторож: ${s.fpgaStatus.wd_fired ? "СРАБОТАЛ" : "жив"} · walk: ${s.fpgaStatus.walk_state ?? 0}${s.fpgaStatus.walk_delay != null ? ` · задержка ${s.fpgaStatus.walk_delay}` : ""} · детектов: ${s.fpgaStatus.det_count ?? 0} · буфер FPGA: ${s.fpgaStatus.lb_level ?? 0}`
                 : `статус недоступен: ${s.fpgaStatus.reason ?? "?"}`}
             </div>
           </div>

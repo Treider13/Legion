@@ -26,6 +26,13 @@ architecture tb of legion_regs_tb is
     signal tx_player_len : unsigned(11 downto 0);
     signal tx_cap_arm    : std_logic;
     signal tx_wd_kick    : std_logic;
+    signal tx_delay      : unsigned(31 downto 0);
+    signal tx_walk_step  : unsigned(31 downto 0);
+    signal tx_walk_max   : unsigned(31 downto 0);
+    signal tx_walk_en    : std_logic;
+    signal tx_walk_auto  : std_logic;
+    signal tx_walk_hold  : std_logic;
+    signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
     signal det_cnt       : unsigned(15 downto 0) := x"00A5";
@@ -64,13 +71,16 @@ begin
             tx_nco_ftw => tx_nco_ftw, tx_lb_shift => tx_lb_shift,
             tx_wd_limit => tx_wd_limit, tx_player_len => tx_player_len,
             tx_cap_arm => tx_cap_arm, tx_wd_kick => tx_wd_kick,
+            tx_delay => tx_delay, tx_walk_step => tx_walk_step, tx_walk_max => tx_walk_max,
+            tx_walk_en => tx_walk_en, tx_walk_auto => tx_walk_auto, tx_walk_hold => tx_walk_hold,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
             rx_fft_lock => rx_fft_lock,
             rx_peak_word => peak_word,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
-            tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt
+            tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt,
+            tx_walk_state => "011", tx_walk_cur => walk_cur
         );
 
     stim : process
@@ -149,6 +159,27 @@ begin
         pio_addr <= (others => '0');
         for k in 0 to 5 loop wait until rising_edge(nios_clk); end loop;
         assert pio_status(2) = '1' report "FAIL: status restored after peak mux" severity failure;
+        assert pio_status(7 downto 5) = "011" report "FAIL: walk state in STATUS" severity failure;
+        assert pio_status(4) = '0' report "FAIL: bit4 must stay 0 for NIOS latch" severity failure;
+
+        -- DELAY / WALK_* пересекают CDC
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_DELAY, 17);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WALK_STEP, 3);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WALK_MAX, 99);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_WALK_CTL, 7);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_delay = to_unsigned(17, 32) report "FAIL: DELAY CDC" severity failure;
+        assert tx_walk_step = to_unsigned(3, 32) report "FAIL: WALK_STEP CDC" severity failure;
+        assert tx_walk_max = to_unsigned(99, 32) report "FAIL: WALK_MAX CDC" severity failure;
+        assert tx_walk_en = '1' and tx_walk_auto = '1' and tx_walk_hold = '1'
+            report "FAIL: WALK_CTL CDC" severity failure;
+
+        -- STATUS mux 0x23 = текущая задержка
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_WALK_CUR, 7));
+        pio_we <= '0';
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert unsigned(pio_status) = to_unsigned(42, 32)
+            report "FAIL: WALK_CUR mux" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;
