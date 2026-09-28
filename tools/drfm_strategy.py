@@ -26,6 +26,7 @@ DRFM_ZC_RU = "drfm · ZC CFO 15 кГц"
 def drfm_ftw_from_hz(hz: float, fs_hz: float) -> int:
     if fs_hz <= 0 or abs(hz) < 0.5:
         return 0
+    # 15e3/56e6·2³² = 1_150_438, не 1150 (~15 Гц). Как legion_fpga.set_lb_shift_hz.
     return int(round(hz / fs_hz * (1 << 32))) & 0xFFFFFFFF
 
 

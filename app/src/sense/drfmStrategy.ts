@@ -65,6 +65,7 @@ export function drfmFtwFromHz(hz: number, fsHz: number): number {
   if (!Number.isFinite(hz) || !Number.isFinite(fsHz) || fsHz <= 0 || Math.abs(hz) < 0.5) {
     return 0;
   }
+  /* 15e3/56e6·2³² = 1_150_438, не 1150 (~15 Гц). Шлюз: hz/fs*(1<<32). */
   return (Math.round((hz / fsHz) * 2 ** 32) >>> 0);
 }
 

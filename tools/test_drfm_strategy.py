@@ -39,16 +39,16 @@ check("ELRS → two-ray 0/64, walk_step=0, без сдвига",
 
 zc = match_smart_grid({"looks": [{"zc_hit": True, "freq_mhz": 5789.5}]})
 z = plan_drfm_strategy(zc, 56e6)
-check("ZC 5.8 → один отвод + 15 кГц, FTW 1150 @ 56e6",
+check("ZC 5.8 → один отвод + 15 кГц, FTW 1150438 @ 56e6",
       z["id"] == "zc-cfo" and z["delay1"] == 0 and z["amp1"] == 0
       and z["shift_hz"] == DRFM_ZC_SHIFT_HZ
       and z["ftw"] == drfm_ftw_from_hz(15_000, 56e6)
-      and z["ftw"] == 1150 and z["walk_step"] == 0
+      and z["ftw"] == 1_150_438 and z["walk_step"] == 0
       and z["reason"] == DRFM_ZC_RU)
 
 z40 = plan_drfm_strategy(zc, 40e6)
-check("ZC FTW от фактического fs: 15 кГц @ 40e6 → 1611",
-      z40["ftw"] == drfm_ftw_from_hz(15_000, 40e6) and z40["ftw"] == 1611)
+check("ZC FTW от фактического fs: 15 кГц @ 40e6 → 1610613",
+      z40["ftw"] == drfm_ftw_from_hz(15_000, 40e6) and z40["ftw"] == 1_610_613)
 
 ofdm = match_smart_grid({
     "looks": [{"kind": "ofdm", "freq_mhz": 2442, "leftover": 0.4}],

@@ -1583,13 +1583,13 @@ async function main(): Promise<void> {
       && s.shiftHz === 0 && s.walkStep === 0 && s.reason === DRFM_TWORY_RU
       && g.preset === CH_PRESET_ELRS;
   })());
-  check("DRFM: ZC → 15 кГц, FTW 1150 @ 56e6 / 1611 @ 40e6", (() => {
+  check("DRFM: ZC → 15 кГц, FTW 1150438 @ 56e6 / 1610613 @ 40e6", (() => {
     const z = planDrfmStrategy(zcCard(), 56e6);
     const z40 = planDrfmStrategy(zcCard(), 40e6);
     return z.id === "zc-cfo" && z.delay1 === 0 && z.amp1 === 0
-      && z.shiftHz === DRFM_ZC_SHIFT_HZ && z.ftw === 1150
+      && z.shiftHz === DRFM_ZC_SHIFT_HZ && z.ftw === 1_150_438
       && z.ftw === drfmFtwFromHz(15_000, 56e6) && z.walkStep === 0
-      && z.reason === DRFM_ZC_RU && z40.ftw === 1611;
+      && z.reason === DRFM_ZC_RU && z40.ftw === 1_610_613;
   })());
   check("DRFM: ISM8 / OFDM без ZC → two-ray, не OcuSync", (() => {
     const g = matchSmartGrid({
@@ -1621,7 +1621,7 @@ async function main(): Promise<void> {
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
       fftEnable: true, grid: zcCard(),
     });
-    return p.ok && p.drfm.id === "zc-cfo" && p.drfm.ftw === 1150
+    return p.ok && p.drfm.id === "zc-cfo" && p.drfm.ftw === 1_150_438
       && p.fsHz === 56e6 && p.reason.includes(DRFM_ZC_RU);
   })());
   check("ARM FFT ELRS: 0/64, walk_step=0, amp 16384, без aim FTW", (() => {
