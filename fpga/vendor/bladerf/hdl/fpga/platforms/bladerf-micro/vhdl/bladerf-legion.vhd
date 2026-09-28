@@ -210,6 +210,17 @@ architecture legion of bladerf is
     signal lg_tx_lb_amp1    : unsigned(15 downto 0);
     signal lg_tx_walk_period : unsigned(31 downto 0);
     signal lg_tx_walk_ftw_step : unsigned(31 downto 0);
+    signal lg_tx_proto_period : unsigned(31 downto 0);
+    signal lg_tx_proto_pulse  : unsigned(31 downto 0);
+    signal lg_tx_step_src     : std_logic;
+    signal lg_tx_ch_target    : unsigned(1 downto 0);
+    signal lg_tx_ch_bins      : std_logic_vector(31 downto 0);
+    signal lg_aim_ftw         : unsigned(31 downto 0);
+    signal lg_nco_ftw_sel     : unsigned(31 downto 0);
+    signal lg_ch_energy01     : std_logic_vector(31 downto 0);
+    signal lg_ch_energy23     : std_logic_vector(31 downto 0);
+    signal lg_ch_bins_rx      : std_logic_vector(31 downto 0);
+    signal lg_ch_active       : std_logic_vector(3 downto 0);
     signal lg_lb_dly0       : std_logic_vector(31 downto 0);
     signal lg_lb_dly1       : std_logic_vector(31 downto 0);
     signal lg_lb_mix0       : std_logic_vector(31 downto 0);
@@ -1183,6 +1194,11 @@ begin
         tx_lb_amp1    => lg_tx_lb_amp1,
         tx_walk_period => lg_tx_walk_period,
         tx_walk_ftw_step => lg_tx_walk_ftw_step,
+        tx_proto_period => lg_tx_proto_period,
+        tx_proto_pulse  => lg_tx_proto_pulse,
+        tx_drfm_step_src => lg_tx_step_src,
+        tx_ch_target    => lg_tx_ch_target,
+        tx_ch_bins      => lg_tx_ch_bins,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1198,7 +1214,11 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
-        rx_peak_word  => lg_peak_word
+        rx_peak_word  => lg_peak_word,
+        rx_ch_energy01 => lg_ch_energy01,
+        rx_ch_energy23 => lg_ch_energy23,
+        rx_ch_bins     => lg_ch_bins_rx,
+        rx_ch_active   => lg_ch_active
       );
 
     U_legion_detector : entity work.legion_detector
@@ -1224,7 +1244,11 @@ begin
         in_i      => adc_streams(0).data_i,
         in_q      => adc_streams(0).data_q,
         in_valid  => adc_streams(0).data_v,
-        peak_word => lg_peak_word
+        peak_word => lg_peak_word,
+        ch_energy01 => lg_ch_energy01,
+        ch_energy23 => lg_ch_energy23,
+        ch_bins     => lg_ch_bins_rx,
+        ch_active   => lg_ch_active
       );
 
     -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой ADC.
@@ -1307,6 +1331,8 @@ begin
         walk_step    => lg_tx_walk_step,
         walk_max     => lg_tx_walk_max,
         walk_period  => lg_tx_walk_period,
+        proto_period => lg_tx_proto_period,
+        step_src     => lg_tx_step_src,
         ftw0_init    => lg_tx_lb_ftw,
         ftw1_init    => lg_tx_lb_ftw1,
         ftw_step     => lg_tx_walk_ftw_step,
@@ -1347,12 +1373,20 @@ begin
         clock     => tx_clock,
         reset     => tx_reset,
         enable    => lg_nco_en,
-        ftw       => lg_tx_nco_ftw,
+        ftw       => lg_nco_ftw_sel,
         out_i     => lg_nco_i,
         out_q     => lg_nco_q,
         out_valid => lg_nco_valid
       );
-    lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO else '0';
+    U_legion_lb_aim : entity work.legion_lb_aim
+      port map (
+        ch_target => lg_tx_ch_target,
+        ch_bins   => lg_tx_ch_bins,
+        ftw       => lg_aim_ftw
+      );
+    lg_nco_ftw_sel <= lg_aim_ftw when lg_tx_mode = LEGION_MODE_AIM else lg_tx_nco_ftw;
+    lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO
+                       or lg_tx_mode = LEGION_MODE_AIM else '0';
 
     U_legion_dcfifo : entity work.legion_dcfifo
       port map (

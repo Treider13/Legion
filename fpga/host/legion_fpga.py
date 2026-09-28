@@ -71,6 +71,16 @@ REG_LB_FTW1 = 0x27
 REG_LB_AMP = 0x28  # [15:0] A0 Q15, [31:16] A1
 REG_WALK_PERIOD = 0x29  # сэмплы между шагами; 0 = фронт det
 REG_WALK_FTW_STEP = 0x2A  # прирост FTW0 за шаг
+REG_PROTO_PERIOD = 0x2B  # период пакета, сэмплы
+REG_PROTO_PULSE = 0x2C  # длительность пакета, сэмплы
+REG_DRFM_STEP_SRC = 0x2D  # 0=WALK_PERIOD, 1=PROTO_PERIOD
+REG_CH_THR = 0x2E
+REG_CH_HYST = 0x2F
+REG_CH_TARGET = 0x30
+REG_CH_ACTIVE = 0x31
+REG_CH_ENERGY01 = 0x32
+REG_CH_ENERGY23 = 0x33
+REG_CH_BINS = 0x34
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF
@@ -101,6 +111,7 @@ MODE_PLAYER = 0x1
 MODE_NCO = 0x2
 MODE_LB_GATED = 0x3
 MODE_LB_ALWAYS = 0x4
+MODE_AIM = 0x5  # NCO по CH_TARGET
 
 CTRL_ARM = 1 << 0
 CTRL_WD_EN = 1 << 4
@@ -310,6 +321,20 @@ class LegionFpga:
                 self.write_reg(REG_LB_AMP, amp) and
                 self.write_reg(REG_WALK_PERIOD, int(period) & 0xFFFFFFFF) and
                 self.write_reg(REG_WALK_FTW_STEP, int(ftw_step) & 0xFFFFFFFF))
+
+    def set_proto_timing(self, period: int = 0, pulse: int = 0,
+                         step_src: int = 0) -> bool:
+        """PRI: PROTO_PERIOD/PULSE в сэмплах; step_src=1 шагает walk по PRI."""
+        return (self.write_reg(REG_PROTO_PERIOD, int(period) & 0xFFFFFFFF) and
+                self.write_reg(REG_PROTO_PULSE, int(pulse) & 0xFFFFFFFF) and
+                self.write_reg(REG_DRFM_STEP_SRC, int(step_src) & 1))
+
+    def set_channel_map(self, thr: int = 0, hyst: int = 0,
+                        target: int = 0) -> bool:
+        """Карта 4 групп FFT. thr=0 — CHANNEL_SCAN выкл (прежний HOLD)."""
+        return (self.write_reg(REG_CH_THR, int(thr) & 0xFFFFFFFF) and
+                self.write_reg(REG_CH_HYST, int(hyst) & 0xFFFFFFFF) and
+                self.write_reg(REG_CH_TARGET, int(target) & 3))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

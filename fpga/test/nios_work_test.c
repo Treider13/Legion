@@ -48,6 +48,10 @@ static uint32_t t_control;   /* CONTROL-PIO Nuand (x40: бит1 rx, бит2 tx) 
 static uint64_t t_tamer;     /* RX time tamer (сэмплы) */
 static uint32_t t_aws;       /* последний AWS: mux 0x15 → peak, не STATUS */
 static uint32_t t_peak_word; /* слово пика HDL: valid/frame/mag/bin */
+static uint32_t t_ch_e01;
+static uint32_t t_ch_e23;
+static uint32_t t_ch_bins;
+static uint32_t t_ch_active;
 
 static uint32_t mk_peak(int valid, unsigned frame, unsigned mag_hi, unsigned bin)
 {
@@ -94,8 +98,23 @@ int band_select(struct bladerf *dev, bladerf_module module, bool low_band)
 uint32_t t_pio_read(uint32_t base)
 {
     if (base == (uint32_t)LEGION_STATUS_BASE) {
-        if ((t_aws & 0x7Fu) == LEGION_REG_PEAK_BIN && (t_aws & 0x80u) == 0) {
-            return t_peak_word;
+        if ((t_aws & 0x80u) == 0) {
+            uint8_t const a = (uint8_t)(t_aws & 0x7Fu);
+            if (a == LEGION_REG_PEAK_BIN) {
+                return t_peak_word;
+            }
+            if (a == LEGION_REG_CH_ENERGY01) {
+                return t_ch_e01;
+            }
+            if (a == LEGION_REG_CH_ENERGY23) {
+                return t_ch_e23;
+            }
+            if (a == LEGION_REG_CH_BINS) {
+                return t_ch_bins;
+            }
+            if (a == LEGION_REG_CH_ACTIVE) {
+                return t_ch_active;
+            }
         }
         return t_status;
     }
@@ -748,6 +767,82 @@ int main(void)
     t_tamer += (uint64_t)56000000 * 6 / 1000;
     legion_work();
     CHECK("FFT n==1 тишина: не mute/SETTLE на том же LO", rfic_n == 0);
+
+    /* CHANNEL_SCAN: цель погасла в окне → новый CH_TARGET без ARM и hop PLL. */
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 56000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 56000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2436000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2464000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    legion_reg_write(LEGION_REG_CH_THR, 0x100);
+    legion_reg_write(LEGION_REG_CH_HYST, 0x40);
+    CHECK("CH scan: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("CH scan: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    t_ch_e01 = 0;
+    t_ch_e23 = 0;
+    t_ch_bins = 0;
+    t_ch_active = 0;
+    rfic_n = 0;
+    legion_work(); /* SEARCH */
+    t_tamer += 8;
+    legion_work(); /* FRAME */
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 0, 0x2000, 16);
+    legion_work();
+    t_peak_word = mk_peak(1, 1, 0x2000, 16);
+    legion_work(); /* FIRE group 0 */
+    {
+        uint32_t tgt = 0xffffffffu;
+        legion_reg_read(LEGION_REG_CH_TARGET, &tgt);
+        CHECK("CH scan: FIRE ставит группу пика", tgt == 0);
+    }
+    t_ch_e01 = 0x2000; /* цель жива */
+    t_ch_bins = 16;
+    t_tamer += 8;
+    rfic_n = 0;
+    pio_n = 0;
+    legion_work();
+    CHECK("CH scan: цель жива → hop нет", rfic_n == 0);
+    CHECK("CH scan: цель жива → ARM не переписываем",
+          !pio_wrote_reg(LEGION_REG_CTRL, CTRL_ARM_WD_LBG) &&
+          !pio_wrote_reg(LEGION_REG_LB_DELAY, 0));
+    t_ch_e01 = 0x2000u << 16; /* ch0 погас, ch1 жив */
+    t_ch_bins = (80u << 8) | 16u;
+    t_tamer += 8;
+    rfic_n = 0;
+    pio_n = 0;
+    legion_work(); /* CHANNEL_SCAN → FIRE group 1 */
+    {
+        uint32_t tgt = 0;
+        uint32_t khz = 0;
+        legion_reg_read(LEGION_REG_CH_TARGET, &tgt);
+        legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
+        CHECK("CH scan: цель погасла → CH_TARGET=1", tgt == 1);
+        CHECK("CH scan: PEAK bin80 @56e6 = 2467500", khz == 2467500);
+    }
+    CHECK("CH scan: retarget без hop PLL",
+          rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
+                   2467500ULL * 1000ULL) < 0);
+    CHECK("CH scan: без нового ARM и без сброса DRFM",
+          !pio_wrote_reg(LEGION_REG_CTRL, 0) &&
+          !pio_wrote_reg(LEGION_REG_CTRL, CTRL_ARM_WD_LBG) &&
+          !pio_wrote_reg(LEGION_REG_LB_DELAY, 0) &&
+          !pio_wrote_reg(LEGION_REG_LB_DELAY, 64));
+    t_ch_e01 = 0;
+    t_ch_e23 = 0;
+    t_tamer += 8;
+    rfic_n = 0;
+    legion_work();
+    CHECK("CH scan: карта пуста, n==1 → hop нет", rfic_n == 0);
+    legion_reg_write(LEGION_REG_CH_THR, 0);
+    legion_reg_write(LEGION_REG_CH_HYST, 0);
 
     /* SETTLE снимает кадр из регистра: тот же frame не целит, первый новый — да. */
     legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2450000);

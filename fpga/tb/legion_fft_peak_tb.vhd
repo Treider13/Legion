@@ -17,6 +17,10 @@ architecture tb of legion_fft_peak_tb is
     signal in_q     : signed(15 downto 0) := (others => '0');
     signal in_v     : std_logic := '0';
     signal peak     : std_logic_vector(31 downto 0);
+    signal e01      : std_logic_vector(31 downto 0);
+    signal e23      : std_logic_vector(31 downto 0);
+    signal bins     : std_logic_vector(31 downto 0);
+    signal act      : std_logic_vector(3 downto 0);
     signal done     : boolean := false;
 
     constant PI : real := 3.141592653589793;
@@ -59,7 +63,9 @@ begin
     dut : entity work.legion_fft_peak
         port map (
             clock => clk, reset => rst, enable => en, dc_notch => notch,
-            in_i => in_i, in_q => in_q, in_valid => in_v, peak_word => peak
+            in_i => in_i, in_q => in_q, in_valid => in_v, peak_word => peak,
+            ch_energy01 => e01, ch_energy23 => e23, ch_bins => bins,
+            ch_active => act
         );
 
     stim : process
@@ -89,6 +95,12 @@ begin
             report "FAIL: bin16 got " & integer'image(bin) severity failure;
         fr1 := to_integer(unsigned(pw(30 downto 24)));
         assert pw(31) = '1' report "FAIL: valid after bin16" severity failure;
+        assert unsigned(bins(7 downto 0)) = 16
+            report "FAIL: group0 peak bin" severity failure;
+        assert act(0) = '1'
+            report "FAIL: group0 active on bin16" severity failure;
+        assert unsigned(e01(15 downto 0)) /= 0
+            report "FAIL: group0 energy" severity failure;
 
         -- второй кадр: bin 240 (= −16). valid от кадра 16 ещё стоит —
         -- ждём смену frame, не первый valid.

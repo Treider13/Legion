@@ -69,6 +69,16 @@
 #define LEGION_REG_LB_AMP         0x28  /* [15:0] A0 Q15, [31:16] A1 */
 #define LEGION_REG_WALK_PERIOD    0x29  /* сэмплы между шагами; 0 = фронт det */
 #define LEGION_REG_WALK_FTW_STEP  0x2A  /* прирост FTW0 за шаг */
+#define LEGION_REG_PROTO_PERIOD   0x2B  /* период пакета, сэмплы (хост) */
+#define LEGION_REG_PROTO_PULSE    0x2C  /* длительность пакета, сэмплы */
+#define LEGION_REG_DRFM_STEP_SRC  0x2D  /* 0=WALK_PERIOD, 1=PROTO_PERIOD */
+#define LEGION_REG_CH_THR         0x2E  /* порог энергии группы (NIOS) */
+#define LEGION_REG_CH_HYST        0x2F  /* гистерезис сброса цели (NIOS) */
+#define LEGION_REG_CH_TARGET      0x30  /* 0..3 выбранная группа */
+#define LEGION_REG_CH_ACTIVE      0x31  /* STATUS mux: биты живых групп */
+#define LEGION_REG_CH_ENERGY01    0x32  /* [15:0] ch0, [31:16] ch1 */
+#define LEGION_REG_CH_ENERGY23    0x33
+#define LEGION_REG_CH_BINS        0x34  /* 4×8 бит пика группы */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -90,7 +100,10 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_WALK_FTW_STEP
+#define LEGION_REG_MAX            LEGION_REG_CH_BINS
+#define LEGION_CH_N               4u
+#define LEGION_DRFM_STEP_SRC_LAB  0u
+#define LEGION_DRFM_STEP_SRC_PROTO 1u
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -98,6 +111,7 @@
 #define LEGION_MODE_NCO           0x2   /* тон DDS */
 #define LEGION_MODE_LB_GATED      0x3   /* RX→TX по детектору */
 #define LEGION_MODE_LB_ALWAYS     0x4   /* RX→TX всегда */
+#define LEGION_MODE_AIM           0x5   /* NCO по CH_TARGET */
 
 /* Статус (STATUS-PIO, читается по read-пакету target 0x80), биты:
  *   0 playing, 1 capture_done, 2 det_active, 3 wd_fired (HDL, живой),
@@ -141,7 +155,9 @@ bool legion_air_down(void);
  * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
  * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
  * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
- * узжаем. HOLD: TURN = выдержка, затем следующий взгляд (плитка);
+ * узжаем. CH_THR≠0: HOLD читает карту групп каждый SETTLE; цель погасла →
+ * CHANNEL_SCAN → FIRE на новом канале без нового ARM и без сброса DRFM.
+ * HOLD: TURN = выдержка, затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
  * хоп внутри взгляда = live FFT → xlat.

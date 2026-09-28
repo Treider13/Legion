@@ -40,6 +40,15 @@ architecture tb of legion_regs_tb is
     signal tx_lb_amp1    : unsigned(15 downto 0);
     signal tx_walk_period : unsigned(31 downto 0);
     signal tx_walk_ftw_step : unsigned(31 downto 0);
+    signal tx_proto_period : unsigned(31 downto 0);
+    signal tx_proto_pulse  : unsigned(31 downto 0);
+    signal tx_step_src     : std_logic;
+    signal tx_ch_target    : unsigned(1 downto 0);
+    signal tx_ch_bins      : std_logic_vector(31 downto 0);
+    signal ch_e01          : std_logic_vector(31 downto 0) := x"00020001";
+    signal ch_e23          : std_logic_vector(31 downto 0) := x"00040003";
+    signal ch_bins         : std_logic_vector(31 downto 0) := x"C0A05010";
+    signal ch_act          : std_logic_vector(3 downto 0) := "0101";
     signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
@@ -85,11 +94,16 @@ begin
             tx_lb_delay1 => tx_lb_delay1, tx_lb_ftw1 => tx_lb_ftw1,
             tx_lb_amp0 => tx_lb_amp0, tx_lb_amp1 => tx_lb_amp1,
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
+            tx_proto_period => tx_proto_period, tx_proto_pulse => tx_proto_pulse,
+            tx_drfm_step_src => tx_step_src, tx_ch_target => tx_ch_target,
+            tx_ch_bins => tx_ch_bins,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
             rx_fft_lock => rx_fft_lock,
             rx_peak_word => peak_word,
+            rx_ch_energy01 => ch_e01, rx_ch_energy23 => ch_e23,
+            rx_ch_bins => ch_bins, rx_ch_active => ch_act,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt,
             tx_walk_state => "011", tx_walk_cur => walk_cur
@@ -214,6 +228,29 @@ begin
             report "FAIL: LB_AMP CDC" severity failure;
         assert tx_walk_period = to_unsigned(4096, 32) report "FAIL: WALK_PERIOD CDC" severity failure;
         assert tx_walk_ftw_step = to_unsigned(3, 32) report "FAIL: WALK_FTW_STEP CDC" severity failure;
+
+        -- PROTO / CH_* : 0x24–0x2A не сдвинуты.
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PERIOD, 40000);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PULSE, 58000);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_DRFM_STEP_SRC, 1);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_TARGET, 2);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_proto_period = to_unsigned(40000, 32) report "FAIL: PROTO_PERIOD CDC" severity failure;
+        assert tx_proto_pulse = to_unsigned(58000, 32) report "FAIL: PROTO_PULSE CDC" severity failure;
+        assert tx_step_src = '1' report "FAIL: DRFM_STEP_SRC CDC" severity failure;
+        assert tx_ch_target = to_unsigned(2, 2) report "FAIL: CH_TARGET CDC" severity failure;
+        assert tx_ch_bins = ch_bins report "FAIL: CH_BINS rx→tx CDC" severity failure;
+
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE, 7));
+        pio_we <= '0';
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status(3 downto 0) = ch_act report "FAIL: CH_ACTIVE mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY01, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_e01 report "FAIL: CH_ENERGY01 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_bins report "FAIL: CH_BINS mux" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;

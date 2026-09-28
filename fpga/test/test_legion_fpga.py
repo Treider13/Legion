@@ -152,6 +152,16 @@ py_map = {
     "LEGION_REG_LB_AMP": lf.REG_LB_AMP,
     "LEGION_REG_WALK_PERIOD": lf.REG_WALK_PERIOD,
     "LEGION_REG_WALK_FTW_STEP": lf.REG_WALK_FTW_STEP,
+    "LEGION_REG_PROTO_PERIOD": lf.REG_PROTO_PERIOD,
+    "LEGION_REG_PROTO_PULSE": lf.REG_PROTO_PULSE,
+    "LEGION_REG_DRFM_STEP_SRC": lf.REG_DRFM_STEP_SRC,
+    "LEGION_REG_CH_THR": lf.REG_CH_THR,
+    "LEGION_REG_CH_HYST": lf.REG_CH_HYST,
+    "LEGION_REG_CH_TARGET": lf.REG_CH_TARGET,
+    "LEGION_REG_CH_ACTIVE": lf.REG_CH_ACTIVE,
+    "LEGION_REG_CH_ENERGY01": lf.REG_CH_ENERGY01,
+    "LEGION_REG_CH_ENERGY23": lf.REG_CH_ENERGY23,
+    "LEGION_REG_CH_BINS": lf.REG_CH_BINS,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -426,6 +436,21 @@ check("lb_gated явные live-ключи перекрывают дефолт",
       gw.fpga._t.regs.get(lf.REG_LB_DELAY1) == 32 and
       gw.fpga._t.regs.get(lf.REG_LB_AMP) == (20000 | (10000 << 16)) and
       gw.fpga._t.regs.get(lf.REG_WALK_PERIOD) == 128)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+         "proto_period": 40000, "proto_pulse": 10, "drfm_step_src": 1,
+         "ch_thr": 256, "ch_hyst": 64, "ch_target": 2})
+check("lb_gated PROTO/CH ключи",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_PROTO_PERIOD) == 40000 and
+      gw.fpga._t.regs.get(lf.REG_PROTO_PULSE) == 10 and
+      gw.fpga._t.regs.get(lf.REG_DRFM_STEP_SRC) == 1 and
+      gw.fpga._t.regs.get(lf.REG_CH_THR) == 256 and
+      gw.fpga._t.regs.get(lf.REG_CH_HYST) == 64 and
+      gw.fpga._t.regs.get(lf.REG_CH_TARGET) == 2)
+r = rpc({"op": "arm", "mode": "aim", "nco_ftw": 0x10000000})
+check("aim mode → MODE_AIM",
+      r.get("ok") is True and
+      ((gw.fpga._t.regs.get(lf.REG_CTRL) >> 1) & 7) == lf.MODE_AIM)
 check("det_thr записан до CTRL", gw.fpga._t.regs.get(lf.REG_DET_THR) == 5000)
 check("det_shift=4 (окно 16 сэмплов = 8 µs @ 2 МГц)",
       gw.fpga._t.regs.get(lf.REG_DET_SHIFT) == 4)

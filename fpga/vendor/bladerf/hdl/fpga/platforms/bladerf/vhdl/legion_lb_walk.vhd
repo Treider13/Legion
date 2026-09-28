@@ -4,8 +4,11 @@
 -- xA4: два отвода, глубина 4096. Не PRI-lock и не RFSoC 4×256 км.
 -- EN=0: tap = init, FTW = init.
 -- PERIOD=0: шаг по фронту det_active (как раньше).
--- PERIOD>0: шаг каждые PERIOD сэмплов, пока det_active=1 (лабораторные часы,
--- не строб дальности). STEP=0: застыть. HOLD: на потолке остаться.
+-- PERIOD>0 и STEP_SRC=0: шаг каждые PERIOD сэмплов, пока det_active=1
+-- (лабораторные часы). На паузе det счётчик сбрасывается.
+-- STEP_SRC=1 и PROTO_PERIOD>0: шаг каждые PROTO_PERIOD сэмплов, счётчик
+-- не сбрасывается на паузе det — PRI/RGPO. PROTO_PERIOD=0 → как SRC=0.
+-- STEP=0: застыть. HOLD: на потолке остаться.
 -- FTW0 += WALK_FTW_STEP на том же шаге; FTW1 не ходит (вторая клетка).
 -- ============================================================================
 library ieee;
@@ -25,6 +28,8 @@ entity legion_lb_walk is
         walk_step    : in  unsigned(31 downto 0);
         walk_max     : in  unsigned(31 downto 0);
         walk_period  : in  unsigned(31 downto 0);
+        proto_period : in  unsigned(31 downto 0);
+        step_src     : in  std_logic;  -- 0 = WALK_PERIOD, 1 = PROTO_PERIOD
         ftw0_init    : in  unsigned(31 downto 0);
         ftw1_init    : in  unsigned(31 downto 0);
         ftw_step     : in  unsigned(31 downto 0);
@@ -50,6 +55,8 @@ architecture rtl of legion_lb_walk is
     signal ftw1i_d  : unsigned(31 downto 0);
     signal period_c : unsigned(31 downto 0);
     signal run      : std_logic;
+    signal use_proto : std_logic;
+    signal eff_period : unsigned(31 downto 0);
 
     function tap_cap(mx : unsigned(31 downto 0)) return unsigned is
         variable cap : unsigned(11 downto 0);
@@ -83,7 +90,9 @@ architecture rtl of legion_lb_walk is
         return acc(11 downto 0);
     end function;
 begin
-    run       <= enable and arm;
+    use_proto  <= '1' when step_src = '1' and proto_period /= 0 else '0';
+    eff_period <= proto_period when use_proto = '1' else walk_period;
+    run        <= enable and arm;
     tap       <= delay_init when run = '0' else tap0_r;
     tap1      <= delay1_init when run = '0' else tap1_r;
     ftw0      <= ftw0_init when run = '0' else ftw0_r;
@@ -132,7 +141,17 @@ begin
                     ftw1_r <= ftw1_init;
                 end if;
 
-                if walk_period = 0 then
+                if use_proto = '1' then
+                    -- PRI: считать все сэмплы, пока ARM. det не сбрасывает.
+                    if sample_en = '1' then
+                        if period_c + 1 >= eff_period then
+                            period_c <= (others => '0');
+                            do_step := true;
+                        else
+                            period_c <= period_c + 1;
+                        end if;
+                    end if;
+                elsif walk_period = 0 then
                     if det_d = '0' and det_active = '1' then
                         do_step := true;
                     end if;

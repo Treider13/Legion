@@ -17,12 +17,13 @@ use ieee.numeric_std.all;
 
 package legion_pkg is
 
-    -- Режимы TX-мультиплексора (CTRL.MODE, биты 2:1)
+    -- Режимы TX-мультиплексора (CTRL.MODE, биты 3:1)
     constant LEGION_MODE_PASS      : std_logic_vector(2 downto 0) := "000"; -- обычный стрим с хоста
     constant LEGION_MODE_PLAYER    : std_logic_vector(2 downto 0) := "001"; -- волна из RAM
     constant LEGION_MODE_NCO       : std_logic_vector(2 downto 0) := "010"; -- тон DDS
     constant LEGION_MODE_LB_GATED  : std_logic_vector(2 downto 0) := "011"; -- RX→TX по детектору
     constant LEGION_MODE_LB_ALWAYS : std_logic_vector(2 downto 0) := "100"; -- RX→TX всегда
+    constant LEGION_MODE_AIM       : std_logic_vector(2 downto 0) := "101"; -- NCO по CH_TARGET
 
     -- Адреса регистров (адрес на отдельном PIO, данные 32 бита на wdata-PIO)
     -- CTRL: bit0=ARM, bits3:1=MODE, bit4=WD_EN
@@ -81,6 +82,27 @@ package legion_pkg is
     constant LEGION_REG_LB_AMP     : natural := 16#28#; -- [15:0] A0 Q15, [31:16] A1
     constant LEGION_REG_WALK_PERIOD : natural := 16#29#; -- сэмплы между шагами; 0 = фронт det
     constant LEGION_REG_WALK_FTW_STEP : natural := 16#2A#; -- прирост FTW0 за шаг
+    -- 0x24–0x2A заняты живым DRFM. Протокол и карта каналов — 0x2B–0x34.
+    -- PROTO_PERIOD: период пакета в сэмплах (хост). Пример @40 MSPS:
+    --   ELRS 1000 Гц = 40000; OcuSync двойной пакет 6.8 мс = 272000.
+    -- PROTO_PULSE: длительность пакета в сэмплах (хост; walk не гейтит).
+    -- DRFM_STEP_SRC: 0 = WALK_PERIOD (лабораторные часы), 1 = PROTO_PERIOD.
+    --   SRC=1 считает sample_en непрерывно (не сбрасывает на паузе det).
+    -- CH_*: 4 группы по 64 бина FFT-256. ENERGY — сумма |X|² группы.
+    constant LEGION_REG_PROTO_PERIOD  : natural := 16#2B#;
+    constant LEGION_REG_PROTO_PULSE   : natural := 16#2C#;
+    constant LEGION_REG_DRFM_STEP_SRC : natural := 16#2D#; -- bit0
+    constant LEGION_REG_CH_THR        : natural := 16#2E#; -- порог группы (NIOS)
+    constant LEGION_REG_CH_HYST       : natural := 16#2F#; -- гистерезис (NIOS)
+    constant LEGION_REG_CH_TARGET     : natural := 16#30#; -- 0..3
+    constant LEGION_REG_CH_ACTIVE     : natural := 16#31#; -- STATUS mux [3:0]
+    constant LEGION_REG_CH_ENERGY01   : natural := 16#32#; -- [15:0] ch0, [31:16] ch1
+    constant LEGION_REG_CH_ENERGY23   : natural := 16#33#;
+    constant LEGION_REG_CH_BINS       : natural := 16#34#; -- 4×8 бит пика группы
+
+    constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
+    constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;
+    constant LEGION_CH_N                : natural := 4;
 
     constant LEGION_WALK_CTL_EN    : natural := 0;
     constant LEGION_WALK_CTL_AUTO  : natural := 1;
