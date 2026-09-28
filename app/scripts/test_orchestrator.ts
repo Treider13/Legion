@@ -81,14 +81,30 @@ import {
   XA4_WALK_MAX,
 } from "../src/sense/fpgaFastpath";
 import {
+  DRFM_AMP_HALF,
+  DRFM_TAP1_TWORY,
+  DRFM_TWORY_RU,
+  DRFM_ZC_RU,
+  DRFM_ZC_SHIFT_HZ,
+  drfmFtwFromHz,
+  planDrfmStrategy,
+} from "../src/sense/drfmStrategy";
+import {
   CH_PRESET_ELRS,
+  CH_PRESET_ISM8,
+  CH_PRESET_O4VID3,
   GRID_FLAG_FCORR,
+  GRID_FLAG_ZC,
+  GRID_KIND_OFDM,
+  GRID_KIND_ZC,
   LEGION_AIM_NONE,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
+  emptySmartGrid,
   matchSmartGrid,
   packGridF0,
   xlatWindowMhz,
+  type SmartGridCard,
 } from "../src/sense/smartGrid";
 import {
   FPGA_SOLO_FS_MIN_HZ,
@@ -1550,6 +1566,110 @@ async function main(): Promise<void> {
     return c.ch_target === LEGION_AIM_NONE && c.drfm_step_src === 0
       && c.grid_f0_hz === 2_400_400_000 && c.ch_pwr_thr === 0x40 && c.ch_thr === 0;
   })());
+  const zcCard = (): SmartGridCard => ({
+    ...emptySmartGrid("5.8 цифра · ZC 600/147"),
+    empty: false,
+    analog: false,
+    smart: true,
+    kind: GRID_KIND_ZC,
+    flags: GRID_FLAG_ZC,
+    preset: CH_PRESET_O4VID3,
+  });
+  check("DRFM: ELRS → two-ray 0/64, walk_step=0, без сдвига", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    const s = planDrfmStrategy(g, 56e6);
+    return s.id === "tworay" && s.delay0 === 0 && s.delay1 === DRFM_TAP1_TWORY
+      && s.amp0 === DRFM_AMP_HALF && s.amp1 === DRFM_AMP_HALF
+      && s.shiftHz === 0 && s.walkStep === 0 && s.reason === DRFM_TWORY_RU
+      && g.preset === CH_PRESET_ELRS;
+  })());
+  check("DRFM: ZC → 15 кГц, FTW 1150438 @ 56e6 / 1610613 @ 40e6", (() => {
+    const z = planDrfmStrategy(zcCard(), 56e6);
+    const z40 = planDrfmStrategy(zcCard(), 40e6);
+    return z.id === "zc-cfo" && z.delay1 === 0 && z.amp1 === 0
+      && z.shiftHz === DRFM_ZC_SHIFT_HZ && z.ftw === 1_150_438
+      && z.ftw === drfmFtwFromHz(15_000, 56e6) && z.walkStep === 0
+      && z.reason === DRFM_ZC_RU && z40.ftw === 1_610_613;
+  })());
+  check("DRFM: ISM8 / OFDM без ZC → two-ray, не OcuSync", (() => {
+    const g = matchSmartGrid({
+      operator: { f0Hz: 2_400_000_000, stepHz: 10_000_000, n: 8, kind: GRID_KIND_OFDM },
+    });
+    const s = planDrfmStrategy(g, 56e6);
+    return g.preset === CH_PRESET_ISM8 && g.kind === GRID_KIND_OFDM
+      && s.id === "tworay" && s.shiftHz === 0;
+  })());
+  check("DRFM: O4VID3 без zc_hit → two-ray", (() => {
+    const g = matchSmartGrid({ acceptO4: true });
+    const s = planDrfmStrategy(g, 56e6);
+    return g.kind === GRID_KIND_ZC && (g.flags & GRID_FLAG_ZC) === 0
+      && s.id === "tworay" && s.shiftHz === 0;
+  })());
+  check("план FFT: ELRS несёт застывший two-ray в reason", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: g,
+    });
+    return p.ok && p.drfm.id === "tworay" && p.drfm.walkStep === 0
+      && p.reason.includes(DRFM_TWORY_RU);
+  })());
+  check("план FFT: ZC 15 кГц на фактическом fs", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: zcCard(),
+    });
+    return p.ok && p.drfm.id === "zc-cfo" && p.drfm.ftw === 1_150_438
+      && p.fsHz === 56e6 && p.reason.includes(DRFM_ZC_RU);
+  })());
+  check("ARM FFT ELRS: 0/64, walk_step=0, amp 16384, без aim FTW", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4] });
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2440,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2480,
+      fftEnable: true, fireBwMhz: 2, grid: g,
+    });
+    return c.lb_delay === 0 && c.lb_delay1 === 64 && c.walk_step === 0
+      && c.lb_amp0 === 16384 && c.lb_amp1 === 16384 && c.lb_ftw === 0
+      && c.lb_shift_hz === undefined && c.walk_ftw_step === 0
+      && c.nco_ftw === undefined && c.ch_target === LEGION_AIM_NONE;
+  })());
+  check("ARM FFT ZC: lb_shift_hz=15000, один отвод, walk_step=0", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 5789.5,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 5725, scanF2Mhz: 5850,
+      fftEnable: true, fireBwMhz: 2, grid: zcCard(),
+    });
+    return c.lb_shift_hz === 15000 && c.lb_ftw === undefined
+      && c.lb_delay === 0 && c.lb_delay1 === 0 && c.lb_amp1 === 0
+      && c.walk_step === 0 && c.nco_ftw === undefined;
+  })());
+  check("ARM FFT пустая сетка → two-ray, не ELRS-сдвиг", (() => {
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2440,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2480,
+      fftEnable: true, fireBwMhz: 2,
+    });
+    return c.lb_delay === 0 && c.lb_delay1 === 64 && c.walk_step === 0
+      && c.lb_ftw === 0 && c.lb_shift_hz === undefined;
+  })());
+  check("ARM FFT панель бьёт таблицу: tap0=32 и −25 кГц", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4] });
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2440,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2480,
+      fftEnable: true, fireBwMhz: 2, grid: g, lbDelay: 32, lbShiftHz: -25000,
+    });
+    return c.lb_delay === 32 && c.lb_delay1 === 64 && c.lb_shift_hz === -25000
+      && c.walk_step === 0;
+  })());
+  check("ARM lab без FFT: walk_step=1 как раньше", (() => {
+    const c = fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t" });
+    return c.walk_step === XA4_WALK_STEP && c.lb_delay1 === XA4_LB_DELAY1
+      && c.lb_ftw === 0;
+  })());
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
     return t !== null && t.join(",") === "4000,8000,12000";
@@ -1940,6 +2060,8 @@ async function main(): Promise<void> {
     storeSrc.includes("fsHz,") && storeSrc.includes("bwMhz: plan.lookMhz"));
   check("онбордовый ARM включает FFT-пик (точный Гц)",
     storeSrc.includes("fftEnable: true") && storeSrc.includes("fireBwMhz: plan.fireBwMhz"));
+  check("онбордовый план и ARM делят панель DRFM (0 = таблица)",
+    storeSrc.includes("const lbOpts = lbDelayArmOpts(get())") && storeSrc.includes("...lbOpts,"));
   check("онбордовый ARM несёт TURN и выдержку оператора",
     storeSrc.includes("scanTurn: plan.turn") && storeSrc.includes("scanDwellMs: plan.dwellMs")
     && storeSrc.includes("fpgaInnerDispatch(s.autoDispatch)"));
