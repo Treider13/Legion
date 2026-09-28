@@ -1143,8 +1143,8 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag, uint32_t bin)
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
     /* LO на центре взгляда. Синтез — NCO на bin, не PLL.
-     * SETTLE уже открыл TX. База лежит в отдельном FIFO (тот же cadence,
-     * что вырез): следующий sample_en берёт FTW. Общее FIFO не переключаем. */
+     * База — старшая половина того же CDC-слова, что вырез. FTW на
+     * следующем sample_en. Нижнюю половину (вырез) не переключаем. */
     legion_aim_set(bin);
     if (!legion_set_tx_mute(false)) {
         return;

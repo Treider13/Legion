@@ -154,6 +154,19 @@ begin
         assert abs(yi - ei) > 400
             report "FAIL: NCO waited full bin1 period" severity failure;
 
+        -- После arm=0 регистр не держит сырой din: первый dout при arm
+        -- без нового sample_en — ноль, не база на bin 0.
+        sample_en <= '0';
+        ch_target <= (others => '0');
+        din <= pack_iq(AMP, 0);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        ch_target <= x"80000040";
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert unpack_i(dout) = 0 and unpack_q(dout) = 0
+            report "FAIL: armed dout held raw baseband" severity failure;
+
         report "legion_lb_aim_tb: PASS" severity note;
         done <= true;
         wait;

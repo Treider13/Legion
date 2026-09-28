@@ -27,8 +27,8 @@ entity legion_lb_xlat is
         out_i     : out signed(15 downto 0);
         out_q     : out signed(15 downto 0);
         out_valid : out std_logic;
-        -- База после MA, до обратного смесителя. Пишется во второе FIFO
-        -- синтеза; общее FIFO остаётся на out (когерентный up-mix).
+        -- База после MA, до обратного смесителя. Старшая половина того же
+        -- CDC-слова, что и out; NCO синтеза читает только её.
         bb_i      : out signed(15 downto 0);
         bb_q      : out signed(15 downto 0)
     );

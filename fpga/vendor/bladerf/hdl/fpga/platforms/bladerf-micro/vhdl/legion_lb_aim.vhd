@@ -116,8 +116,11 @@ begin
             q         <= (others => '0');
         elsif rising_edge(clock) then
             if ch_target(31) = '0' then
+                -- q не копирует din. Иначе первый захват mux после arm
+                -- (он берёт регистр, а не результат этого же фронта) — сырая
+                -- база на bin 0, до первого произведения.
                 phase_acc <= (others => '0');
-                q         <= din;
+                q         <= (others => '0');
             elsif sample_en = '1' then
                 -- FTW живой: новый bin входит в шаг этого valid, cis
                 -- следующего. Обёртку аккумулятора не ждём (rotator hop).
