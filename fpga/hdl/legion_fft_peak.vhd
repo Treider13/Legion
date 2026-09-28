@@ -1,33 +1,46 @@
 -- ============================================================================
--- LEGION — radix-2 DIT 256 + argmax на том же RX-тапе, что legion_detector.
--- Алгоритм как R2FFT (yoonisi, BSD-3): один бабочка, (N/2)·log2(N) шагов,
--- вход bit-reversed, Q15 twiddle, >>1 на стадии (антипереполнение).
--- Не Intel FFT IP: на xA4 нет лицензии / OpenCore Plus истекает через час.
--- Пик: f = LO + signed_bin·(fs/256). bin≥128 → bin−256.
+-- LEGION — radix-2 DIT 256 + argmax + Top-N (local-max + distance).
+-- Алгоритм как R2FFT (yoonisi, BSD-3). Не Intel FFT IP.
+-- Пик 0 (0x15 / xlat): глобальный argmax — не менять контракт walker.
+-- PEAK1..3: SciPy find_peaks — локальный max, затем distance (excl бинов).
+-- Поток mag_* кормит legion_fft_channelize, FFT не переписываем.
 -- Слово пика: [7:0] bin, [23:8] mag[31:16], [30:24] frame, [31] valid.
--- enable=0: коллектор стоит, valid=0 — walker без FFT_CTRL не меняется.
+-- enable=0: коллектор стоит, valid=0.
 -- ============================================================================
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use work.legion_fft_twiddle.all;
+use work.legion_pkg.all;
 
 entity legion_fft_peak is
     port (
-        clock     : in  std_logic;
-        reset     : in  std_logic;
-        enable    : in  std_logic;
-        dc_notch  : in  std_logic;
-        in_i      : in  signed(15 downto 0);
-        in_q      : in  signed(15 downto 0);
-        in_valid  : in  std_logic;
-        peak_word : out std_logic_vector(31 downto 0)
+        clock      : in  std_logic;
+        reset      : in  std_logic;
+        enable     : in  std_logic;
+        dc_notch   : in  std_logic;
+        excl       : in  unsigned(7 downto 0);
+        in_i       : in  signed(15 downto 0);
+        in_q       : in  signed(15 downto 0);
+        in_valid   : in  std_logic;
+        peak_word  : out std_logic_vector(31 downto 0);
+        peak1_word : out std_logic_vector(31 downto 0);
+        peak2_word : out std_logic_vector(31 downto 0);
+        peak3_word : out std_logic_vector(31 downto 0);
+        mag_valid  : out std_logic;
+        mag_last   : out std_logic;
+        mag_bin    : out unsigned(7 downto 0);
+        mag_pow    : out unsigned(15 downto 0);
+        mag_frame  : out unsigned(6 downto 0)
     );
 end entity;
 
 architecture rtl of legion_fft_peak is
     type ram_t is array (0 to 255) of std_logic_vector(31 downto 0);
     signal ram : ram_t := (others => (others => '0'));
+
+    type mag_ram_t is array (0 to 255) of unsigned(15 downto 0);
+    signal mag_ram : mag_ram_t := (others => (others => '0'));
 
     signal addr_a : unsigned(7 downto 0) := (others => '0');
     signal addr_b : unsigned(7 downto 0) := (others => '0');
@@ -37,9 +50,14 @@ architecture rtl of legion_fft_peak is
     signal din_b  : std_logic_vector(31 downto 0) := (others => '0');
     signal q_a    : std_logic_vector(31 downto 0) := (others => '0');
     signal q_b    : std_logic_vector(31 downto 0) := (others => '0');
+    signal mag_addr : unsigned(7 downto 0) := (others => '0');
+    signal mag_q    : unsigned(15 downto 0) := (others => '0');
+    signal mag_we   : std_logic := '0';
+    signal mag_din  : unsigned(15 downto 0) := (others => '0');
 
     type state_t is (ST_COLLECT, ST_FFT_RD, ST_FFT_WAIT, ST_FFT_WR,
-                    ST_PEAK_RD, ST_PEAK_WAIT, ST_PEAK_CMP, ST_PUBLISH);
+                    ST_PEAK_RD, ST_PEAK_WAIT, ST_PEAK_CMP, ST_LM_WRAP,
+                    ST_TOP_RD, ST_TOP_WAIT, ST_TOP_CMP, ST_PUBLISH);
     signal state : state_t := ST_COLLECT;
 
     signal collect_n : unsigned(8 downto 0) := (others => '0');
@@ -51,6 +69,9 @@ architecture rtl of legion_fft_peak is
     signal frame_r   : unsigned(6 downto 0) := (others => '0');
     signal valid_r   : std_logic := '0';
     signal word_r    : std_logic_vector(31 downto 0) := (others => '0');
+    signal word1_r   : std_logic_vector(31 downto 0) := (others => '0');
+    signal word2_r   : std_logic_vector(31 downto 0) := (others => '0');
+    signal word3_r   : std_logic_vector(31 downto 0) := (others => '0');
     signal a_i_r     : signed(15 downto 0) := (others => '0');
     signal a_q_r     : signed(15 downto 0) := (others => '0');
     signal b_i_r     : signed(15 downto 0) := (others => '0');
@@ -59,6 +80,29 @@ architecture rtl of legion_fft_peak is
     signal wi_r      : signed(15 downto 0) := (others => '0');
     signal ia_r      : unsigned(7 downto 0) := (others => '0');
     signal ib_r      : unsigned(7 downto 0) := (others => '0');
+
+    signal mag_valid_r : std_logic := '0';
+    signal mag_last_r  : std_logic := '0';
+    signal mag_bin_r   : unsigned(7 downto 0) := (others => '0');
+    signal mag_pow_r   : unsigned(15 downto 0) := (others => '0');
+    signal mag_frame_r : unsigned(6 downto 0) := (others => '0');
+
+    signal lm_flags  : std_logic_vector(0 to 255) := (others => '0');
+    signal mag0_r    : unsigned(15 downto 0) := (others => '0');
+    signal mag1_r    : unsigned(15 downto 0) := (others => '0');
+    signal mag254_r  : unsigned(15 downto 0) := (others => '0');
+    signal mag255_r  : unsigned(15 downto 0) := (others => '0');
+    signal mag_prev  : unsigned(15 downto 0) := (others => '0');
+    signal mag_prev2 : unsigned(15 downto 0) := (others => '0');
+
+    signal top_k         : unsigned(1 downto 0) := (others => '0');
+    signal top_i         : unsigned(8 downto 0) := (others => '0');
+    signal top_best_bin  : unsigned(7 downto 0) := (others => '0');
+    signal top_best_mag  : unsigned(15 downto 0) := (others => '0');
+    signal top_best_ok   : std_logic := '0';
+    signal sel_bin0, sel_bin1, sel_bin2, sel_bin3 : unsigned(7 downto 0) := (others => '0');
+    signal sel_mag0, sel_mag1, sel_mag2, sel_mag3 : unsigned(15 downto 0) := (others => '0');
+    signal sel_ok0, sel_ok1, sel_ok2, sel_ok3     : std_logic := '0';
 
     function bitrev8(x : unsigned(7 downto 0)) return unsigned is
         variable r : unsigned(7 downto 0);
@@ -73,10 +117,50 @@ architecture rtl of legion_fft_peak is
     begin
         return std_logic_vector(ii) & std_logic_vector(qq);
     end function;
-begin
-    peak_word <= word_r;
 
-    -- True dual-port, чтение и запись в разных тактах бабочки (не same-addr).
+    function pack_peak(v : std_logic; fr : unsigned(6 downto 0);
+                       mag16 : unsigned(15 downto 0); bin : unsigned(7 downto 0))
+        return std_logic_vector is
+        variable w : std_logic_vector(31 downto 0);
+    begin
+        w(7 downto 0)   := std_logic_vector(bin);
+        w(23 downto 8)  := std_logic_vector(mag16);
+        w(30 downto 24) := std_logic_vector(fr);
+        w(31)           := v;
+        return w;
+    end function;
+
+    function circ_dist(a, b : integer) return integer is
+        variable d : integer;
+    begin
+        d := a - b;
+        if d < 0 then
+            d := -d;
+        end if;
+        if d > 128 then
+            d := 256 - d;
+        end if;
+        return d;
+    end function;
+
+    function excl_eff(e : unsigned(7 downto 0)) return integer is
+    begin
+        if e = 0 then
+            return LEGION_CH_EXCL_DEFAULT;
+        end if;
+        return to_integer(e);
+    end function;
+begin
+    peak_word  <= word_r;
+    peak1_word <= word1_r;
+    peak2_word <= word2_r;
+    peak3_word <= word3_r;
+    mag_valid  <= mag_valid_r;
+    mag_last   <= mag_last_r;
+    mag_bin    <= mag_bin_r;
+    mag_pow    <= mag_pow_r;
+    mag_frame  <= mag_frame_r;
+
     ram_p : process(clock)
     begin
         if rising_edge(clock) then
@@ -87,6 +171,10 @@ begin
             end if;
             if we_b = '1' then
                 ram(to_integer(addr_b)) <= din_b;
+            end if;
+            mag_q <= mag_ram(to_integer(mag_addr));
+            if mag_we = '1' then
+                mag_ram(to_integer(mag_addr)) <= mag_din;
             end if;
         end if;
     end process;
@@ -103,8 +191,13 @@ begin
         variable sa, da  : signed(16 downto 0);
         variable sb, db  : signed(16 downto 0);
         variable mag     : unsigned(31 downto 0);
+        variable mag16   : unsigned(15 downto 0);
         variable skip_dc : boolean;
         variable ii, qq  : signed(15 downto 0);
+        variable blocked : boolean;
+        variable ex      : integer;
+        variable bi      : integer;
+        variable fr      : unsigned(6 downto 0);
     begin
         if reset = '1' then
             state     <= ST_COLLECT;
@@ -117,21 +210,43 @@ begin
             frame_r   <= (others => '0');
             valid_r   <= '0';
             word_r    <= (others => '0');
+            word1_r   <= (others => '0');
+            word2_r   <= (others => '0');
+            word3_r   <= (others => '0');
             we_a      <= '0';
             we_b      <= '0';
             addr_a    <= (others => '0');
             addr_b    <= (others => '0');
             din_a     <= (others => '0');
             din_b     <= (others => '0');
+            mag_valid_r <= '0';
+            mag_last_r  <= '0';
+            mag_bin_r   <= (others => '0');
+            mag_pow_r   <= (others => '0');
+            mag_frame_r <= (others => '0');
+            mag_we      <= '0';
+            lm_flags    <= (others => '0');
+            top_k       <= (others => '0');
+            top_i       <= (others => '0');
+            sel_ok0     <= '0';
+            sel_ok1     <= '0';
+            sel_ok2     <= '0';
+            sel_ok3     <= '0';
         elsif rising_edge(clock) then
-            we_a <= '0';
-            we_b <= '0';
+            we_a        <= '0';
+            we_b        <= '0';
+            mag_we      <= '0';
+            mag_valid_r <= '0';
+            mag_last_r  <= '0';
 
             if enable = '0' then
                 state     <= ST_COLLECT;
                 collect_n <= (others => '0');
                 valid_r   <= '0';
                 word_r    <= (others => '0');
+                word1_r   <= (others => '0');
+                word2_r   <= (others => '0');
+                word3_r   <= (others => '0');
             else
                 case state is
                     when ST_COLLECT =>
@@ -149,7 +264,6 @@ begin
                         end if;
 
                     when ST_FFT_RD =>
-                        -- ia = (pair>>stage)<<(stage+1) + (pair&(half-1)); без mul на 256
                         half := shift_left(to_unsigned(1, 8), to_integer(stage));
                         j    := resize(pair, 8) and (half - 1);
                         grp  := shift_right(resize(pair, 8), to_integer(stage));
@@ -162,7 +276,6 @@ begin
                         ib_r   <= ib;
                         wr_r   <= LEGION_TWIDDLE_RE(to_integer(tw_idx));
                         wi_r   <= LEGION_TWIDDLE_IM(to_integer(tw_idx));
-                        -- RAM: q на следующем фронте после addr (как collect+idle).
                         state  <= ST_FFT_WAIT;
 
                     when ST_FFT_WAIT =>
@@ -173,7 +286,6 @@ begin
                         a_q_r <= signed(q_a(15 downto 0));
                         b_i_r <= signed(q_b(31 downto 16));
                         b_q_r <= signed(q_b(15 downto 0));
-                        -- W*B в Q15, затем A±T и >>1 (R2FFT scale-per-stage)
                         pr := wr_r * signed(q_b(31 downto 16)) - wi_r * signed(q_b(15 downto 0));
                         pi := wr_r * signed(q_b(15 downto 0)) + wi_r * signed(q_b(31 downto 16));
                         tr := resize(shift_right(pr, 15), 16);
@@ -193,10 +305,17 @@ begin
                         if pair = 127 then
                             pair <= (others => '0');
                             if stage = 7 then
-                                peak_i   <= (others => '0');
-                                best_bin <= (others => '0');
-                                best_mag <= (others => '0');
-                                state    <= ST_PEAK_RD;
+                                peak_i    <= (others => '0');
+                                best_bin  <= (others => '0');
+                                best_mag  <= (others => '0');
+                                lm_flags  <= (others => '0');
+                                mag_prev  <= (others => '0');
+                                mag_prev2 <= (others => '0');
+                                sel_ok0   <= '0';
+                                sel_ok1   <= '0';
+                                sel_ok2   <= '0';
+                                sel_ok3   <= '0';
+                                state     <= ST_PEAK_RD;
                             else
                                 stage <= stage + 1;
                                 state <= ST_FFT_RD;
@@ -217,27 +336,144 @@ begin
                         ii := signed(q_a(31 downto 16));
                         qq := signed(q_a(15 downto 0));
                         mag := unsigned(ii * ii) + unsigned(qq * qq);
+                        mag16 := mag(31 downto 16);
+                        mag_addr    <= peak_i(7 downto 0);
+                        mag_din     <= mag16;
+                        mag_we      <= '1';
+                        mag_valid_r <= '1';
+                        mag_bin_r   <= peak_i(7 downto 0);
+                        mag_pow_r   <= mag16;
+                        mag_frame_r <= frame_r + 1;
+                        mag_last_r  <= '0';
+                        if peak_i = 0 then
+                            mag0_r <= mag16;
+                        elsif peak_i = 1 then
+                            mag1_r <= mag16;
+                        elsif peak_i = 254 then
+                            mag254_r <= mag16;
+                        elsif peak_i = 255 then
+                            mag255_r <= mag16;
+                            mag_last_r <= '1';
+                        end if;
+                        if peak_i >= 2 then
+                            if mag_prev > mag_prev2 and mag_prev > mag16 then
+                                lm_flags(to_integer(peak_i) - 1) <= '1';
+                            end if;
+                        end if;
+                        mag_prev2 <= mag_prev;
+                        mag_prev  <= mag16;
                         skip_dc := (dc_notch = '1') and (peak_i = 0);
                         if (not skip_dc) and mag > best_mag then
                             best_mag <= mag;
                             best_bin <= peak_i(7 downto 0);
                         end if;
                         if peak_i = 255 then
-                            state <= ST_PUBLISH;
+                            state <= ST_LM_WRAP;
                         else
                             peak_i <= peak_i + 1;
                             state  <= ST_PEAK_RD;
                         end if;
 
+                    when ST_LM_WRAP =>
+                        if mag0_r > mag255_r and mag0_r > mag1_r and dc_notch = '0' then
+                            lm_flags(0) <= '1';
+                        end if;
+                        if mag255_r > mag254_r and mag255_r > mag0_r then
+                            lm_flags(255) <= '1';
+                        end if;
+                        top_k        <= (others => '0');
+                        top_i        <= (others => '0');
+                        top_best_mag <= (others => '0');
+                        top_best_bin <= (others => '0');
+                        top_best_ok  <= '0';
+                        state        <= ST_TOP_RD;
+
+                    when ST_TOP_RD =>
+                        mag_addr <= top_i(7 downto 0);
+                        state    <= ST_TOP_WAIT;
+
+                    when ST_TOP_WAIT =>
+                        state <= ST_TOP_CMP;
+
+                    when ST_TOP_CMP =>
+                        ex := excl_eff(excl);
+                        bi := to_integer(top_i(7 downto 0));
+                        blocked := (dc_notch = '1' and top_i = 0) or
+                                   (lm_flags(bi) = '0');
+                        if not blocked then
+                            if circ_dist(bi, to_integer(best_bin)) < ex then
+                                blocked := true;
+                            end if;
+                            if sel_ok0 = '1' and circ_dist(bi, to_integer(sel_bin0)) < ex then
+                                blocked := true;
+                            end if;
+                            if sel_ok1 = '1' and circ_dist(bi, to_integer(sel_bin1)) < ex then
+                                blocked := true;
+                            end if;
+                            if sel_ok2 = '1' and circ_dist(bi, to_integer(sel_bin2)) < ex then
+                                blocked := true;
+                            end if;
+                            if sel_ok3 = '1' and circ_dist(bi, to_integer(sel_bin3)) < ex then
+                                blocked := true;
+                            end if;
+                        end if;
+                        if (not blocked) and (top_best_ok = '0' or mag_q > top_best_mag) then
+                            top_best_mag <= mag_q;
+                            top_best_bin <= top_i(7 downto 0);
+                            top_best_ok  <= '1';
+                        end if;
+                        if top_i = 255 then
+                            if top_k = 0 then
+                                sel_bin0 <= top_best_bin;
+                                sel_mag0 <= top_best_mag;
+                                sel_ok0  <= top_best_ok;
+                            elsif top_k = 1 then
+                                sel_bin1 <= top_best_bin;
+                                sel_mag1 <= top_best_mag;
+                                sel_ok1  <= top_best_ok;
+                            else
+                                sel_bin2 <= top_best_bin;
+                                sel_mag2 <= top_best_mag;
+                                sel_ok2  <= top_best_ok;
+                            end if;
+                            -- 3 прохода: PEAK1..3. peak0 = argmax, не дублируем.
+                            if top_k = 2 then
+                                state <= ST_PUBLISH;
+                            else
+                                top_k        <= top_k + 1;
+                                top_i        <= (others => '0');
+                                top_best_mag <= (others => '0');
+                                top_best_bin <= (others => '0');
+                                top_best_ok  <= '0';
+                                state        <= ST_TOP_RD;
+                            end if;
+                        else
+                            top_i <= top_i + 1;
+                            state <= ST_TOP_RD;
+                        end if;
+
                     when ST_PUBLISH =>
                         valid_r <= '1';
                         frame_r <= frame_r + 1;
-                        word_r(7 downto 0)   <= std_logic_vector(best_bin);
-                        word_r(23 downto 8)  <= std_logic_vector(best_mag(31 downto 16));
-                        word_r(30 downto 24) <= std_logic_vector(frame_r + 1);
-                        word_r(31)           <= '1';
-                        collect_n            <= (others => '0');
-                        state                <= ST_COLLECT;
+                        fr := frame_r + 1;
+                        word_r  <= pack_peak('1', fr, best_mag(31 downto 16), best_bin);
+                        if sel_ok0 = '1' then
+                            word1_r <= pack_peak('1', fr, sel_mag0, sel_bin0);
+                        else
+                            word1_r <= (others => '0');
+                        end if;
+                        if sel_ok1 = '1' then
+                            word2_r <= pack_peak('1', fr, sel_mag1, sel_bin1);
+                        else
+                            word2_r <= (others => '0');
+                        end if;
+                        if sel_ok2 = '1' then
+                            word3_r <= pack_peak('1', fr, sel_mag2, sel_bin2);
+                        else
+                            word3_r <= (others => '0');
+                        end if;
+                        collect_n <= (others => '0');
+                        state     <= ST_COLLECT;
                 end case;
             end if;
         end if;

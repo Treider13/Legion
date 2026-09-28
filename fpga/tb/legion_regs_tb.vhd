@@ -45,9 +45,20 @@ architecture tb of legion_regs_tb is
     signal rx_reset      : std_logic := '1';
     signal det_cnt       : unsigned(15 downto 0) := x"00A5";
     signal peak_word     : std_logic_vector(31 downto 0) := x"81AB3410";
+    signal peak1_word    : std_logic_vector(31 downto 0) := x"82CD5611";
+    signal peak2_word    : std_logic_vector(31 downto 0) := x"83001222";
+    signal peak3_word    : std_logic_vector(31 downto 0) := x"84003433";
+    signal ch_word       : std_logic_vector(31 downto 0) := x"85AA0030";
     signal rx_fft_en     : std_logic;
     signal rx_fft_notch  : std_logic;
     signal rx_fft_lock   : std_logic;
+    signal rx_fft_bypass : std_logic;
+    signal rx_fft_excl   : unsigned(7 downto 0);
+    signal rx_ch_ctrl    : std_logic_vector(15 downto 0);
+    signal rx_ch_idx     : unsigned(6 downto 0);
+    signal rx_lut_we     : std_logic;
+    signal rx_lut_addr   : unsigned(7 downto 0);
+    signal rx_lut_data   : unsigned(7 downto 0);
     signal done          : boolean := false;
 
     procedure write_reg(signal clk : in std_logic;
@@ -89,7 +100,14 @@ begin
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
             rx_fft_lock => rx_fft_lock,
+            rx_fft_xlat_bypass => rx_fft_bypass,
+            rx_fft_excl => rx_fft_excl,
+            rx_ch_ctrl => rx_ch_ctrl, rx_ch_idx => rx_ch_idx,
+            rx_lut_we => rx_lut_we, rx_lut_addr => rx_lut_addr,
+            rx_lut_data => rx_lut_data,
             rx_peak_word => peak_word,
+            rx_peak1_word => peak1_word, rx_peak2_word => peak2_word,
+            rx_peak3_word => peak3_word, rx_ch_word => ch_word,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt,
             tx_walk_state => "011", tx_walk_cur => walk_cur
@@ -214,6 +232,42 @@ begin
             report "FAIL: LB_AMP CDC" severity failure;
         assert tx_walk_period = to_unsigned(4096, 32) report "FAIL: WALK_PERIOD CDC" severity failure;
         assert tx_walk_ftw_step = to_unsigned(3, 32) report "FAIL: WALK_FTW_STEP CDC" severity failure;
+
+        -- FFT_CTRL bit3 = xlat bypass; CH_CTRL excl и idx пересекают CDC
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_FFT_CTRL, 8);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_CTRL, 16#0801#);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_IDX, 5);
+        for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
+        assert rx_fft_bypass = '1' and rx_fft_en = '0'
+            report "FAIL: XLATA_BYPASS CDC" severity failure;
+        assert rx_fft_excl = x"08" report "FAIL: CH_CTRL excl CDC" severity failure;
+        assert rx_ch_ctrl = x"0801" report "FAIL: CH_CTRL CDC" severity failure;
+        assert rx_ch_idx = to_unsigned(5, 7) report "FAIL: CH_IDX CDC" severity failure;
+
+        -- LUT: запись CH_LUT → один пульс we в rx
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_LUT, 16#1028#);
+        declare
+            variable saw_we : boolean := false;
+        begin
+            for k in 0 to 19 loop
+                wait until rising_edge(rx_clock);
+                if rx_lut_we = '1' then
+                    saw_we := true;
+                    assert rx_lut_addr = x"10" report "FAIL: LUT addr" severity failure;
+                    assert rx_lut_data = x"28" report "FAIL: LUT data" severity failure;
+                end if;
+            end loop;
+            assert saw_we report "FAIL: LUT we pulse missing" severity failure;
+        end;
+
+        -- STATUS mux PEAK1 / CH_PWR
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_PEAK1, 7));
+        pio_we <= '0';
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = peak1_word report "FAIL: PEAK1 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_PWR, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_word report "FAIL: CH_PWR mux" severity failure;
 
         report "legion_regs_tb: PASS" severity note;
         done <= true;
