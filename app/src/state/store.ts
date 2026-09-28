@@ -39,7 +39,6 @@ import {
   hostScan,
   hostAttackScan,
   hostAttackThink,
-  hostTx,
   hostTxGain,
   hostTxOff,
   hostTxWave,
@@ -1159,6 +1158,24 @@ export const useLegion = create<LegionStore>((set, get) => {
   const shelfFsNow = (): number =>
     shelfFsHz(parseLocaleNumber(get().txShelfMhz), catalogCaps(get().sdrId).analogBwMhz);
 
+  /** Атака без рамки: часы = слух (общий BBPLL), горб = analog-фильтр полки. Не hostTx 2 МГц. */
+  const attackNoPaintShelf = (): {
+    kind: WaveKind;
+    params: Record<string, number>;
+    fsHz: number;
+    filterMhz: number;
+  } => {
+    const analog = gLive ? catalogCaps(get().sdrId).analogBwMhz : gSdr.analogBwMhz();
+    const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null });
+    const shelf = openLoopShelfTxPlan({
+      shelfMhz: parseLocaleNumber(get().txShelfMhz),
+      analogMhz: analog,
+      kind: get().txWaveKind,
+      params: get().txWaveParams,
+    });
+    return { kind: shelf.waveKind, params: shelf.waveParams, fsHz: listen.fsHz, filterMhz: shelf.filterMhz };
+  };
+
   const runHandoffAsync = async (mhz: number, powerDbm = 0): Promise<boolean> => {
     const st = get();
     const caps = catalogCaps(st.sdrId);
@@ -1177,15 +1194,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     let sdrUs = 0;
     try {
       if (plan.sdrTx) {
-        // Зашитая волна (вкладка ТИП СИГНАЛА) идёт во все TX-пути; иначе CW тон.
-        const armed = get().txWaveKind;
+        const shelf = attackNoPaintShelf();
         const tx = gLive
-          ? armed
-            ? await hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())
-            : await hostTx(plan.freqMhz)
-          : armed
-            ? gSdr.txWave(plan.freqMhz, armed)
-            : gSdr.txCue(plan.freqMhz);
+          ? await hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)
+          : gSdr.txWave(plan.freqMhz, shelf.kind);
         sdrUs = tx.latencyUs;
         pushLog("sys", tx.reason);
         if (!tx.ok) {
@@ -1225,15 +1237,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     // СТОП во время re-sense: не воскрешаем TX (аудит: restore не проверял
     // transmitArmed — тон возвращался в эфир после команды оператора).
     if (!get().transmitArmed) return false;
-    // Зашитая волна (вкладка ТИП СИГНАЛА) идёт и в restore; иначе CW тон.
-    const armed = get().txWaveKind;
+    const shelf = attackNoPaintShelf();
     const tx = gLive
-      ? armed
-        ? await hostTxWave(mhz, armed, get().txWaveParams, shelfFsNow())
-        : await hostTx(mhz)
-      : armed
-        ? gSdr.txWave(mhz, armed)
-        : gSdr.txCue(mhz);
+      ? await hostTxWave(mhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)
+      : gSdr.txWave(mhz, shelf.kind);
     if (!tx.ok) {
       pushLog("sys", tx.reason);
       return false;

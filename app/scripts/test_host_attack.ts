@@ -169,6 +169,25 @@ async function main(): Promise<void> {
       startOpenSrc.includes("runOpenLoopShelfTx") &&
       !startOpenSrc.includes("runHandoffAsync"),
   );
+  const handoffSrc = storeSrc.slice(storeSrc.indexOf("const runHandoffAsync"), storeSrc.indexOf("const restoreHeldTx"));
+  const restoreSrc = storeSrc.slice(storeSrc.indexOf("const restoreHeldTx"), storeSrc.indexOf("const resenseHeld"));
+  check(
+    "без рамки Атаки часы слуха + фильтр полки, не hostTx 2 МГц",
+    handoffSrc.includes("attackNoPaintShelf") &&
+      handoffSrc.includes("hostTxWave") &&
+      handoffSrc.includes("shelf.fsHz") &&
+      handoffSrc.includes("shelf.filterMhz") &&
+      !handoffSrc.includes("hostTx(") &&
+      !handoffSrc.includes("shelfFsNow"),
+  );
+  check(
+    "restore без рамки не схлопывает BBPLL полкой",
+    restoreSrc.includes("attackNoPaintShelf") &&
+      restoreSrc.includes("shelf.fsHz") &&
+      restoreSrc.includes("shelf.filterMhz") &&
+      !restoreSrc.includes("shelfFsNow") &&
+      !restoreSrc.includes("hostTx("),
+  );
   check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({

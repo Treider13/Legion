@@ -2015,8 +2015,13 @@ async function main(): Promise<void> {
   check("отзыв после попытки ARM требует DISARM даже при потерянном ответе", storeSrc.includes("abortAirIfRevoked(true)") && storeSrc.includes("abortSoloIfRevoked(true)"));
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
-  check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, armed, get().txWaveParams, shelfFsNow())"));
+  check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, shelf.waveKind, shelf.waveParams, shelf.fsHz, shelf.filterMhz)"));
   check("зашить передаёт полку в часы TX", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, shelfFsNow())"));
+  check(
+    "Атака без рамки: часы слуха, фильтр полки",
+    storeSrc.includes("const attackNoPaintShelf") &&
+      storeSrc.includes("hostTxWave(plan.freqMhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz)"),
+  );
   check(
     "качание/сплошная/случайная — отдельный TX полки, не CW hostTx",
     storeSrc.includes("const runOpenLoopShelfTx") &&
