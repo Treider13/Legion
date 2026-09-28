@@ -31,8 +31,9 @@ import {
   paintCenterMhz,
   paintRefuseReason,
   paintSpanMhz,
-  paintWaveHint,
 } from "../sense/attackPaint";
+import { attackShelfHint, clipShelfToCorridor } from "../sense/attackShelfTx";
+import { clampShelfMhz } from "../sense/txShelf";
 import { TxGainControl } from "./TxGainControl";
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
@@ -93,7 +94,7 @@ export function ScanPanel() {
             ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
-              : `${HOST_ATTACK_MODE_RU_CAPS}: слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Мозг помнит IQ на плате и hop-вспышки сессии, пишет разбор и подсказки по-русски. Рамка мышкой до ${ATTACK_TX_MAX_MHZ} МГц, тип волны и выдержка — кнопка «взять» ставит только то, что вы нажали; в эфир само не уходит. ПЕРЕДАТЬ заливает нарисованное. Пунктир на спектре — предложение, не рамка. Без рамки — прежний авто-handoff. Хост-скан и FPGA вместе не работают (один USB).`}
+              : `${HOST_ATTACK_MODE_RU_CAPS}: без рамки слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Рамка мышкой — коридор (может быть шире ${ATTACK_TX_MAX_MHZ} МГц; одно окно USB FD ≤${ATTACK_TX_MAX_MHZ}). Полка — горб на найденном, тип волны — чем заливаем полку. Выдержка — на каждой засечке, сессию гасит только Стоп передачу. Пунктир — предложение, не рамка. Без рамки — авто-handoff живой засечки той же полкой. Хост-скан и FPGA вместе не работают (один USB).`}
       </p>
       <div className="freq-hud" aria-label="Перехваченная и TX частоты">
         <div className="freq-hud-card hit">
@@ -326,10 +327,10 @@ export function ScanPanel() {
         )}
         {auto && (
           <>
-            <label title="Сколько миллисекунд держать усилитель в нарисованной рамке после ПЕРЕДАТЬ.">
+            <label title="Сколько миллисекунд держать полку на одной засечке, потом следующая в коридоре. Сессию не гасит.">
               TX РАМКИ мс
               <input
-                aria-label="Выдержка передачи в рамке Атаки"
+                aria-label="Выдержка полки на засечке Атаки"
                 type="number"
                 min={ATTACK_HOLD_MIN_MS}
                 max={ATTACK_HOLD_MAX_MS}
@@ -339,10 +340,10 @@ export function ScanPanel() {
                 disabled={s.transmitArmed}
               />
             </label>
-            <label title="Тип baseband, которым заливаем рамку. CW — узкий тон в центре.">
-              ВОЛНА РАМКИ
+            <label title="Тип baseband на полке засечки. CW — узкий тон в центре полки, не коридора.">
+              ВОЛНА ПОЛКИ
               <select
-                aria-label="Тип волны для рамки Атаки"
+                aria-label="Тип волны полки Атаки"
                 value={s.txWaveKind ?? ""}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -373,7 +374,7 @@ export function ScanPanel() {
             }`
           : auto
             ? s.attackPaint
-              ? "Атака: рамка ваша. Подсказки ниже — помощник, не кнопка. ПЕРЕДАТЬ жмёте вы."
+              ? "Атака: рамка — где ищем. Полка и волна — что уходит на найденное. ПЕРЕДАТЬ жмёте вы."
               : s.autoDispatch === "priority"
               ? "рамки нет: без обвода ПЕРЕДАТЬ возьмёт живую засечку. Приоритет — сильнее рядом."
               : s.autoDispatch === "park"
@@ -389,14 +390,21 @@ export function ScanPanel() {
         <p className="sens-hint">
           TX-контент:{" "}
           {s.txWaveKind !== null
-            ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА / волна рамки)`
-            : "CW тон · сменить — волна рамки выше или вкладка ТИП СИГНАЛА"}
+            ? `зашитая волна «${waveMeta(s.txWaveKind).title}» (вкладка ТИП СИГНАЛА / волна полки)`
+            : "CW тон · сменить — волна полки выше или вкладка ТИП СИГНАЛА"}
         </p>
       )}
       {auto && (
         <p className="sens-hint">
           {s.attackPaint
-            ? `рамка ${s.attackPaint.f1Mhz.toFixed(2)}…${s.attackPaint.f2Mhz.toFixed(2)} МГц · центр ${paintCenterMhz(s.attackPaint).toFixed(3)} · ${paintSpanMhz(s.attackPaint).toFixed(2)} МГц · ${paintWaveHint(s.txWaveKind, s.attackPaint, s.txWaveParams)}`
+            ? (() => {
+                const analog = catalogCaps(s.sdrId).analogBwMhz;
+                const shelf = clampShelfMhz(parseLocaleNumber(s.txShelfMhz), analog);
+                const mid = paintCenterMhz(s.attackPaint);
+                const clip = clipShelfToCorridor(mid, shelf, s.attackPaint, analog);
+                const occ = clip?.occupyMhz ?? shelf;
+                return `коридор ${s.attackPaint.f1Mhz.toFixed(2)}…${s.attackPaint.f2Mhz.toFixed(2)} МГц · ${paintSpanMhz(s.attackPaint).toFixed(2)} МГц · полка ${occ.toFixed(2)} МГц · ${attackShelfHint(s.txWaveKind, occ, s.attackPaint)}`;
+              })()
             : "рамки нет — выделите полосу мышкой на спектре, иначе ПЕРЕДАТЬ возьмёт живую засечку как раньше"}
           {s.attackTxUntil != null && s.transmitArmed
             ? ` · TX ещё ${Math.max(0, s.attackTxUntil - Date.now())} мс`
