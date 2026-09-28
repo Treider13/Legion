@@ -61,6 +61,7 @@ architecture rtl of legion_walkoff is
     signal play_cnt    : unsigned(11 downto 0);
     signal phase       : std_logic;
     signal cap_arm_r   : std_logic;
+    signal cap_seen_lo : std_logic; -- фронт arm сбросил липкий capture_done
     signal play_en_r   : std_logic;
     signal lb_rd_r     : std_logic;
     signal cap_i_r     : signed(15 downto 0);
@@ -112,32 +113,35 @@ begin
             delay_now <= (others => '0');
             play_cnt  <= (others => '0');
             phase     <= '0';
-            cap_arm_r <= '0';
-            play_en_r <= '0';
-            lb_rd_r   <= '0';
-            cap_i_r   <= (others => '0');
-            cap_q_r   <= (others => '0');
-            cap_v_r   <= '0';
+            cap_arm_r   <= '0';
+            cap_seen_lo <= '0';
+            play_en_r   <= '0';
+            lb_rd_r     <= '0';
+            cap_i_r     <= (others => '0');
+            cap_q_r     <= (others => '0');
+            cap_v_r     <= '0';
         elsif rising_edge(clock) then
             lb_rd_r <= '0';
             cap_v_r <= '0';
 
             if run = '0' then
-                st        <= LEGION_WALK_ST_IDLE;
-                delay_cnt <= (others => '0');
-                delay_now <= delay_init;
-                play_cnt  <= (others => '0');
-                phase     <= '0';
-                cap_arm_r <= '0';
-                play_en_r <= '0';
+                st          <= LEGION_WALK_ST_IDLE;
+                delay_cnt   <= (others => '0');
+                delay_now   <= delay_init;
+                play_cnt    <= (others => '0');
+                phase       <= '0';
+                cap_arm_r   <= '0';
+                cap_seen_lo <= '0';
+                play_en_r   <= '0';
             else
                 case st is
                     when LEGION_WALK_ST_IDLE =>
-                        cap_arm_r <= '0';
-                        play_en_r <= '0';
-                        delay_now <= delay_init;
-                        play_cnt  <= (others => '0');
-                        phase     <= '0';
+                        cap_arm_r   <= '0';
+                        cap_seen_lo <= '0';
+                        play_en_r   <= '0';
+                        delay_now   <= delay_init;
+                        play_cnt    <= (others => '0');
+                        phase       <= '0';
                         if auto = '1' then
                             st <= LEGION_WALK_ST_WAIT_DET;
                         elsif capture_done = '1' then
@@ -146,9 +150,10 @@ begin
                         end if;
 
                     when LEGION_WALK_ST_WAIT_DET =>
-                        cap_arm_r <= '0';
-                        play_en_r <= '0';
-                        phase     <= '0';
+                        cap_arm_r   <= '0';
+                        cap_seen_lo <= '0';
+                        play_en_r   <= '0';
+                        phase       <= '0';
                         if det_active = '1' then
                             st <= LEGION_WALK_ST_CAPTURE;
                         end if;
@@ -156,23 +161,31 @@ begin
                     when LEGION_WALK_ST_CAPTURE =>
                         cap_arm_r <= '1';
                         play_en_r <= '0';
-                        -- Захват с FIFO: тот же каденс, что у mux (rd, затем valid).
-                        phase <= not phase;
-                        if phase = '1' and lb_empty = '0' then
-                            lb_rd_r <= '1';
+                        -- capture_done липкий: новый фронт arm сбрасывает его
+                        -- на следующем такте. Иначе повторный AUTO-цикл видит
+                        -- старый done=1 и прыгает в DELAY без нового захвата.
+                        -- FIFO не читаем, пока плеер не принял новый arm
+                        -- (иначе сливаем слова в никуда).
+                        if capture_done = '0' then
+                            cap_seen_lo <= '1';
+                            phase <= not phase;
+                            if phase = '1' and lb_empty = '0' then
+                                lb_rd_r <= '1';
+                            end if;
+                            if lb_rd_r = '1' then
+                                cap_i_r <= shift_left(signed(lb_data(31 downto 16)),
+                                                      to_integer(lb_shift));
+                                cap_q_r <= shift_left(signed(lb_data(15 downto 0)),
+                                                      to_integer(lb_shift));
+                                cap_v_r <= '1';
+                            end if;
                         end if;
-                        if lb_rd_r = '1' then
-                            cap_i_r <= shift_left(signed(lb_data(31 downto 16)),
-                                                  to_integer(lb_shift));
-                            cap_q_r <= shift_left(signed(lb_data(15 downto 0)),
-                                                  to_integer(lb_shift));
-                            cap_v_r <= '1';
-                        end if;
-                        if capture_done = '1' then
-                            cap_arm_r <= '0';
-                            phase     <= '0';
-                            delay_cnt <= delay_now;
-                            st        <= LEGION_WALK_ST_DELAY;
+                        if cap_seen_lo = '1' and capture_done = '1' then
+                            cap_arm_r   <= '0';
+                            cap_seen_lo <= '0';
+                            phase       <= '0';
+                            delay_cnt   <= delay_now;
+                            st          <= LEGION_WALK_ST_DELAY;
                         end if;
 
                     when LEGION_WALK_ST_DELAY =>
@@ -203,8 +216,9 @@ begin
                         end if;
 
                     when LEGION_WALK_ST_STEP =>
-                        cap_arm_r <= '0';
-                        play_en_r <= '0';
+                        cap_arm_r   <= '0';
+                        cap_seen_lo <= '0';
+                        play_en_r   <= '0';
                         delay_now <= next_delay(delay_now, walk_step, delay_init,
                                                 walk_max, hold_max);
                         play_cnt  <= (others => '0');
@@ -218,9 +232,10 @@ begin
                         end if;
 
                     when others =>
-                        st        <= LEGION_WALK_ST_IDLE;
-                        cap_arm_r <= '0';
-                        play_en_r <= '0';
+                        st          <= LEGION_WALK_ST_IDLE;
+                        cap_arm_r   <= '0';
+                        cap_seen_lo <= '0';
+                        play_en_r   <= '0';
                 end case;
             end if;
         end if;

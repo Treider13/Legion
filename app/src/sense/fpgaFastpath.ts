@@ -503,7 +503,7 @@ export function attachTxGainDb(
   return cmd;
 }
 
-/** Команда ARM для шлюза. det_thr/shift — только lb_gated. nco_ftw — только nco.
+/** Команда ARM для шлюза. det_thr/shift — lb_gated и walk-off AUTO. nco_ftw — только nco.
  *  freq_mhz — LO парковки: на micro без неё шлюз честно отказывает (AD9361
  *  поднимает NIOS-прошивка, ей нужна частота); на x40 игнорируется. */
 export function fpgaArmCmd(

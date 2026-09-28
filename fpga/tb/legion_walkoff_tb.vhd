@@ -237,7 +237,7 @@ begin
         enable     <= '1';
         arm        <= '1';
         mode_player <= '1';
-        fifo_stock <= 16;
+        fifo_stock <= 32;
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         assert wstate = LEGION_WALK_ST_WAIT_DET
@@ -278,6 +278,23 @@ begin
         assert cur_delay = to_unsigned(1, 32)
             report "FAIL: AUTO walk-off step after first play" severity failure;
         assert play_en = '0' report "FAIL: play still on in WAIT_DET" severity failure;
+
+        -- Второй круг: det ещё 1 → CAPTURE должен сбросить липкий done,
+        -- а не прыгнуть в DELAY со старой RAM.
+        saw_arm := false;
+        for k in 0 to 240 loop
+            wait until rising_edge(clock);
+            if wstate = LEGION_WALK_ST_CAPTURE and capture_arm = '1'
+               and capture_done = '0' then
+                saw_arm := true;
+            end if;
+            exit when wstate = LEGION_WALK_ST_PLAY and saw_arm;
+        end loop;
+        assert saw_arm
+            report "FAIL: AUTO recapture did not clear sticky capture_done"
+            severity failure;
+        assert wstate = LEGION_WALK_ST_PLAY
+            report "FAIL: AUTO second cycle did not reach PLAY" severity failure;
 
         -- ---------- 5. DISARM гасит автомат (play_en = обход MODE_PLAYER) ----------
         arm <= '0';
