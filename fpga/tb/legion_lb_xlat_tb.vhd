@@ -78,7 +78,8 @@ begin
         port map (
             clock => clk, reset => rst, enable => en, lock => lck, peak_word => peak,
             in_i => in_i, in_q => in_q, in_valid => in_v,
-            out_i => o_i, out_q => o_q, out_valid => o_v
+            out_i => o_i, out_q => o_q, out_valid => o_v,
+            bb_i => open, bb_q => open
         );
 
     stim : process

@@ -71,6 +71,7 @@ REG_LB_FTW1 = 0x27
 REG_LB_AMP = 0x28  # [15:0] A0 Q15, [31:16] A1
 REG_WALK_PERIOD = 0x29  # сэмплы между шагами; 0 = фронт det
 REG_WALK_FTW_STEP = 0x2A  # прирост FTW0 за шаг
+REG_CH_TARGET = 0x2B  # [31]=arm, [7:0]=signed bin; FTW=bin<<24, LO не трогаем
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF

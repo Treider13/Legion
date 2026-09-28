@@ -69,6 +69,8 @@
 #define LEGION_REG_LB_AMP         0x28  /* [15:0] A0 Q15, [31:16] A1 */
 #define LEGION_REG_WALK_PERIOD    0x29  /* сэмплы между шагами; 0 = фронт det */
 #define LEGION_REG_WALK_FTW_STEP  0x2A  /* прирост FTW0 за шаг */
+/* Синтез: [31]=arm, [7:0]=signed bin. FTW=bin<<24. LO не двигается. */
+#define LEGION_REG_CH_TARGET      0x2B
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -90,7 +92,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_WALK_FTW_STEP
+#define LEGION_REG_MAX            LEGION_REG_CH_TARGET
 
 /* Режимы MODE — зеркало legion_pkg.vhd (LEGION_MODE_*) */
 #define LEGION_MODE_PASS          0x0   /* обычный стрим с хоста */
@@ -140,6 +142,8 @@ bool legion_air_down(void);
  * FFT_CTRL=0 (дефолт): взгляд = AIR_BW, гейт I²+Q², hop на центр взгляда.
  * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
  * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
+ * После канала NIOS пишет CH_TARGET: legion_lb_aim ставит копию базы DRFM
+ * на этот bin следующим sample_en. Период обзора и обёртку NCO не ждёт.
  * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
  * узжаем. HOLD: TURN = выдержка, затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;

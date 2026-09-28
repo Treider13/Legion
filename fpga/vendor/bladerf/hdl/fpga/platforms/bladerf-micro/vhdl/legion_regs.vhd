@@ -46,6 +46,7 @@ entity legion_regs is
         tx_lb_amp1    : out unsigned(15 downto 0);
         tx_walk_period : out unsigned(31 downto 0);
         tx_walk_ftw_step : out unsigned(31 downto 0);
+        tx_ch_target  : out std_logic_vector(31 downto 0);
         -- Домен RX (пороги детектора)
         rx_clock      : in  std_logic;
         rx_reset      : in  std_logic;
@@ -54,6 +55,7 @@ entity legion_regs is
         rx_fft_en     : out std_logic;
         rx_fft_dc_notch : out std_logic;
         rx_fft_lock   : out std_logic;
+        rx_aim_en     : out std_logic;
         rx_peak_word  : in  std_logic_vector(31 downto 0);
         -- Статусные входы из TX/RX доменов
         tx_playing    : in  std_logic;
@@ -89,6 +91,7 @@ architecture rtl of legion_regs is
     signal r_lb_amp     : std_logic_vector(31 downto 0);
     signal r_walk_period : std_logic_vector(31 downto 0);
     signal r_walk_ftw_step : std_logic_vector(31 downto 0);
+    signal r_ch_target  : std_logic_vector(31 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -112,6 +115,7 @@ architecture rtl of legion_regs is
     signal lba_meta, lba_tx     : std_logic_vector(31 downto 0);
     signal wper_meta, wper_tx   : std_logic_vector(31 downto 0);
     signal wfs_meta, wfs_tx     : std_logic_vector(31 downto 0);
+    signal cht_meta, cht_tx     : std_logic_vector(31 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -121,6 +125,7 @@ architecture rtl of legion_regs is
     signal thr_meta, thr_rx     : std_logic_vector(31 downto 0);
     signal sh_meta, sh_rx       : std_logic_vector(3 downto 0);
     signal fft_meta, fft_rx     : std_logic_vector(2 downto 0);
+    signal aim_meta, aim_rx     : std_logic;
     signal pk_meta, pk_nios     : std_logic_vector(31 downto 0);
     signal wcur_meta, wcur_nios : std_logic_vector(31 downto 0);
 
@@ -169,6 +174,7 @@ begin
             r_lb_amp     <= x"00007FFF"; -- A0≈1.0, A1=0: один отвод, mux даст 0.9
             r_walk_period <= (others => '0');
             r_walk_ftw_step <= (others => '0');
+            r_ch_target  <= (others => '0');
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -201,6 +207,7 @@ begin
                     when LEGION_REG_LB_AMP     => r_lb_amp     <= pio_wdata;
                     when LEGION_REG_WALK_PERIOD => r_walk_period <= pio_wdata;
                     when LEGION_REG_WALK_FTW_STEP => r_walk_ftw_step <= pio_wdata;
+                    when LEGION_REG_CH_TARGET  => r_ch_target  <= pio_wdata;
                     when others => null;
                 end case;
             end if;
@@ -229,6 +236,7 @@ begin
             lba_meta  <= (others => '0'); lba_tx <= (others => '0');
             wper_meta <= (others => '0'); wper_tx <= (others => '0');
             wfs_meta  <= (others => '0'); wfs_tx <= (others => '0');
+            cht_meta  <= (others => '0'); cht_tx <= (others => '0');
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -253,6 +261,7 @@ begin
             lba_meta  <= r_lb_amp;     lba_tx  <= lba_meta;
             wper_meta <= r_walk_period; wper_tx <= wper_meta;
             wfs_meta  <= r_walk_ftw_step; wfs_tx <= wfs_meta;
+            cht_meta  <= r_ch_target;  cht_tx  <= cht_meta;
         end if;
     end process;
 
@@ -279,6 +288,7 @@ begin
     tx_lb_amp1    <= unsigned(lba_tx(31 downto 16));
     tx_walk_period <= unsigned(wper_tx);
     tx_walk_ftw_step <= unsigned(wfs_tx);
+    tx_ch_target  <= cht_tx;
 
     -- ---------------- Статус: сборка в tx_clock, CDC → 80 МГц ----------------
     -- det_count — gray CDC из rx-домена в nios (не 2FF целого слова).
@@ -310,10 +320,12 @@ begin
             thr_meta <= (others => '0'); thr_rx <= (others => '0');
             sh_meta  <= (others => '0'); sh_rx  <= (others => '0');
             fft_meta <= (others => '0'); fft_rx <= (others => '0');
+            aim_meta <= '0'; aim_rx <= '0';
         elsif rising_edge(rx_clock) then
             thr_meta <= r_det_thr;   thr_rx <= thr_meta;
             sh_meta  <= r_det_shift; sh_rx  <= sh_meta;
             fft_meta <= r_fft_ctrl;  fft_rx <= fft_meta;
+            aim_meta <= r_ch_target(31); aim_rx <= aim_meta;
         end if;
     end process;
 
@@ -322,6 +334,7 @@ begin
     rx_fft_en       <= fft_rx(0);
     rx_fft_dc_notch <= fft_rx(1);
     rx_fft_lock     <= fft_rx(2);
+    rx_aim_en       <= aim_rx;
 
     -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
     cdc_det_src : process(rx_clock, rx_reset)

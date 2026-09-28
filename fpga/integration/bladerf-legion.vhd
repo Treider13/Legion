@@ -299,6 +299,7 @@ architecture legion of bladerf is
     signal lg_tx_lb_amp1    : unsigned(15 downto 0);
     signal lg_tx_walk_period : unsigned(31 downto 0);
     signal lg_tx_walk_ftw_step : unsigned(31 downto 0);
+    signal lg_tx_ch_target  : std_logic_vector(31 downto 0);
     signal lg_lb_dly0       : std_logic_vector(31 downto 0);
     signal lg_lb_dly1       : std_logic_vector(31 downto 0);
     signal lg_lb_mix0       : std_logic_vector(31 downto 0);
@@ -366,6 +367,13 @@ architecture legion of bladerf is
     signal lg_xlat_i        : signed(15 downto 0);
     signal lg_xlat_q        : signed(15 downto 0);
     signal lg_xlat_v        : std_logic;
+    signal lg_xlat_bb_i     : signed(15 downto 0);
+    signal lg_xlat_bb_q     : signed(15 downto 0);
+    signal lg_rx_aim        : std_logic;
+    signal lg_fifo_i        : signed(15 downto 0);
+    signal lg_fifo_q        : signed(15 downto 0);
+    signal lg_aim_data      : std_logic_vector(31 downto 0);
+    signal lg_lb_to_mux     : std_logic_vector(31 downto 0);
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1550,6 +1558,7 @@ begin
         tx_lb_amp1    => lg_tx_lb_amp1,
         tx_walk_period => lg_tx_walk_period,
         tx_walk_ftw_step => lg_tx_walk_ftw_step,
+        tx_ch_target  => lg_tx_ch_target,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1565,6 +1574,7 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
+        rx_aim_en     => lg_rx_aim,
         rx_peak_word  => lg_peak_word
       );
 
@@ -1619,8 +1629,15 @@ begin
         in_valid  => rx_sample_corrected_valid,
         out_i     => lg_xlat_i,
         out_q     => lg_xlat_q,
-        out_valid => lg_xlat_v
+        out_valid => lg_xlat_v,
+        bb_i      => lg_xlat_bb_i,
+        bb_q      => lg_xlat_bb_q
       );
+    -- arm: в DRFM база (вырез уже снял соседей). Иначе — прежний вырез на bin.
+    -- Первые FIFO(64)+delay сэмплов после arm ещё старый вырез: aim сдвинет
+    -- их второй раз, потом в линии уже база и bin садится куда написан.
+    lg_fifo_i <= lg_xlat_bb_i when lg_rx_aim = '1' else lg_xlat_i;
+    lg_fifo_q <= lg_xlat_bb_q when lg_rx_aim = '1' else lg_xlat_q;
 
     -- det_active → tx_clock (квазистатичный уровень)
     U_legion_det_sync : entity work.synchronizer
@@ -1739,7 +1756,7 @@ begin
       port map (
         wr_clk   => rx_clock,
         wr_reset => rx_reset,
-        wr_data  => std_logic_vector(lg_xlat_i) & std_logic_vector(lg_xlat_q),
+        wr_data  => std_logic_vector(lg_fifo_i) & std_logic_vector(lg_fifo_q),
         wr_en    => lg_lb_wr_en,
         wr_full  => lg_lb_full,
         rd_clk   => tx_clock,
@@ -1841,6 +1858,19 @@ begin
         dout      => lg_lb_mux_data
       );
 
+    -- Синтез: копия отвода 0 (DRFM) × NCO(CH_TARGET). LO не трогаем.
+    -- arm=0: lg_lb_to_mux = combine, как раньше.
+    U_legion_lb_aim : entity work.legion_lb_aim
+      port map (
+        clock     => tx_clock,
+        reset     => tx_reset,
+        ch_target => lg_tx_ch_target,
+        sample_en => lg_mux_rd_en,
+        din       => lg_lb_dly0,
+        dout      => lg_aim_data
+      );
+    lg_lb_to_mux <= lg_aim_data when lg_tx_ch_target(31) = '1' else lg_lb_mux_data;
+
     -- Мультиплексор TX-источника
     U_legion_tx_mux : entity work.legion_tx_mux
       port map (
@@ -1861,7 +1891,7 @@ begin
         nco_i      => lg_nco_i,
         nco_q      => lg_nco_q,
         nco_valid  => lg_nco_valid,
-        lb_data    => lg_lb_mux_data,
+        lb_data    => lg_lb_to_mux,
         lb_empty   => lg_lb_empty,
         lb_rd_en   => lg_mux_rd_en,
         out_i      => lg_mux_i,

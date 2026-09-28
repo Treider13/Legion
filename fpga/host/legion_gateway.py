@@ -418,7 +418,7 @@ class FakeTransport:
                         lf.REG_WALK_CTL, lf.REG_WALK_CUR,
                         lf.REG_LB_DELAY, lf.REG_LB_FTW, lf.REG_LB_DELAY1,
                         lf.REG_LB_FTW1, lf.REG_LB_AMP, lf.REG_WALK_PERIOD,
-                        lf.REG_WALK_FTW_STEP):
+                        lf.REG_WALK_FTW_STEP, lf.REG_CH_TARGET):
                 val = int(self.regs.get(addr, 0)) & 0xFFFFFFFF
                 resp[5:9] = val.to_bytes(4, "little")
                 return bytes(resp)
@@ -1191,6 +1191,7 @@ class LegionGateway:
                 "lb_delay1": lf.REG_LB_DELAY1, "lb_ftw1": lf.REG_LB_FTW1,
                 "lb_amp": lf.REG_LB_AMP, "walk_period": lf.REG_WALK_PERIOD,
                 "walk_ftw_step": lf.REG_WALK_FTW_STEP,
+                "ch_target": lf.REG_CH_TARGET,
                 "air_freq_khz": lf.REG_AIR_FREQ_KHZ, "air_gain_db": lf.REG_AIR_GAIN_DB,
                 "air_prep": lf.REG_AIR_PREP,
                 "air_fs_hz": lf.REG_AIR_FS_HZ, "air_bw_hz": lf.REG_AIR_BW_HZ,

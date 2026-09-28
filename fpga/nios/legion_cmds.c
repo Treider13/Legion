@@ -98,6 +98,9 @@ static uint32_t legion_settle_n;
 static uint32_t legion_look_center_khz;
 static uint32_t legion_fire_khz;
 static uint32_t legion_fire_mag;
+/* CH_TARGET: [31]=arm, [7:0]=bin. 0 = вырез как раньше, без синтеза. */
+static uint32_t legion_ch_target;
+static void legion_aim_clear(void);
 static uint32_t legion_snap_frame;
 static bool     legion_snap_have; /* frame 7 бит: 0 — валидный кадр, не «пусто» */
 static uint8_t  legion_fft_st;
@@ -266,6 +269,7 @@ static void legion_scan_reset(void)
     legion_inner_t0 = 0;
     legion_scan_event = 0;
     legion_survey_clear_hits();
+    legion_aim_clear();
 }
 
 bool legion_air_up(bool rx, bool tx)
@@ -1009,6 +1013,28 @@ static void legion_fft_ctrl_hdl(uint32_t c)
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
 }
 
+/* Цифровой hop: слово в HDL, LO не трогаем. Следующий sample_en уже с новым FTW. */
+static void legion_aim_write(uint32_t word)
+{
+    legion_ch_target = word;
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, word);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | LEGION_REG_CH_TARGET);
+    IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+}
+
+static void legion_aim_set(uint32_t bin)
+{
+    legion_aim_write(0x80000000u | (bin & 0xffu));
+}
+
+static void legion_aim_clear(void)
+{
+    if (legion_ch_target == 0) {
+        return;
+    }
+    legion_aim_write(0);
+}
+
 static void legion_fft_invalidate_peak(void)
 {
     uint32_t const c = legion_fft_ctrl;
@@ -1067,6 +1093,8 @@ static bool legion_fft_enter_search(uint32_t center_khz)
     if (!legion_hop_lo_ex(center_khz, false)) {
         return false;
     }
+    /* Новый взгляд: синтез прошлого bin гасим сразу, не ждём период. */
+    legion_aim_clear();
     legion_fft_invalidate_peak();
     legion_look_center_khz = center_khz;
     legion_settle_t0 = time_tamer_read(BLADERF_MODULE_RX);
@@ -1109,14 +1137,14 @@ static void legion_fft_try_next(void)
     legion_scan_dir = old_dir;
 }
 
-static void legion_fft_fire(uint32_t peak_khz, uint32_t mag)
+static void legion_fft_fire(uint32_t peak_khz, uint32_t mag, uint32_t bin)
 {
     legion_peak_khz = peak_khz;
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
-    /* LO на центре взгляда: вырез уже в HDL (FTW=bin≪24). Hop PLL —
-     * миллисекунды ADI SPI / LMS, это ломает µs-путь. Analog FIRE_BW
-     * не узжаем — изоляция цифровая, как xlating FIR. */
+    /* LO на центре взгляда. Синтез — NCO на bin, не PLL.
+     * Пишем до unmute: 2FF CDC успевает, пока SPI mute отпускает TX. */
+    legion_aim_set(bin);
     if (!legion_set_tx_mute(false)) {
         return;
     }
@@ -1216,7 +1244,7 @@ static void legion_fft_walk(void)
         if (peak == 0) {
             return;
         }
-        legion_fft_fire(peak, mag);
+        legion_fft_fire(peak, mag, w & 0xffu);
         return;
     }
 
@@ -1530,6 +1558,7 @@ static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
     legion_peak_khz = peak_khz;
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
+    legion_aim_set(bin);
     legion_fft_stare_hdl(true);
     if (!legion_set_tx_mute(false)) {
         return;
@@ -1919,6 +1948,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
         case LEGION_REG_WALK_CUR:
             return true;
 
+        case LEGION_REG_CH_TARGET:
+            legion_ch_target = data;
+            break;
+
         case LEGION_REG_AIR_PREP:
             if (data & 0x1) {
                 return legion_air_up((data & 0x2) != 0, (data & 0x4) != 0);
@@ -1955,6 +1988,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 /* DISARM: цифру гасим сразу (mux нули), эфир — честно.
                  * STANDBY отказ → запись CTRL=0 уже ушла, write не ok. */
                 legion_armed = false;
+                legion_aim_clear();
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80 | addr);
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
@@ -2072,6 +2106,10 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_WALK_CUR) {
         *data = legion_walk_cur_word();
+        return true;
+    }
+    if (addr == LEGION_REG_CH_TARGET) {
+        *data = legion_ch_target;
         return true;
     }
     *data = IORD_ALTERA_AVALON_PIO_DATA(LEGION_STATUS_BASE);

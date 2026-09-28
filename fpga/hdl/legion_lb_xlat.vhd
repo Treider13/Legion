@@ -26,7 +26,11 @@ entity legion_lb_xlat is
         in_valid  : in  std_logic;
         out_i     : out signed(15 downto 0);
         out_q     : out signed(15 downto 0);
-        out_valid : out std_logic
+        out_valid : out std_logic;
+        -- База после MA, до обратного смесителя. Копия в DRFM, когда
+        -- CH_TARGET.arm: legion_lb_aim ставит её на bin, LO не двигается.
+        bb_i      : out signed(15 downto 0);
+        bb_q      : out signed(15 downto 0)
     );
 end entity;
 
@@ -80,6 +84,8 @@ architecture rtl of legion_lb_xlat is
     signal out_i_r   : signed(15 downto 0) := (others => '0');
     signal out_q_r   : signed(15 downto 0) := (others => '0');
     signal out_v_r   : std_logic := '0';
+    signal bb_i_r    : signed(15 downto 0) := (others => '0');
+    signal bb_q_r    : signed(15 downto 0) := (others => '0');
 
     function sine_lookup(phase10 : unsigned(9 downto 0)) return signed is
         variable quad : unsigned(1 downto 0);
@@ -117,6 +123,8 @@ begin
     out_i     <= out_i_r;
     out_q     <= out_q_r;
     out_valid <= out_v_r;
+    bb_i      <= bb_i_r;
+    bb_q      <= bb_q_r;
 
     process(clock, reset)
         variable bin  : signed(7 downto 0);
@@ -144,12 +152,16 @@ begin
             out_i_r   <= (others => '0');
             out_q_r   <= (others => '0');
             out_v_r   <= '0';
+            bb_i_r    <= (others => '0');
+            bb_q_r    <= (others => '0');
         elsif rising_edge(clock) then
             out_v_r <= '0';
             if enable = '0' then
                 out_i_r   <= in_i;
                 out_q_r   <= in_q;
                 out_v_r   <= in_valid;
+                bb_i_r    <= in_i;
+                bb_q_r    <= in_q;
                 ma_have   <= '0';
                 lock_have <= '0';
                 acc_i     <= (others => '0');
@@ -160,6 +172,8 @@ begin
                 out_i_r <= (others => '0');
                 out_q_r <= (others => '0');
                 out_v_r <= in_valid;
+                bb_i_r  <= (others => '0');
+                bb_q_r  <= (others => '0');
                 ma_have <= '0';
                 acc_i   <= (others => '0');
                 acc_q   <= (others => '0');
@@ -208,6 +222,8 @@ begin
                 b_i := resize(shift_right(a_i, 4), 16);
                 b_q := resize(shift_right(a_q, 4), 16);
                 -- up: (I'+jQ')(cos+j sin)
+                bb_i_r  <= b_i;
+                bb_q_r  <= b_q;
                 out_i_r <= mix_sum(b_i, b_q, c_i, s_q, true);
                 out_q_r <= mix_sum(b_i, b_q, s_q, c_i, false);
                 out_v_r <= '1';

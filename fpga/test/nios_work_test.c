@@ -736,6 +736,10 @@ int main(void)
         CHECK("FFT n==1: AIR_FREQ = центр взгляда", khz == 2450000);
         legion_reg_read(LEGION_REG_PEAK_KHZ, &khz);
         CHECK("FFT n==1: PEAK_KHZ = пик", khz == 2453500);
+        legion_reg_read(LEGION_REG_CH_TARGET, &khz);
+        CHECK("FFT n==1: CH_TARGET bin16 arm, LO на месте",
+              khz == 0x80000010u &&
+              pio_wrote_reg(LEGION_REG_CH_TARGET, 0x80000010u));
     }
     rfic_n = 0;
     t_status = LEGION_STATUS_DET_ACTIVE;

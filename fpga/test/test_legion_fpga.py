@@ -152,6 +152,7 @@ py_map = {
     "LEGION_REG_LB_AMP": lf.REG_LB_AMP,
     "LEGION_REG_WALK_PERIOD": lf.REG_WALK_PERIOD,
     "LEGION_REG_WALK_FTW_STEP": lf.REG_WALK_FTW_STEP,
+    "LEGION_REG_CH_TARGET": lf.REG_CH_TARGET,
 }
 
 v, n = vhdl_consts(), nios_consts()
