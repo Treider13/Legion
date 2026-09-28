@@ -116,9 +116,15 @@ def packet_css(x: np.ndarray, fs: float, starts: list[int], dur_s: float) -> flo
     return float(np.median(scores)) if scores else css_score(x, fs)
 
 
-def classify_rc(rate_hz: float, css: bool, band: str, hop_spacing_mhz: float = 0.0) -> dict[str, Any]:
+def classify_rc(
+    rate_hz: float,
+    css: bool,
+    band: str,
+    hop_spacing_mhz: float = 0.0,
+    freq_mhz: float = 0.0,
+) -> dict[str, Any]:
     """Имя только когда сетка (+ шаг hop) не пересекается."""
-    return classify_rc_db(rate_hz, css, band, hop_spacing_mhz)
+    return classify_rc_db(rate_hz, css, band, hop_spacing_mhz, freq_mhz)
 
 
 def analyze_rc(
@@ -148,7 +154,7 @@ def analyze_rc(
     env = envelope_packets(z, fs)
     score = packet_css(z, fs, env["starts"], float(env["durS"]))
     css = score >= CSS_HIT
-    cls = classify_rc(float(env["rateHz"]), css, band, hop_spacing_mhz)
+    cls = classify_rc(float(env["rateHz"]), css, band, hop_spacing_mhz, freq_mhz)
     return {
         **cls,
         "rateHz": float(env["rateHz"]),

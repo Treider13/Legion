@@ -405,10 +405,10 @@ async function main(): Promise<void> {
     rc900.hint,
   );
   check(
-    "2.4 + IQ 250 Гц CSS = ELRS",
+    "2.4 + IQ 250 Гц CSS dual",
     classifyAttackFamily(rc24Track, undefined, undefined, {
-      rc: { id: "elrs", label: "ELRS LoRa 250 Гц", hint: "CSS + скорость ELRS" },
-    }).id === "elrs",
+      rc: { id: "elrs-ghost-250", label: "CSS 250 Гц (ELRS или Ghost Pure Race)", hint: "CSS" },
+    }).id === "elrs-ghost-250",
   );
   check(
     "2.4 + IQ 31 Гц CSS = mLRS",
@@ -460,6 +460,20 @@ async function main(): Promise<void> {
   check("канал A4 на 5805", nearestAnalogChannel(5805)?.id === "A4");
   check("2.4 не analog-канал", nearestAnalogChannel(2442) == null);
   check("каталог баз ≥ 12", PROTOCOL_CATALOG.length >= 12);
+  check(
+    "каталог IN866+US433W",
+    PROTOCOL_CATALOG.some((p) => p.id === "elrs-in866") && PROTOCOL_CATALOG.some((p) => p.id === "elrs-us433w"),
+  );
+  check("корзина 1.2 на 1080", bandBucket(1080) === "l12");
+  check(
+    "433 + IQ ELRS extra",
+    classifyAttackFamily(
+      { freqMhz: 433.4, widthMhz: 0.5, duty: 0.2, streak: 1 },
+      undefined,
+      undefined,
+      { rc: { id: "elrs", label: "ELRS LoRa 100 Гц", hint: "CSS 433" } },
+    ).id === "elrs",
+  );
   const fhssLook = parseWorkerLook(
     {
       kind: "tone",

@@ -221,7 +221,10 @@ function parseRcLook(raw: unknown): RcLook | null {
     "ghost",
     "mlrs-frsky-111",
     "elrs-tracer-250",
-    "elrs-crossfire-150",
+    "elrs-ghost-150",
+    "elrs-ghost-250",
+    "elrs-ghost-500",
+    "crossfire-or-fsk-150",
     "rc-unknown",
   ];
   const id: RcId = (known as string[]).includes(idRaw) ? (idRaw as RcId) : "rc-unknown";

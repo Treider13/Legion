@@ -1,7 +1,7 @@
 // ============================================================================
 // LEGION — плейлист полос дронов. Не декодер и не имя фирмы.
 // Источники частот (публичные обзоры Oscar Liang / DJI O4 / analog FPV / ELRS):
-//   420–450 UHF, 850–930 LRS/ELRS, 1180–1360 analog 1.2,
+//   420–450 UHF, 850–930 LRS/ELRS, 1080–1360 analog 1.2,
 //   1400–2000 цифра 1.4–2.0, 2400–2485 ISM, 3080–3600 analog 3.3,
 //   5150–5250 O4 low (DJI specs), 5320–5950 analog L/U/D 5.3 + 5.8
 //   (Oscar Liang LOWRACE 5333–5613 / Raceband 5658–5917).
@@ -15,7 +15,7 @@ import type { AllowBand } from "../policy/allowlist";
 export const DRONE_SURVEY_TEMPLATE: readonly AllowBand[] = [
   { f1Mhz: 420, f2Mhz: 450 },
   { f1Mhz: 850, f2Mhz: 930 },
-  { f1Mhz: 1180, f2Mhz: 1360 },
+  { f1Mhz: 1080, f2Mhz: 1360 },
   { f1Mhz: 1400, f2Mhz: 2000 },
   { f1Mhz: 2400, f2Mhz: 2485 },
   { f1Mhz: 3080, f2Mhz: 3600 },

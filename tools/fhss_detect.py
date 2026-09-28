@@ -23,7 +23,7 @@ from protocol_db import XA4_IBW_MHZ, classify_fhss_domain, classify_rc
 
 FHSS_NFFT_FAST = 4096
 FHSS_HOP_FAST = 2048
-FHSS_MAX_S = 0.080
+FHSS_MAX_S = 0.160  # 160 мс = ATTACK_RC_S: три hop на 19 Гц mLRS; 80 мс не хватало
 FHSS_DG_DB = 14.0  # PMC Algorithm 1
 FHSS_MIN_HOPS = 3
 FHSS_MIN_FRAMES = 2
@@ -257,7 +257,7 @@ def attach_rc(fhss: dict[str, Any], rc: dict[str, Any] | None, freq_mhz: float) 
     spacing = float(fhss.get("spacingMhz") or 0.0)
     rate = float(rc.get("rateHz") or fhss.get("rateHz") or 0.0)
     css = bool(rc.get("css"))
-    cls = classify_rc(rate, css, band_of(freq_mhz), spacing)
+    cls = classify_rc(rate, css, band_of(freq_mhz), spacing, freq_mhz)
     return {
         **rc,
         **cls,

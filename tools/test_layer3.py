@@ -84,7 +84,7 @@ def main() -> int:
     n = int(fs * 0.12)
     elrs = rc.synth_rc_train(fs, 250.0, n, css=True, pkt_s=0.0012)
     a250 = rc.analyze_rc(elrs, fs, 2442.0)
-    check("ELRS 250 CSS id", a250["id"] == "elrs", str(a250))
+    check("250 CSS dual ELRS/Ghost Pure Race", a250["id"] == "elrs-ghost-250", str(a250))
     check("ELRS 250 css", a250["css"] is True, str(a250))
 
     mlrs = rc.synth_rc_train(fs, 31.0, int(fs * 0.14), css=True, pkt_s=0.002)
@@ -109,15 +109,27 @@ def main() -> int:
     cls19 = rc.classify_rc(19.0, True, "s24")
     check("19 Гц таблица = mLRS", cls19["id"] == "mlrs", str(cls19))
     cls500 = rc.classify_rc(500.0, True, "s24")
-    check("500 Гц таблица = ELRS", cls500["id"] == "elrs", str(cls500))
+    check("500 Гц CSS = ELRS", cls500["id"] == "elrs", str(cls500))
     cls333f = rc.classify_rc(333.0, False, "s24")
     check("333 Гц без CSS не FLRC", cls333f["id"] == "rc-unknown", str(cls333f))
     cls15 = rc.classify_rc(15.0, True, "s24")
     check("15 Гц CSS = Ghost", cls15["id"] == "ghost", str(cls15))
+    cls160 = rc.classify_rc(160.0, True, "s24")
+    check("160 Гц CSS dual ELRS/Ghost Race", cls160["id"] == "elrs-ghost-150", str(cls160))
+    cls55 = rc.classify_rc(55.0, True, "s24")
+    check("55 Гц CSS dual не Ghost-имя", cls55["id"] == "elrs-mlrs-50", str(cls55))
+    cls500f = rc.classify_rc(500.0, False, "s24")
+    check("500 Гц без CSS dual ELRS/Ghost", cls500f["id"] == "elrs-ghost-500", str(cls500f))
     cls_cf = rc.classify_rc(150.0, False, "p900", 0.26)
     check("150 Гц + 260 кГц = Crossfire", cls_cf["id"] == "crossfire", str(cls_cf))
     cls_150 = rc.classify_rc(150.0, False, "p900", 0.0)
-    check("150 Гц 900 без шага dual", cls_150["id"] == "elrs-crossfire-150", str(cls_150))
+    check("150 Гц 900 без шага не ELRS", cls_150["id"] == "crossfire-or-fsk-150", str(cls_150))
+    cls150css900 = rc.classify_rc(150.0, True, "p900")
+    check("150 Гц CSS на 900 не ELRS", cls150css900["id"] == "rc-unknown", str(cls150css900))
+    cls25 = rc.classify_rc(25.0, True, "p900")
+    check("25 Гц CSS 900 = ELRS", cls25["id"] == "elrs", str(cls25))
+    cls433 = rc.classify_rc(100.0, True, "uhf", 0.0, 433.4)
+    check("100 Гц CSS 433 = ELRS", cls433["id"] == "elrs", str(cls433))
 
     r5 = pdb.nearest_analog_channel(5806.0)
     check("канал R5", r5 is not None and r5["id"] == "R5", str(r5))
@@ -169,6 +181,15 @@ def main() -> int:
     check("каталог не пуст", len(cat) >= 12, str(len(cat)))
     ids = {r["id"] for r in cat}
     check("каталог DroneID+ODID+Crossfire", {"droneid", "opendroneid", "crossfire"} <= ids, str(ids))
+    check(
+        "каталог IN866+US433W+70cm",
+        {"elrs-in866", "elrs-us433w", "mlrs-70cm", "mlrs-in866"} <= ids,
+        str(ids),
+    )
+    in866 = pdb.classify_fhss_domain(0.525, 866.0)
+    check("шаг 0.525 на 866 не уникален", in866["unique"] is False, str(in866))
+    usw = next(d for d in pdb.FHSS_DOMAINS if d["id"] == "elrs-us433w")
+    check("US433W 20 каналов", usw["n"] == 20 and abs(usw["spacing"] - (438.0 - 423.5) / 19) < 1e-9)
 
     return fail
 

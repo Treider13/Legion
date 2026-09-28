@@ -254,7 +254,7 @@ DRONEID_THINK_N = 1 << 16
 
 
 def _want_rc(freq_mhz: float, bw_mhz: float) -> bool:
-    return band_of(freq_mhz) in ("s24", "p900") and float(bw_mhz) <= 2.5
+    return band_of(freq_mhz) in ("s24", "p900", "uhf") and float(bw_mhz) <= 2.5
 
 
 def _want_droneid(freq_mhz: float, bw_mhz: float, parsed: dict[str, Any]) -> bool:

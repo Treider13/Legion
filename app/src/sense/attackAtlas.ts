@@ -52,7 +52,7 @@ export function bandBucket(mhz: number): AttackBand {
   if (mhz >= 134 && mhz <= 175) return "vhf";
   if (mhz >= 380 && mhz <= 525) return "uhf";
   if (mhz >= 850 && mhz <= 950) return "p900";
-  if (mhz >= 1180 && mhz <= 1360) return "l12";
+  if (mhz >= 1080 && mhz <= 1360) return "l12";
   if (mhz >= 1400 && mhz <= 2000) return "s14";
   if (mhz >= 2400 && mhz <= 2500) return "s24";
   if (mhz >= 3080 && mhz <= 3600) return "c33";
@@ -95,11 +95,11 @@ export function classifyAttackFamily(
   }
 
   const rc = extra?.rc;
-  if (rc && rc.id !== "rc-unknown" && (band === "s24" || band === "p900") && t.widthMhz <= 2.5) {
+  if (rc && rc.id !== "rc-unknown" && (band === "s24" || band === "p900" || band === "uhf") && t.widthMhz <= 2.5) {
     return { id: rc.id, label: rc.label, hint: rc.hint };
   }
   const fhss = extra?.fhss;
-  if (fhss?.hit && fhss.spacingMhz > 0 && (band === "s24" || band === "p900") && t.widthMhz <= 2.5) {
+  if (fhss?.hit && fhss.spacingMhz > 0 && (band === "s24" || band === "p900" || band === "uhf") && t.widthMhz <= 2.5) {
     const dom = classifyFhssDomain(fhss.spacingMhz, band, t.freqMhz);
     if (dom.unique) {
       return { id: dom.id, label: dom.label, hint: dom.hint };

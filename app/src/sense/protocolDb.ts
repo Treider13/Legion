@@ -12,7 +12,10 @@ export type RcId =
   | "ghost"
   | "mlrs-frsky-111"
   | "elrs-tracer-250"
-  | "elrs-crossfire-150"
+  | "elrs-ghost-150"
+  | "elrs-ghost-250"
+  | "elrs-ghost-500"
+  | "crossfire-or-fsk-150"
   | "rc-unknown";
 
 export interface FhssDomain {
@@ -68,10 +71,21 @@ export const FHSS_DOMAINS: readonly FhssDomain[] = [
   { id: "mlrs-2p4", family: "mlrs", label: "mLRS 2.4", band: "s24", f0: 2401.0, f1: 2480.0, n: 80, spacing: 1.0, source: "olliw42/mLRS fhss.h", unique: false },
   { id: "elrs-fcc915", family: "elrs", label: "ELRS FCC915", band: "p900", f0: 903.5, f1: 926.9, n: 40, spacing: (926.9 - 903.5) / 39, source: "ExpressLRS FHSS.cpp FCC915", unique: false },
   { id: "mlrs-915", family: "mlrs", label: "mLRS 915 FCC", band: "p900", f0: 902.4, f1: 927.6, n: 43, spacing: 0.6, source: "olliw42/mLRS fhss.h", unique: false },
+  { id: "elrs-au915", family: "elrs", label: "ELRS AU915", band: "p900", f0: 915.5, f1: 926.9, n: 20, spacing: (926.9 - 915.5) / 19, source: "ExpressLRS FHSS.cpp AU915", unique: false },
   { id: "elrs-eu868", family: "elrs", label: "ELRS EU868", band: "p900", f0: 863.275, f1: 869.575, n: 13, spacing: (869.575 - 863.275) / 12, source: "ExpressLRS FHSS.cpp EU868", unique: false },
   { id: "mlrs-868", family: "mlrs", label: "mLRS 868", band: "p900", f0: 863.275, f1: 868.0, n: 10, spacing: 0.525, source: "olliw42/mLRS fhss.h", unique: false },
   { id: "crossfire-915", family: "crossfire", label: "Crossfire 915", band: "p900", f0: 902.165, f1: 927.905, n: 50, spacing: 0.26, source: "g3gg0.de 50×260 кГц", unique: true },
   { id: "crossfire-868", family: "crossfire", label: "Crossfire 868", band: "p900", f0: 860.165, f1: 885.905, n: 50, spacing: 0.26, source: "g3gg0.de 50×260 кГц", unique: true },
+  { id: "crossfire-915-race", family: "crossfire", label: "Crossfire 915 Race", band: "p900", f0: 902.165, f1: 927.905, n: 100, spacing: 0.26, source: "g3gg0.de / TBS Race 100×260 кГц", unique: true },
+  { id: "elrs-in866", family: "elrs", label: "ELRS IN866", band: "p900", f0: 865.375, f1: 866.95, n: 4, spacing: (866.95 - 865.375) / 3, source: "ExpressLRS FHSS.cpp IN866", unique: false },
+  { id: "elrs-th920", family: "elrs", label: "ELRS TH920", band: "p900", f0: 920.5, f1: 924.7, n: 8, spacing: 0.6, source: "ExpressLRS FHSS.cpp TH920", unique: false },
+  { id: "elrs-eu433", family: "elrs", label: "ELRS EU433", band: "uhf", f0: 433.1, f1: 434.45, n: 3, spacing: (434.45 - 433.1) / 2, source: "ExpressLRS FHSS.cpp EU433", unique: false },
+  { id: "elrs-au433", family: "elrs", label: "ELRS AU433", band: "uhf", f0: 433.42, f1: 434.42, n: 3, spacing: (434.42 - 433.42) / 2, source: "ExpressLRS FHSS.cpp AU433", unique: false },
+  { id: "elrs-us433", family: "elrs", label: "ELRS US433", band: "uhf", f0: 433.25, f1: 438.0, n: 8, spacing: (438.0 - 433.25) / 7, source: "ExpressLRS FHSS.cpp US433", unique: false },
+  { id: "elrs-us433w", family: "elrs", label: "ELRS US433W", band: "uhf", f0: 423.5, f1: 438.0, n: 20, spacing: (438.0 - 423.5) / 19, source: "ExpressLRS FHSS.cpp US433W", unique: false },
+  { id: "mlrs-433", family: "mlrs", label: "mLRS 433", band: "uhf", f0: 433.36, f1: 433.92, n: 3, spacing: 0, source: "olliw42/mLRS 433.36/433.48/433.92", unique: false },
+  { id: "mlrs-70cm", family: "mlrs", label: "mLRS 70cm ham", band: "uhf", f0: 430.4, f1: 449.6, n: 33, spacing: 0.6, source: "olliw42/mLRS fhss.h 70cm 0.6 МГц", unique: false },
+  { id: "mlrs-in866", family: "mlrs", label: "mLRS IN866", band: "p900", f0: 865.375, f1: 866.95, n: 4, spacing: 0.525, source: "olliw42/mLRS fhss.h 866 IN", unique: false },
 ];
 
 export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
@@ -98,13 +112,17 @@ export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: stri
   { id: "opendroneid", layer: "l3", label: "OpenDroneID F3411", hint: "IE 221 FA:0B:BC / BLE 0xFFFA. PHY 802.11 нет" },
   { id: "analog-video", layer: "video", label: "analog PAL/NTSC + IRC", hint: "гребёнка 15625/15734 и A/B/E/F/R/L" },
   { id: "digital-video", layer: "video", label: "цифра 10/20/40", hint: "ширина FCC, не имя модели" },
-  { id: "elrs", layer: "rc", label: "ExpressLRS", hint: "CSS+скорость или FLRC 500/1000" },
+  { id: "elrs", layer: "rc", label: "ExpressLRS", hint: "CSS 100/333/500 или FLRC 1000" },
   { id: "mlrs", layer: "rc", label: "mLRS", hint: "CSS 19/31 Гц" },
   { id: "crossfire", layer: "rc", label: "TBS Crossfire", hint: "шаг 260 кГц на 868/915" },
-  { id: "ghost", layer: "rc", label: "ImmersionRC Ghost", hint: "CSS 15 Гц (и 55–62 вне ELRS)" },
-  { id: "elrs-mlrs-50", layer: "rc", label: "50 Гц dual", hint: "ELRS и mLRS" },
+  { id: "ghost", layer: "rc", label: "ImmersionRC Ghost", hint: "уникален только CSS 15 Гц Long Range" },
+  { id: "elrs-mlrs-50", layer: "rc", label: "50 Гц dual", hint: "ELRS / mLRS / Ghost 55" },
+  { id: "elrs-ghost-150", layer: "rc", label: "150 Гц CSS dual", hint: "ELRS 150 / Ghost Race 160" },
+  { id: "elrs-ghost-250", layer: "rc", label: "250 Гц CSS dual", hint: "ELRS / Ghost Pure Race" },
+  { id: "elrs-ghost-500", layer: "rc", label: "500 Гц FLRC dual", hint: "ELRS FLRC / Ghost Race500" },
   { id: "mlrs-frsky-111", layer: "rc", label: "111 Гц dual", hint: "mLRS FLRC / FrSky ACCST" },
-  { id: "elrs-tracer-250", layer: "rc", label: "250 Гц dual", hint: "ELRS FLRC / Tracer" },
+  { id: "elrs-tracer-250", layer: "rc", label: "250 Гц без CSS dual", hint: "ELRS FLRC / Tracer / Ghost MSK" },
+  { id: "crossfire-or-fsk-150", layer: "rc", label: "900 150 Гц dual", hint: "Crossfire FSK; ELRS 900 150 нет" },
   ...FHSS_DOMAINS.map((d) => ({
     id: d.id,
     layer: "fhss",
@@ -115,6 +133,7 @@ export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: stri
 
 export function classifyFhssDomain(spacingMhz: number, band: string, freqMhz = 0): ProtoMatch {
   const hits = FHSS_DOMAINS.filter((d) => {
+    if (d.spacing <= 0) return false;
     if (band !== "other" && d.band !== band) return false;
     if (freqMhz > 0 && (freqMhz < d.f0 - 5 || freqMhz > d.f1 + 5)) return false;
     return Math.abs(spacingMhz - d.spacing) / d.spacing <= SPACING_TOL;
@@ -207,6 +226,9 @@ export function isHopRcId(id: string): boolean {
     id === "ghost" ||
     id === "mlrs-frsky-111" ||
     id === "elrs-tracer-250" ||
-    id === "elrs-crossfire-150"
+    id === "elrs-ghost-150" ||
+    id === "elrs-ghost-250" ||
+    id === "elrs-ghost-500" ||
+    id === "crossfire-or-fsk-150"
   );
 }
