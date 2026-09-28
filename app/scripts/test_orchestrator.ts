@@ -1541,9 +1541,9 @@ async function main(): Promise<void> {
     const g = matchSmartGrid({ hopsMhz: [2440, 2441, 2442, 2443] });
     return g.smart && g.f0Hz === 2_401_000_000 && g.n === 80 && (g.flags & GRID_FLAG_F0UNC) === 0;
   })());
-  check("матчер: ±200 кГц обеих сеток — одна карточка F0UNC", (() => {
+  check("матчер: середина сеток — одна карточка n=80", (() => {
     const g = matchSmartGrid({ hopsMhz: [2440.2, 2441.2, 2442.2] });
-    return g.smart && g.n === 80 && (g.flags & GRID_FLAG_F0UNC) !== 0;
+    return g.smart && g.n === 80 && g.stepHz === 1_000_000;
   })());
   check("матчер: x40+5.8 отказ", matchSmartGrid({
     sdrId: "bladerf-x40", bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],

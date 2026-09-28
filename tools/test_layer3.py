@@ -126,8 +126,8 @@ def main() -> int:
     )
     y4, hold4 = dji.decimate_droneid_block(np.ones(61, dtype=np.complex64), 61.44e6)
     check("decim 61.44 leftover %4", y4.size == 15 and hold4.size == 1, str((y4.size, hold4.size)))
-    y4b, hold4b = dji.decimate_droneid_block(np.ones(3, dtype=np.complex64), 61.44e6, hold4)
-    check("decim hold склейка", y4b.size == 1 and hold4b.size == 0, str((y4b.size, hold4b.size)))
+    y4b, hold4b = dji.decimate_droneid_block(np.ones(7, dtype=np.complex64), 61.44e6, hold4)
+    check("decim hold склейка", y4b.size == 2 and hold4b.size == 0, str((y4b.size, hold4b.size)))
 
     n40 = int(round(burst.size * 40.0e6 / dji.DRONEID_FS))
     x40 = dji._fft_resample(burst, n40)
@@ -264,9 +264,11 @@ def main() -> int:
     ov_m = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.0)
     ov_e = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.4)
     ov_c = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.55)
+    ov_mid = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.2)
     check("1 МГц + residual 0.0 = mLRS", ov_m["unique"] is True and ov_m["family"] == "mlrs", str(ov_m))
     check("1 МГц + residual 0.4 = ELRS", ov_e["unique"] is True and ov_e["family"] == "elrs", str(ov_e))
     check("FreqCorrection +150 residual 0.55 = ELRS", ov_c["unique"] is True and ov_c["family"] == "elrs", str(ov_c))
+    check("residual 0.2 обеих сеток не уникален", ov_mid["unique"] is False, str(ov_mid))
     ov6 = pdb.classify_fhss_domain(0.6, 915.0)
     check("шаг 0.6 900 не уникален", ov6["unique"] is False, str(ov6))
 
@@ -296,7 +298,7 @@ def main() -> int:
         "FHSS 2440+i residual 0 → mLRS",
         (a24.get("domain") or {}).get("unique") is True
         and (a24.get("domain") or {}).get("family") == "mlrs"
-        and abs(float(a24.get("f0ResidualMhz") or -1) - 0.0) < 0.05
+        and abs(float(a24.get("f0ResidualMhz", -1)) - 0.0) < 0.05
         and int(a24.get("nSlots") or 0) == 6,
         str((a24.get("domain"), a24.get("f0ResidualMhz"), a24.get("nSlots"))),
     )

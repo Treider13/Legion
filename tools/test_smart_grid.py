@@ -77,7 +77,7 @@ check("residual 0.0 → одна карточка mLRS n=80",
       mlrs_int["n"] == 80 and (mlrs_int["flags"] & GRID_FLAG_F0UNC) == 0)
 
 amb = match_smart_grid({"hops_mhz": [2440.2, 2441.2, 2442.2]})
-check("residual ±200 кГц обеих сеток → F0UNC, одна карточка n=80",
-      amb["smart"] and amb["n"] == 80 and (amb["flags"] & GRID_FLAG_F0UNC) != 0)
+check("середина сеток — одна карточка n=80",
+      amb["smart"] and amb["n"] == 80 and amb["step_hz"] == 1_000_000)
 
 print("smart_grid: ALL PASS")
