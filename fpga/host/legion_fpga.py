@@ -109,8 +109,36 @@ REG_CH_BINS_03 = 0x4D
 REG_CH_BINS_47 = 0x4E
 REG_CH_FS_HZ = 0x4F
 REG_CH_LO_KHZ = 0x50
+REG_GRID_META = 0x51
+REG_GRID_F0_HZ = 0x52
+REG_GRID_STEP_HZ = 0x53
+REG_GRID_PRI_US = 0x54
+REG_GRID_SHIFT_HZ = 0x55
+REG_GRID_FLAGS = 0x56
+REG_GRID_RSV = 0x57
+REG_CH_PWR_THR = 0x58
+REG_AIM_CH = 0x59
 CH_MODE_OCUSYNC = 0
 CH_MODE_ELRS = 1
+AIM_NONE = 0xFF
+CH_PWR_THR_DEFAULT = 0x40
+CH_THR_SLOT_DEFAULT = 256
+GRID_KIND_UNKNOWN = 0
+GRID_KIND_FHSS = 1
+GRID_KIND_OFDM = 2
+GRID_KIND_ANALOG = 3
+GRID_KIND_ZC = 4
+GRID_KIND_CW = 5
+GRID_SRC_NONE = 0
+GRID_SRC_MATCHER = 1
+GRID_SRC_PRESET = 2
+GRID_SRC_OPERATOR = 3
+GRID_FLAG_WINLIM = 1 << 0
+GRID_FLAG_F0UNC = 1 << 1
+GRID_FLAG_ZC = 1 << 2
+GRID_FLAG_FCORR = 1 << 3
+GRID_F0_KHZ_GATE = 10_000_000
+C58_MHZ = 5100.0
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF
@@ -171,6 +199,23 @@ CTRL_WD_EN = 1 << 4
 WD_TICK = 65536
 WD_LIMIT_DEFAULT = 61
 WD_TIMEOUT_S = 2.0
+
+
+def pack_grid_f0(f0_hz: int) -> int:
+    """5.8 ГГц не влезает в uint32 Hz → кГц (<10e6). 2.4 — Hz."""
+    hz = int(f0_hz)
+    if hz <= 0:
+        return 0
+    if hz > 0xFFFFFFFF:
+        return int(round(hz / 1000.0)) & 0xFFFFFFFF
+    return hz & 0xFFFFFFFF
+
+
+def pack_grid_meta(n: int, n_used: int = 0, conf: int = 0,
+                   source: int = 0, kind: int = 0) -> int:
+    return ((int(n) & 0xFF) | ((int(n_used) & 0xFF) << 8) |
+            ((int(conf) & 0xFF) << 16) | ((int(source) & 0xF) << 24) |
+            ((int(kind) & 0xF) << 28)) & 0xFFFFFFFF
 
 
 def settle_n_for_fs(fs_hz: int) -> int:
@@ -396,12 +441,26 @@ class LegionFpga:
                 self.write_reg(REG_DRFM_STEP_SRC, int(step_src) & 1))
 
     def set_channel_map(self, thr: int = 0, hyst: int = 0,
-                        target: int = 0, mode: int = 0) -> bool:
-        """Карта 8×10 МГц / ELRS 80. thr=0 — CHANNEL_SCAN выкл. hyst=N хитов."""
+                        target: int = AIM_NONE, mode: int = 0) -> bool:
+        """Карта 8×10 МГц / ELRS 80. thr=0 — слот выкл. target=0xFF — нет цели (0 = DC)."""
         return (self.write_reg(REG_CH_THR, int(thr) & 0xFFFFFFFF) and
                 self.write_reg(REG_CH_HYST, int(hyst) & 0xFFFFFFFF) and
                 self.write_reg(REG_CH_MODE, int(mode) & 1) and
                 self.write_reg(REG_CH_TARGET, int(target) & 0xFF))
+
+    def set_grid(self, meta: int = 0, f0_hz: int = 0, step_hz: int = 0,
+                 pri_us: int = 0, shift_hz: int = 0, flags: int = 0,
+                 pwr_thr: int = 0) -> bool:
+        """Сетка умной атаки 0x51–0x58. Пусто — нули, не leftover ELRS."""
+        sh = int(shift_hz) & 0xFFFFFFFF
+        return (self.write_reg(REG_GRID_META, int(meta) & 0xFFFFFFFF) and
+                self.write_reg(REG_GRID_F0_HZ, int(f0_hz) & 0xFFFFFFFF) and
+                self.write_reg(REG_GRID_STEP_HZ, int(step_hz) & 0xFFFFFFFF) and
+                self.write_reg(REG_GRID_PRI_US, int(pri_us) & 0xFFFFFFFF) and
+                self.write_reg(REG_GRID_SHIFT_HZ, sh) and
+                self.write_reg(REG_GRID_FLAGS, int(flags) & 0xFFFFFFFF) and
+                self.write_reg(REG_GRID_RSV, 0) and
+                self.write_reg(REG_CH_PWR_THR, int(pwr_thr) & 0xFFFF))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

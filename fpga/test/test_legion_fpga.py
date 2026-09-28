@@ -178,6 +178,15 @@ py_map = {
     "LEGION_REG_CH_BINS_47": lf.REG_CH_BINS_47,
     "LEGION_REG_CH_FS_HZ": lf.REG_CH_FS_HZ,
     "LEGION_REG_CH_LO_KHZ": lf.REG_CH_LO_KHZ,
+    "LEGION_REG_GRID_META": lf.REG_GRID_META,
+    "LEGION_REG_GRID_F0_HZ": lf.REG_GRID_F0_HZ,
+    "LEGION_REG_GRID_STEP_HZ": lf.REG_GRID_STEP_HZ,
+    "LEGION_REG_GRID_PRI_US": lf.REG_GRID_PRI_US,
+    "LEGION_REG_GRID_SHIFT_HZ": lf.REG_GRID_SHIFT_HZ,
+    "LEGION_REG_GRID_FLAGS": lf.REG_GRID_FLAGS,
+    "LEGION_REG_GRID_RSV": lf.REG_GRID_RSV,
+    "LEGION_REG_CH_PWR_THR": lf.REG_CH_PWR_THR,
+    "LEGION_REG_AIM_CH": lf.REG_AIM_CH,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -463,6 +472,15 @@ check("lb_gated PROTO/CH ключи",
       gw.fpga._t.regs.get(lf.REG_CH_THR) == 256 and
       gw.fpga._t.regs.get(lf.REG_CH_HYST) == 64 and
       gw.fpga._t.regs.get(lf.REG_CH_TARGET) == 2)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
+check("lb_gated без ch_target → 0xFF не DC",
+      r.get("ok") is True and
+      gw.fpga._t.regs.get(lf.REG_CH_TARGET) == lf.AIM_NONE)
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+         "scan_enable": True, "scan_f1_mhz": 5725, "scan_f2_mhz": 5850,
+         "fft_enable": True})
+check("x40+5.8 ARM отказ",
+      r.get("ok") is False and "5.8" in str(r.get("reason") or ""))
 r = rpc({"op": "arm", "mode": "aim", "nco_ftw": 0x10000000})
 check("aim mode → MODE_AIM",
       r.get("ok") is True and
@@ -1413,6 +1431,36 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
 check("micro: ARM коридор 5000-5800 (выше ADF 4400)", r.get("ok") is True)
 check("micro: SCAN_F1 = 5e6 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F1_KHZ) == 5_000_000)
 check("micro: SCAN_F2 = 5.8e6 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F2_KHZ) == 5_800_000)
+rpcm({"op": "disarm"})
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2440.4, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2480,
+          "fft_enable": True, "fire_bw_mhz": 2,
+          "ch_preset": 1, "ch_pwr_thr": 0x40, "ch_thr": 0, "ch_hyst": 1,
+          "grid_meta": 80 | (lf.GRID_KIND_FHSS << 28) | (lf.GRID_SRC_MATCHER << 24),
+          "grid_f0_hz": 2400400000, "grid_step_hz": 1000000,
+          "grid_flags": lf.GRID_FLAG_WINLIM | lf.GRID_FLAG_F0UNC})
+check("micro: ARM сетка ELRS ok", r.get("ok") is True)
+check("micro: GRID_F0 2400.4 Hz",
+      gw_m.fpga._t.regs.get(lf.REG_GRID_F0_HZ) == 2400400000)
+check("micro: GRID_STEP 1e6",
+      gw_m.fpga._t.regs.get(lf.REG_GRID_STEP_HZ) == 1_000_000)
+check("micro: CH_PWR_THR 0x40",
+      gw_m.fpga._t.regs.get(lf.REG_CH_PWR_THR) == 0x40)
+check("micro: CH_TARGET 0xFF до first-valid",
+      gw_m.fpga._t.regs.get(lf.REG_CH_TARGET) == lf.AIM_NONE)
+check("micro: DRFM_STEP_SRC=0 (не PRI)",
+      gw_m.fpga._t.regs.get(lf.REG_DRFM_STEP_SRC, 0) == 0)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 5789.5, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 5725, "scan_f2_mhz": 5850,
+          "fft_enable": True, "ch_preset": 3,
+          "grid_f0_hz": 5768500, "grid_step_hz": 21000000,
+          "grid_meta": 3 | (lf.GRID_KIND_ZC << 28)})
+check("micro: карточка 5.8 кГц бьёт O4",
+      r.get("ok") is True and
+      gw_m.fpga._t.regs.get(lf.REG_GRID_F0_HZ) == 5768500 and
+      (gw_m.fpga._t.regs.get(lf.REG_GRID_META) & 0xFF) == 3)
 rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 98.0, "fs_hz": 56_000_000, "bw_mhz": 56,

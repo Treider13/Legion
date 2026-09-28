@@ -11,6 +11,7 @@ NIOS_SRC=$VENDOR/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src
 MICRO_SRC=$VENDOR/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src
 
 INCS="-I nios_work_stubs -I nios_stubs \
+      -I ../nios \
       -I $NIOS_SRC \
       -I $MICRO_SRC \
       -I $VENDOR/fpga_common/include \

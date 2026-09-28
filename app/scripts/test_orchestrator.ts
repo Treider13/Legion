@@ -81,6 +81,16 @@ import {
   XA4_WALK_MAX,
 } from "../src/sense/fpgaFastpath";
 import {
+  CH_PRESET_ELRS,
+  GRID_FLAG_FCORR,
+  LEGION_AIM_NONE,
+  SMART_GRID_EMPTY_RU,
+  SMART_X40_C58_RU,
+  matchSmartGrid,
+  packGridF0,
+  xlatWindowMhz,
+} from "../src/sense/smartGrid";
+import {
   FPGA_SOLO_FS_MIN_HZ,
   FPGA_SOLO_MICRO_ANALOG_MHZ,
   airHopBlockedReason,
@@ -1499,6 +1509,46 @@ async function main(): Promise<void> {
       && on.settle_n === fpgaSettleN(56e6)
       && Array.isArray(on.scan_bands) && (on.scan_bands as { f1_mhz: number }[])[0].f1_mhz === 2400
       && off.fft_enable === undefined;
+  })());
+  check("матчер: пустой эфир не ELRS", matchSmartGrid({}).empty && matchSmartGrid({}).reason === SMART_GRID_EMPTY_RU);
+  check("матчер: ELRS hop-set → 2400.4/1/80", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    return g.smart && g.f0Hz === 2_400_400_000 && g.stepHz === 1_000_000 && g.n === 80 && g.preset === CH_PRESET_ELRS;
+  })());
+  check("матчер: FreqCorrection +150 кГц", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.55, 2401.55, 2410.55] });
+    return g.smart && g.shiftHz === 150_000 && (g.flags & GRID_FLAG_FCORR) !== 0;
+  })());
+  check("матчер: x40+5.8 отказ", matchSmartGrid({
+    sdrId: "bladerf-x40", bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],
+  }).reason === SMART_X40_C58_RU);
+  check("pack 5.8 ГГц → кГц", packGridF0(5_768_500_000) === 5_768_500);
+  check("окно xlat 56e6 → 3.5 МГц", xlatWindowMhz(56e6) === 3.5);
+  check("план x40+5.8 отказ до ARM", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-x40", analogBwMhz: 28, bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 28, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return !p.ok && p.reason.includes("5.8");
+  })());
+  check("план без слуха: сетка не собрана", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true,
+    });
+    return p.ok && p.grid.empty && p.reason.includes(SMART_GRID_EMPTY_RU);
+  })());
+  check("ARM FFT несёт сетку и 0xFF", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4] });
+    const c = fpgaArmCmd("lb_gated", {
+      detThr: 5000, detShift: 4, token: "t", freqMhz: 2440,
+      fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2400, scanF2Mhz: 2480,
+      fftEnable: true, fireBwMhz: 2, grid: g,
+    });
+    return c.ch_target === LEGION_AIM_NONE && c.drfm_step_src === 0
+      && c.grid_f0_hz === 2_400_400_000 && c.ch_pwr_thr === 0x40 && c.ch_thr === 0;
   })());
   check("air-таблица: полка × K по стоянкам", (() => {
     const t = airThrTable([1000, 2000, 3000]);
