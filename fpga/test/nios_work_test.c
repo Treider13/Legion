@@ -719,6 +719,7 @@ int main(void)
     CHECK("FFT: ждём новый кадр (в т.ч. после frame=0)", rfic_n == 0);
     t_peak_word = mk_peak(1, 1, 0x2000, 16);
     rfic_n = 0;
+    pio_n = 0;
     legion_work(); /* FIRE: bin16 @ 56e6 = +3500 кГц → PEAK 2453.5, LO 2450 */
     CHECK("FFT n==1: FIRE без hop PLL на пик",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
@@ -740,6 +741,9 @@ int main(void)
         CHECK("FFT n==1: CH_TARGET bin16 arm, LO на месте",
               khz == 0x80000010u &&
               pio_wrote_reg(LEGION_REG_CH_TARGET, 0x80000010u));
+        CHECK("FFT n==1: HDL lock на тот же bin",
+              pio_wrote_reg(LEGION_REG_FFT_CTRL,
+                            LEGION_FFT_CTRL_EN | LEGION_FFT_CTRL_LOCK));
     }
     rfic_n = 0;
     t_status = LEGION_STATUS_DET_ACTIVE;

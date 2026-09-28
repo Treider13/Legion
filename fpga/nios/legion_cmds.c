@@ -1068,6 +1068,20 @@ static void legion_fft_stare_hdl(bool lock)
     legion_fft_ctrl_hdl(c);
 }
 
+/* Тот же LOCK, но notch из тени хоста. Синтез вне стоянки не снимает skip_dc:
+ * тень не пишем, следующий invalidate снова отдаёт слово хоста. */
+static void legion_fft_lock_hdl(bool lock)
+{
+    uint32_t c = legion_fft_ctrl;
+
+    if (lock) {
+        c |= LEGION_FFT_CTRL_LOCK;
+    } else {
+        c &= ~LEGION_FFT_CTRL_LOCK;
+    }
+    legion_fft_ctrl_hdl(c);
+}
+
 static void legion_inner_clear(void)
 {
     legion_inner_on = false;
@@ -1144,7 +1158,10 @@ static void legion_fft_fire(uint32_t peak_khz, uint32_t mag, uint32_t bin)
     legion_fire_mag = mag;
     /* LO на центре взгляда. Синтез — NCO на bin, не PLL.
      * База — старшая половина того же CDC-слова, что вырез. FTW на
-     * следующем sample_en. Нижнюю половину (вырез) не переключаем. */
+     * следующем sample_en. Нижнюю половину (вырез) не переключаем.
+     * LOCK до CH_TARGET: downmix и aim — один bin. Иначе живой пик
+     * (эмиттер − live + aim) садится на старый канал. */
+    legion_fft_lock_hdl(true);
     legion_aim_set(bin);
     if (!legion_set_tx_mute(false)) {
         return;
@@ -1550,6 +1567,9 @@ static bool legion_survey_two_frame(uint32_t *mag_out, uint32_t *peak_out,
 static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
                                    uint32_t bin, uint8_t evt)
 {
+    /* Сначала снять FTW, потом старый lock. Пока aim вооружён, живой
+     * downmix играет прошлый канал. Новый aim — только после нового LOCK. */
+    legion_aim_clear();
     legion_fft_stare_hdl(false);
     legion_inner_on = true;
     legion_inner_bin = bin;
@@ -1559,8 +1579,8 @@ static void legion_survey_lock_fire(uint32_t peak_khz, uint32_t mag,
     legion_peak_khz = peak_khz;
     legion_fire_khz = peak_khz;
     legion_fire_mag = mag;
-    legion_aim_set(bin);
     legion_fft_stare_hdl(true);
+    legion_aim_set(bin);
     if (!legion_set_tx_mute(false)) {
         return;
     }

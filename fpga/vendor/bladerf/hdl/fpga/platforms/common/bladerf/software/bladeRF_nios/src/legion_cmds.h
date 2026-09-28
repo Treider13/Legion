@@ -142,13 +142,16 @@ bool legion_air_down(void);
  * FFT_CTRL=0 (дефолт): взгляд = AIR_BW, гейт I²+Q², hop на центр взгляда.
  * FFT_CTRL.enable: SEARCH (TX mute, hop на центр взгляда) → SETTLE unmute →
  * FFT-бин → цифровой вырез на стоящем LO (legion_lb_xlat, FTW=bin≪24).
- * После канала NIOS пишет CH_TARGET: legion_lb_aim ставит копию базы DRFM
- * на этот bin следующим sample_en. Период обзора и обёртку NCO не ждёт.
- * PLL во взгляде не трогаем — гейт снова микросекунды. FIRE_BW analog не
- * узжаем. HOLD: TURN = выдержка, затем следующий взгляд (плитка);
+ * После канала NIOS пишет CH_TARGET и LOCK одним bin: legion_lb_aim ставит
+ * копию базы DRFM на этот bin следующим sample_en, xlat защёлкивает тот же
+ * bin. Период обзора и обёртку NCO не ждёт. PLL во взгляде не трогаем —
+ * гейт снова микросекунды. FIRE_BW analog не узжаем. HOLD: TURN = выдержка,
+ * затем следующий взгляд (плитка);
  * PRIORITY: пока det — взгляд не шагаем;
- * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем —
- * хоп внутри взгляда = live FFT → xlat.
+ * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.
+ * Пока CH_TARGET снят, хоп внутри взгляда = live FFT → xlat.
+ * Пока CH_TARGET вооружён, downmix и aim стоят на одном bin
+ * (иначе TX = эмиттер − live + aim).
  * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
  * HDL DC-notch снят, SCAN_SURVEY_US от unmute — снова обзор.
  * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой
