@@ -748,6 +748,17 @@
   color: var(--lg-accent-hi);
 }
 
+.rfclass-l3 span {
+  display: block;
+}
+
+.rfclass-l3-sub {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--lg-faint);
+  opacity: 0.88;
+}
+
 .rfclass-rail {
   display: flex;
   align-items: center;

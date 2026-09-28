@@ -30,6 +30,9 @@
     62 Гц и 300 Гц в мануале нет.
   IRC/Fatshark + Oscar Liang: Raceband / A/B/E/F / LOWRACE
   ASTM F3411 / opendroneid-core-c; proto17 DroneID
+  kismetwireless/kismet master dot11_ie_221_dji_droneid.h
+    product_type_str (1…70) и биты state_info. ID >70 в kismet нет.
+  anarkiwi/samples2djidroneid decode_djidroneid.py — 91 байт LE
   PMC11314967: STFT FHSS @ 61.44 MSPS, IBW 56 МГц — ровно xA4
 
 Честно не уникально (не имя фирмы):
@@ -712,6 +715,84 @@ def classify_rc(
     }
 
 
+# kismet dot11_ie_221_dji_droneid.h product_type_str. Опечатки kismet
+# (Instpire / Phandom) — имена изделий. После 70 строк в kismet нет.
+DJI_PRODUCT_TYPES: dict[int, str] = {
+    1: "Inspire 1",
+    2: "Phantom 3 Series",
+    3: "Phantom 3 Series",
+    4: "Phantom 3 Std",
+    5: "M100",
+    6: "ACEONE",
+    7: "WKM",
+    8: "NAZA",
+    9: "A2",
+    10: "A3",
+    11: "Phantom 4",
+    12: "MG1",
+    14: "M600",
+    15: "Phantom 3 4k",
+    16: "Mavic Pro",
+    17: "Inspire 2",
+    18: "Phantom 4 Pro",
+    20: "N2",
+    21: "Spark",
+    23: "M600 Pro",
+    24: "Mavic Air",
+    25: "M200",
+    26: "Phantom 4 Series",
+    27: "Phantom 4 Adv",
+    28: "M210",
+    30: "M210RTK",
+    31: "A3_AG",
+    32: "MG2",
+    34: "MG1A",
+    35: "Phantom 4 RTK",
+    36: "Phantom 4 Pro V2.0",
+    38: "MG1P",
+    40: "MV1P-RTK",
+    41: "Mavic 2",
+    44: "M200 V2 Series",
+    51: "Mavic 2 Enterprise",
+    53: "Mavic Mini",
+    58: "Mavic Air 2",
+    59: "P4M",
+    60: "M300 RTK",
+    61: "DJI FPV",
+    63: "Mini 2",
+    64: "AGRAS T10",
+    65: "AGRAS T30",
+    66: "Air 2S",
+    68: "Mavic 3",
+    69: "Mavic 2 Enterprise Advanced",
+    70: "Mini SE",
+}
+
+
+def droneid_model(product_type: int) -> str:
+    n = int(product_type)
+    return DJI_PRODUCT_TYPES.get(n, f"Unknown ({n})")
+
+
+def droneid_state(state_info: int) -> dict[str, bool]:
+    """Биты kismet dji_subcommand_flight_reg. privacy = (bit1 == 0)."""
+    s = int(state_info) & 0xFFFF
+    return {
+        "serial_valid": bool(s & 0x01),
+        "privacy": (s & 0x02) == 0,
+        "homepoint": bool(s & 0x04),
+        "uuid_set": bool(s & 0x08),
+        "motor_on": bool(s & 0x10),
+        "in_air": bool(s & 0x20),
+        "gps_valid": bool(s & 0x40),
+        "alt_valid": bool(s & 0x80),
+        "height_valid": bool(s & 0x100),
+        "horiz_valid": bool(s & 0x200),
+        "vup_valid": bool(s & 0x400),
+        "pitchroll_valid": bool(s & 0x800),
+    }
+
+
 def catalog() -> list[dict[str, Any]]:
     """Полный список того, что прибор вообще умеет честно сказать."""
     rows: list[dict[str, Any]] = [
@@ -719,7 +800,7 @@ def catalog() -> list[dict[str, Any]]:
             "id": "droneid",
             "layer": "l3",
             "label": "DJI DroneID O2/O3 plaintext",
-            "hint": "proto17 ZC 600/147 + turbo + 91 байт anarkiwi. O3+/O4 — ZC без decrypt",
+            "hint": "proto17 ZC 600/147 + turbo + 91 байт anarkiwi. Модель — kismet product_type. O3+/O4 — ZC без decrypt",
         },
         {
             "id": "opendroneid",

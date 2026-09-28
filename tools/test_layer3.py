@@ -41,11 +41,41 @@ def main() -> int:
     check("turbo CRC=0", dec.get("ok") is True, str(dec.get("reason")))
     check("turbo 173 байт", dec.get("bytes", b"")[:173] == raw, str(dec.get("bytes", b"")[:20]))
 
-    frame = dji.pack_droneid_91("1581F5YHD228Q00A", 47.1, 8.2, 120, 540, 63, "legion-lab")
+    check("kismet Mini 2 = 63", pdb.droneid_model(63) == "Mini 2")
+    check("kismet Mavic 3 = 68", pdb.droneid_model(68) == "Mavic 3")
+    check("kismet Air 2S = 66", pdb.droneid_model(66) == "Air 2S")
+    check("kismet нет Mini 3", pdb.droneid_model(99) == "Unknown (99)")
+    st = pdb.droneid_state(0x75)
+    check("state motor+air+gps+home", st["motor_on"] and st["in_air"] and st["gps_valid"] and st["homepoint"], str(st))
+    check("state privacy bit1=0", pdb.droneid_state(0x01)["privacy"] is True)
+    check("state privacy bit1=1", pdb.droneid_state(0x03)["privacy"] is False)
+
+    frame = dji.pack_droneid_91(
+        "1581F5YHD228Q00A",
+        47.1,
+        8.2,
+        120,
+        540,
+        63,
+        "legion-lab",
+        seqno=15,
+        state_info=0x75,
+        velocity_north=10,
+        velocity_east=-7,
+        velocity_up=1,
+        yaw_cdeg=16900,
+        home_lat=47.11,
+        home_lon=8.21,
+    )
     check("91 байт", len(frame) == 91, str(len(frame)))
     plain = dji.unpack_droneid_91(frame)
     check("serial", plain is not None and plain["serial"] == "1581F5YHD228Q00A", str(plain))
     check("lat", plain is not None and abs(plain["latitude"] - 47.1) < 1e-4, str(plain))
+    check("model Mini 2", plain is not None and plain["model"] == "Mini 2", str(plain))
+    check("seqno 15", plain is not None and plain["seqno"] == 15, str(plain))
+    check("vel east -7", plain is not None and plain["velocity_east"] == -7, str(plain))
+    check("state motor", plain is not None and plain["state"]["motor_on"] is True, str(plain and plain["state"]))
+    check("home lat", plain is not None and abs(plain["home_latitude"] - 47.11) < 1e-4, str(plain))
 
     burst = dji.synth_droneid_burst(frame, dji.DRONEID_FS)
     check("burst длина 9 символов", burst.size == dji.burst_len(dji.DRONEID_FS, False), str(burst.size))

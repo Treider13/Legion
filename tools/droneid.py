@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 
 from lte_turbo import TURBO_E, decode_droneid_coded, decode_droneid_soft, encode_droneid_coded
+from protocol_db import droneid_model, droneid_state
 
 DRONEID_FS = 15_360_000.0
 DRONEID_SCS = 15_000.0
@@ -479,7 +480,9 @@ def unpack_droneid_91(data: bytes) -> dict[str, Any] | None:
         "home_latitude": t[17] / LATLON_SCALE,
         "home_longitude": t[18] / LATLON_SCALE,
         "product_type": int(t[19]),
+        "model": droneid_model(int(t[19])),
         "uuid": uuid,
+        "state": droneid_state(int(t[4])),
         "crc": int(t[23]),
     }
 
@@ -636,31 +639,42 @@ def pack_droneid_91(
     altitude: int = 540,
     product_type: int = 63,
     uuid: str = "legion-lab",
+    *,
+    seqno: int = 1,
+    state_info: int = 0,
+    velocity_north: int = 0,
+    velocity_east: int = 0,
+    velocity_up: int = 0,
+    yaw_cdeg: int = 0,
+    home_lat: float | None = None,
+    home_lon: float | None = None,
 ) -> bytes:
     """Собрать 91 байт как anarkiwi — для тестов распаковки и OFDM-синтеза."""
     serial_b = serial.encode("ascii")[:16].ljust(16, b"\x00")
     uuid_b = uuid.encode("ascii")[:19].ljust(19, b"\x00")
+    hlat = lat if home_lat is None else home_lat
+    hlon = lon if home_lon is None else home_lon
     return struct.pack(
         "<BBBH h 16s i i H H h h h h Q i i i i B B 19s B h",
         91,
         0x10,
         1,
-        1,
-        0,
+        seqno,
+        state_info,
         serial_b,
         int(round(lon * LATLON_SCALE)),
         int(round(lat * LATLON_SCALE)),
         height,
         altitude,
-        0,
-        0,
-        0,
-        0,
+        velocity_north,
+        velocity_east,
+        velocity_up,
+        yaw_cdeg,
         0,
         int(round(lat * LATLON_SCALE)),
         int(round(lon * LATLON_SCALE)),
-        int(round(lat * LATLON_SCALE)),
-        int(round(lon * LATLON_SCALE)),
+        int(round(hlat * LATLON_SCALE)),
+        int(round(hlon * LATLON_SCALE)),
         product_type,
         min(19, len(uuid.encode("ascii"))),
         uuid_b,

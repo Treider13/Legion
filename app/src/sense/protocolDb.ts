@@ -108,7 +108,7 @@ export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
 const SPACING_TOL = 0.18;
 
 export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: string; hint: string }[] = [
-  { id: "droneid", layer: "l3", label: "DJI DroneID O2/O3", hint: "proto17 ZC 600/147 + 91 байт. O3+/O4 без decrypt" },
+  { id: "droneid", layer: "l3", label: "DJI DroneID O2/O3", hint: "proto17 ZC 600/147 + 91 байт. Модель — kismet product_type. O3+/O4 без decrypt" },
   { id: "opendroneid", layer: "l3", label: "OpenDroneID F3411", hint: "IE 221 FA:0B:BC / BLE 0xFFFA. PHY 802.11 нет" },
   { id: "analog-video", layer: "video", label: "analog PAL/NTSC + IRC", hint: "гребёнка 15625/15734 и A/B/E/F/R/L" },
   { id: "digital-video", layer: "video", label: "цифра 10/20/40", hint: "ширина FCC, не имя модели" },
@@ -210,6 +210,109 @@ export function parseAnalogChannel(raw: unknown): AnalogChannel | null {
   const o = raw as Record<string, unknown>;
   if (typeof o.id !== "string" || !Number.isFinite(Number(o.mhz))) return null;
   return { id: o.id, band: String(o.band ?? ""), mhz: Number(o.mhz) };
+}
+
+// kismet dot11_ie_221_dji_droneid.h product_type_str. После 70 в kismet нет.
+export const DJI_PRODUCT_TYPES: Readonly<Record<number, string>> = {
+  1: "Inspire 1",
+  2: "Phantom 3 Series",
+  3: "Phantom 3 Series",
+  4: "Phantom 3 Std",
+  5: "M100",
+  6: "ACEONE",
+  7: "WKM",
+  8: "NAZA",
+  9: "A2",
+  10: "A3",
+  11: "Phantom 4",
+  12: "MG1",
+  14: "M600",
+  15: "Phantom 3 4k",
+  16: "Mavic Pro",
+  17: "Inspire 2",
+  18: "Phantom 4 Pro",
+  20: "N2",
+  21: "Spark",
+  23: "M600 Pro",
+  24: "Mavic Air",
+  25: "M200",
+  26: "Phantom 4 Series",
+  27: "Phantom 4 Adv",
+  28: "M210",
+  30: "M210RTK",
+  31: "A3_AG",
+  32: "MG2",
+  34: "MG1A",
+  35: "Phantom 4 RTK",
+  36: "Phantom 4 Pro V2.0",
+  38: "MG1P",
+  40: "MV1P-RTK",
+  41: "Mavic 2",
+  44: "M200 V2 Series",
+  51: "Mavic 2 Enterprise",
+  53: "Mavic Mini",
+  58: "Mavic Air 2",
+  59: "P4M",
+  60: "M300 RTK",
+  61: "DJI FPV",
+  63: "Mini 2",
+  64: "AGRAS T10",
+  65: "AGRAS T30",
+  66: "Air 2S",
+  68: "Mavic 3",
+  69: "Mavic 2 Enterprise Advanced",
+  70: "Mini SE",
+};
+
+export interface DroneidStateFlags {
+  serialValid: boolean;
+  privacy: boolean;
+  homepoint: boolean;
+  uuidSet: boolean;
+  motorOn: boolean;
+  inAir: boolean;
+  gpsValid: boolean;
+  altValid: boolean;
+  heightValid: boolean;
+  horizValid: boolean;
+  vupValid: boolean;
+  pitchrollValid: boolean;
+}
+
+export function droneidModel(productType: number | undefined): string | undefined {
+  if (productType == null || !Number.isFinite(productType)) return undefined;
+  const n = Math.trunc(productType);
+  return DJI_PRODUCT_TYPES[n] ?? `Unknown (${n})`;
+}
+
+export function droneidState(stateInfo: number | undefined): DroneidStateFlags | undefined {
+  if (stateInfo == null || !Number.isFinite(stateInfo)) return undefined;
+  const s = Math.trunc(stateInfo) & 0xffff;
+  return {
+    serialValid: (s & 0x01) !== 0,
+    privacy: (s & 0x02) === 0,
+    homepoint: (s & 0x04) !== 0,
+    uuidSet: (s & 0x08) !== 0,
+    motorOn: (s & 0x10) !== 0,
+    inAir: (s & 0x20) !== 0,
+    gpsValid: (s & 0x40) !== 0,
+    altValid: (s & 0x80) !== 0,
+    heightValid: (s & 0x100) !== 0,
+    horizValid: (s & 0x200) !== 0,
+    vupValid: (s & 0x400) !== 0,
+    pitchrollValid: (s & 0x800) !== 0,
+  };
+}
+
+export function droneidStateRu(st: DroneidStateFlags | undefined): string {
+  if (!st) return "";
+  const bits: string[] = [];
+  if (st.motorOn) bits.push("мотор");
+  if (st.inAir) bits.push("в воздухе");
+  if (st.gpsValid) bits.push("GPS");
+  if (st.homepoint) bits.push("дом");
+  if (st.serialValid) bits.push("серийник");
+  return bits.join(" · ");
 }
 
 export function hopRailPct(freqMhz: number, fLow: number, fHigh: number): number {

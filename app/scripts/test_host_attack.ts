@@ -12,8 +12,8 @@ import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
-import { classifyFhssDomain, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
+import { droneidPlainLines, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { classifyFhssDomain, droneidModel, droneidState, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -440,13 +440,31 @@ async function main(): Promise<void> {
         hit: true,
         ok: true,
         zcScore: 0.8,
-        plain: { serial: "1581F5YHD228Q00A", latitude: 47.1, longitude: 8.2 },
+        plain: {
+          serial: "1581F5YHD228Q00A",
+          latitude: 47.1,
+          longitude: 8.2,
+          altitude: 540,
+          height: 120,
+          product_type: 63,
+          seqno: 15,
+          state_info: 0x75,
+          velocity_north: 10,
+          velocity_east: -7,
+          velocity_up: 1,
+          yaw: 16900 / 100 / 57.296,
+          home_latitude: 47.11,
+          home_longitude: 8.21,
+          uuid: "legion-lab",
+        },
       },
       rc: { id: "elrs", label: "ELRS LoRa 250 Гц", hint: "CSS", rateHz: 250, css: true },
     },
     2442,
   );
   check("parseWorkerLook serial", workerLook.droneid?.plain?.serial === "1581F5YHD228Q00A");
+  check("parseWorkerLook Mini 2", workerLook.droneid?.plain?.model === "Mini 2");
+  check("parseWorkerLook motor", workerLook.droneid?.plain?.state?.motorOn === true);
   check("parseWorkerLook rc elrs", workerLook.rc?.id === "elrs");
   check(
     "AMC ofdm+hit не analog",
@@ -456,8 +474,20 @@ async function main(): Promise<void> {
     "analogKind pal + hit",
     parseAnalogComb({ analogKind: "pal", hit: true, analogScore: 4 }).kind === "pal",
   );
-  check("lookRu несёт DroneID", lookRu(workerLook).includes("DroneID 1581F5YHD228Q00A"), lookRu(workerLook));
+  check("lookRu несёт DroneID Mini 2", lookRu(workerLook).includes("DroneID Mini 2 1581F5YHD228Q00A"), lookRu(workerLook));
   check("extraFromLook droneid", extraFromLook(workerLook)?.layer3?.id === "droneid");
+  check(
+    "extraFromLook модель",
+    extraFromLook(workerLook)?.layer3?.label.includes("Mini 2") === true,
+    extraFromLook(workerLook)?.layer3?.label,
+  );
+  check("kismet Mini 2", droneidModel(63) === "Mini 2");
+  check("kismet Mavic 3", droneidModel(68) === "Mavic 3");
+  check("kismet нет id 99", droneidModel(99) === "Unknown (99)");
+  check("state 0x75 мотор", droneidState(0x75)?.motorOn === true && droneidState(0x75)?.inAir === true);
+  const l3 = droneidPlainLines(workerLook.droneid!.plain!);
+  check("l3 дом", l3.some((s) => s.includes("дом 47.11000")), l3.join(" | "));
+  check("l3 N/E/U", l3.some((s) => s.includes("N/E/U 10/-7/1")), l3.join(" | "));
   check(
     "шаг 260 кГц = Crossfire",
     classifyFhssDomain(0.26, "p900").unique && classifyFhssDomain(0.26, "p900").id === "crossfire",

@@ -6,10 +6,14 @@ import { analogCombRu, ANALOG_COMB_NONE, parseAnalogComb, type AnalogComb } from
 import { binsAroundPeak, cepstrumPeak, spectralFlatness, type AttackWidths } from "./attackMeasure";
 import { ATTACK_ASSOC_MHZ } from "./attackTracks";
 import {
+  droneidModel,
+  droneidState,
+  droneidStateRu,
   nearestAnalogChannel,
   parseAnalogChannel,
   parseFhssLook,
   type AnalogChannel,
+  type DroneidStateFlags,
   type FhssLook,
   type RcId,
 } from "./protocolDb";
@@ -25,6 +29,18 @@ export interface DroneidPlain {
   height?: number;
   uuid?: string;
   product_type?: number;
+  model?: string;
+  seqno?: number;
+  state_info?: number;
+  state?: DroneidStateFlags;
+  velocity_north?: number;
+  velocity_east?: number;
+  velocity_up?: number;
+  yaw?: number;
+  home_latitude?: number;
+  home_longitude?: number;
+  phone_app_latitude?: number;
+  phone_app_longitude?: number;
 }
 
 export interface DroneidLook {
@@ -164,19 +180,60 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+function finiteNum(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseDroneidState(raw: unknown, stateInfo?: number): DroneidStateFlags | undefined {
+  const o = asRecord(raw);
+  if (o) {
+    return {
+      serialValid: o.serial_valid === true || o.serialValid === true,
+      privacy: o.privacy === true,
+      homepoint: o.homepoint === true,
+      uuidSet: o.uuid_set === true || o.uuidSet === true,
+      motorOn: o.motor_on === true || o.motorOn === true,
+      inAir: o.in_air === true || o.inAir === true,
+      gpsValid: o.gps_valid === true || o.gpsValid === true,
+      altValid: o.alt_valid === true || o.altValid === true,
+      heightValid: o.height_valid === true || o.heightValid === true,
+      horizValid: o.horiz_valid === true || o.horizValid === true,
+      vupValid: o.vup_valid === true || o.vupValid === true,
+      pitchrollValid: o.pitchroll_valid === true || o.pitchrollValid === true,
+    };
+  }
+  return droneidState(stateInfo);
+}
+
 function parseDroneidLook(raw: unknown): DroneidLook | null {
   const o = asRecord(raw);
   if (!o || o.hit !== true) return null;
   const plainRaw = asRecord(o.plain);
+  const productType = finiteNum(plainRaw?.product_type);
+  const stateInfo = finiteNum(plainRaw?.state_info);
+  const modelRaw = typeof plainRaw?.model === "string" ? plainRaw.model : undefined;
   const plain: DroneidPlain | null = plainRaw
     ? {
         serial: typeof plainRaw.serial === "string" ? plainRaw.serial : undefined,
-        latitude: Number(plainRaw.latitude),
-        longitude: Number(plainRaw.longitude),
-        altitude: Number(plainRaw.altitude),
-        height: Number(plainRaw.height),
-        uuid: typeof plainRaw.uuid === "string" ? plainRaw.uuid : undefined,
-        product_type: Number(plainRaw.product_type),
+        latitude: finiteNum(plainRaw.latitude),
+        longitude: finiteNum(plainRaw.longitude),
+        altitude: finiteNum(plainRaw.altitude),
+        height: finiteNum(plainRaw.height),
+        uuid: typeof plainRaw.uuid === "string" && plainRaw.uuid ? plainRaw.uuid : undefined,
+        product_type: productType,
+        model: modelRaw || droneidModel(productType),
+        seqno: finiteNum(plainRaw.seqno),
+        state_info: stateInfo,
+        state: parseDroneidState(plainRaw.state, stateInfo),
+        velocity_north: finiteNum(plainRaw.velocity_north),
+        velocity_east: finiteNum(plainRaw.velocity_east),
+        velocity_up: finiteNum(plainRaw.velocity_up),
+        yaw: finiteNum(plainRaw.yaw),
+        home_latitude: finiteNum(plainRaw.home_latitude),
+        home_longitude: finiteNum(plainRaw.home_longitude),
+        phone_app_latitude: finiteNum(plainRaw.phone_app_latitude),
+        phone_app_longitude: finiteNum(plainRaw.phone_app_longitude),
       }
     : null;
   return {
@@ -285,6 +342,42 @@ export function matchAttackLook<T extends { freqMhz: number }>(
   return best;
 }
 
+const YAW_TO_DEG = 57.296;
+
+function fmtPos(lat?: number, lon?: number): string {
+  if (lat == null || lon == null || !Number.isFinite(lat) || !Number.isFinite(lon)) return "";
+  return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+}
+
+export function droneidPlainLines(p: DroneidPlain): string[] {
+  const model = p.model || droneidModel(p.product_type);
+  const head = ["DroneID", model, p.serial].filter((x) => !!x).join(" ");
+  const lines = [head];
+  const pos = fmtPos(p.latitude, p.longitude);
+  const alt = p.altitude != null && Number.isFinite(p.altitude) ? `${p.altitude.toFixed(0)} м` : "";
+  const h = p.height != null && Number.isFinite(p.height) ? `H ${p.height.toFixed(0)}` : "";
+  if (pos || alt || h) lines.push([pos, alt, h].filter(Boolean).join(" · "));
+  const vn = p.velocity_north;
+  const ve = p.velocity_east;
+  const vu = p.velocity_up;
+  const vel =
+    vn != null && ve != null && vu != null && Number.isFinite(vn) && Number.isFinite(ve) && Number.isFinite(vu)
+      ? `N/E/U ${vn.toFixed(0)}/${ve.toFixed(0)}/${vu.toFixed(0)}`
+      : "";
+  const yaw = p.yaw != null && Number.isFinite(p.yaw) ? `курс ${(p.yaw * YAW_TO_DEG).toFixed(0)}°` : "";
+  if (vel || yaw) lines.push([vel, yaw].filter(Boolean).join(" · "));
+  const home = fmtPos(p.home_latitude, p.home_longitude);
+  if (home) lines.push(`дом ${home}`);
+  const flags = droneidStateRu(p.state ?? droneidState(p.state_info));
+  const extra = [
+    p.seqno != null && Number.isFinite(p.seqno) ? `seq ${p.seqno}` : "",
+    p.uuid ? `UUID ${p.uuid}` : "",
+    flags,
+  ].filter(Boolean);
+  if (extra.length) lines.push(extra.join(" · "));
+  return lines;
+}
+
 export function lookRu(look: AttackLook | undefined): string {
   if (!look) return "разбор ещё копится";
   const pct = Math.round(look.conf * 100);
@@ -293,11 +386,14 @@ export function lookRu(look: AttackLook | undefined): string {
   const bits = [look.label];
   if (comb) bits.push(comb);
   if (look.droneid?.ok && look.droneid.plain?.serial) {
-    bits.push(`DroneID ${look.droneid.plain.serial}`);
+    bits.push(droneidPlainLines(look.droneid.plain)[0] || `DroneID ${look.droneid.plain.serial}`);
   } else if (look.droneid?.hit) {
     bits.push(look.droneid.encrypted ? "DroneID без plaintext" : "DroneID ZC");
   }
-  if (look.opendroneid?.uas?.uasId) bits.push(`RID ${look.opendroneid.uas.uasId}`);
+  if (look.opendroneid?.uas?.uasId) {
+    const od = look.opendroneid.uas;
+    bits.push(`RID ${od.uasId}${od.status ? ` ${od.status}` : ""}`);
+  }
   if (look.rc && look.rc.id !== "rc-unknown") bits.push(look.rc.label);
   if (look.fhss?.hit) {
     const n = look.fhss.unique || look.fhss.hops;

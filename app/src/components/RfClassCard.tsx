@@ -1,6 +1,6 @@
 import { analogCombRu } from "../sense/analogComb";
 import { ATTACK_SILENT_HINT } from "../sense/attackAtlas";
-import { lookRu } from "../sense/attackLook";
+import { droneidPlainLines, lookRu } from "../sense/attackLook";
 import type { AttackRow } from "../sense/attackScene";
 import type { FpgaObserveClass } from "../sense/fpgaObserveClass";
 import { hopRailPct, isHopRcId, PROTOCOL_CATALOG, type FhssLook } from "../sense/protocolDb";
@@ -50,16 +50,14 @@ function Layer3Line({ row }: { row: AttackRow }) {
   const did = row.look?.droneid;
   const od = row.look?.opendroneid;
   if (did?.ok && did.plain) {
-    const p = did.plain;
-    const pos =
-      p.latitude != null && p.longitude != null && Number.isFinite(p.latitude) && Number.isFinite(p.longitude)
-        ? `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`
-        : "";
+    const lines = droneidPlainLines(did.plain);
     return (
       <p className="rfclass-l3">
-        DroneID {p.serial}
-        {pos ? ` · ${pos}` : ""}
-        {p.altitude != null && Number.isFinite(p.altitude) ? ` · ${p.altitude.toFixed(0)} м` : ""}
+        {lines.map((line, i) => (
+          <span key={`${i}-${line}`} className={i === 0 ? undefined : "rfclass-l3-sub"}>
+            {line}
+          </span>
+        ))}
       </p>
     );
   }
@@ -71,10 +69,14 @@ function Layer3Line({ row }: { row: AttackRow }) {
       od.uas.latitude != null && od.uas.longitude != null
         ? ` · ${od.uas.latitude.toFixed(5)}, ${od.uas.longitude.toFixed(5)}`
         : "";
+    const extra = [od.uas.status, od.uas.operatorId, od.uas.altGeo != null && Number.isFinite(od.uas.altGeo) ? `${od.uas.altGeo.toFixed(0)} м` : ""]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <p className="rfclass-l3">
         RID {od.uas.uasId || "—"}
         {pos}
+        {extra ? <span className="rfclass-l3-sub">{extra}</span> : null}
       </p>
     );
   }

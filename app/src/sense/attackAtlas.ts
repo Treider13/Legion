@@ -6,7 +6,7 @@
 import type { AnalogComb } from "./analogComb";
 import type { AttackTrack } from "./attackTracks";
 import { ATTACK_VIDEO_BW_MHZ } from "./attackDetect";
-import { classifyFhssDomain, nearestAnalogChannel, type AnalogChannel, type FhssLook, type RcId } from "./protocolDb";
+import { classifyFhssDomain, droneidModel, nearestAnalogChannel, type AnalogChannel, type FhssLook, type RcId } from "./protocolDb";
 
 export type AttackBand =
   | "vhf"
@@ -205,8 +205,14 @@ function videoPeer(t: Pick<AttackTrack, "widthMhz" | "duty">): boolean {
 
 export function extraFromLook(look?: {
   rc?: RcClassHint | null;
-  droneid?: { hit?: boolean; ok?: boolean; plain?: { serial?: string; latitude?: number; longitude?: number } | null; encrypted?: boolean; zcScore?: number } | null;
-  opendroneid?: { hit?: boolean; ok?: boolean; uas?: { uasId?: string; latitude?: number; longitude?: number } | null } | null;
+  droneid?: {
+    hit?: boolean;
+    ok?: boolean;
+    plain?: { serial?: string; latitude?: number; longitude?: number; model?: string; product_type?: number } | null;
+    encrypted?: boolean;
+    zcScore?: number;
+  } | null;
+  opendroneid?: { hit?: boolean; ok?: boolean; uas?: { uasId?: string; latitude?: number; longitude?: number; status?: string } | null } | null;
   fhss?: FhssLook | null;
   analogChannel?: AnalogChannel | null;
 } | null): AttackClassExtra | undefined {
@@ -220,10 +226,11 @@ export function extraFromLook(look?: {
       lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)
         ? ` · ${lat.toFixed(5)}, ${lon.toFixed(5)}`
         : "";
+    const model = did.plain.model || droneidModel(did.plain.product_type);
     layer3 = {
       id: "droneid",
-      label: `DroneID ${did.plain.serial}`,
-      hint: `Layer 3 DJI O2/O3 plaintext (proto17/anarkiwi)${pos}. Не вход в ПЕРЕДАТЬ`,
+      label: model ? `DroneID ${model} ${did.plain.serial}` : `DroneID ${did.plain.serial}`,
+      hint: `Layer 3 DJI O2/O3 plaintext (proto17/anarkiwi/kismet)${pos}. Не вход в ПЕРЕДАТЬ`,
     };
   } else if (did?.hit) {
     layer3 = {
