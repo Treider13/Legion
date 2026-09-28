@@ -14,6 +14,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.legion_pkg.all;
 
 entity legion_lb_aim is
     port (
@@ -102,7 +103,6 @@ begin
     dout <= din when ch_target(31) = '0' else q;
 
     process(clock, reset)
-        variable bin : signed(7 downto 0);
         variable ftw : unsigned(31 downto 0);
         variable c_i : signed(15 downto 0);
         variable s_q : signed(15 downto 0);
@@ -124,8 +124,7 @@ begin
             elsif sample_en = '1' then
                 -- FTW живой: новый bin входит в шаг этого valid, cis
                 -- следующего. Обёртку аккумулятора не ждём (rotator hop).
-                bin := signed(ch_target(7 downto 0));
-                ftw := unsigned(shift_left(resize(bin, 32), 24));
+                ftw := legion_bin_ftw(ch_target(7 downto 0));
                 c_i := sine_lookup(phase_acc(31 downto 22) + 256);
                 s_q := sine_lookup(phase_acc(31 downto 22));
                 xi  := signed(din(31 downto 16));

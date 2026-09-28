@@ -210,7 +210,21 @@ architecture legion of bladerf is
     signal lg_tx_lb_amp1    : unsigned(15 downto 0);
     signal lg_tx_walk_period : unsigned(31 downto 0);
     signal lg_tx_walk_ftw_step : unsigned(31 downto 0);
-    signal lg_tx_ch_target  : std_logic_vector(31 downto 0);
+    signal lg_tx_proto_period : unsigned(31 downto 0);
+    signal lg_tx_proto_pulse  : unsigned(31 downto 0);
+    signal lg_tx_step_src     : std_logic;
+    signal lg_tx_ch_target    : unsigned(7 downto 0);
+    signal lg_tx_aim_en       : std_logic;
+    signal lg_rx_aim_en       : std_logic;
+    signal lg_rx_aim_bin      : std_logic_vector(7 downto 0);
+    signal lg_aim_word        : std_logic_vector(31 downto 0);
+    signal lg_tone_ftw        : unsigned(31 downto 0);
+    signal lg_nco_ftw_sel     : unsigned(31 downto 0);
+    signal lg_ch_energy       : legion_ch_energy_t;
+    signal lg_ch_bins_rx      : std_logic_vector(63 downto 0);
+    signal lg_ch_active       : std_logic_vector(7 downto 0);
+    signal lg_ch_fs_hz        : unsigned(31 downto 0);
+    signal lg_ch_lo_khz       : unsigned(31 downto 0);
     signal lg_lb_dly0       : std_logic_vector(31 downto 0);
     signal lg_lb_dly1       : std_logic_vector(31 downto 0);
     signal lg_lb_mix0       : std_logic_vector(31 downto 0);
@@ -255,6 +269,10 @@ architecture legion of bladerf is
     signal lg_nco_valid     : std_logic;
 
     signal lg_lb_data       : std_logic_vector(31 downto 0);
+    signal lg_lb_word       : std_logic_vector(63 downto 0);
+    signal lg_aim_dly       : std_logic_vector(31 downto 0);
+    signal lg_aim_data      : std_logic_vector(31 downto 0);
+    signal lg_lb_to_mux     : std_logic_vector(31 downto 0);
     signal lg_lb_empty      : std_logic;
     signal lg_lb_full       : std_logic;
     signal lg_lb_rd_en      : std_logic;
@@ -279,7 +297,6 @@ architecture legion of bladerf is
     signal lg_lut_we        : std_logic;
     signal lg_lut_addr      : unsigned(7 downto 0);
     signal lg_lut_data      : unsigned(7 downto 0);
-    signal lg_peak_word     : std_logic_vector(31 downto 0);
     signal lg_peak1_word    : std_logic_vector(31 downto 0);
     signal lg_peak2_word    : std_logic_vector(31 downto 0);
     signal lg_peak3_word    : std_logic_vector(31 downto 0);
@@ -290,15 +307,12 @@ architecture legion of bladerf is
     signal lg_mag_pow       : unsigned(15 downto 0);
     signal lg_mag_frame     : unsigned(6 downto 0);
     signal lg_xlat_en       : std_logic;
+    signal lg_peak_word     : std_logic_vector(31 downto 0);
     signal lg_xlat_i        : signed(15 downto 0);
     signal lg_xlat_q        : signed(15 downto 0);
     signal lg_xlat_v        : std_logic;
     signal lg_xlat_bb_i     : signed(15 downto 0);
     signal lg_xlat_bb_q     : signed(15 downto 0);
-    signal lg_lb_word       : std_logic_vector(63 downto 0);
-    signal lg_aim_dly       : std_logic_vector(31 downto 0);
-    signal lg_aim_data      : std_logic_vector(31 downto 0);
-    signal lg_lb_to_mux     : std_logic_vector(31 downto 0);
     signal lg_wd_fired      : std_logic;
     signal lg_wd_ok         : std_logic;
 
@@ -1207,7 +1221,11 @@ begin
         tx_lb_amp1    => lg_tx_lb_amp1,
         tx_walk_period => lg_tx_walk_period,
         tx_walk_ftw_step => lg_tx_walk_ftw_step,
-        tx_ch_target  => lg_tx_ch_target,
+        tx_proto_period => lg_tx_proto_period,
+        tx_proto_pulse  => lg_tx_proto_pulse,
+        tx_drfm_step_src => lg_tx_step_src,
+        tx_ch_target    => lg_tx_ch_target,
+        tx_aim_en       => lg_tx_aim_en,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1223,8 +1241,8 @@ begin
         rx_fft_en     => lg_fft_en,
         rx_fft_dc_notch => lg_fft_dc_notch,
         rx_fft_lock   => lg_fft_lock,
-        -- Бит arm в rx_clock больше не переключает формат FIFO.
-        rx_aim_en     => open,
+        rx_aim_en     => lg_rx_aim_en,
+        rx_aim_bin    => lg_rx_aim_bin,
         rx_fft_xlat_bypass => lg_fft_xlat_bypass,
         rx_fft_excl   => lg_fft_excl,
         rx_ch_ctrl    => lg_ch_ctrl,
@@ -1232,11 +1250,16 @@ begin
         rx_lut_we     => lg_lut_we,
         rx_lut_addr   => lg_lut_addr,
         rx_lut_data   => lg_lut_data,
+        rx_ch_fs_hz   => lg_ch_fs_hz,
+        rx_ch_lo_khz  => lg_ch_lo_khz,
         rx_peak_word  => lg_peak_word,
         rx_peak1_word => lg_peak1_word,
         rx_peak2_word => lg_peak2_word,
         rx_peak3_word => lg_peak3_word,
-        rx_ch_word    => lg_ch_word
+        rx_ch_word    => lg_ch_word,
+        rx_ch_energy  => lg_ch_energy,
+        rx_ch_bins    => lg_ch_bins_rx,
+        rx_ch_active  => lg_ch_active
       );
 
     U_legion_detector : entity work.legion_detector
@@ -1252,7 +1275,7 @@ begin
         det_count   => lg_det_count
       );
 
-    -- FFT-пик на том же тапе, что детектор (adc_streams(0))
+    -- FFT-пик + 8-slot энергия + Top-N / occupancy
     U_legion_fft_peak : entity work.legion_fft_peak
       port map (
         clock      => rx_clock,
@@ -1260,6 +1283,8 @@ begin
         enable     => lg_fft_en,
         dc_notch   => lg_fft_dc_notch,
         excl       => lg_fft_excl,
+        fs_hz      => lg_ch_fs_hz,
+        lo_khz     => lg_ch_lo_khz,
         in_i       => adc_streams(0).data_i,
         in_q       => adc_streams(0).data_q,
         in_valid   => adc_streams(0).data_v,
@@ -1271,7 +1296,10 @@ begin
         mag_last   => lg_mag_last,
         mag_bin    => lg_mag_bin,
         mag_pow    => lg_mag_pow,
-        mag_frame  => lg_mag_frame
+        mag_frame  => lg_mag_frame,
+        ch_energy  => lg_ch_energy,
+        ch_bins    => lg_ch_bins_rx,
+        ch_active  => lg_ch_active
       );
 
     U_legion_fft_channelize : entity work.legion_fft_channelize
@@ -1294,7 +1322,6 @@ begin
 
     -- Gemini / два тона ≥ fs/16: MA-16 режет вторую; bypass = in→out.
     lg_xlat_en <= lg_fft_en and not lg_fft_xlat_bypass;
-
     -- Вырез пика на стоящем LO (wiphy / xlating FIR). Детектор — сырой ADC.
     U_legion_lb_xlat : entity work.legion_lb_xlat
       port map (
@@ -1302,6 +1329,8 @@ begin
         reset     => rx_reset,
         enable    => lg_xlat_en,
         lock      => lg_fft_lock,
+        aim_en    => lg_rx_aim_en,
+        aim_bin   => lg_rx_aim_bin,
         peak_word => lg_peak_word,
         in_i      => adc_streams(0).data_i,
         in_q      => adc_streams(0).data_q,
@@ -1312,9 +1341,6 @@ begin
         bb_i      => lg_xlat_bb_i,
         bb_q      => lg_xlat_bb_q
       );
-    -- CDC-слово: [63:32] база после MA, [31:0] когерентный вырез.
-    -- Один указатель, половины не разъезжаются. FTW = bin<<24 сдвигает
-    -- центр на f; NCO от выреза дал бы peak+target.
 
     U_legion_det_sync : entity work.synchronizer
       generic map ( RESET_LEVEL => '0' )
@@ -1380,6 +1406,8 @@ begin
         walk_step    => lg_tx_walk_step,
         walk_max     => lg_tx_walk_max,
         walk_period  => lg_tx_walk_period,
+        proto_period => lg_tx_proto_period,
+        step_src     => lg_tx_step_src,
         ftw0_init    => lg_tx_lb_ftw,
         ftw1_init    => lg_tx_lb_ftw1,
         ftw_step     => lg_tx_walk_ftw_step,
@@ -1420,14 +1448,16 @@ begin
         clock     => tx_clock,
         reset     => tx_reset,
         enable    => lg_nco_en,
-        ftw       => lg_tx_nco_ftw,
+        ftw       => lg_nco_ftw_sel,
         out_i     => lg_nco_i,
         out_q     => lg_nco_q,
         out_valid => lg_nco_valid
       );
-    lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO else '0';
+    lg_tone_ftw <= legion_bin_ftw(std_logic_vector(lg_tx_ch_target));
+    lg_nco_ftw_sel <= lg_tone_ftw when lg_tx_mode = LEGION_MODE_AIM else lg_tx_nco_ftw;
+    lg_nco_en <= '1' when lg_tx_mode = LEGION_MODE_NCO
+                       or lg_tx_mode = LEGION_MODE_AIM else '0';
 
-    -- [31:0] — вырез (walk-off, delayline, combine). [63:32] — база синтеза.
     U_legion_dcfifo : entity work.legion_dcfifo
       generic map ( WIDTH => 64 )
       port map (
@@ -1544,17 +1574,19 @@ begin
         dout      => lg_lb_mux_data
       );
 
-    -- Синтез: отвод базы (тот же delay, что tap 0) × NCO(CH_TARGET). LO не трогаем.
+    lg_aim_word(31) <= lg_tx_aim_en;
+    lg_aim_word(30 downto 8) <= (others => '0');
+    lg_aim_word(7 downto 0) <= std_logic_vector(lg_tx_ch_target);
     U_legion_lb_aim : entity work.legion_lb_aim
       port map (
         clock     => tx_clock,
         reset     => tx_reset,
-        ch_target => lg_tx_ch_target,
+        ch_target => lg_aim_word,
         sample_en => lg_mux_rd_en,
         din       => lg_aim_dly,
         dout      => lg_aim_data
       );
-    lg_lb_to_mux <= lg_aim_data when lg_tx_ch_target(31) = '1' else lg_lb_mux_data;
+    lg_lb_to_mux <= lg_aim_data when lg_tx_aim_en = '1' else lg_lb_mux_data;
 
     U_legion_tx_mux : entity work.legion_tx_mux
       port map (

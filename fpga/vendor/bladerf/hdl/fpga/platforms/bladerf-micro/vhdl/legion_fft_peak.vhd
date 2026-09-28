@@ -4,6 +4,7 @@
 -- Пик 0 (0x15 / xlat): глобальный argmax — не менять контракт walker.
 -- PEAK1..3: SciPy find_peaks — локальный max, затем distance (excl бинов).
 -- Поток mag_* кормит legion_fft_channelize, FFT не переписываем.
+-- 8 слотов 10 МГц (2400…2480) или 8 октантов, если fs/lo = 0.
 -- Слово пика: [7:0] bin, [23:8] mag[31:16], [30:24] frame, [31] valid.
 -- enable=0: коллектор стоит, valid=0.
 -- ============================================================================
@@ -20,6 +21,8 @@ entity legion_fft_peak is
         enable     : in  std_logic;
         dc_notch   : in  std_logic;
         excl       : in  unsigned(7 downto 0);
+        fs_hz      : in  unsigned(31 downto 0);
+        lo_khz     : in  unsigned(31 downto 0);
         in_i       : in  signed(15 downto 0);
         in_q       : in  signed(15 downto 0);
         in_valid   : in  std_logic;
@@ -31,7 +34,10 @@ entity legion_fft_peak is
         mag_last   : out std_logic;
         mag_bin    : out unsigned(7 downto 0);
         mag_pow    : out unsigned(15 downto 0);
-        mag_frame  : out unsigned(6 downto 0)
+        mag_frame  : out unsigned(6 downto 0);
+        ch_energy  : out legion_ch_energy_t;
+        ch_bins    : out std_logic_vector(63 downto 0);
+        ch_active  : out std_logic_vector(7 downto 0)
     );
 end entity;
 
@@ -104,6 +110,15 @@ architecture rtl of legion_fft_peak is
     signal sel_mag0, sel_mag1, sel_mag2, sel_mag3 : unsigned(15 downto 0) := (others => '0');
     signal sel_ok0, sel_ok1, sel_ok2, sel_ok3     : std_logic := '0';
 
+    type mag8_t is array (0 to 7) of unsigned(31 downto 0);
+    type bin8_t is array (0 to 7) of unsigned(7 downto 0);
+    signal g_acc  : mag8_t := (others => (others => '0'));
+    signal g_pk   : mag8_t := (others => (others => '0'));
+    signal g_bin  : bin8_t := (others => (others => '0'));
+    signal e_r    : legion_ch_energy_t := (others => (others => '0'));
+    signal bins_r : std_logic_vector(63 downto 0) := (others => '0');
+    signal act_r  : std_logic_vector(7 downto 0) := (others => '0');
+
     function bitrev8(x : unsigned(7 downto 0)) return unsigned is
         variable r : unsigned(7 downto 0);
     begin
@@ -150,6 +165,45 @@ architecture rtl of legion_fft_peak is
         end if;
         return to_integer(e);
     end function;
+
+    -- 2400…2480 / 10 МГц при известном LO/fs; иначе октант bin/32.
+    function ch_slot(bin : natural; fs : unsigned(31 downto 0);
+                     lo : unsigned(31 downto 0)) return integer is
+        variable sb      : integer;
+        variable prod    : signed(47 downto 0);
+        variable off_khz : signed(31 downto 0);
+        variable f_khz   : integer;
+        variable slot    : integer;
+    begin
+        if fs = 0 or lo = 0 then
+            return bin / 32;
+        end if;
+        if bin < 128 then
+            sb := bin;
+        else
+            sb := bin - 256;
+        end if;
+        -- Тот же round, что legion_bin_to_khz: (k·fs ± 128000) / 256000.
+        -- Trunc здесь и round в NIOS расходились на границе 10 МГц.
+        prod := to_signed(sb, 16) * signed(resize(fs, 32));
+        if prod >= 0 then
+            off_khz := resize((prod + to_signed(128000, 48)) /
+                              to_signed(256000, 48), 32);
+        else
+            off_khz := resize((prod - to_signed(128000, 48)) /
+                              to_signed(256000, 48), 32);
+        end if;
+        f_khz := to_integer(signed(resize(lo, 32)) + off_khz);
+        if f_khz < LEGION_OCUSYNC_F0_KHZ or
+           f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then
+            return -1;
+        end if;
+        slot := (f_khz - LEGION_OCUSYNC_F0_KHZ) / LEGION_OCUSYNC_BW_KHZ;
+        if slot < 0 or slot > 7 then
+            return -1;
+        end if;
+        return slot;
+    end function;
 begin
     peak_word  <= word_r;
     peak1_word <= word1_r;
@@ -160,6 +214,9 @@ begin
     mag_bin    <= mag_bin_r;
     mag_pow    <= mag_pow_r;
     mag_frame  <= mag_frame_r;
+    ch_energy  <= e_r;
+    ch_bins    <= bins_r;
+    ch_active  <= act_r;
 
     ram_p : process(clock)
     begin
@@ -198,6 +255,8 @@ begin
         variable ex      : integer;
         variable bi      : integer;
         variable fr      : unsigned(6 downto 0);
+        variable gi      : integer;
+        variable sum     : unsigned(32 downto 0);
     begin
         if reset = '1' then
             state     <= ST_COLLECT;
@@ -213,6 +272,12 @@ begin
             word1_r   <= (others => '0');
             word2_r   <= (others => '0');
             word3_r   <= (others => '0');
+            e_r       <= (others => (others => '0'));
+            bins_r    <= (others => '0');
+            act_r     <= (others => '0');
+            g_acc     <= (others => (others => '0'));
+            g_pk      <= (others => (others => '0'));
+            g_bin     <= (others => (others => '0'));
             we_a      <= '0';
             we_b      <= '0';
             addr_a    <= (others => '0');
@@ -247,6 +312,9 @@ begin
                 word1_r   <= (others => '0');
                 word2_r   <= (others => '0');
                 word3_r   <= (others => '0');
+                e_r       <= (others => (others => '0'));
+                bins_r    <= (others => '0');
+                act_r     <= (others => '0');
             else
                 case state is
                     when ST_COLLECT =>
@@ -315,6 +383,9 @@ begin
                                 sel_ok1   <= '0';
                                 sel_ok2   <= '0';
                                 sel_ok3   <= '0';
+                                g_acc     <= (others => (others => '0'));
+                                g_pk      <= (others => (others => '0'));
+                                g_bin     <= (others => (others => '0'));
                                 state     <= ST_PEAK_RD;
                             else
                                 stage <= stage + 1;
@@ -366,6 +437,19 @@ begin
                         if (not skip_dc) and mag > best_mag then
                             best_mag <= mag;
                             best_bin <= peak_i(7 downto 0);
+                        end if;
+                        gi := ch_slot(to_integer(peak_i(7 downto 0)), fs_hz, lo_khz);
+                        if (not skip_dc) and gi >= 0 and gi <= 7 then
+                            sum := resize(g_acc(gi), 33) + resize(mag, 33);
+                            if sum(32) = '1' then
+                                g_acc(gi) <= (others => '1');
+                            else
+                                g_acc(gi) <= sum(31 downto 0);
+                            end if;
+                            if mag > g_pk(gi) then
+                                g_pk(gi)  <= mag;
+                                g_bin(gi) <= peak_i(7 downto 0);
+                            end if;
                         end if;
                         if peak_i = 255 then
                             state <= ST_LM_WRAP;
@@ -472,6 +556,29 @@ begin
                         else
                             word3_r <= (others => '0');
                         end if;
+                        e_r(0) <= std_logic_vector(g_acc(0));
+                        e_r(1) <= std_logic_vector(g_acc(1));
+                        e_r(2) <= std_logic_vector(g_acc(2));
+                        e_r(3) <= std_logic_vector(g_acc(3));
+                        e_r(4) <= std_logic_vector(g_acc(4));
+                        e_r(5) <= std_logic_vector(g_acc(5));
+                        e_r(6) <= std_logic_vector(g_acc(6));
+                        e_r(7) <= std_logic_vector(g_acc(7));
+                        bins_r(7 downto 0)   <= std_logic_vector(g_bin(0));
+                        bins_r(15 downto 8)  <= std_logic_vector(g_bin(1));
+                        bins_r(23 downto 16) <= std_logic_vector(g_bin(2));
+                        bins_r(31 downto 24) <= std_logic_vector(g_bin(3));
+                        bins_r(39 downto 32) <= std_logic_vector(g_bin(4));
+                        bins_r(47 downto 40) <= std_logic_vector(g_bin(5));
+                        bins_r(55 downto 48) <= std_logic_vector(g_bin(6));
+                        bins_r(63 downto 56) <= std_logic_vector(g_bin(7));
+                        for si in 0 to 7 loop
+                            if g_acc(si) /= 0 then
+                                act_r(si) <= '1';
+                            else
+                                act_r(si) <= '0';
+                            end if;
+                        end loop;
                         collect_n <= (others => '0');
                         state     <= ST_COLLECT;
                 end case;

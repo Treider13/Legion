@@ -17,12 +17,17 @@ use ieee.numeric_std.all;
 
 package legion_pkg is
 
-    -- Режимы TX-мультиплексора (CTRL.MODE, биты 2:1)
+    -- Режимы TX-мультиплексора (CTRL.MODE, биты 3:1)
     constant LEGION_MODE_PASS      : std_logic_vector(2 downto 0) := "000"; -- обычный стрим с хоста
     constant LEGION_MODE_PLAYER    : std_logic_vector(2 downto 0) := "001"; -- волна из RAM
     constant LEGION_MODE_NCO       : std_logic_vector(2 downto 0) := "010"; -- тон DDS
     constant LEGION_MODE_LB_GATED  : std_logic_vector(2 downto 0) := "011"; -- RX→TX по детектору
     constant LEGION_MODE_LB_ALWAYS : std_logic_vector(2 downto 0) := "100"; -- RX→TX всегда
+    constant LEGION_MODE_AIM       : std_logic_vector(2 downto 0) := "101"; -- NCO по CH_TARGET
+
+    -- f = signed(bin)·fs/256. Тон MODE_AIM и произведение DRFM×NCO
+    -- берут одну величину: FTW = bin≪24 = FTW·fs/2^32.
+    function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned;
 
     -- Адреса регистров (адрес на отдельном PIO, данные 32 бита на wdata-PIO)
     -- CTRL: bit0=ARM, bits3:1=MODE, bit4=WD_EN
@@ -83,6 +88,7 @@ package legion_pkg is
     constant LEGION_REG_WALK_FTW_STEP : natural := 16#2A#; -- прирост FTW0 за шаг
     -- Occupancy после FFT (FOSDEM energy-window) + Top-N (SciPy find_peaks).
     -- Не 88 PIO: CH_PWR/PEAKk — STATUS mux, как 0x15/0x23.
+    -- 0x2B–0x31 заняты production main (PR #86). PROTO/8-slot карта — с 0x32.
     constant LEGION_REG_CH_CTRL    : natural := 16#2B#; -- HDL [15:0]; NIOS preset [17:16]
     constant LEGION_REG_CH_IDX     : natural := 16#2C#; -- индекс 0..79 (как BAND_IDX)
     constant LEGION_REG_CH_PWR     : natural := 16#2D#; -- STATUS mux: слово канала
@@ -90,10 +96,74 @@ package legion_pkg is
     constant LEGION_REG_PEAK2      : natural := 16#2F#;
     constant LEGION_REG_PEAK3      : natural := 16#30#;
     constant LEGION_REG_CH_LUT     : natural := 16#31#; -- write {idx[15:8], ch[7:0]}
-    -- Синтез: цифровой hop DRFM→TX без LO. [31]=arm, [7:0]=signed bin.
-    -- FTW = bin≪24 (f = bin·fs/256). HDL берёт слово на следующем sample_en.
-    -- 0x2B занят CH_CTRL.
-    constant LEGION_REG_CH_TARGET : natural := 16#32#;
+    -- PROTO_PERIOD: период пакета в сэмплах (хост). Пример @40 MSPS:
+    --   ELRS 1000 Гц = 40000; OcuSync двойной пакет 6.8 мс = 272000.
+    -- PROTO_PULSE: длительность пакета в сэмплах (хост; walk не гейтит).
+    -- DRFM_STEP_SRC: 0 = WALK_PERIOD (лабораторные часы), 1 = PROTO_PERIOD.
+    --   SRC=1 считает sample_en непрерывно (не сбрасывает на паузе det).
+    -- Карта каналов 8×10 МГц (не 0x24–0x2A и не 0x2B–0x31):
+    --   CH_MODE 0 = 8×10 МГц на 2400…2480 (грубая карта ISM 2.4).
+    --     Занятая полоса 10 МГц — Goggles RE / FCC 1.4/3/10/20/40.
+    --     Официальная сетка Air Unit 2.4 — 7 каналов×10 МГц, не 8;
+    --     8 слотов = 80 МГц ISM и CH_ENERGY_0..7, не таблица DJI.
+    --   CH_MODE 1 = ELRS ISM2G4: 2400.4…2479.4 / 80 / 1 МГц (FHSS.cpp).
+    --   CH_ACTIVE_0: 8 бит слотов 10 МГц. ACTIVE_1..3: 80 бит ELRS.
+    --   CH_ENERGY_0..7 / CH_HITS_0..7: энергия и окна подряд ≥ CH_THR.
+    --   CH_TARGET [7:0]: signed FFT-бин (не индекс группы). [31]=arm
+    --   произведения DRFM×NCO в режиме LB. Запись 80 без бита 31
+    --   оставляет aim выключенным (тон MODE_AIM читает только [7:0]).
+    --   0x32 — PROTO_PERIOD, не этот регистр. CH_HYST = N хитов.
+    --   CH_FS_HZ / CH_LO_KHZ: NIOS → HDL для абсолютной сетки 2.4.
+    --   fs=0 или lo=0: 8 октантов по 32 бина (стенд без LO).
+    constant LEGION_REG_PROTO_PERIOD  : natural := 16#32#;
+    constant LEGION_REG_PROTO_PULSE   : natural := 16#33#;
+    constant LEGION_REG_DRFM_STEP_SRC : natural := 16#34#; -- bit0
+    constant LEGION_REG_CH_THR        : natural := 16#35#; -- порог энергии (NIOS)
+    constant LEGION_REG_CH_HYST       : natural := 16#36#; -- N окон подряд (NIOS)
+    constant LEGION_REG_CH_TARGET     : natural := 16#37#; -- [31]=arm, [7:0]=bin
+    constant LEGION_REG_CH_MODE       : natural := 16#38#; -- 0 OcuSync / 1 ELRS
+    constant LEGION_REG_CH_ACTIVE_0   : natural := 16#39#; -- [7:0] 10 МГц
+    constant LEGION_REG_CH_ACTIVE_1   : natural := 16#3A#; -- ELRS bits 0..31
+    constant LEGION_REG_CH_ACTIVE_2   : natural := 16#3B#; -- ELRS bits 32..63
+    constant LEGION_REG_CH_ACTIVE_3   : natural := 16#3C#; -- ELRS bits 64..79
+    constant LEGION_REG_CH_ENERGY_0   : natural := 16#3D#;
+    constant LEGION_REG_CH_ENERGY_1   : natural := 16#3E#;
+    constant LEGION_REG_CH_ENERGY_2   : natural := 16#3F#;
+    constant LEGION_REG_CH_ENERGY_3   : natural := 16#40#;
+    constant LEGION_REG_CH_ENERGY_4   : natural := 16#41#;
+    constant LEGION_REG_CH_ENERGY_5   : natural := 16#42#;
+    constant LEGION_REG_CH_ENERGY_6   : natural := 16#43#;
+    constant LEGION_REG_CH_ENERGY_7   : natural := 16#44#;
+    constant LEGION_REG_CH_HITS_0     : natural := 16#45#;
+    constant LEGION_REG_CH_HITS_1     : natural := 16#46#;
+    constant LEGION_REG_CH_HITS_2     : natural := 16#47#;
+    constant LEGION_REG_CH_HITS_3     : natural := 16#48#;
+    constant LEGION_REG_CH_HITS_4     : natural := 16#49#;
+    constant LEGION_REG_CH_HITS_5     : natural := 16#4A#;
+    constant LEGION_REG_CH_HITS_6     : natural := 16#4B#;
+    constant LEGION_REG_CH_HITS_7     : natural := 16#4C#;
+    constant LEGION_REG_CH_BINS_03    : natural := 16#4D#; -- пики слотов 0..3
+    constant LEGION_REG_CH_BINS_47    : natural := 16#4E#; -- пики слотов 4..7
+    constant LEGION_REG_CH_FS_HZ      : natural := 16#4F#; -- NIOS → HDL
+    constant LEGION_REG_CH_LO_KHZ     : natural := 16#50#; -- центр взгляда
+
+    constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
+    constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;
+    -- 80 каналов occupancy LUT (main). 8 слотов 10 МГц — отдельная карта.
+    constant LEGION_CH_N                : natural := 80;
+    constant LEGION_CH_SLOT_N           : natural := 8;
+    constant LEGION_CH_MODE_OCUSYNC     : natural := 0;
+    constant LEGION_CH_MODE_ELRS        : natural := 1;
+    constant LEGION_CH_ELRS_N           : natural := 80;
+    -- 2400…2480 МГц / 10 МГц — 8 слотов на ширину ISM 2.4 (83.5 МГц).
+    constant LEGION_OCUSYNC_F0_KHZ      : natural := 2400000;
+    constant LEGION_OCUSYNC_BW_KHZ      : natural := 10000;
+    -- ExpressLRS FHSS.cpp RADIO_SX128X ISM2G4.
+    constant LEGION_ELRS_F0_KHZ         : natural := 2400400;
+    constant LEGION_ELRS_F1_KHZ         : natural := 2479400;
+    constant LEGION_ELRS_SPACING_KHZ    : natural := 1000;
+
+    type legion_ch_energy_t is array (0 to 7) of std_logic_vector(31 downto 0);
 
     constant LEGION_WALK_CTL_EN    : natural := 0;
     constant LEGION_WALK_CTL_AUTO  : natural := 1;
@@ -124,7 +194,6 @@ package legion_pkg is
     constant LEGION_CH_FFTSHIFT    : natural := 5;
     constant LEGION_CH_DC_SKIP     : natural := 6;
     constant LEGION_CH_N80         : natural := 7;
-    constant LEGION_CH_N           : natural := 80;
     constant LEGION_CH_EXCL_DEFAULT : natural := 8;
     constant LEGION_CH_PRESET_MANUAL : natural := 0;
     constant LEGION_CH_PRESET_ELRS   : natural := 1;
@@ -148,4 +217,8 @@ package legion_pkg is
 end package;
 
 package body legion_pkg is
+    function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned is
+    begin
+        return unsigned(shift_left(resize(signed(bin8), 32), 24));
+    end function;
 end package body;

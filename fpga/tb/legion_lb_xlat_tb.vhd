@@ -14,6 +14,8 @@ architecture tb of legion_lb_xlat_tb is
     signal rst  : std_logic := '1';
     signal en   : std_logic := '0';
     signal lck  : std_logic := '0';
+    signal aim_en  : std_logic := '0';
+    signal aim_bin : std_logic_vector(7 downto 0) := (others => '0');
     signal peak : std_logic_vector(31 downto 0) := (others => '0');
     signal in_i : signed(15 downto 0) := (others => '0');
     signal in_q : signed(15 downto 0) := (others => '0');
@@ -76,7 +78,8 @@ begin
 
     dut : entity work.legion_lb_xlat
         port map (
-            clock => clk, reset => rst, enable => en, lock => lck, peak_word => peak,
+            clock => clk, reset => rst, enable => en, lock => lck,
+            aim_en => aim_en, aim_bin => aim_bin, peak_word => peak,
             in_i => in_i, in_q => in_q, in_valid => in_v,
             out_i => o_i, out_q => o_q, out_valid => o_v,
             bb_i => open, bb_q => open
@@ -157,6 +160,19 @@ begin
         feed_tone(clk, in_i, in_q, in_v, 200, 80, e_in, e_out, n_out, 20);
         assert e_out > e_in / 4
             report "FAIL: neg-bin energy lost e_in=" & integer'image(e_in) &
+                   " e_out=" & integer'image(e_out) severity failure;
+
+        -- Пик на 200, синтез просит bin 16: downmix следует CH_TARGET,
+        -- даже когда peak.valid=0.
+        aim_en <= '1';
+        aim_bin <= std_logic_vector(to_unsigned(16, 8));
+        peak <= (others => '0');
+        e_in := 0; e_out := 0; n_out := 0;
+        feed_tone(clk, in_i, in_q, in_v, 16, 80, e_in, e_out, n_out, 20);
+        assert n_out > 40
+            report "FAIL: aim-bin no samples" severity failure;
+        assert e_out > e_in / 4
+            report "FAIL: aim-bin not followed e_in=" & integer'image(e_in) &
                    " e_out=" & integer'image(e_out) severity failure;
 
         report "legion_lb_xlat_tb: PASS" severity note;

@@ -13,6 +13,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.legion_pkg.all;
 
 entity legion_lb_xlat is
     port (
@@ -20,6 +21,11 @@ entity legion_lb_xlat is
         reset     : in  std_logic;
         enable    : in  std_logic;
         lock      : in  std_logic;
+        -- aim_en=1: downmix = CH_TARGET[7:0], не защёлка пика. Иначе
+        -- произведение на новом bin и вырез на старом дают
+        -- TX = эмиттер − lock + target.
+        aim_en    : in  std_logic;
+        aim_bin   : in  std_logic_vector(7 downto 0);
         peak_word : in  std_logic_vector(31 downto 0);
         in_i      : in  signed(15 downto 0);
         in_q      : in  signed(15 downto 0);
@@ -168,7 +174,8 @@ begin
                 acc_q     <= (others => '0');
                 ma_i      <= (others => (others => '0'));
                 ma_q      <= (others => (others => '0'));
-            elsif peak_word(31) = '0' and not (lock = '1' and lock_have = '1') then
+            elsif aim_en = '0' and peak_word(31) = '0'
+                  and not (lock = '1' and lock_have = '1') then
                 out_i_r <= (others => '0');
                 out_q_r <= (others => '0');
                 out_v_r <= in_valid;
@@ -180,7 +187,15 @@ begin
                 ma_i    <= (others => (others => '0'));
                 ma_q    <= (others => (others => '0'));
             elsif in_valid = '1' then
-                if lock = '1' and lock_have = '1' then
+                if aim_en = '1' then
+                    bin := signed(aim_bin);
+                    -- Пока синтез вооружён, защёлка = тот же bin. Снятие
+                    -- arm до снятия lock не возвращает вырез на старый пик.
+                    if lock = '1' then
+                        lock_bin  <= bin;
+                        lock_have <= '1';
+                    end if;
+                elsif lock = '1' and lock_have = '1' then
                     bin := lock_bin;
                 else
                     bin := signed(peak_word(7 downto 0));
@@ -191,7 +206,7 @@ begin
                         lock_have <= '0';
                     end if;
                 end if;
-                ftw := unsigned(shift_left(resize(bin, 32), 24));
+                ftw := legion_bin_ftw(std_logic_vector(bin));
                 flush := (ma_have = '0') or (bin /= ma_bin);
                 c_i := sine_lookup(phase_acc(31 downto 22) + 256);
                 s_q := sine_lookup(phase_acc(31 downto 22));

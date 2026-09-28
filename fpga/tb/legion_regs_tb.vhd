@@ -40,8 +40,18 @@ architecture tb of legion_regs_tb is
     signal tx_lb_amp1    : unsigned(15 downto 0);
     signal tx_walk_period : unsigned(31 downto 0);
     signal tx_walk_ftw_step : unsigned(31 downto 0);
-    signal tx_ch_target  : std_logic_vector(31 downto 0);
-    signal rx_aim_en     : std_logic;
+    signal tx_proto_period : unsigned(31 downto 0);
+    signal tx_proto_pulse  : unsigned(31 downto 0);
+    signal tx_step_src     : std_logic;
+    signal tx_ch_target    : unsigned(7 downto 0);
+    signal tx_aim_en       : std_logic;
+    signal rx_aim_en       : std_logic;
+    signal rx_aim_bin      : std_logic_vector(7 downto 0);
+    signal ch_energy       : legion_ch_energy_t := (
+        0 => x"00000011", 1 => x"00000022", 2 => x"00000033", 3 => x"00000044",
+        4 => x"00000055", 5 => x"00000066", 6 => x"00000077", 7 => x"00000088");
+    signal ch_bins         : std_logic_vector(63 downto 0) := x"C0A05010B0E07020";
+    signal ch_act          : std_logic_vector(7 downto 0) := x"A5";
     signal walk_cur      : unsigned(31 downto 0) := to_unsigned(42, 32);
     signal rx_clock      : std_logic := '0';
     signal rx_reset      : std_logic := '1';
@@ -98,19 +108,25 @@ begin
             tx_lb_delay1 => tx_lb_delay1, tx_lb_ftw1 => tx_lb_ftw1,
             tx_lb_amp0 => tx_lb_amp0, tx_lb_amp1 => tx_lb_amp1,
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
-            tx_ch_target => tx_ch_target,
+            tx_proto_period => tx_proto_period, tx_proto_pulse => tx_proto_pulse,
+            tx_drfm_step_src => tx_step_src, tx_ch_target => tx_ch_target,
+            tx_aim_en => tx_aim_en,
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,
-            rx_fft_lock => rx_fft_lock, rx_aim_en => rx_aim_en,
+            rx_fft_lock => rx_fft_lock,
+            rx_aim_en => rx_aim_en, rx_aim_bin => rx_aim_bin,
             rx_fft_xlat_bypass => rx_fft_bypass,
             rx_fft_excl => rx_fft_excl,
             rx_ch_ctrl => rx_ch_ctrl, rx_ch_idx => rx_ch_idx,
             rx_lut_we => rx_lut_we, rx_lut_addr => rx_lut_addr,
             rx_lut_data => rx_lut_data,
+            rx_ch_fs_hz => open, rx_ch_lo_khz => open,
             rx_peak_word => peak_word,
             rx_peak1_word => peak1_word, rx_peak2_word => peak2_word,
             rx_peak3_word => peak3_word, rx_ch_word => ch_word,
+            rx_ch_energy => ch_energy,
+            rx_ch_bins => ch_bins, rx_ch_active => ch_act,
             tx_playing => '1', tx_cap_done => '1', tx_wd_fired => '0',
             tx_lb_level => x"2A", tx_det_active => '1', tx_det_count => det_cnt,
             tx_walk_state => "011", tx_walk_cur => walk_cur
@@ -237,16 +253,46 @@ begin
         assert tx_walk_period = to_unsigned(4096, 32) report "FAIL: WALK_PERIOD CDC" severity failure;
         assert tx_walk_ftw_step = to_unsigned(3, 32) report "FAIL: WALK_FTW_STEP CDC" severity failure;
 
-        -- CH_TARGET: arm + bin 16. 0x80000000 не влезает в natural write_reg.
+        -- PROTO / CH_* : 0x24–0x2A и 0x2B–0x31 не сдвинуты.
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PERIOD, 40000);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_PROTO_PULSE, 58000);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_DRFM_STEP_SRC, 1);
+        write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_TARGET, 80);
+        for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
+        assert tx_proto_period = to_unsigned(40000, 32) report "FAIL: PROTO_PERIOD CDC" severity failure;
+        assert tx_proto_pulse = to_unsigned(58000, 32) report "FAIL: PROTO_PULSE CDC" severity failure;
+        assert tx_step_src = '1' report "FAIL: DRFM_STEP_SRC CDC" severity failure;
+        assert tx_ch_target = to_unsigned(80, 8) report "FAIL: CH_TARGET CDC" severity failure;
+        assert tx_aim_en = '0' report "FAIL: bare bin arms product" severity failure;
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_TARGET, 7));
         pio_wdata <= x"80000010";
         pio_we <= '1';
         wait until rising_edge(nios_clk);
         pio_we <= '0';
+        wait until rising_edge(nios_clk);
         for k in 0 to 9 loop wait until rising_edge(tx_clock); end loop;
         for k in 0 to 9 loop wait until rising_edge(rx_clock); end loop;
-        assert tx_ch_target = x"80000010" report "FAIL: CH_TARGET CDC" severity failure;
-        assert rx_aim_en = '1' report "FAIL: rx aim_en" severity failure;
+        assert tx_ch_target = to_unsigned(16, 8) report "FAIL: aim bin slice" severity failure;
+        assert tx_aim_en = '1' report "FAIL: aim arm CDC" severity failure;
+        assert rx_aim_en = '1' and rx_aim_bin = x"10"
+            report "FAIL: rx aim word CDC" severity failure;
+
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ACTIVE_0, 7));
+        pio_we <= '0';
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status(7 downto 0) = ch_act report "FAIL: CH_ACTIVE_0 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY_0, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_energy(0) report "FAIL: CH_ENERGY_0 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_ENERGY_7, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_energy(7) report "FAIL: CH_ENERGY_7 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS_03, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_bins(31 downto 0) report "FAIL: CH_BINS_03 mux" severity failure;
+        pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_CH_BINS_47, 7));
+        for k in 0 to 9 loop wait until rising_edge(nios_clk); end loop;
+        assert pio_status = ch_bins(63 downto 32) report "FAIL: CH_BINS_47 mux" severity failure;
 
         -- FFT_CTRL bit3 = xlat bypass; CH_CTRL excl и idx пересекают CDC
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_FFT_CTRL, 8);
