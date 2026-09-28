@@ -140,7 +140,7 @@ begin
                 else
                     pwr := (others => '0');
                 end if;
-                word_r(7 downto 0)   <= std_logic_vector(ch_idx);
+                word_r(7 downto 0)   <= std_logic_vector(resize(ch_idx, 8));
                 word_r(23 downto 8)  <= std_logic_vector(pwr);
                 word_r(30 downto 24) <= std_logic_vector(fr_r);
                 word_r(31)           <= vld_r;

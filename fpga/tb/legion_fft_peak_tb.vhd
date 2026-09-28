@@ -105,6 +105,8 @@ begin
         variable bin  : integer;
         variable fr1  : integer;
         variable fr2  : integer;
+        variable saw_last : boolean;
+        variable last_bin : integer;
     begin
         wait for 40 ns;
         rst <= '0';
@@ -184,26 +186,23 @@ begin
         wait until rising_edge(clk);
         wait until rising_edge(clk);
         en <= '1';
-        declare
-            variable saw_last : boolean := false;
-            variable last_bin : integer := -1;
-        begin
-            feed_tone(clk, in_i, in_q, in_v, 16, 20000.0, 0.0);
-            for k in 0 to 20000 loop
-                wait until rising_edge(clk);
-                if mag_v = '1' and mag_last = '1' then
-                    saw_last := true;
-                    last_bin := to_integer(mag_bin);
-                end if;
-                if peak(31) = '1' then
-                    exit;
-                end if;
-            end loop;
-            assert saw_last report "FAIL: mag_last never pulsed" severity failure;
-            assert last_bin = 255
-                report "FAIL: mag_last bin got " & integer'image(last_bin)
-                severity failure;
-        end;
+        saw_last := false;
+        last_bin := -1;
+        feed_tone(clk, in_i, in_q, in_v, 16, 20000.0, 0.0);
+        for k in 0 to 20000 loop
+            wait until rising_edge(clk);
+            if mag_v = '1' and mag_last = '1' then
+                saw_last := true;
+                last_bin := to_integer(mag_bin);
+            end if;
+            if peak(31) = '1' then
+                exit;
+            end if;
+        end loop;
+        assert saw_last report "FAIL: mag_last never pulsed" severity failure;
+        assert last_bin = 255
+            report "FAIL: mag_last bin got " & integer'image(last_bin)
+            severity failure;
 
         report "legion_fft_peak_tb: PASS" severity note;
         done <= true;

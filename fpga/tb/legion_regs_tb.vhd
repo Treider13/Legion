@@ -115,6 +115,7 @@ begin
 
     stim : process
         variable kicked : boolean;
+        variable saw_we : boolean;
     begin
         kicked := false;
         wait for 30 ns;
@@ -246,19 +247,16 @@ begin
 
         -- LUT: запись CH_LUT → один пульс we в rx
         write_reg(nios_clk, pio_addr, pio_we, pio_wdata, LEGION_REG_CH_LUT, 16#1028#);
-        declare
-            variable saw_we : boolean := false;
-        begin
-            for k in 0 to 19 loop
-                wait until rising_edge(rx_clock);
-                if rx_lut_we = '1' then
-                    saw_we := true;
-                    assert rx_lut_addr = x"10" report "FAIL: LUT addr" severity failure;
-                    assert rx_lut_data = x"28" report "FAIL: LUT data" severity failure;
-                end if;
-            end loop;
-            assert saw_we report "FAIL: LUT we pulse missing" severity failure;
-        end;
+        saw_we := false;
+        for k in 0 to 19 loop
+            wait until rising_edge(rx_clock);
+            if rx_lut_we = '1' then
+                saw_we := true;
+                assert rx_lut_addr = x"10" report "FAIL: LUT addr" severity failure;
+                assert rx_lut_data = x"28" report "FAIL: LUT data" severity failure;
+            end if;
+        end loop;
+        assert saw_we report "FAIL: LUT we pulse missing" severity failure;
 
         -- STATUS mux PEAK1 / CH_PWR
         pio_addr <= std_logic_vector(to_unsigned(LEGION_REG_PEAK1, 7));
