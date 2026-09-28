@@ -50,7 +50,7 @@ REG_SEARCH_BW_HZ = 0x12  # analog BW обзора, Гц; 0 = AIR_BW
 REG_FIRE_BW_HZ = 0x13  # leftover; вырез цифровой, analog не узжаем
 REG_PEAK_KHZ = 0x14  # найденная частота, кГц (считает NIOS)
 REG_PEAK_BIN = 0x15  # слово пика HDL: bin/mag/frame/valid
-REG_FFT_CTRL = 0x16  # bit0 enable, bit1 dc_notch, bit2 lock
+REG_FFT_CTRL = 0x16  # bit0 enable, bit1 dc_notch, bit2 lock, bit3 xlat bypass
 REG_BAND_IDX = 0x17
 REG_BAND_F1_KHZ = 0x18
 REG_BAND_F2_KHZ = 0x19
@@ -71,6 +71,13 @@ REG_LB_FTW1 = 0x27
 REG_LB_AMP = 0x28  # [15:0] A0 Q15, [31:16] A1
 REG_WALK_PERIOD = 0x29  # сэмплы между шагами; 0 = фронт det
 REG_WALK_FTW_STEP = 0x2A  # прирост FTW0 за шаг
+REG_CH_CTRL = 0x2B  # HDL [15:0]; NIOS preset [17:16]
+REG_CH_IDX = 0x2C
+REG_CH_PWR = 0x2D  # STATUS mux: слово канала
+REG_PEAK1 = 0x2E
+REG_PEAK2 = 0x2F
+REG_PEAK3 = 0x30
+REG_CH_LUT = 0x31  # write {idx[15:8], ch[7:0]}
 
 # xA4 lab DRFM (не RFSoC 4×256 км): два отвода, mux потом ×0.9
 LB_AMP_Q15_UNITY = 0x7FFF
@@ -91,6 +98,16 @@ SCAN_CTRL_SURVEY = 1 << 3  # глухой обзор → окно → перио
 FFT_CTRL_EN = 1 << 0
 FFT_CTRL_DC_NOTCH = 1 << 1
 FFT_CTRL_LOCK = 1 << 2
+FFT_CTRL_XLAT_BYPASS = 1 << 3  # xlat=passthrough; Gemini / два тона ≥ fs/16
+CH_MAP_RAW = 0
+CH_MAP_LUT = 1
+CH_FFTSHIFT = 1 << 5
+CH_DC_SKIP = 1 << 6
+CH_N80 = 1 << 7
+CH_PRESET_MANUAL = 0
+CH_PRESET_ELRS = 1  # ExpressLRS FHSS.cpp ISM2G4 80×1 МГц
+CH_PRESET_ISM8 = 2  # 2400–2480 / 8×10 МГц, не OcuSync
+CH_PRESET_O4VID3 = 3  # DJI O4 20/10 МГц: 5768.5/5789.5/5814.5
 FIRE_BW_DEFAULT_HZ = 2_000_000
 SETTLE_N_DEFAULT = 4096
 LO_SETTLE_S = 0.006  # AD9361/LMS hop; 4096 сэмплов мало на 56e6
@@ -237,14 +254,39 @@ class LegionFpga:
 
     def set_fft(self, enable: bool, dc_notch: bool = False,
                 search_bw_hz: int = 0, fire_bw_hz: int = 0,
-                settle_n: int = 0) -> bool:
+                settle_n: int = 0, xlat_bypass: bool = False) -> bool:
         """FFT-пик на FPGA. enable=0 — walker как раньше (центр взгляда).
-        fire_bw_hz пишется в регистр (совместимость); NIOS analog не узжает."""
-        ctrl = (FFT_CTRL_EN if enable else 0) | (FFT_CTRL_DC_NOTCH if dc_notch else 0)
+        fire_bw_hz пишется в регистр (совместимость); NIOS analog не узжает.
+        xlat_bypass — MA-16 обход (Gemini ~40 МГц, два тона ≥ fs/16)."""
+        ctrl = ((FFT_CTRL_EN if enable else 0) |
+                (FFT_CTRL_DC_NOTCH if dc_notch else 0) |
+                (FFT_CTRL_XLAT_BYPASS if xlat_bypass else 0))
         return (self.write_reg(REG_SEARCH_BW_HZ, int(search_bw_hz) & 0xFFFFFFFF) and
                 self.write_reg(REG_FIRE_BW_HZ, int(fire_bw_hz) & 0xFFFFFFFF) and
                 self.write_reg(REG_SETTLE_N, int(settle_n) & 0xFFFFFFFF) and
                 self.write_reg(REG_FFT_CTRL, ctrl))
+
+    def set_channelize(self, preset: int = 0, map_lut: bool = False,
+                       grp_shift: int = 0, fftshift: bool = False,
+                       dc_skip: bool = False, n80: bool = False,
+                       excl: int = 0, idx: int = 0) -> bool:
+        """Occupancy после FFT. preset: 0 manual / 1 ELRS / 2 ISM-OCC-8 / 3 O4-VID-3.
+        map [1:0] — значение, не бит: 0=raw, 1=lut. NIOS при preset≠0 сам
+        пишет LUT (ELRS 80×1 МГц / 8×10 МГц / три центра DJI O4)."""
+        ctrl = ((CH_MAP_LUT if map_lut else CH_MAP_RAW) |
+                ((int(grp_shift) & 7) << 2) |
+                (CH_FFTSHIFT if fftshift else 0) |
+                (CH_DC_SKIP if dc_skip else 0) |
+                (CH_N80 if n80 else 0) |
+                ((int(excl) & 0xFF) << 8) |
+                ((int(preset) & 3) << 16))
+        return (self.write_reg(REG_CH_CTRL, ctrl & 0xFFFFFFFF) and
+                self.write_reg(REG_CH_IDX, int(idx) & 0x7F))
+
+    def write_ch_lut(self, bin_idx: int, ch: int) -> bool:
+        """Один бин FFT → канал. ch=0xFF — не копить."""
+        return self.write_reg(REG_CH_LUT,
+                              ((int(bin_idx) & 0xFF) << 8) | (int(ch) & 0xFF))
 
     def set_band_table(self, bands: list[tuple[float, float]]) -> bool:
         """До 8 коридоров. Пусто / BAND_COUNT=0 — сетка от SCAN_F1/F2."""
