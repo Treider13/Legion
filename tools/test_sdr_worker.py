@@ -424,7 +424,9 @@ def main() -> int:
         live._tone_bb = None
         think_d = live.attack_think(2442, 61.44e6, [{"freqMhz": 2442, "bwMhz": 10}], False)
         did = ((think_d.get("looks") or [{}])[0].get("droneid")) or {}
-        check("think DroneID plaintext xA4", did.get("ok") is True, str(did.get("reason")))
+        check("think DroneID plaintext xA4", did.get("ok") is True)
+        if did.get("ok") is not True:
+            print("    detail", did)
 
     # _wait_psd ждёт новое поколение кольца (_rx_gen), не крутит Welch на IQ до hop.
     check("wait_psd требует gen + кольцо", "self._rx_gen >= gen" in open(WORKER).read())

@@ -24,7 +24,9 @@ from protocol_db import XA4_IBW_MHZ, classify_fhss_domain, classify_rc
 FHSS_NFFT_FAST = 4096
 FHSS_HOP_FAST = 2048
 FHSS_MAX_S = 0.160  # 160 мс = ATTACK_RC_S: три hop на 19 Гц mLRS; 80 мс не хватало
-FHSS_DG_DB = 14.0  # PMC Algorithm 1
+FHSS_DG_DB = 14.0  # PMC Algorithm 1 относительно медианы кадра
+FHSS_PEAK_WIN_DB = 10.0  # иначе чистый тон: median≈−∞, боковые лепестки = «каналы»
+FHSS_HOLD_FRAMES = 2  # один пропуск STFT не рвёт dwell
 FHSS_MIN_HOPS = 3
 FHSS_MIN_FRAMES = 2
 FHSS_MIN_SPACING_MHZ = 0.15  # ниже — chirp/утечка STFT, не сетка RC
@@ -121,7 +123,7 @@ def analyze_fhss(x: np.ndarray, fs: float, lo_mhz: float) -> dict[str, Any]:
     def close_stale(frame: int) -> None:
         keep: list[dict[str, Any]] = []
         for t in tracks:
-            if frame - int(t["last"]) >= 1:
+            if frame - int(t["last"]) >= FHSS_HOLD_FRAMES:
                 if int(t["last"]) - int(t["start"]) + 1 >= FHSS_MIN_FRAMES:
                     closed.append(t)
             else:
@@ -130,7 +132,8 @@ def analyze_fhss(x: np.ndarray, fs: float, lo_mhz: float) -> dict[str, Any]:
 
     for fi, row in enumerate(db):
         noise = float(np.median(row))
-        thr = noise + FHSS_DG_DB
+        peak = float(np.max(row))
+        thr = max(noise + FHSS_DG_DB, peak - FHSS_PEAK_WIN_DB)
         peaks = _clusters(row, freqs, thr)
         used = [False] * len(peaks)
         for t in tracks:

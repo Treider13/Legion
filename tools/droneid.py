@@ -141,17 +141,26 @@ def prepare_droneid_iq(
 
 
 def _norm_xcorr(x: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """|⟨x, ref⟩| / (‖x‖‖ref‖) на скользящем окне. 0…1.
+
+    Старое fft(conj(ref[::-1])) не совпадало с vdot: пик был у нулей
+    (score 1250 при пороге 0.45), а тело ZC символа 4 не находилось.
+    На кадре без паддинга start сжимался в 0 — тесты врали.
+    """
     n = int(x.size)
     m = int(ref.size)
     if n < m:
         return np.zeros(0, dtype=np.float64)
     nfft = 1 << int(math.ceil(math.log2(n + m)))
     xf = np.fft.fft(x, nfft)
-    rf = np.fft.fft(np.conj(ref[::-1]), nfft)
-    corr = np.fft.ifft(xf * rf)[: n - m + 1]
+    rf = np.fft.fft(ref, nfft)
+    corr = np.fft.ifft(xf * np.conj(rf))[: n - m + 1]
     p = np.convolve(np.abs(x) ** 2, np.ones(m), mode="valid")
-    den = np.sqrt(p * float(np.sum(np.abs(ref) ** 2))) + 1e-20
-    return np.abs(corr) / den
+    energy = float(np.sum(np.abs(ref) ** 2))
+    den = np.sqrt(np.maximum(p, 0.0) * energy) + 1e-20
+    ncc = np.abs(corr) / den
+    ncc[p < 1e-6 * max(energy, 1e-20)] = 0.0
+    return np.minimum(np.real(ncc), 1.0)
 
 
 def _peaks_above(score: np.ndarray, threshold: float, min_gap: int) -> list[int]:
