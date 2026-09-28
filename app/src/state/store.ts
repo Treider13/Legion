@@ -1331,15 +1331,21 @@ export const useLegion = create<LegionStore>((set, get) => {
   const attackShelfWant = (): number =>
     parseLocaleNumber(get().txShelfMhz);
 
-  const liveCorridorDets = (): import("../sdr/types").Detection[] => {
+  const liveCorridorDets = (
+    liveWindow: readonly import("../sdr/types").Detection[] = [],
+  ): import("../sdr/types").Detection[] => {
     const paint = get().attackPaint;
-    const raw = get().detections;
-    const pool = paint ? raw.filter((d) => freqInCorridor(d.freqMhz, paint)) : raw;
-    const tracks = gAttackTracker.snapshot();
-    for (const t of tracks) {
-      if (paint && !freqInCorridor(t.freqMhz, paint)) continue;
-      if (pool.some((d) => sameBin(d.freqMhz, t.freqMhz))) continue;
-      pool.push({
+    const pool: import("../sdr/types").Detection[] = [];
+    const take = (d: import("../sdr/types").Detection): void => {
+      if (paint && !freqInCorridor(d.freqMhz, paint)) return;
+      const i = pool.findIndex((x) => sameBin(x.freqMhz, d.freqMhz));
+      if (i < 0) pool.push({ ...d });
+      else if (d.powerDbm > pool[i]!.powerDbm) pool[i] = { ...d };
+    };
+    for (const d of liveWindow) take(d);
+    for (const t of gAttackTracker.snapshot()) {
+      if (t.state === "cooled") continue;
+      take({
         freqMhz: t.freqMhz,
         powerDbm: t.powerDbm,
         noiseDbm: t.noiseDbm,
@@ -1463,10 +1469,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     }
   };
 
-  const cueAttackTarget = async (): Promise<boolean> => {
+  const cueAttackTarget = async (
+    liveWindow: readonly import("../sdr/types").Detection[] = [],
+  ): Promise<boolean> => {
     if (get().scanPattern !== "auto" || !get().transmitArmed) return false;
     const paint = get().attackPaint;
-    const live = liveCorridorDets();
+    const live = liveCorridorDets(liveWindow);
     const next = pickArmedAutoTarget({
       liveWindow: live,
       archive: get().detections,
@@ -2398,21 +2406,42 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (!p) {
         set({ attackPaint: null, attackPaintDraft: null });
         const st = get();
-        set(attackBrainPatch(st, st.attackTracks, st.scanBins, attackListenPlan({
-          analogMhz: catalogCaps(st.sdrId).analogBwMhz,
-          paintOwnsTx: false,
-          paint: null,
-        }).spanMhz));
+        const analog = catalogCaps(st.sdrId).analogBwMhz;
+        const listen = attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null });
+        set(attackBrainPatch(st, st.attackTracks, st.scanBins, listen.spanMhz));
+        if (st.scanRunning) {
+          gWalker = new ScanWalker({
+            bands: st.sdrBands,
+            pattern: "sweep",
+            windowMhz: listen.spanMhz,
+            analogBwMhz: analog,
+            dwellMs: parseFloat(st.scanDwellMs),
+            seed: Date.now() & 0xffffffff,
+          });
+        }
         return;
       }
       const paint = clampCorridorPaint(p);
       set({ attackPaint: paint, attackPaintDraft: null });
       const st = get();
-      set(attackBrainPatch({ ...st, attackPaint: paint }, st.attackTracks, st.scanBins, attackListenPlan({
-        analogMhz: catalogCaps(st.sdrId).analogBwMhz,
+      const analog = catalogCaps(st.sdrId).analogBwMhz;
+      const listen = attackListenPlan({
+        analogMhz: analog,
         paintOwnsTx: attackPaintOwnsTx(st.scanPattern, paint, st.transmitArmed),
         paint,
-      }).spanMhz));
+      });
+      set(attackBrainPatch({ ...st, attackPaint: paint }, st.attackTracks, st.scanBins, listen.spanMhz));
+      if (st.scanRunning) {
+        const clipped = clipCorridorToAllowlist(paint, st.sdrBands) ?? paint;
+        gWalker = new ScanWalker({
+          bands: [corridorAsBand(clipped)],
+          pattern: "sweep",
+          windowMhz: listen.spanMhz,
+          analogBwMhz: analog,
+          dwellMs: parseFloat(st.scanDwellMs),
+          seed: Date.now() & 0xffffffff,
+        });
+      }
     },
     setAttackPaintDraft: (p) => {
       if (get().scanPattern !== "auto") return;
@@ -4914,7 +4943,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           const holding =
             cur.attackTxUntil != null && Date.now() < cur.attackTxUntil && cur.lastForwardMhz != null;
           if (holding && cur.autoDispatch === "turn") {
-            const live = cur.attackPaint ? liveCorridorDets() : detections;
+            const live = cur.attackPaint ? liveCorridorDets(detections) : detections;
             if (cur.lastForwardMhz != null && heldHitAlive(live, cur.lastForwardMhz)) return;
           }
           if (
@@ -4933,7 +4962,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           const heldNow = gGate.lastCuedMhz;
           const dispatch = after.autoDispatch;
           if (after.attackPaint) {
-            void cueAttackTarget();
+            void cueAttackTarget(detections);
             return;
           }
           const stillHold =

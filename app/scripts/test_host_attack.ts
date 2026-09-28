@@ -134,6 +134,12 @@ async function main(): Promise<void> {
       !fireSrc.includes("void get().stopTransmit()"),
   );
   check(
+    "очередь Атаки не берёт merge-архив засечек",
+    storeSrc.includes("liveCorridorDets") &&
+      storeSrc.includes('t.state === "cooled"') &&
+      storeSrc.slice(storeSrc.indexOf("const liveCorridorDets"), storeSrc.indexOf("const muteAttackTxKeepSession")).includes("liveWindow"),
+  );
+  check(
     "pickArmed архив по-прежнему пуст",
     pickArmedAutoTarget({
       liveWindow: [],
