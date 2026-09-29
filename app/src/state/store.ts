@@ -1629,7 +1629,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       return false;
     }
-    if (get().lastForwardMhz != null && sameBin(next.freqMhz, get().lastForwardMhz)) {
+    const lastForward = get().lastForwardMhz;
+    if (lastForward != null && sameBin(next.freqMhz, lastForward)) {
       return true;
     }
     if (paint) return runAttackShelfTx(next.freqMhz, next.powerDbm);
@@ -2774,7 +2775,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         analogMhz: analog,
         paintOwnsTx: attackPaintOwnsTx(st.scanPattern, paint, st.transmitArmed),
         paint,
-        txLive: autoTxLive({ ...st, attackPaint: paint }),
+        // autoTxLive читает только scanPattern/transmitArmed — attackPaint ему не нужен.
+        txLive: autoTxLive(st),
       });
       set(attackBrainPatch({ ...st, attackPaint: paint }, st.attackTracks, st.scanBins, listen.spanMhz));
       if (st.scanRunning) {

@@ -161,7 +161,9 @@ function combRatio(mag: Float64Array, freqs: Float64Array, f0: number, halfHz: n
 /** Спектр FM: DC-block + Ханна + rFFT. orecchiette: пик на 15625/15734, не окно 80 Гц. */
 export function analogCombFromFm(fm: ArrayLike<number>, fsHz: number): AnalogComb {
   if (fm.length < 256 || !(fsHz > 0)) return { ...ANALOG_COMB_NONE };
-  let work = new Float64Array(fm.length);
+  // Явный тип: в TS ≥5.7 `new Float64Array(n)` выводится как
+  // Float64Array<ArrayBuffer>, а decimateMean возвращает Float64Array<ArrayBufferLike>.
+  let work: Float64Array = new Float64Array(fm.length);
   for (let i = 0; i < fm.length; i++) work[i] = fm[i]!;
   let fs = fsHz;
   const decim = Math.max(1, Math.floor(fs / ANALOG_COMB_FS_HZ));
