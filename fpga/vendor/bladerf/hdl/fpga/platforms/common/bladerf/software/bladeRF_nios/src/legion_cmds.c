@@ -124,7 +124,6 @@ static uint16_t legion_survey_mag[LEGION_SURVEY_LOOK_MAX];
 static uint32_t legion_survey_peak[LEGION_SURVEY_LOOK_MAX];
 static bool     legion_stare_on;
 static uint64_t legion_last_live_tick;
-static uint32_t legion_scan_survey_us;
 static uint32_t legion_scan_event;
 static uint32_t legion_scan_event_seq;
 static uint32_t legion_walk_ctl;
@@ -628,6 +627,7 @@ static uint32_t legion_looks_in(uint32_t f1_khz, uint32_t f2_khz)
 static uint32_t legion_center_in(uint32_t f1_khz, uint32_t f2_khz, uint32_t i)
 {
     uint32_t const look_khz = legion_look_hz() / 1000u;
+    uint32_t const half = look_khz / 2u;
     uint32_t const n = legion_looks_in(f1_khz, f2_khz);
     uint32_t c;
 
@@ -640,9 +640,22 @@ static uint32_t legion_center_in(uint32_t f1_khz, uint32_t f2_khz, uint32_t i)
     if (i >= n) {
         i = n - 1u;
     }
-    c = f1_khz + (look_khz / 2u) + i * look_khz;
-    if (c > f2_khz) {
-        c = f2_khz;
+    c = f1_khz + half + i * look_khz;
+    /* Обрезаем по КРАЮ окна (центр + look/2), а не по центру: иначе последний
+     * взгляд слышит за F2 (при коридоре 2000…2200, взгляд 56 поиск слышал
+     * 2168…2224). Посадка на пик уже подтягивает так же — legion_survey_clip_lo. */
+    if (c + half > f2_khz) {
+        c = f2_khz - half;
+        /* Страховка от округления целочисленного half: при n=ceil(span/look)
+         * подтянутый центр не совпадает с предыдущим и не уходит назад, но
+         * держим явный пол на край-кейс. */
+        if (i > 0u) {
+            uint32_t const prev = f1_khz + half + (i - 1u) * look_khz;
+
+            if (c <= prev) {
+                c = prev + 1u;
+            }
+        }
     }
     return c;
 }
@@ -3276,10 +3289,6 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             legion_settle_n = data;
             return true;
 
-        case LEGION_REG_SCAN_SURVEY_US:
-            legion_scan_survey_us = data;
-            return true;
-
         case LEGION_REG_SCAN_EVENT:
             return true;
 
@@ -3572,10 +3581,6 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     }
     if (addr == LEGION_REG_SETTLE_N) {
         *data = legion_settle_n;
-        return true;
-    }
-    if (addr == LEGION_REG_SCAN_SURVEY_US) {
-        *data = legion_scan_survey_us;
         return true;
     }
     if (addr == LEGION_REG_SCAN_EVENT) {

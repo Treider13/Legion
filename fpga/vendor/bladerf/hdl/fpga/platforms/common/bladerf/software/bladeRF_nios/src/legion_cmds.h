@@ -54,7 +54,6 @@
 #define LEGION_REG_BAND_F2_KHZ    0x19
 #define LEGION_REG_BAND_COUNT     0x1A  /* 0 = один коридор SCAN_F1/F2 */
 #define LEGION_REG_SETTLE_N       0x1B  /* сэмплы после hop; 0 = 4096 */
-#define LEGION_REG_SCAN_SURVEY_US 0x1C  /* период глухого прохода, мкс; 0 = 5e6 */
 #define LEGION_REG_SCAN_EVENT     0x1D  /* [7:0] код, [31:8] seq — лог хоста */
 #define LEGION_REG_AIR_TX_GAIN_DB 0x1E  /* ручной TX gain, дБ; код = gain+1000; 0xFFFFFFFF = не задан */
 #define LEGION_REG_DELAY          0x1F  /* начальная задержка, сэмплы (HDL) */
@@ -146,8 +145,7 @@
 #define LEGION_SURVEY_LOOK_MAX    128u
 #define LEGION_FIRE_BW_DEFAULT_HZ 2000000u
 #define LEGION_SETTLE_N_DEFAULT   4096u
-#define LEGION_SCAN_SURVEY_DEFAULT_US 5000000u
-#define LEGION_SURVEY_GONE_MS     1500u /* current occupancy; не SCAN_SURVEY_US */
+#define LEGION_SURVEY_GONE_MS     1500u /* current occupancy текущего канала */
 #define LEGION_EVT_PASS           1u
 #define LEGION_EVT_STARE          2u
 #define LEGION_EVT_LOCK           3u
@@ -258,7 +256,7 @@ bool legion_air_down(void);
  * PARK: одна стоянка на середине коридора (ICE9), PLL не гоняем.
  * SURVEY+PARK (ИИ): глухой проход 0…n−1 (mute) → LO на clip(PEAK) →
  * HDL DC-notch снят. RESURVEY: current occupancy gone 1.5 с
- * (CH_PWR/слот сейчас, иначе det). Не SCAN_SURVEY_US и не pwr_hits.
+ * (CH_PWR/слот сейчас, иначе det). Не таймер прохода и не pwr_hits.
  * Внутри окна SCAN_DWELL на сигнал: TURN=обычный (выдержка, потом другой
  * пик), иначе приоритет (сильнее — перескок и новая выдержка).
  * F1/F2 не пишет. Отказ hop не переводит в stare (не unmute на старом LO).

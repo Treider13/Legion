@@ -1,6 +1,6 @@
 import { analogCombRu } from "../sense/analogComb";
 import { ATTACK_SILENT_HINT } from "../sense/attackAtlas";
-import { droneidPlainLines, lookRu } from "../sense/attackLook";
+import { droneidPlainLines, droneidSortA, lookRu } from "../sense/attackLook";
 import type { AttackRow } from "../sense/attackScene";
 import type { FpgaObserveClass } from "../sense/fpgaObserveClass";
 import { hopRailPct, isHopRcId, PROTOCOL_CATALOG, type FhssLook } from "../sense/protocolDb";
@@ -62,7 +62,14 @@ function Layer3Line({ row }: { row: AttackRow }) {
     );
   }
   if (did?.hit) {
-    return <p className="rfclass-l3">{did.encrypted ? "DroneID без plaintext (O3+/O4)" : "DroneID ZC"}</p>;
+    const head = did.encrypted ? "DroneID без plaintext (O3+/O4)" : "DroneID ZC";
+    const metrics = droneidSortA(did);
+    return (
+      <p className="rfclass-l3">
+        {head}
+        {metrics ? <span className="rfclass-l3-sub">{metrics}</span> : null}
+      </p>
+    );
   }
   if (od?.hit && od.uas) {
     const pos =

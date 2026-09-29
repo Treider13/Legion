@@ -98,7 +98,7 @@ export function ScanPanel() {
         {taskLive
           ? `Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан. Стоп — там или кнопкой ниже.`
           : fpgaAir
-            ? `${FPGA_AIR_MODE_RU}: Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает карточку и ARM. Пустая / аналог 5.8 / x40+C58 — ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Гейт в текущем взгляде — микросекунды. Живой канал last_live ${FPGA_SURVEY_GONE_MS} мс, не таймер SCAN_SURVEY. USB не в круге «увидел → усилитель».`
+            ? `${FPGA_AIR_MODE_RU}: Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает карточку и ARM. Пустая / аналог 5.8 / x40+C58 — ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Гейт в текущем взгляде — микросекунды. Живой канал last_live ${FPGA_SURVEY_GONE_MS} мс, не таймер периода прохода. USB не в круге «увидел → усилитель».`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
               : `${HOST_ATTACK_MODE_RU_CAPS}: без рамки слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Рамка мышкой — коридор (может быть шире ${ATTACK_TX_MAX_MHZ} МГц; одно окно USB FD ≤${ATTACK_TX_MAX_MHZ}). Полка — горб на найденном, тип волны — чем заливаем полку. Выдержка — на каждой засечке, сессию гасит только Стоп передачу. Пунктир — предложение, не рамка. Без рамки — авто-handoff живой засечки той же полкой. Хост-скан и FPGA вместе не работают (один USB).`}
@@ -229,7 +229,7 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
-            <label title="NIOS RESURVEY: occupancy текущего канала last_live 1.5 с. Не таймер SCAN_SURVEY_US.">
+            <label title="NIOS RESURVEY: occupancy текущего канала last_live 1.5 с. Не таймер периода прохода.">
               ЖИВОЙ КАНАЛ
               <input
                 aria-label="Occupancy last_live, не таймер сканирования"

@@ -12,7 +12,7 @@ import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { droneidPlainLines, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
+import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
@@ -503,6 +503,23 @@ async function main(): Promise<void> {
   const l3 = droneidPlainLines(workerLook.droneid!.plain!);
   check("l3 дом", l3.some((s) => s.includes("дом 47.11000")), l3.join(" | "));
   check("l3 N/E/U", l3.some((s) => s.includes("N/E/U 10/-7/1")), l3.join(" | "));
+  {
+    const encLook = parseWorkerLook(
+      {
+        kind: "cycle",
+        label: "есть цикл",
+        conf: 0.6,
+        droneid: { hit: true, ok: false, encrypted: true, zcScore: 0.83, zcRoot: 600, reason: "turbo/CRC" },
+      },
+      2442,
+    );
+    const sa = droneidSortA(encLook.droneid!);
+    check("Sort-A: zcScore видно", sa.includes("ZC 0.83"), sa);
+    check("Sort-A: root видно", sa.includes("root 600"), sa);
+    check("Sort-A: причина CRC видна", sa.includes("причина: turbo/CRC"), sa);
+    check("lookRu O3+ несёт Sort-A", lookRu(encLook).includes("DroneID без plaintext") && lookRu(encLook).includes("ZC 0.83"), lookRu(encLook));
+    check("Sort-A: при plaintext причину не дублируем", !droneidSortA(workerLook.droneid!).includes("причина:"), droneidSortA(workerLook.droneid!));
+  }
   check(
     "шаг 260 кГц = Crossfire",
     classifyFhssDomain(0.26, "p900").unique && classifyFhssDomain(0.26, "p900").id === "crossfire",

@@ -50,10 +50,7 @@ import {
   fpgaTurnDwellClamp,
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_TURN_DWELL_MIN_MS,
-  FPGA_SURVEY_PERIOD_DEFAULT_MS,
   FPGA_SURVEY_GONE_MS,
-  fpgaSurveyPeriodClamp,
-  fpgaSurveyPeriodUs,
   FPGA_OBSERVE_MS,
   FPGA_AIR_GONE_MS,
   detCountStagnant,
@@ -459,6 +456,23 @@ async function main(): Promise<void> {
   check(
     "полоса ≤ BW → одна стойка (ice9 park)",
     planCenters([{ f1Mhz: 2440, f2Mhz: 2448 }], 56).length === 1,
+  );
+  // П.1: обрезка последнего взгляда по краю окна (центр + W/2 ≤ F2).
+  check(
+    "F2-clamp: 2000..2200 / 56 → …2172, не 2196",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2200 }], 56).join(",") === "2028,2084,2140,2172",
+  );
+  check(
+    "F2-clamp: 2000..2020 / 56 → одна стойка 2010",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2020 }], 56).join(",") === "2010",
+  );
+  check(
+    "F2-clamp: 2000..2200 / 20 → край ровно на F2, без изменений",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2200 }], 20).slice(-1)[0] === 2190,
+  );
+  check(
+    "F2-clamp: 2000..2100 / 56 → вторая подтянута к 2072",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2100 }], 56).join(",") === "2028,2072",
   );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
@@ -1335,7 +1349,6 @@ async function main(): Promise<void> {
     Number.isNaN(parseLocaleNumber("нет")) && Number.isNaN(parseLocaleNumber("")));
   check("turn dwell: пол 0.1 мс, потолок 60000", FPGA_TURN_DWELL_MIN_MS === 0.1 && fpgaTurnDwellClamp(0.05) === 0.1 && fpgaTurnDwellClamp(999999) === 60_000);
   check("turn dwell: значение в диапазоне как есть", fpgaTurnDwellClamp(1500) === 1500 && fpgaTurnDwellClamp(40) === 40);
-  check("сканирование: дефолт периода 5000", FPGA_SURVEY_PERIOD_DEFAULT_MS === 5000 && fpgaSurveyPeriodClamp(Number.NaN) === 5000 && fpgaSurveyPeriodUs(5) === 5000);
   check("air полоса: дефолт 2 на мусоре", clampAirBwMhz(Number.NaN, 56) === 2 && clampAirBwMhz(0, 56) === 2);
   check("air полоса: кламп потолком платы", clampAirBwMhz(56, 28) === 28 && clampAirBwMhz(20, 56) === 20);
   check("air полоса: пол 0.2 МГц", clampAirBwMhz(0.1, 56) === 0.2);
@@ -1414,7 +1427,7 @@ async function main(): Promise<void> {
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
       fftEnable: true, peakOverride: true,
     });
-    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5978;
+    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5972;
   })());
   check("онбордовый xA4: 20-80 отказ (ниже RX 70)", planOnboardIntercept({
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 20, f2Mhz: 80 }],
@@ -1435,10 +1448,10 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2487 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
-      surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
-      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("last_live");
+      && p.centers[1] === 2459 && p.reason.includes("last_live");
   })());
   check("онбордовый xA4: 2440–2480 @ 56 ИИ — один взгляд плитки", (() => {
     const p = planOnboardIntercept({
@@ -1456,17 +1469,17 @@ async function main(): Promise<void> {
       fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 18 && p.firstMhz === 2028
-      && p.centers[17] === 2980;
+      && p.centers[17] === 2972;
   })());
   check("онбордовый xA4: 2400–2500 @ 56 ИИ+обычный — 2 взгляда, выдержка 0.4", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: true, dwellMs: 0.4,
-      surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.fftEnable && p.turn && p.survey && p.park && p.dwellMs === 0.4
-      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2484
-      && p.reason.includes("обычный") && p.reason.includes("last_live") && p.surveyPeriodMs === 5000;
+      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2472
+      && p.reason.includes("обычный") && p.reason.includes("last_live");
   })());
   check("ARM FFT+TURN несёт scan_turn и 400 мкс", (() => {
     const c = fpgaArmCmd("lb_gated", {
@@ -1495,15 +1508,15 @@ async function main(): Promise<void> {
     return c.fft_enable === true && c.scan_survey === true && c.scan_park === false
       && c.scan_f1_mhz === 2000 && c.scan_dwell_us === 3_000_000;
   })());
-  check("ARM ИИ несёт park+survey+период", (() => {
+  check("ARM ИИ несёт park+survey+turn", (() => {
     const c = fpgaArmCmd("lb_gated", {
       detThr: 5000, detShift: 4, token: "t", freqMhz: 2028,
       fsHz: 56e6, bwMhz: 56, scanEnable: true, scanF1Mhz: 2000, scanF2Mhz: 3000,
       scanPark: true, scanSurvey: true, scanTurn: true,
-      scanDwellMs: 0.4, scanSurveyMs: 5000, fftEnable: true, fireBwMhz: 2,
+      scanDwellMs: 0.4, fftEnable: true, fireBwMhz: 2,
     });
     return c.scan_park === true && c.scan_survey === true && c.scan_turn === true
-      && c.scan_dwell_us === 400 && c.scan_survey_us === 5_000_000;
+      && c.scan_dwell_us === 400;
   })());
   check("онбордовый план без fftEnable — walker как раньше", (() => {
     const p = planOnboardIntercept({
@@ -2080,11 +2093,10 @@ async function main(): Promise<void> {
   useLegion.getState().stopScan();
   const autoPark = await runSmartStart({
     f1: "2400", f2: "2487", wave: "awgn", loadOk: true, path: "auto",
-    windowMhz: "56", dwellMs: "0.4", surveyPeriodMs: "5000", dispatch: "park",
+    windowMhz: "56", dwellMs: "0.4", dispatch: "park",
   });
-  check("кино перехват: leftover стоянка → обычный + период",
-    autoPark === true && useLegion.getState().autoDispatch === "turn"
-    && useLegion.getState().fpgaSurveyPeriodMs === "5000");
+  check("кино перехват: leftover стоянка → обычный",
+    autoPark === true && useLegion.getState().autoDispatch === "turn");
   useLegion.getState().stopScan();
 
   // --- Кино: ручной порог чувствительности для автономного эфира ---
@@ -2143,9 +2155,8 @@ async function main(): Promise<void> {
   check("онбордовый ARM несёт TURN и выдержку оператора",
     storeSrc.includes("scanTurn: plan.turn") && storeSrc.includes("scanDwellMs: plan.dwellMs")
     && storeSrc.includes("fpgaInnerDispatch(s.autoDispatch)"));
-  check("онбордовый ARM несёт ИИ PARK+SURVEY и период",
+  check("онбордовый ARM несёт ИИ PARK+SURVEY",
     storeSrc.includes("scanPark: plan.park") && storeSrc.includes("scanSurvey: plan.survey")
-      && storeSrc.includes("scanSurveyMs: plan.surveyPeriodMs")
       && storeSrc.includes("park: true")
     && storeSrc.includes('autoDispatch: "park"'));
   check("наблюдение логирует обычный и приоритет по часам",
@@ -2382,9 +2393,8 @@ async function main(): Promise<void> {
     !muxSrc.includes("lb_always остаётся 1:1"));
   check("cinema auto: ждёт слух, ARM без Принять — отказ",
     autoBlock.includes("smartListenLive") && autoBlock.includes("st.fpgaArmed") && autoBlock.includes("return false"));
-  check("cinema auto: канал, выдержка и период сканирования пишутся в стор",
-    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)")
-    && runSrc.includes("setFpgaSurveyPeriodMs(opts.surveyPeriodMs)"));
+  check("cinema auto: канал и выдержка пишутся в стор",
+    runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
   check("cinema air: ручной порог из мастера пишется в стор",
     gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
   // Регрессия: окно детектора в мастере — от реального канала (fs следует за

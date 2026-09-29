@@ -56,7 +56,6 @@ REG_BAND_F1_KHZ = 0x18
 REG_BAND_F2_KHZ = 0x19
 REG_BAND_COUNT = 0x1A  # 0 = один коридор SCAN_F1/F2
 REG_SETTLE_N = 0x1B  # сэмплы после hop; 0 = 4096
-REG_SCAN_SURVEY_US = 0x1C  # период глухого прохода, мкс; 0 = 5e6
 REG_SCAN_EVENT = 0x1D  # [7:0] код, [31:8] seq
 REG_AIR_TX_GAIN_DB = 0x1E  # ручной TX gain, дБ; код = gain+1000; только NIOS
 REG_DELAY = 0x1F  # начальная задержка, сэмплы
@@ -307,11 +306,9 @@ class LegionFpga:
 
     def set_scan_corridor(self, f1_mhz: float, f2_mhz: float,
                           enable: bool, turn: bool, dwell_us: int,
-                          park: bool = False, survey: bool = False,
-                          survey_us: int = 0) -> bool:
+                          park: bool = False, survey: bool = False) -> bool:
         """Коридор онбордового обзора. enable=0 — walker молчит (эфир/solo).
         dwell_us — выдержка на сигнал внутри окна (0 → 3 с).
-        survey_us — период глухого прохода (0 → 5 с, пишет NIOS).
         park — ICE9 один LO / с survey — ИИ (плитка не схлопывается).
         survey — глухой проход, затем LO на пик. Биты OR, не взаимно исключены.
         turn при survey — обычный внутри окна; иначе приоритет."""
@@ -324,11 +321,9 @@ class LegionFpga:
                 (SCAN_CTRL_PARK if park else 0) |
                 (SCAN_CTRL_SURVEY if survey else 0))
         dwell = max(0, int(dwell_us))
-        period = max(0, int(survey_us))
         return (self.write_reg(REG_SCAN_F1_KHZ, f1 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_F2_KHZ, f2 & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_DWELL_US, dwell & 0xFFFFFFFF) and
-                self.write_reg(REG_SCAN_SURVEY_US, period & 0xFFFFFFFF) and
                 self.write_reg(REG_SCAN_CTRL, ctrl))
 
     def set_fft(self, enable: bool, dc_notch: bool = False,

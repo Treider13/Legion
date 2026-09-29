@@ -66,7 +66,6 @@ package legion_pkg is
     constant LEGION_REG_BAND_F2_KHZ  : natural := 16#19#;
     constant LEGION_REG_BAND_COUNT   : natural := 16#1A#; -- 0 = один коридор SCAN_F1/F2
     constant LEGION_REG_SETTLE_N     : natural := 16#1B#; -- сэмплы после hop; 0 = 4096
-    constant LEGION_REG_SCAN_SURVEY_US : natural := 16#1C#; -- период глухого прохода, мкс; 0 = 5e6
     constant LEGION_REG_SCAN_EVENT   : natural := 16#1D#; -- [7:0] код, [31:8] seq
     -- Только NIOS (HDL when others => null). Код = gain+1000, 0xFFFFFFFF = не задан.
     constant LEGION_REG_AIR_TX_GAIN_DB : natural := 16#1E#; -- ручной TX gain, дБ
