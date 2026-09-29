@@ -6,7 +6,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cueFreqAllowed, hzInAllowlist, parseBand, paCurrentInRange } from "../src/policy/allowlist";
-import { hostPeakWord } from "../src/sense/hostFpgaSpectrum";
 import { cropPsdBins, detectFromBins, estimateNoiseFloor, hostPaintSpanMhz, hostScanSpanMhz, MockSdrBackend, SDR_TX_US } from "../src/sdr/backend";
 import { SDR_CATALOG, catalogById, parseSdrRxBand, soapyRemoteArgs } from "../src/sdr/catalog";
 import { envMatchesChip, parseEsp32Chip, planEsp32Flash, usableSerialPort } from "../src/flash/esp32";
@@ -2827,20 +2826,6 @@ async function main(): Promise<void> {
   await L().closeSdr();
   check("closeSdr не скрывает отказ остановки", L().fpgaStopPending === true);
   pokeLastKickOkMs(null);
-
-  const tone = [
-    { freqMhz: 2440, powerDbm: -90 },
-    { freqMhz: 2440.25, powerDbm: -40 },
-    { freqMhz: 2441, powerDbm: -90 },
-    { freqMhz: 2439, powerDbm: -91 },
-    { freqMhz: 2442, powerDbm: -92 },
-    { freqMhz: 2438, powerDbm: -93 },
-    { freqMhz: 2443, powerDbm: -94 },
-    { freqMhz: 2437, powerDbm: -95 },
-  ];
-  const word = hostPeakWord(tone, 2440, 2e6, 5);
-  check("хост-спектр: +0.25 МГц при fs=2 МГц → bin 32 и valid",
-    word !== null && (word >>> 31) === 1 && (word & 0xff) === 32 && ((word >> 24) & 0x7f) === 5);
 
   console.log(failures === 0 ? "\nORCH: ALL PASS" : `\nORCH: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

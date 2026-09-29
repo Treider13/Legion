@@ -57,7 +57,6 @@ import type { Detection, FlashResult, ScanBin, SdrDeviceInfo } from "../sdr/type
 import { defaultParams, type WaveKind } from "../sdr/waveforms";
 import { detectAttackHits } from "../sense/attackDetect";
 import { attackListenPlan, classListenPlan, shelfListenPlan } from "../sense/attackListen";
-import { hostPeakWord } from "../sense/hostFpgaSpectrum";
 import { droneSurveyBands, droneSurveyLine } from "../sense/droneBands";
 import { classifyFpgaObserve, type FpgaObserveClass } from "../sense/fpgaObserveClass";
 import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
@@ -5298,16 +5297,6 @@ export const useLegion = create<LegionStore>((set, get) => {
             );
           } else {
             bins = cropPsdBins(gSdr.scanWindow(centerMhz, spanMhz, nBins));
-          }
-          if (get().fpgaArmed && get().sdrGateway && bins.length) {
-            const fsHz = listen?.fsHz ?? spanMhz * 1e6;
-            const word = hostPeakWord(bins, centerMhz, fsHz);
-            if (word !== null) {
-              void hostFpga(
-                { op: "set", reg: "peak_bin", value: word, token: get().fpgaToken },
-                get().sdrGateway,
-              );
-            }
           }
           const now = Date.now();
           const rawAll = clipToAllowlist(detectFromBins(bins, get().scanThresholdDb), get().sdrBands).map((d) => ({
