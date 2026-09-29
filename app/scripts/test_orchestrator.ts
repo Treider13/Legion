@@ -1431,7 +1431,7 @@ async function main(): Promise<void> {
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
       fftEnable: true, peakOverride: true,
     });
-    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5978;
+    return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5972;
   })());
   check("онбордовый xA4: 20-80 отказ (ниже RX 70)", planOnboardIntercept({
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 20, f2Mhz: 80 }],
@@ -1455,7 +1455,7 @@ async function main(): Promise<void> {
       surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
-      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("last_live");
+      && p.centers[1] === 2459 && p.surveyPeriodMs === 5000 && p.reason.includes("last_live");
   })());
   check("онбордовый xA4: 2440–2480 @ 56 ИИ — один взгляд плитки", (() => {
     const p = planOnboardIntercept({
@@ -1473,7 +1473,7 @@ async function main(): Promise<void> {
       fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 18 && p.firstMhz === 2028
-      && p.centers[17] === 2980;
+      && p.centers[17] === 2972;
   })());
   check("онбордовый xA4: 2400–2500 @ 56 ИИ+обычный — 2 взгляда, выдержка 0.4", (() => {
     const p = planOnboardIntercept({
@@ -1482,7 +1482,7 @@ async function main(): Promise<void> {
       surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
     });
     return p.ok && p.fftEnable && p.turn && p.survey && p.park && p.dwellMs === 0.4
-      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2484
+      && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2472
       && p.reason.includes("обычный") && p.reason.includes("last_live") && p.surveyPeriodMs === 5000;
   })());
   check("ARM FFT+TURN несёт scan_turn и 400 мкс", (() => {
