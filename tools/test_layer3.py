@@ -129,6 +129,26 @@ def main() -> int:
     y4b, hold4b = dji.decimate_droneid_block(np.ones(4095, dtype=np.complex64), 61.44e6, hold4)
     check("decim hold склейка", y4b.size == 1024 and hold4b.size == 0, str((y4b.size, hold4b.size)))
 
+    ring_n = int(dji.DRONEID_FS * dji.DRONEID_RING_S)
+    think_gap_s = 0.700
+    tail_s = 1.20
+    ring = np.zeros(ring_n, dtype=np.complex64)
+    ring[: burst.size] = burst
+    tail_off = int(dji.DRONEID_FS * tail_s)
+    check(
+        "хвост 1.20 с влезает в 1.30",
+        tail_off + burst.size <= ring_n,
+        str((tail_off + burst.size, ring_n)),
+    )
+    ring[tail_off : tail_off + burst.size] = burst
+    think1 = dji.analyze_droneid(ring, dji.DRONEID_FS)
+    check("think1 кольцо 1.30 с голова+хвост zc_hit", think1.get("hit") is True, str(think1.get("reason")))
+    think2 = np.zeros(ring_n, dtype=np.complex64)
+    think2_off = int(dji.DRONEID_FS * (tail_s - think_gap_s))
+    think2[think2_off : think2_off + burst.size] = burst
+    got_think2 = dji.analyze_droneid(think2, dji.DRONEID_FS)
+    check("think2 +700 мс хвост zc_hit", got_think2.get("hit") is True, str(got_think2.get("reason")))
+
     n40 = int(round(burst.size * 40.0e6 / dji.DRONEID_FS))
     x40 = dji._fft_resample(burst, n40)
     got40 = dji.analyze_droneid(x40, 40.0e6)
@@ -271,6 +291,20 @@ def main() -> int:
     check("residual 0.2 обеих сеток не уникален", ov_mid["unique"] is False, str(ov_mid))
     ov6 = pdb.classify_fhss_domain(0.6, 915.0)
     check("шаг 0.6 900 не уникален", ov6["unique"] is False, str(ov6))
+    r903, ref903 = pdb.fhss_residual_f0([903.5, 904.1, 904.7, 910.1], 0.6)
+    r902, ref902 = pdb.fhss_residual_f0([902.4, 903.0, 903.6, 909.0], 0.6)
+    ov903 = pdb.classify_fhss_domain(0.6, 910.0, 903.5, 910.1, r903, ref903)
+    ov902 = pdb.classify_fhss_domain(0.6, 910.0, 902.4, 909.0, r902, ref902)
+    check(
+        "0.6 + residual 903.5 = ELRS",
+        ov903["unique"] is True and ov903["family"] == "elrs",
+        str((ov903, r903, ref903)),
+    )
+    check(
+        "0.6 + residual 902.4 = mLRS",
+        ov902["unique"] is True and ov902["family"] == "mlrs",
+        str((ov902, r902, ref902)),
+    )
 
     fs_h = 8.0e6
     hops = [902.165 + i * 0.260 for i in range(8)]

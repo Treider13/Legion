@@ -110,6 +110,16 @@ export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
 
 const SPACING_TOL = 0.18;
 export const FREQCORR_MAX_MHZ = 0.20; // ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
+export const FREQCORR_SX127X_MHZ = 0.10; // Team900 SX127x
+export const FREQCORR_TIE_MHZ = 0.001; // 1 кГц — равные остатки → F0UNC
+
+export function fhssFreqcorrMaxMhz(band: string): number {
+  return band === "p900" ? FREQCORR_SX127X_MHZ : FREQCORR_MAX_MHZ;
+}
+
+export function fhssFreqcorrMaxHz(band: string): number {
+  return Math.round(fhssFreqcorrMaxMhz(band) * 1e6);
+}
 
 function mhzToKhz(x: number): number {
   return Math.round(x * 1000);
@@ -146,6 +156,37 @@ export function fhssCircDistMhz(a: number, b: number, step: number): number {
   if (!(s > 0)) return Math.abs(a - b);
   const d = Math.abs(mhzToKhz(a) - mhzToKhz(b)) % s;
   return Math.min(d, s - d) / 1000;
+}
+
+export function fhssResidualDistMhz(
+  residualMhz: number,
+  f0Mhz: number,
+  stepMhz: number,
+  fRefMhz: number,
+): number {
+  const expect = fhssResidualF0([f0Mhz], stepMhz, fRefMhz).residualMhz;
+  return fhssCircDistMhz(residualMhz, expect, stepMhz);
+}
+
+export function fhssFilterResidual<T>(
+  items: readonly T[],
+  residualMhz: number,
+  fRefMhz: number,
+  band: string,
+  f0Of: (it: T) => number,
+  stepOf: (it: T) => number,
+): T[] {
+  const gate = fhssFreqcorrMaxMhz(band);
+  const scored: { dist: number; it: T }[] = [];
+  for (const it of items) {
+    const step = stepOf(it);
+    if (!(step > 0)) continue;
+    const dist = fhssResidualDistMhz(residualMhz, f0Of(it), step, fRefMhz);
+    if (dist <= gate) scored.push({ dist, it });
+  }
+  if (scored.length === 0) return [...items];
+  const minD = Math.min(...scored.map((s) => s.dist));
+  return scored.filter((s) => s.dist <= minD + FREQCORR_TIE_MHZ).map((s) => s.it);
 }
 
 export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: string; hint: string }[] = [
@@ -190,12 +231,7 @@ export function classifyFhssDomain(
   }
   if (residualMhz != null) {
     const fRef = fRefMhz ?? (freqMhz >= 2390 && freqMhz <= 2510 ? 2400 : freqMhz);
-    const tight = hits.filter((h) => {
-      if (!(h.spacing > 0)) return false;
-      const expect = fhssResidualF0([h.f0], h.spacing, fRef).residualMhz;
-      return fhssCircDistMhz(residualMhz, expect, h.spacing) <= FREQCORR_MAX_MHZ;
-    });
-    if (tight.length > 0) hits = tight;
+    hits = fhssFilterResidual(hits, residualMhz, fRef, band, (h) => h.f0, (h) => h.spacing);
   }
   const families = new Set(hits.map((h) => h.family));
   const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null);

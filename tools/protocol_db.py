@@ -453,6 +453,19 @@ def match_spacing(
 
 
 FREQCORR_MAX_MHZ = 0.20  # ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
+FREQCORR_SX127X_MHZ = 0.10  # Team900 SX127x: 100000/FREQ_STEP
+FREQCORR_TIE_MHZ = 0.001  # 1 кГц — квант _mhz_to_khz; равные остатки → F0UNC
+
+
+def fhss_freqcorr_max_mhz(band: str) -> float:
+    """2.4: 200 кГц. 900: 100 кГц. Сдвиг семей FCC915/mLRS = 100 кГц — один порог их не рвёт."""
+    if band == "p900":
+        return FREQCORR_SX127X_MHZ
+    return FREQCORR_MAX_MHZ
+
+
+def fhss_freqcorr_max_hz(band: str) -> int:
+    return int(round(fhss_freqcorr_max_mhz(band) * 1e6))
 
 
 def _mhz_to_khz(x: float) -> int:
@@ -504,6 +517,57 @@ def fhss_circ_dist_mhz(a: float, b: float, step: float) -> float:
     return min(d, s - d) / 1000.0
 
 
+def fhss_residual_dist_mhz(
+    residual_mhz: float,
+    f0_mhz: float,
+    step_mhz: float,
+    f_ref_mhz: float,
+) -> float:
+    expect, _ = fhss_residual_f0([float(f0_mhz)], float(step_mhz), float(f_ref_mhz))
+    return fhss_circ_dist_mhz(float(residual_mhz), expect, float(step_mhz))
+
+
+def fhss_filter_residual(
+    items: list[Any],
+    residual_mhz: float,
+    f_ref_mhz: float,
+    band: str,
+    *,
+    f0_of: Any,
+    step_of: Any,
+) -> list[Any]:
+    """Окно FreqCorrection, затем ближайший остаток. 903.5 vs 902.4: 0.10 ≤ 0.10/0.20 — без nearest оба живы."""
+    gate = fhss_freqcorr_max_mhz(band)
+    scored: list[tuple[float, Any]] = []
+    for it in items:
+        step = float(step_of(it) or 0.0)
+        if step <= 0:
+            continue
+        dist = fhss_residual_dist_mhz(residual_mhz, float(f0_of(it)), step, f_ref_mhz)
+        if dist <= gate:
+            scored.append((dist, it))
+    if not scored:
+        return list(items)
+    min_d = min(dist for dist, _ in scored)
+    return [it for dist, it in scored if dist <= min_d + FREQCORR_TIE_MHZ]
+
+
+def fhss_filter_residual_domains(
+    domains: list[dict[str, Any]],
+    residual_mhz: float,
+    f_ref_mhz: float,
+    band: str,
+) -> list[dict[str, Any]]:
+    return fhss_filter_residual(
+        domains,
+        residual_mhz,
+        f_ref_mhz,
+        band,
+        f0_of=lambda d: d["f0"],
+        step_of=lambda d: d.get("spacing") or 0.0,
+    )
+
+
 def classify_fhss_domain(
     spacing_mhz: float,
     freq_mhz: float,
@@ -526,20 +590,10 @@ def classify_fhss_domain(
     if not hits:
         return empty
     if residual_mhz is not None and hits:
-        step = float(spacing_mhz)
         f_ref = float(f_ref_mhz) if f_ref_mhz is not None else (
             2400.0 if 2390.0 <= float(freq_mhz) <= 2510.0 else float(f_low or freq_mhz)
         )
-        tight = []
-        for h in hits:
-            d_step = float(h.get("spacing") or 0.0)
-            if d_step <= 0:
-                continue
-            expect, _ = fhss_residual_f0([float(h["f0"])], d_step, f_ref)
-            if fhss_circ_dist_mhz(float(residual_mhz), expect, d_step) <= FREQCORR_MAX_MHZ:
-                tight.append(h)
-        if tight:
-            hits = tight
+        hits = fhss_filter_residual_domains(hits, float(residual_mhz), f_ref, band)
     families = {str(h["family"]) for h in hits}
     unique = len(families) == 1 and (all(h.get("unique") for h in hits) or residual_mhz is not None)
     labels = ", ".join(sorted({str(h["label"]) for h in hits}))

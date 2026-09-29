@@ -3,7 +3,8 @@
 
 Слух хоста (hop-set / ZC / analog comb) → поля 0x51–0x59.
 Пустой эфир не подставляет ELRS 2400.4. 5.8 analog — без умной сетки.
-FreqCorrection: |shift|≤200 кГц @ 2.4 (ExpressLRS FHSS.cpp).
+FreqCorrection: |shift|≤200 кГц @ 2.4, ≤100 кГц @ 900 (ExpressLRS FHSS.h).
+900 FCC915 903.5 vs mLRS 902.4: nearest residual, иначе оба ≤ 200/100 кГц.
 Порог канала на плате — occupancy (Sandia gr-fhss_utils / muccc gr-iridium),
 не max-mag.
 """
@@ -13,9 +14,10 @@ from typing import Any
 
 from protocol_db import (
     ANALOG_CHANNELS,
-    FREQCORR_MAX_MHZ,
     FHSS_DOMAINS,
-    fhss_circ_dist_mhz,
+    band_of,
+    fhss_filter_residual,
+    fhss_freqcorr_max_hz,
     fhss_residual_f0,
 )
 
@@ -152,7 +154,8 @@ def _hop_match(hops: list[float], domain: dict[str, Any]) -> dict[str, int] | No
         return None
     shifts.sort()
     shift = shifts[len(shifts) // 2]
-    if domain.get("band") == "s24" and abs(shift) > FREQCORR_MAX_HZ:
+    band = str(domain.get("band") or "")
+    if band in ("s24", "p900") and abs(shift) > fhss_freqcorr_max_hz(band):
         return None
     return {"shift_hz": int(round(shift)), "hits": len(shifts)}
 
@@ -273,22 +276,22 @@ def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
         scored.sort(key=lambda s: (-s["hits"], abs(s["shift_hz"])))
         if scored:
             residual, f_ref = fhss_residual_f0(hops, float(scored[0]["d"]["spacing"]))
-            tight = []
-            for s in scored:
-                d_step = float(s["d"].get("spacing") or 0.0)
-                if d_step <= 0:
-                    continue
-                expect, _ = fhss_residual_f0([float(s["d"]["f0"])], d_step, f_ref)
-                if fhss_circ_dist_mhz(residual, expect, d_step) <= FREQCORR_MAX_MHZ:
-                    tight.append(s)
-            if tight:
-                scored = tight
+            mid = hops[len(hops) // 2] if len(hops) < 3 else sorted(hops)[len(hops) // 2]
+            scored = fhss_filter_residual(
+                scored,
+                residual,
+                f_ref,
+                band_of(mid),
+                f0_of=lambda s: s["d"]["f0"],
+                step_of=lambda s: s["d"].get("spacing") or 0.0,
+            )
             best = scored[0]
             families = {s["d"]["family"] for s in scored if s["hits"] == best["hits"]}
             unconf = len(families) > 1
             s24 = best["d"].get("band") == "s24"
             elrs_like = s24 and abs(float(best["d"]["spacing"]) - 1.0) <= 0.05
-            fcorr = s24 and 0 < abs(best["shift_hz"]) <= FREQCORR_MAX_HZ
+            gate_hz = fhss_freqcorr_max_hz(str(best["d"].get("band") or ""))
+            fcorr = best["d"].get("band") in ("s24", "p900") and 0 < abs(best["shift_hz"]) <= gate_hz
             hop_span = max(hops) - min(hops)
             cropped = win_lim or hop_span > 56.5
             return _finish({

@@ -1,20 +1,22 @@
 // ============================================================================
 // LEGION — карточка сетки умной атаки (слух хоста → 0x51–0x59).
 // Не подставляет ELRS 2400.4 на пустом эфире. 5.8: ZC/OFDM vs analog.
-// FreqCorrection: |shift|≤200 кГц @ 2.4 (ExpressLRS FHSS.cpp).
+// FreqCorrection: |shift|≤200 кГц @ 2.4, ≤100 кГц @ 900 (ExpressLRS FHSS.h).
+// 900 FCC915 903.5 vs mLRS 902.4: nearest residual, иначе оба ≤ порога.
 // Occupancy на плате: CH_PWR vs порог + hyst, как Sandia gr-fhss_utils /
 // muccc gr-iridium fft_burst_tagger (бин vs пол, не max-mag).
 // ============================================================================
 import {
-  FREQCORR_MAX_MHZ,
   FHSS_DOMAINS,
   XA4_IBW_MHZ,
-  fhssCircDistMhz,
+  fhssFilterResidual,
+  fhssFreqcorrMaxHz,
   fhssResidualF0,
   nearestAnalogChannel,
   type FhssDomain,
   type FhssLook,
 } from "./protocolDb";
+import { bandBucket } from "./attackAtlas";
 import type { AttackLook } from "./attackLook";
 import type { AllowBand } from "../policy/allowlist";
 
@@ -189,7 +191,7 @@ function hopMatch(hops: readonly number[], d: FhssDomain): { shiftHz: number; hi
   if (shifts.length < 2) return null;
   shifts.sort((a, b) => a - b);
   const shiftHz = shifts[Math.floor(shifts.length / 2)]!;
-  if (d.band === "s24" && Math.abs(shiftHz) > LEGION_FREQCORR_MAX_HZ) return null;
+  if ((d.band === "s24" || d.band === "p900") && Math.abs(shiftHz) > fhssFreqcorrMaxHz(d.band)) return null;
   return { shiftHz: Math.round(shiftHz), hits: shifts.length };
 }
 
@@ -346,19 +348,24 @@ export function matchSmartGrid(i: SmartGridInput): SmartGridCard {
     scored.sort((a, b) => b.hits - a.hits || Math.abs(a.shiftHz) - Math.abs(b.shiftHz));
     if (scored.length > 0) {
       const { residualMhz, fRefMhz } = fhssResidualF0(hops, scored[0]!.d.spacing);
-      const tight = scored.filter((s) => {
-        if (!(s.d.spacing > 0)) return false;
-        const expect = fhssResidualF0([s.d.f0], s.d.spacing, fRefMhz).residualMhz;
-        return fhssCircDistMhz(residualMhz, expect, s.d.spacing) <= FREQCORR_MAX_MHZ;
-      });
-      if (tight.length > 0) scored = tight;
+      const mid = hops.length < 3 ? hops[Math.floor(hops.length / 2)]! : [...hops].sort((a, b) => a - b)[Math.floor(hops.length / 2)]!;
+      scored = fhssFilterResidual(
+        scored,
+        residualMhz,
+        fRefMhz,
+        bandBucket(mid),
+        (s) => s.d.f0,
+        (s) => s.d.spacing,
+      );
       const best = scored[0]!;
       const families = new Set(scored.filter((s) => s.hits === best.hits).map((s) => s.d.family));
       const unconf = families.size > 1;
       const s24 = best.d.band === "s24";
       const ism8 = s24 && best.d.spacing >= 9.5;
       const elrsLike = s24 && Math.abs(best.d.spacing - 1) <= 0.05;
-      const fcorr = s24 && Math.abs(best.shiftHz) > 0 && Math.abs(best.shiftHz) <= LEGION_FREQCORR_MAX_HZ;
+      const gateHz = fhssFreqcorrMaxHz(best.d.band);
+      const fcorr = (best.d.band === "s24" || best.d.band === "p900")
+        && Math.abs(best.shiftHz) > 0 && Math.abs(best.shiftHz) <= gateHz;
       return finish({
         analog: false,
         reason: unconf

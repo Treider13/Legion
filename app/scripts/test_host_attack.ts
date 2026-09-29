@@ -13,7 +13,7 @@ import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { droneidPlainLines, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
-import { classifyFhssDomain, droneidModel, droneidState, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
+import { classifyFhssDomain, droneidModel, droneidState, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -509,6 +509,14 @@ async function main(): Promise<void> {
   );
   check("шаг 1 МГц 2.4 не уникален", classifyFhssDomain(1.0, "s24").unique === false);
   check("шаг 0.6 900 не уникален", classifyFhssDomain(0.6, "p900").unique === false);
+  {
+    const a = fhssResidualF0([903.5, 904.1, 904.7, 910.1], 0.6);
+    const b = fhssResidualF0([902.4, 903.0, 903.6, 909.0], 0.6);
+    const elrs = classifyFhssDomain(0.6, "p900", 910, a.residualMhz, a.fRefMhz);
+    const mlrs = classifyFhssDomain(0.6, "p900", 910, b.residualMhz, b.fRefMhz);
+    check("0.6 + residual 903.5 = ELRS", elrs.unique && elrs.id === "elrs", JSON.stringify(elrs));
+    check("0.6 + residual 902.4 = mLRS", mlrs.unique && mlrs.id === "mlrs", JSON.stringify(mlrs));
+  }
   check("канал R5", nearestAnalogChannel(5806)?.id === "R5");
   check("канал A4 на 5805", nearestAnalogChannel(5805)?.id === "A4");
   check("2.4 не analog-канал", nearestAnalogChannel(2442) == null);
