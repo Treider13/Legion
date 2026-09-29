@@ -167,16 +167,24 @@ cat > "$HOME/legion-build.sh" << EOF
 #!/bin/bash
 set -euo pipefail
 cd "$REPO/fpga/vendor/bladerf/hdl/quartus"
-exec ./build_bladerf.sh -k -b bladeRF-micro -s A4 -r legion
+exec ./build_bladerf.sh -b bladeRF-micro -s A4 -r legion
 EOF
 chmod +x "$HOME/legion-build.sh"
 ~/intelFPGA_lite/23.1std/nios2eds/nios2_command_shell.sh "$HOME/legion-build.sh"
 ```
 
-`-k` продолжает уже созданный каталог `work` (qsys и BSP). Без `-k` сборка
-стирает его и начинает сначала. Образ: `hdl/quartus/legionxA4-<дата>/legionxA4.rbf`.
+Первую сборку после обновления исходников выполняйте без `-k`: Qsys, BSP и
+объекты Nios должны получить актуальный размер RAM и флаги линковки. `-k`
+допустим только для последующих инкрементальных HDL-сборок с неизменными
+Qsys/BSP/Makefile. Без `-k` пересоздаётся только генерируемый каталог `work`;
+исходники не удаляются. Образ:
+`hdl/quartus/legionxA4-<дата>/legionxA4.rbf`.
 xA4 теряет образ в RAM при отключении USB. `-l` поднимает его сразу, `-L`
 кладёт в autoload.
+
+Для xA4 Nios RAM должна оставаться `131072` байт в `platform.conf`.
+Увеличение до 192/256 КиБ отнимает M10K у FIFO и линий задержки; размер ELF
+снижается секционированием и `--gc-sections`, а не расширением Qsys RAM.
 
 Запись в плату — из **desktop** LEGION (Tauri: `npm run tauri dev` / собранное
 приложение), вкладка **КАСТОМ FPGA**: СОБРАТЬ (Quartus на этом ПК) → ПРОШИТЬ
