@@ -453,6 +453,10 @@ async function main(): Promise<void> {
   check("ISM 100 МГц / 56 МГц → 2 стойки, не 5", hop56.length === 2);
   check("ICE9 park 2400-2487 → один центр 2443.5",
     planParkCenters([{ f1Mhz: 2400, f2Mhz: 2487 }]).join(",") === "2443.5");
+  // Произвольный коридор с нечётной кГц-суммой (LPD433 на 25-кГц сетке): float
+  // (f1+f2)/2 = 433.92499999999995, целые кГц дают 433.924 — байт-в-байт с NIOS.
+  check("ICE9 park 433.075-434.775 → 433.924 (целые кГц, не float)",
+    planParkCenters([{ f1Mhz: 433.075, f2Mhz: 434.775 }]).join(",") === "433.924");
   check(
     "полоса ≤ BW → одна стойка (ice9 park)",
     planCenters([{ f1Mhz: 2440, f2Mhz: 2448 }], 56).length === 1,

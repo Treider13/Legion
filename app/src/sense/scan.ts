@@ -184,8 +184,13 @@ export class AllowlistScanner {
 export function planParkCenters(bands: readonly AllowBand[]): number[] {
   const out: number[] = [];
   for (const b of bands) {
-    if (b.f2Mhz < b.f1Mhz) continue;
-    out.push((b.f1Mhz + b.f2Mhz) / 2);
+    const f1 = Math.round(b.f1Mhz * 1000);
+    const f2 = Math.round(b.f2Mhz * 1000);
+    if (f2 < f1) continue;
+    // Середина в целых кГц — байт-в-байт с NIOS legion_center_in (ветка n==1):
+    // (f1k/2)+(f2k/2). float (f1+f2)/2 на нечётной кГц-сумме уходит на 1 кГц
+    // (напр. LPD433 433.075..434.775) и копит артефакты (…2450.1499999996).
+    out.push((Math.floor(f1 / 2) + Math.floor(f2 / 2)) / 1000);
   }
   return out;
 }
