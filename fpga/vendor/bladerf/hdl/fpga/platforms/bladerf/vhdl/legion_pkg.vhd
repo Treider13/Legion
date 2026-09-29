@@ -29,6 +29,13 @@ package legion_pkg is
     -- берут одну величину: FTW = bin≪24 = FTW·fs/2^32.
     function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned;
 
+    -- Слот 0..7 для бина FFT. Тот же round, что legion_bin_to_khz в Nios:
+    -- off = trunc_toward_0((k·fs ± 128000) / 256000), затем (f-2400000)/10000.
+    -- Деление константой здесь — сдвиг и умножение, не оператор "/":
+    -- Quartus собирает "/" в lpm_divide (в fit xA4 это тысячи ALM).
+    function legion_ch_slot(bin : natural; fs : unsigned(31 downto 0);
+                            lo : unsigned(31 downto 0)) return integer;
+
     -- Адреса регистров (адрес на отдельном PIO, данные 32 бита на wdata-PIO)
     -- CTRL: bit0=ARM, bits3:1=MODE, bit4=WD_EN
     constant LEGION_REG_CTRL       : natural := 16#00#;
@@ -229,5 +236,87 @@ package body legion_pkg is
     function legion_bin_ftw(bin8 : std_logic_vector(7 downto 0)) return unsigned is
     begin
         return unsigned(shift_left(resize(signed(bin8), 32), 24));
+    end function;
+
+    function legion_ch_slot(bin : natural; fs : unsigned(31 downto 0);
+                            lo : unsigned(31 downto 0)) return integer is
+        -- 256000 = 2048 · 125. Для деления к нулю
+        -- trunc(n/(a·b)) = trunc(trunc(n/a)/b) при a>0, b>0.
+        -- trunc(n/2048) — арифметический сдвиг; у отрицательных некратных
+        -- floor на 1 меньше trunc, поэтому +1, если младшие 11 бит не нули.
+        -- trunc(t/125) для |t| <= 134217790:
+        -- floor(u · 68719477 / 2^33) = u/125. Константа проверена на всём
+        -- диапазоне (концы каждого остатка 0..124). 68719477 < 2^27.
+        constant DIV125_MAG : unsigned(26 downto 0) := to_unsigned(68719477, 27);
+        constant DIV125_SH  : natural := 33;
+        variable sb      : integer;
+        variable prod    : signed(47 downto 0);
+        variable num     : signed(47 downto 0);
+        variable shifted : signed(47 downto 0);
+        variable t       : signed(31 downto 0);
+        variable mag_u   : unsigned(31 downto 0);
+        variable wide    : unsigned(58 downto 0);
+        variable quot    : signed(31 downto 0);
+        variable off_khz : signed(31 downto 0);
+        variable f_khz   : integer;
+        variable delta   : integer;
+    begin
+        if fs = 0 or lo = 0 then
+            return to_integer(shift_right(to_unsigned(bin, 8), 5));
+        end if;
+        if bin < 128 then
+            sb := bin;
+        else
+            sb := bin - 256;
+        end if;
+        -- Знаковый взгляд на биты fs — как было в ch_slot. Для fs < 2^31
+        -- это то же число, что uint32 в legion_bin_to_khz.
+        prod := to_signed(sb, 16) * signed(resize(fs, 32));
+        if prod >= 0 then
+            num := prod + to_signed(128000, 48);
+        else
+            num := prod - to_signed(128000, 48);
+        end if;
+        shifted := shift_right(num, 11);
+        if num < 0 and num(10 downto 0) /= 0 then
+            shifted := shifted + 1;
+        end if;
+        t := resize(shifted, 32);
+        if t < 0 then
+            mag_u := unsigned(-t);
+        else
+            mag_u := unsigned(t);
+        end if;
+        wide := mag_u * DIV125_MAG;
+        quot := signed(resize(shift_right(wide, DIV125_SH), 32));
+        if t < 0 then
+            quot := -quot;
+        end if;
+        off_khz := quot;
+        f_khz := to_integer(signed(resize(lo, 32)) + off_khz);
+        if f_khz < LEGION_OCUSYNC_F0_KHZ or
+           f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then
+            return -1;
+        end if;
+        -- f попадает в [2400000, 2480000), delta = 0..79999.
+        -- Пороги совпадают с trunc(delta/10000) на этом отрезке.
+        delta := f_khz - LEGION_OCUSYNC_F0_KHZ;
+        if delta >= 70000 then
+            return 7;
+        elsif delta >= 60000 then
+            return 6;
+        elsif delta >= 50000 then
+            return 5;
+        elsif delta >= 40000 then
+            return 4;
+        elsif delta >= 30000 then
+            return 3;
+        elsif delta >= 20000 then
+            return 2;
+        elsif delta >= 10000 then
+            return 1;
+        else
+            return 0;
+        end if;
     end function;
 end package body;
