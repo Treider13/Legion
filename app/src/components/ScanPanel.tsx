@@ -5,6 +5,8 @@ import {
   FPGA_AIR_MODE_RU_CAPS,
   FPGA_AI_OPTION_RU,
   FPGA_AIR_MODE_START_RU,
+  FPGA_AIR_MODE_ACCEPT_RU,
+  SMART_PEAK_OVERRIDE_RU,
   HOST_ATTACK_MODE_RU_CAPS,
   fpgaInnerDispatch,
   isFpgaAirLive,
@@ -15,7 +17,7 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { airTractParams, fpgaAirSupported, fpgaObserveLine, fpgaSurveyPeriodClamp, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, FPGA_SURVEY_GONE_MS, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
@@ -50,10 +52,11 @@ export function ScanPanel() {
   const fpgaAir = isFpgaAirPattern(s.scanPattern);
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
+  const listenLive = s.smartListenLive;
   const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
-  const classLive = detectorListens(s.scanPattern) && !taskLive && !airLive;
+  const classLive = (detectorListens(s.scanPattern) || listenLive) && !taskLive && !airLive;
   const interceptSetup = fpgaAir && !taskLive && !airLive;
-  const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed;
+  const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed || listenLive;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
     ? s.sdrBands
@@ -95,7 +98,7 @@ export function ScanPanel() {
         {taskLive
           ? `Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан. Стоп — там или кнопкой ниже.`
           : fpgaAir
-            ? `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. ИИ: глухой обзор коридора, окно на всплеск, внутри — обычный или приоритет с выдержкой, затем снова обзор. Гейт в текущем взгляде — микросекунды. USB не в круге «увидел → усилитель». Ноутбук — коридор, два времени, Старт/Стоп и наблюдение. Порог — поле ниже (не полка USB-IQ).`
+            ? `${FPGA_AIR_MODE_RU}: Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает карточку и ARM. Пустая / аналог 5.8 / x40+C58 — ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Гейт в текущем взгляде — микросекунды. Живой канал last_live ${FPGA_SURVEY_GONE_MS} мс, не таймер SCAN_SURVEY. USB не в круге «увидел → усилитель».`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
               : `${HOST_ATTACK_MODE_RU_CAPS}: без рамки слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Рамка мышкой — коридор (может быть шире ${ATTACK_TX_MAX_MHZ} МГц; одно окно USB FD ≤${ATTACK_TX_MAX_MHZ}). Полка — горб на найденном, тип волны — чем заливаем полку. Выдержка — на каждой засечке, сессию гасит только Стоп передачу. Пунктир — предложение, не рамка. Без рамки — авто-handoff живой засечки той же полкой. Хост-скан и FPGA вместе не работают (один USB).`}
@@ -226,17 +229,13 @@ export function ScanPanel() {
                 disabled={busy || s.fpgaBusy}
               />
             </label>
-            <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
-              СКАНИРОВАНИЕ мс
+            <label title="NIOS RESURVEY: occupancy текущего канала last_live 1.5 с. Не таймер SCAN_SURVEY_US.">
+              ЖИВОЙ КАНАЛ
               <input
-                aria-label="Период сканирования коридора"
-                type="number"
-                min={0.1}
-                max={60000}
-                step={0.1}
-                value={s.fpgaSurveyPeriodMs}
-                onChange={(e) => s.setFpgaSurveyPeriodMs(e.target.value)}
-                disabled={busy || s.fpgaBusy}
+                aria-label="Occupancy last_live, не таймер сканирования"
+                value={`${FPGA_SURVEY_GONE_MS} мс last_live`}
+                readOnly
+                disabled
               />
             </label>
             <label title="Живая линия задержки RX→TX после CDC. Не walk-off снимок. 0 — обход. 4096 сэмплов @ 2 MSPS ≈ 2 мс.">
@@ -262,18 +261,29 @@ export function ScanPanel() {
           </>
         )}
         {interceptSetup && (
-          <label>
-            В ОКНЕ
-            <select
-              aria-label="Обычный или приоритет внутри окна"
-              value={fpgaInnerDispatch(s.autoDispatch)}
-              onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
-              disabled={busy}
-            >
-              <option value="turn">{autoDispatchOptionRu("turn")}</option>
-              <option value="priority">{autoDispatchOptionRu("priority")}</option>
-            </select>
-          </label>
+          <>
+            <label>
+              В ОКНЕ
+              <select
+                aria-label="Обычный или приоритет внутри окна"
+                value={fpgaInnerDispatch(s.autoDispatch)}
+                onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
+                disabled={busy}
+              >
+                <option value="turn">{autoDispatchOptionRu("turn")}</option>
+                <option value="priority">{autoDispatchOptionRu("priority")}</option>
+              </select>
+            </label>
+            <label className="check-row" title="Пустая карточка: ARM как пик, не умная. Аналог 5.8 и x40+C58 всё равно отказ.">
+              <input
+                type="checkbox"
+                checked={s.smartPeakOverride}
+                onChange={(e) => s.setSmartPeakOverride(e.target.checked)}
+                disabled={s.fpgaArmed || s.fpgaBusy}
+              />
+              {SMART_PEAK_OVERRIDE_RU}
+            </label>
+          </>
         )}
         {auto && (
           <label>
@@ -391,11 +401,11 @@ export function ScanPanel() {
         {taskLive
           ? `FPGA-задача с вкладки ТИП СИГНАЛА — не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан`
           : fpgaAir
-          ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. Ноутбук не считает спектр и не ставит TX — только наблюдает. ${FPGA_AI_OPTION_RU}. ${
+          ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. ${FPGA_AI_OPTION_RU}. ${
               fpgaInnerDispatch(s.autoDispatch) === "turn"
-                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал, сканирование каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
-                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс, сканирование каждые ${fpgaSurveyPeriodClamp(parseLocaleNumber(s.fpgaSurveyPeriodMs))} мс`
-            }`
+                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал · last_live ${FPGA_SURVEY_GONE_MS} мс`
+                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс · last_live ${FPGA_SURVEY_GONE_MS} мс`
+            }${s.smartGridCard ? ` · ${s.smartGridCard.reason}` : ""}`
           : auto
             ? s.attackPaint
               ? "Атака: рамка — где ищем. Полка и волна — что уходит на найденное. ПЕРЕДАТЬ жмёте вы."
@@ -501,15 +511,39 @@ export function ScanPanel() {
             <button className="btn-danger" onClick={() => void s.stopFpgaAir()}>
               СТОП (отмена старта)
             </button>
+          ) : listenLive ? (
+            <>
+              <button className="btn-danger" onClick={() => s.stopScan()}>
+                СТОП СЛУХ
+              </button>
+              <button
+                className="btn-primary"
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
+                onClick={() => void s.acceptSmartGridAndArm({ peak: s.smartPeakOverride })}
+                title="Заморозить карточку и ARM. Пустая сетка — только с пиком без сетки."
+              >
+                {FPGA_AIR_MODE_ACCEPT_RU}
+              </button>
+            </>
           ) : (
-            <button
-              className="btn-primary"
-              disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
-              onClick={() => void s.startScan()}
-              title="Плата смотрит эфир сама и открывает TX. Ноутбук — рубильник."
-            >
-              {FPGA_AIR_MODE_START_RU}
-            </button>
+            <>
+              <button
+                className="btn-primary"
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
+                onClick={() => void s.startScan()}
+                title="Слух Soapy, карточка живая, TX выкл. ARM только после Принять."
+              >
+                {FPGA_AIR_MODE_START_RU}
+              </button>
+              <button
+                className="btn-ghost"
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
+                onClick={() => void s.acceptSmartGridAndArm({ peak: s.smartPeakOverride })}
+                title="Принять текущую карточку без нового слуха, если hops уже есть."
+              >
+                {FPGA_AIR_MODE_ACCEPT_RU}
+              </button>
+            </>
           )
         ) : (
           <>
@@ -616,7 +650,7 @@ export function ScanPanel() {
               ? s.lastCueReason ||
                 (!fpgaAirSupported(s.sdrId)
                   ? `${FPGA_AIR_MODE_RU}: выберите bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR`
-                  : `${FPGA_AIR_MODE_RU}: СТАРТ — плата ищет всплеск и ставит окно, ноутбук наблюдает`)
+                  : `${FPGA_AIR_MODE_RU}: СТАРТ — слух Soapy, Принять — ARM${s.smartGridCard ? ` · ${s.smartGridCard.reason}` : ""}`)
               : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>
       {airLive && s.fpgaStatus && (
@@ -649,7 +683,7 @@ export function ScanPanel() {
           fpga={airLive ? s.fpgaClass : null}
         />
       )}
-      {auto && (
+      {(auto || listenLive) && (
         <>
           <table className="det-table">
             <thead>

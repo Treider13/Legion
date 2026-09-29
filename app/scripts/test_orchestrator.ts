@@ -35,7 +35,7 @@ import {
   waveAmpQ15,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, peekSmartAccepted, peekSmartListen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -51,6 +51,7 @@ import {
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_TURN_DWELL_MIN_MS,
   FPGA_SURVEY_PERIOD_DEFAULT_MS,
+  FPGA_SURVEY_GONE_MS,
   fpgaSurveyPeriodClamp,
   fpgaSurveyPeriodUs,
   FPGA_OBSERVE_MS,
@@ -99,6 +100,8 @@ import {
   GRID_KIND_OFDM,
   GRID_KIND_ZC,
   LEGION_AIM_NONE,
+  GRID_KIND_ANALOG,
+  SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
   emptySmartGrid,
@@ -124,7 +127,7 @@ import {
   soloTuneCmd,
   waveFillsSoloWindow,
 } from "../src/sense/fpgaSoloWalk";
-import { cinemaIsLive, runCinemaStop, runSmartStart } from "../src/components/cinema/run";
+import { cinemaIsLive, runCinemaStop, runSmartAccept, runSmartStart } from "../src/components/cinema/run";
 import { shelfFsHz } from "../src/sense/txShelf";
 import {
   applyLook,
@@ -155,7 +158,10 @@ import {
   autoDispatchLabelRu,
   autoDispatchOptionRu,
   FPGA_AI_LABEL_RU,
+  FPGA_AIR_MODE_ACCEPT_RU,
+  SMART_ARM_NEED_ACCEPT_RU,
   fpgaInnerDispatch,
+  hostListenActive,
   autoForwardAllowed,
   bandListFor,
   isFpgaAirLive,
@@ -564,6 +570,12 @@ async function main(): Promise<void> {
   check("planSdrWork FPGA: плата смотрит эфир, хост-сканер не в круге",
     fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
+  check("planSdrWork FPGA: две фазы Старт/Принять", fpgaWork.reason.includes("Принять") && fpgaWork.reason.includes("last_live"));
+  check("hostListenActive: fpga только в фазе слуха",
+    !hostListenActive("fpga") && hostListenActive("fpga", true) && hostListenActive("auto"));
+  check("ПРИНЯТЬ подпись", FPGA_AIR_MODE_ACCEPT_RU === "ПРИНЯТЬ");
+  check("ARM без Принять — строка", SMART_ARM_NEED_ACCEPT_RU.includes("Принять"));
+  check("occupancy last_live 1.5 с, не SCAN_SURVEY", FPGA_SURVEY_GONE_MS === 1500);
   check("СКАНИРОВАТЬ в качании — слух классов", scanRefusedReason("sweep") === null);
   check("TX-сканер по-прежнему только Атака", scannerParticipates("sweep") === false);
   check(
@@ -1394,13 +1406,13 @@ async function main(): Promise<void> {
   check("онбордовый xA4: коридор 5000-5800 (выше ADF 4400)", planOnboardIntercept({
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5000, f2Mhz: 5800 }],
     loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-    fftEnable: true,
+    fftEnable: true, peakOverride: true,
   }).ok === true);
   check("онбордовый xA4: 70-6000 @ 56 МГц — 106 взглядов", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 70, f2Mhz: 6000 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-      fftEnable: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5978;
   })());
@@ -1413,25 +1425,26 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-      fftEnable: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.fftEnable && p.survey && p.park && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
-      && p.reason.includes("ИИ") && p.reason.includes("сканирование") && !p.reason.includes("не шагает");
+      && p.reason.includes("ИИ") && p.reason.includes("last_live") && !p.reason.includes("не шагает")
+      && !p.reason.includes("сканирование каждые");
   })());
   check("онбордовый xA4: 2400–2487 @ 56 ИИ — SURVEY+PARK (два взгляда)", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2487 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
-      surveyPeriodMs: 5000, fftEnable: true,
+      surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
-      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("сканирование");
+      && p.centers[1] === 2484 && p.surveyPeriodMs === 5000 && p.reason.includes("last_live");
   })());
   check("онбордовый xA4: 2440–2480 @ 56 ИИ — один взгляд плитки", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2440, f2Mhz: 2480 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
-      fftEnable: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.park && p.survey && p.centers.length === 1 && p.firstMhz === 2460
       && p.reason.includes("ИИ");
@@ -1440,7 +1453,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2000, f2Mhz: 3000 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 3000,
-      fftEnable: true,
+      fftEnable: true, peakOverride: true,
     });
     return p.ok && p.survey && p.park && p.centers.length === 18 && p.firstMhz === 2028
       && p.centers[17] === 2980;
@@ -1449,11 +1462,11 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: true, dwellMs: 0.4,
-      surveyPeriodMs: 5000, fftEnable: true,
+      surveyPeriodMs: 5000, fftEnable: true, peakOverride: true,
     });
     return p.ok && p.fftEnable && p.turn && p.survey && p.park && p.dwellMs === 0.4
       && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2484
-      && p.reason.includes("обычный") && p.reason.includes("5000");
+      && p.reason.includes("обычный") && p.reason.includes("last_live") && p.surveyPeriodMs === 5000;
   })());
   check("ARM FFT+TURN несёт scan_turn и 400 мкс", (() => {
     const c = fpgaArmCmd("lb_gated", {
@@ -1570,13 +1583,36 @@ async function main(): Promise<void> {
     });
     return !p.ok && p.reason.includes("5.8");
   })());
-  check("план без слуха: сетка не собрана", (() => {
+  check("план без слуха: сетка не собрана — ARM нет", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
       fftEnable: true,
     });
-    return p.ok && p.grid.empty && p.reason.includes(SMART_GRID_EMPTY_RU);
+    return !p.ok && p.grid.empty && p.reason.includes(SMART_GRID_EMPTY_RU);
+  })());
+  check("план пустой + пик-override: не умная, но ok", (() => {
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true, peakOverride: true,
+    });
+    return p.ok && p.grid.empty && !p.grid.smart && p.reason.includes("last_live");
+  })());
+  check("план аналог 5.8: отказ даже с пик-override", (() => {
+    const analog = {
+      ...emptySmartGrid(SMART_GRID_ANALOG_RU),
+      analog: true,
+      empty: true,
+      smart: false,
+      kind: GRID_KIND_ANALOG,
+    };
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: analog, peakOverride: true,
+    });
+    return !p.ok && p.grid.analog && p.reason.includes(SMART_GRID_ANALOG_RU);
   })());
   check("ARM FFT несёт сетку и 0xFF", (() => {
     const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4] });
@@ -1993,6 +2029,7 @@ async function main(): Promise<void> {
   check("cinema idle не live", cinemaIsLive(idleLive) === false);
   check("cinema live при capture (busy, не armed)", cinemaIsLive({ ...idleLive, fpgaBusy: true }) === true);
   check("cinema live при ARM", cinemaIsLive({ ...idleLive, fpgaArmed: true }) === true);
+  check("cinema live при слухе умной атаки", cinemaIsLive({ ...idleLive, smartListenLive: true }) === true);
 
   // --- Кино: автоматический перехват (FPGA+сканер из мастера, не лаборатория) ---
   useLegion.getState().clearSdrBands();
@@ -2005,10 +2042,29 @@ async function main(): Promise<void> {
     windowMhz: "5", dwellMs: "1500", dispatch: "priority",
   });
   const autoSt = useLegion.getState();
-  check("кино перехват: эмуляция не врёт скан-фазу и не ARM",
-    autoOk === true && autoSt.scanRunning === false && autoSt.fpgaArmed === false);
-  check("кино перехват: scanPattern=fpga, не fpgaArm",
-    autoSt.scanPattern === "fpga" && autoSt.fpgaArmed === false);
+  check("кино перехват: Старт = слух, не ARM",
+    autoOk === true && autoSt.scanRunning === true && autoSt.smartListenLive === true && autoSt.fpgaArmed === false
+    && Array.isArray(peekSmartListen().hopsMhz) && peekSmartAccepted() === null);
+  check("кино перехват: scanPattern=fpga, карточка не принята",
+    autoSt.scanPattern === "fpga" && autoSt.smartGridAccepted === false && autoSt.fpgaArmed === false);
+  const denyEmpty = await runSmartAccept();
+  check("кино Принять пустую сетку — отказ, ARM нет",
+    denyEmpty === false && useLegion.getState().fpgaArmed === false && peekSmartAccepted() === null);
+  const peakAcc = await runSmartAccept({ peak: true });
+  check("кино Принять пик: карточка принята, эмуляция ARM нет",
+    peakAcc === true && useLegion.getState().smartGridAccepted === true && useLegion.getState().fpgaArmed === false
+    && peekSmartAccepted() != null);
+  await useLegion.getState().stopFpgaAir();
+  useLegion.setState({ sdrId: "bladerf-x40", sdrBands: [{ f1Mhz: 5725, f2Mhz: 5850 }] });
+  useLegion.getState().setScanPattern("fpga");
+  const x40c58 = await runSmartAccept({ peak: true });
+  check("кино x40+C58 даже с пиком — отказ, ARM нет",
+    x40c58 === false && useLegion.getState().fpgaArmed === false && peekSmartAccepted() === null);
+  useLegion.setState({ sdrId: "bladerf-micro-xa4" });
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().setSdrAllowField("sdrF1", "2400");
+  useLegion.getState().setSdrAllowField("sdrF2", "2500");
+  useLegion.getState().addSdrBand();
   check("кино перехват: стратегия приоритет записана", autoSt.autoDispatch === "priority");
   check("кино умная атака ставит амплитуду 0.9", autoSt.signalParams.amp === WAVE_AMP_MAX);
   check("0.9 Q15 = 29491 как в FPGA", waveAmpQ15(WAVE_AMP_MAX) === 29491);
@@ -2324,8 +2380,8 @@ async function main(): Promise<void> {
     muxSrc.includes("lb_amp_q15(nco_i)") &&
     muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
     !muxSrc.includes("lb_always остаётся 1:1"));
-  check("cinema auto: эмуляция не ждёт scanRunning",
-    autoBlock.includes("sdrEmulation") && autoBlock.includes("return true"));
+  check("cinema auto: ждёт слух, ARM без Принять — отказ",
+    autoBlock.includes("smartListenLive") && autoBlock.includes("st.fpgaArmed") && autoBlock.includes("return false"));
   check("cinema auto: канал, выдержка и период сканирования пишутся в стор",
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)")
     && runSrc.includes("setFpgaSurveyPeriodMs(opts.surveyPeriodMs)"));
@@ -2343,6 +2399,10 @@ async function main(): Promise<void> {
   check("антенна RX1, усилитель TX1 (не RX1 на оба)",
     scanSrc.includes("RX1 / RX SMA") && scanSrc.includes("TX1 / TX SMA") &&
     gateSrc.includes("TX1 / TX SMA"));
+  check("UI не врёт «сканирование каждые»",
+    !gateSrc.includes("сканирование каждые") && !scanSrc.includes("сканирование каждые")
+    && gateSrc.includes("last_live") && scanSrc.includes("last_live")
+    && scanSrc.includes("FPGA_AIR_MODE_ACCEPT_RU") && dockSrc.includes("runSmartAccept"));
   const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
   check("жаргон убран: ScanPanel без «конвейер/КОНВЕЙЕР»",
@@ -2392,9 +2452,9 @@ async function main(): Promise<void> {
     runSrc.includes("setFpgaAirDwellMs(opts.dwellMs)") && runSrc.includes("setFpgaAirWalkPattern(opts.pattern)"));
   check("шлюз: tune несёт det_thr в той же операции (без лишнего round-trip)",
     gwSrc.includes('thr = msg.get("det_thr")') && gwSrc.includes("tune: запись DET_THR не удалась"));
-  check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed)"));
-  check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed)"));
-  check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed)"));
+  check("cinema стоп бампает solo до проверки armed", runSrc.includes("abortFpgaSolo()") && runSrc.indexOf("abortFpgaSolo()") < runSrc.indexOf("if (s.fpgaArmed ||"));
+  check("cinema стоп бампает air до проверки armed", runSrc.includes("abortFpgaAir()") && runSrc.indexOf("abortFpgaAir()") < runSrc.indexOf("if (s.fpgaArmed ||"));
+  check("cinema стоп бампает arm до проверки armed", runSrc.includes("abortFpgaArm()") && runSrc.indexOf("abortFpgaArm()") < runSrc.indexOf("if (s.fpgaArmed ||"));
   check("cinema live считает fpgaBusy", runSrc.includes("s.fpgaBusy") && dockSrc.includes("fpgaBusy"));
   const armBlock = storeSrc.slice(storeSrc.indexOf("fpgaArm: async"), storeSrc.indexOf("startFpgaPath: async"));
   const onboardHead = storeSrc.slice(
@@ -2425,13 +2485,30 @@ async function main(): Promise<void> {
     && armBlock.indexOf("set({ fpgaBusy: true, fpgaStatus: null })") < armBlock.indexOf("await get().stopTransmit()"));
   check("fpgaArm сверяет поколение после park/ARM", armBlock.includes("armRevoked()") && armBlock.includes("gFpgaArmGen += 1"));
   check("fpgaArm после отзыва снимает прошедший ARM",
-    armBlock.includes("if (r.ok) {") && armBlock.includes('await gw({ op: "disarm" })'));
+    armBlock.includes("if (r.ok) {") && armBlock.includes("await get().fpgaDisarm()"));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
   check("онбордовый старт: startOnboardIntercept, USB не отдаём хост-сканеру",
     storeSrc.includes("const startOnboardIntercept") &&
     storeSrc.includes("await startOnboardIntercept()") &&
     storeSrc.includes("scanEnable: true") &&
     !storeSrc.includes("USB release перед сканом"));
+  {
+    const startScanFn = storeSrc.slice(storeSrc.indexOf("startScan: ()"), storeSrc.indexOf("stopScan: ()"));
+    check("startScan fpga — слух Soapy, не ARM",
+      startScanFn.includes("smartListenLive: true") && !startScanFn.includes("startOnboardIntercept"));
+  }
+  check("ARM без Принять запрещён в startOnboardIntercept",
+    storeSrc.includes("SMART_ARM_NEED_ACCEPT_RU") &&
+    storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"), storeSrc.indexOf("const fpgaReturnToScan"))
+      .includes("smartGridAccepted"));
+  check("acceptSmartGridAndArm замораживает карточку",
+    storeSrc.includes("acceptSmartGridAndArm") && storeSrc.includes("gSmartAccepted = card"));
+  {
+    const acceptFn = storeSrc.slice(storeSrc.indexOf("acceptSmartGridAndArm:"), storeSrc.indexOf("setAttackPaint:"));
+    check("Принять: analog / x40+C58 отказ даже с пиком; empty — только peak",
+      acceptFn.includes("card.analog") && acceptFn.includes("SMART_X40_C58_RU")
+      && acceptFn.includes("card.empty && !peak") && acceptFn.includes("acceptO4"));
+  }
   {
     const onboard = storeSrc.slice(
       storeSrc.indexOf("const startOnboardIntercept"),
@@ -2451,8 +2528,8 @@ async function main(): Promise<void> {
       tickFn.indexOf("isFpgaAirPattern(cur.scanPattern)"),
       tickFn.indexOf("if (!cur.transmitArmed"),
     );
-    check("tickScan: паттерн fpga fail-closed, не USB-handoff",
-      fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff("));
+    check("tickScan: паттерн fpga без слуха fail-closed, не USB-handoff",
+      fpgaTick.includes("!cur.smartListenLive") && fpgaTick.includes("get().stopScan()") && !fpgaTick.includes("fpgaHandoff("));
     check("tickScan: поколение после await (stop/playlist не пишет чужое окно)",
       tickFn.includes("scanGen !== gScanGen") && storeSrc.includes("let gScanGen = 0"));
   }

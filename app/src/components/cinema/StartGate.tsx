@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaSurveyPeriodClamp, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
+import { FPGA_US_DET_SHIFT, FPGA_SURVEY_GONE_MS, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import { autoDispatchOptionRu, FPGA_AI_OPTION_RU, FPGA_AIR_MODE_RU, fpgaInnerDispatch, type AutoDispatch } from "../../sense/modes";
 import { TxGainControl } from "../TxGainControl";
@@ -62,7 +62,7 @@ export function StartGate({ mode, onClose }: Props) {
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
-  const [surveyPeriodMs, setSurveyPeriodMs] = useState(storedSurveyPeriod);
+  const [surveyPeriodMs] = useState(storedSurveyPeriod);
   const [pattern, setPattern] = useState<FpgaSoloPattern>(path === "air" ? storedAirPattern : storedPattern);
   const [detThr, setDetThr] = useState(String(storedDetThr));
   const [busy, setBusy] = useState(false);
@@ -206,11 +206,6 @@ export function StartGate({ mode, onClose }: Props) {
         setErr("Задайте выдержку числом (0,4 и 0.4 — 400 мкс).");
         return;
       }
-      const period = parseLocaleNumber(surveyPeriodMs);
-      if (!Number.isFinite(period) || period <= 0) {
-        setErr("Задайте период сканирования числом (например 5).");
-        return;
-      }
       const thr = parseFloat(detThr);
       if (!Number.isFinite(thr) || thr <= 0) {
         setErr("Задайте порог чувствительности больше нуля.");
@@ -252,11 +247,11 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · {FPGA_AIR_MODE_RU}</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
-              После Старта хозяин один — SDR. Ноутбук задаёт коридор, выдержку
-              на сигнал, период сканирования, Старт и Стоп. Плата сама видит
-              энергию (антенна на RX1 / RX SMA) и сама открывает TX1 / TX SMA на усилитель.
-              ИИ снаружи всегда: глухой обзор → окно на всплеск → по истечении периода снова обзор.
-              Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка).
+              Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает
+              карточку и отдаёт ARM плате. Пустая сетка / аналог 5.8 / x40+C58 —
+              ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
+              Ноутбук задаёт коридор, выдержку на сигнал, Старт, Принять и Стоп.
+              Живой канал last_live {FPGA_SURVEY_GONE_MS} мс, не таймер SCAN_SURVEY.
               USB не в круге «увидел → усилитель».
             </p>
             <div className="cinema-gate-row">
@@ -282,16 +277,12 @@ export function StartGate({ mode, onClose }: Props) {
               />
             </label>
             <div className="cinema-gate-row">
-              <label title="Через сколько миллисекунд снова пройти глухой обзор всего коридора.">
-                Сканирование, мс
-                <input value={surveyPeriodMs} onChange={(e) => setSurveyPeriodMs(e.target.value)} inputMode="decimal" />
-              </label>
               <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
                 Порог чувствительности
                 <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
               </label>
             </div>
-            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · сканирование каждые {fpgaSurveyPeriodClamp(parseLocaleNumber(surveyPeriodMs))} мс.</p>
+            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · живой канал last_live {FPGA_SURVEY_GONE_MS} мс · не таймер SCAN_SURVEY.</p>
             <div className="cinema-paths" role="radiogroup" aria-label="Стратегия внутри окна">
               <button
                 type="button"
@@ -416,7 +407,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              {FPGA_AIR_MODE_RU}: после Старта хозяин — плата (USB не в круге увидел→TX).
+              {FPGA_AIR_MODE_RU}: Старт — слух Soapy, Принять — ARM плате (USB не в круге увидел→TX).
               Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
               либо Soapy ставит LO, либо агент держит FPGA.
             </p>
@@ -427,12 +418,12 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={path === "auto"}
                 className={path === "auto" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPath("auto")}
-                title="После Старта хозяин — SDR. Плата сама видит энергию и открывает TX. Ноутбук — рубильник."
+                title="Старт — слух Soapy. Принять — ARM. Ноутбук — рубильник."
               >
                 <strong>{FPGA_AIR_MODE_RU}</strong>
                 <span>
-                  Антенна на RX SMA. Плата смотрит эфир в аналоговом окне и сама
-                  решает, что энергия есть. USB не в круге «увидел → усилитель».{" "}
+                  Антенна на RX SMA. Старт слушает Soapy и собирает карточку.
+                  Принять отдаёт ARM плате. USB не в круге «увидел → усилитель».{" "}
                   {fpgaAirSupported(sdrId)
                     ? "Эта плата в ревизии legion."
                     : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}

@@ -20,6 +20,7 @@ import {
   emptySmartGrid,
   LEGION_AIM_NONE,
   matchSmartGrid,
+  SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
   type SmartGridCard,
@@ -114,10 +115,14 @@ export function fpgaTurnDwellUs(ms: number): number {
   return Math.round(fpgaTurnDwellClamp(ms) * 1000);
 }
 
-/** Период сканирования коридора (Умная атака). 0 / мусор → 5 с. */
+/** Период сканирования коридора (Умная атака). 0 / мусор → 5 с.
+ *  Хост всё ещё пишет SCAN_SURVEY_US (leftover). NIOS RESURVEY —
+ *  last_live occupancy FPGA_SURVEY_GONE_MS, не этот таймер. */
 export const FPGA_SURVEY_PERIOD_DEFAULT_MS = 5000;
 export const FPGA_SURVEY_PERIOD_MIN_MS = FPGA_TURN_DWELL_MIN_MS;
 export const FPGA_SURVEY_PERIOD_MAX_MS = FPGA_TURN_DWELL_MAX_MS;
+/** Зеркало LEGION_SURVEY_GONE_MS. Occupancy текущего канала, не SCAN_SURVEY_US. */
+export const FPGA_SURVEY_GONE_MS = 1500;
 
 export function fpgaSurveyPeriodClamp(ms: number): number {
   if (!Number.isFinite(ms) || ms <= 0) return FPGA_SURVEY_PERIOD_DEFAULT_MS;
@@ -358,6 +363,8 @@ export interface OnboardInterceptInput {
   fireBwMhz?: number;
   /** Слух/оператор → карточка 0x51–0x59. Нет — пустая сетка, не ELRS. */
   grid?: SmartGridInput | SmartGridCard;
+  /** Явный пик без сетки. Пустая карточка иначе режет ARM. Аналог / x40+C58 — нет. */
+  peakOverride?: boolean;
   /** Панель DRFM: 0 / пусто = таблица. */
   lbDelay?: number;
   lbDelay1?: number;
@@ -479,10 +486,16 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   if (rx && i.bands.some((b) => b.f1Mhz < rx[0] || b.f2Mhz > rx[1])) {
     return fail(`${FPGA_AIR_MODE_RU}: коридор вне RX ${rx[0]}–${rx[1]} МГц`);
   }
+  if (fftEnable && grid.analog) {
+    return fail(`${FPGA_AIR_MODE_RU}: ${grid.reason || SMART_GRID_ANALOG_RU}`);
+  }
+  if (fftEnable && grid.empty && !i.peakOverride) {
+    return fail(`${FPGA_AIR_MODE_RU}: ${grid.reason || SMART_GRID_EMPTY_RU}`);
+  }
   const hops = Math.max(0, centers.length - 1);
   const inner = i.turn ? "обычный" : "приоритет";
   const how = survey
-    ? `ИИ · обзор ${centers.length} взглядов по ${lookMhz} МГц · сканирование каждые ${surveyPeriodMs} мс · взгляд на всплеск · ${inner} выдержка ${dwellMs} мс`
+    ? `ИИ · обзор ${centers.length} взглядов по ${lookMhz} МГц · живой канал last_live ${FPGA_SURVEY_GONE_MS} мс · взгляд на всплеск · ${inner} выдержка ${dwellMs} мс`
     : park
     ? `стоянка ${(centers[0] ?? 0).toFixed(1)} МГц · взгляд ${lookMhz} МГц (фильтр ≤${analog}) · хопы внутри окна — цифровой вырез на стоящем LO, PLL не гоняем`
     : hops === 0

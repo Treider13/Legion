@@ -94,6 +94,7 @@ import {
   FPGA_DEFAULT_DET_THR,
   FPGA_TURN_DWELL_DEFAULT_MS,
   FPGA_SURVEY_PERIOD_DEFAULT_MS,
+  FPGA_SURVEY_GONE_MS,
   FPGA_US_DET_SHIFT,
   airThrTable,
   airTractParams,
@@ -109,7 +110,14 @@ import {
   planFpgaAir,
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
-import { matchSmartGrid, type SmartGridCard } from "../sense/smartGrid";
+import {
+  bandTouchesC58,
+  matchSmartGrid,
+  SMART_GRID_ANALOG_RU,
+  SMART_GRID_EMPTY_RU,
+  SMART_X40_C58_RU,
+  type SmartGridCard,
+} from "../sense/smartGrid";
 import { openLoopShelfTxPlan, shelfFsHz } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
@@ -131,6 +139,7 @@ import {
 import {
   FPGA_AIR_MODE_RU,
   FPGA_AI_LABEL_RU,
+  SMART_ARM_NEED_ACCEPT_RU,
   fpgaInnerDispatch,
   fpgaRunModeRu,
   isFpgaAirPattern,
@@ -139,6 +148,7 @@ import {
   planSdrWork,
   classScanBlockedByTx,
   detectorListens,
+  hostListenActive,
   patternLabelRu,
   scanRefusedReason,
   scannerParticipates,
@@ -310,6 +320,14 @@ interface LegionStore {
   txGainMin: number;
   txGainMax: number;
   scanPattern: ScanPattern;
+  /** Фаза 1 умной атаки: Soapy слух, TX выкл, карточка живая. */
+  smartListenLive: boolean;
+  /** Фаза 2: карточка заморожена, ARM разрешён. */
+  smartGridAccepted: boolean;
+  /** Живая или принятая карточка сетки (UI). */
+  smartGridCard: SmartGridCard | null;
+  /** Явный пик без сетки. Аналог / x40+C58 не покрывает. */
+  smartPeakOverride: boolean;
   /** Атака: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
@@ -456,6 +474,9 @@ interface LegionStore {
   setScanSensitivity(sens: number): void;
   setTxGain(db: number): Promise<void>;
   setScanPattern(p: ScanPattern): void;
+  setSmartPeakOverride(v: boolean): void;
+  /** Заморозить карточку и ARM. Старт сам не ARM'ит. */
+  acceptSmartGridAndArm(opts?: { peak?: boolean; acceptO4?: boolean }): Promise<boolean>;
   setAutoDispatch(d: AutoDispatch): void;
   setScanWindowMhz(v: string): void;
   setTxShelfMhz(v: string): void;
@@ -867,14 +888,34 @@ let gTxGen = 0;
 /** Хост-Атака: трекер и выдержка рамки. Не трогает FPGA / ESP32 / sweep. */
 const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
-/** Слух до Старта умной атаки: снимок hop/look при уходе с Атаки на FPGA. */
+/** Слух умной атаки: живые hop/look до Принять, затем заморозка. */
 let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
+let gSmartAccepted: SmartGridCard | null = null;
 
-function snapshotSmartListen(): void {
+function publishSmartListen(
+  sdrId: string,
+  bands: readonly AllowBand[],
+  extra?: { acceptO4?: boolean },
+): SmartGridCard {
   gSmartListen = {
     hopsMhz: gAttackMemory.hops.map((h) => h.mhz),
     looks: [...gAttackMemory.looks.values()],
   };
+  return matchSmartGrid({
+    sdrId,
+    bands,
+    hopsMhz: gSmartListen.hopsMhz,
+    looks: gSmartListen.looks,
+    acceptO4: extra?.acceptO4,
+  });
+}
+
+export function peekSmartListen(): { hopsMhz: number[]; looks: AttackLook[] } {
+  return { hopsMhz: [...gSmartListen.hopsMhz], looks: [...gSmartListen.looks] };
+}
+
+export function peekSmartAccepted(): SmartGridCard | null {
+  return gSmartAccepted;
 }
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
@@ -924,6 +965,8 @@ function attackViewOf(
 function attackBrainPatch(
   s: {
     scanPattern: string;
+    smartListenLive?: boolean;
+    sdrId?: string;
     attackPaint: AttackPaint | null;
     txWaveKind: WaveKind | null;
     attackHoldMs: number;
@@ -939,8 +982,10 @@ function attackBrainPatch(
   attackAdvice: AttackAdvice;
   attackMemoryLine: string;
   attackSuggestPaint: AttackPaint | null;
+  smartGridCard?: SmartGridCard;
 } {
-  if (!detectorListens(s.scanPattern as SdrWalkPattern)) {
+  const smartListen = s.scanPattern === "fpga" && !!s.smartListenLive;
+  if (!detectorListens(s.scanPattern as SdrWalkPattern) && !smartListen) {
     return {
       attackTracks: [],
       attackRows: [],
@@ -950,7 +995,7 @@ function attackBrainPatch(
     };
   }
   const view = attackViewOf(s, tracks, bins, windowMhz);
-  if (s.scanPattern !== "auto") {
+  if (s.scanPattern !== "auto" && !smartListen) {
     return {
       attackTracks: tracks.map((t) => ({ ...t })),
       attackRows: view.rows,
@@ -961,12 +1006,24 @@ function attackBrainPatch(
   }
   gAttackMemory.noteHops(tracks, Date.now());
   gAttackMemory.noteScene(Date.now(), tracks);
+  const card = publishSmartListen(s.sdrId ?? "", s.sdrBands);
+  if (s.scanPattern !== "auto") {
+    return {
+      attackTracks: tracks.map((t) => ({ ...t })),
+      attackRows: view.rows,
+      attackAdvice: EMPTY_ATTACK_ADVICE,
+      attackMemoryLine: view.memoryLine,
+      attackSuggestPaint: null,
+      smartGridCard: card,
+    };
+  }
   return {
     attackTracks: tracks.map((t) => ({ ...t })),
     attackRows: view.rows,
     attackAdvice: view.advice,
     attackMemoryLine: view.memoryLine,
     attackSuggestPaint: view.advice.suggestPaint,
+    smartGridCard: card,
   };
 }
 let gAttackHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1644,7 +1701,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     spanMhz: number,
     residual: boolean,
   ): Promise<void> => {
-    if (!detectorListens(get().scanPattern as SdrWalkPattern) || !gLive) return;
+    if (!hostListenActive(get().scanPattern as SdrWalkPattern, get().smartListenLive) || !gLive) return;
     if (gAttackThinkBusy) {
       if (residual) {
         gAttackThinkResidual = {
@@ -1680,7 +1737,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         looks.unshift({ freqMhz: paintCenterMhz(paint), bwMhz: Math.max(0.4, paintSpanMhz(paint)) });
       }
       const r = await hostAttackThink(centerMhz, fsHz, looks, residual);
-      if (thinkGen !== gAttackThinkGen || !detectorListens(get().scanPattern as SdrWalkPattern)) return;
+      if (thinkGen !== gAttackThinkGen || !hostListenActive(get().scanPattern as SdrWalkPattern, get().smartListenLive)) return;
       if (r.memoryCap) gAttackMemory.noteWorker(r.memorySamples ?? 0, r.memoryCap, r.memoryMs ?? 0);
       if (!r.ok) return;
       for (const row of r.looks) {
@@ -2021,9 +2078,15 @@ export const useLegion = create<LegionStore>((set, get) => {
 
   /** Старт онбордового перехвата: один хозяин — SDR. Ноутбук рубильник.
    *  USB не в круге «увидел → усилитель». x40: один park Soapy (Si5338 fs/BW
-   *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy. */
+   *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy.
+   *  ARM только после Принять (замороженная карточка). */
   const startOnboardIntercept = async (): Promise<void> => {
     const s = get();
+    const acceptedCard = gSmartAccepted;
+    if (!s.smartGridAccepted || !acceptedCard) {
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_NEED_ACCEPT_RU}`);
+      return;
+    }
     if (s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending || gFpgaHandoffBusy) return;
     const blocked = modeConflict("sdr", s.corridorRunning, false);
     if (blocked) {
@@ -2067,15 +2130,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       return;
     }
     if (!Number.isFinite(periodRaw) || periodRaw <= 0) {
-      pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте период сканирования числом (например 5)`);
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: leftover SCAN_SURVEY_US — задайте число (например 5)`);
       return;
     }
-    const grid: SmartGridCard = matchSmartGrid({
-      sdrId: s.sdrId,
-      bands: get().sdrBands,
-      hopsMhz: gSmartListen.hopsMhz,
-      looks: gSmartListen.looks,
-    });
+    const grid: SmartGridCard = acceptedCard;
     const lbOpts = lbDelayArmOpts(get());
     const plan = planOnboardIntercept({
       sdrId: s.sdrId,
@@ -2091,6 +2149,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       surveyPeriodMs: periodRaw,
       fftEnable: true,
       grid,
+      peakOverride: get().smartPeakOverride,
       ...lbOpts,
     });
     if (!plan.ok) {
@@ -2100,7 +2159,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     if (s.sdrEmulation) {
       pushLog(
         "sys",
-        `${FPGA_AIR_MODE_RU}: эмуляция — платы нет, ARM нет. USB-IQ handoff убран: без железа эфир не смотрим.`,
+        `${FPGA_AIR_MODE_RU}: эмуляция — платы нет, ARM нет. Карточка принята. USB-IQ handoff убран.`,
       );
       return;
     }
@@ -2361,6 +2420,10 @@ export const useLegion = create<LegionStore>((set, get) => {
     txGainMin: -23.75,
     txGainMax: 66,
     scanPattern: "auto",
+    smartListenLive: false,
+    smartGridAccepted: false,
+    smartGridCard: null,
+    smartPeakOverride: false,
     autoDispatch: "park",
     scanWindowMhz: "20",
     txShelfMhz: "2",
@@ -2593,16 +2656,49 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
     setScanPattern: (p) => {
       if (p === "auto") {
-        set({ scanPattern: p, fpgaClass: null });
+        gSmartAccepted = null;
+        set({
+          scanPattern: p,
+          fpgaClass: null,
+          smartListenLive: false,
+          smartGridAccepted: false,
+        });
         return;
       }
-      if (p === "fpga") snapshotSmartListen();
-      else gSmartListen = { hopsMhz: [], looks: [] };
+      if (p === "fpga") {
+        gSmartAccepted = null;
+        const card = publishSmartListen(get().sdrId, get().sdrBands);
+        clearAttackHoldTimer();
+        gAttackTracker.reset();
+        bumpAttackThinkGen();
+        set({
+          scanPattern: p,
+          smartListenLive: false,
+          smartGridAccepted: false,
+          smartGridCard: card,
+          attackTracks: [],
+          attackPaint: null,
+          attackPaintDraft: null,
+          attackTxUntil: null,
+          attackRows: [],
+          attackAdvice: EMPTY_ATTACK_ADVICE,
+          attackMemoryLine: "",
+          attackSuggestPaint: null,
+          fpgaClass: null,
+        });
+        return;
+      }
+      gSmartListen = { hopsMhz: [], looks: [] };
+      gSmartAccepted = null;
       clearAttackHoldTimer();
       gAttackTracker.reset();
       bumpAttackThinkGen();
       set({
         scanPattern: p,
+        smartListenLive: false,
+        smartGridAccepted: false,
+        smartGridCard: null,
+        smartPeakOverride: false,
         attackTracks: [],
         attackPaint: null,
         attackPaintDraft: null,
@@ -2614,6 +2710,53 @@ export const useLegion = create<LegionStore>((set, get) => {
         fpgaClass: null,
       });
       gAttackMemory.reset();
+    },
+    setSmartPeakOverride: (v) => set({ smartPeakOverride: !!v }),
+    acceptSmartGridAndArm: async (opts) => {
+      const s = get();
+      if (!isFpgaAirPattern(s.scanPattern)) {
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: сначала режим умной атаки`);
+        return false;
+      }
+      if (s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending) {
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ARM уже идёт или плата занята`);
+        return false;
+      }
+      const peak = !!(opts?.peak ?? s.smartPeakOverride);
+      const bands = get().sdrBands;
+      const card = publishSmartListen(s.sdrId, bands, { acceptO4: opts?.acceptO4 });
+      if (card.analog) {
+        gSmartAccepted = null;
+        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: peak });
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_GRID_ANALOG_RU}`);
+        return false;
+      }
+      if (s.sdrId === "bladerf-x40" && (bandTouchesC58(bands) || card.reason === SMART_X40_C58_RU)) {
+        gSmartAccepted = null;
+        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: peak });
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_X40_C58_RU}`);
+        return false;
+      }
+      if (card.empty && !peak) {
+        gSmartAccepted = null;
+        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false });
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_GRID_EMPTY_RU}`);
+        return false;
+      }
+      gSmartAccepted = card.empty && peak ? { ...card, reason: `${card.reason || SMART_GRID_EMPTY_RU} · пик без сетки` } : card;
+      set({
+        smartGridCard: gSmartAccepted,
+        smartGridAccepted: true,
+        smartPeakOverride: peak,
+        smartListenLive: false,
+      });
+      get().stopScan();
+      pushLog(
+        "sys",
+        `${FPGA_AIR_MODE_RU}: карточка принята · ${gSmartAccepted.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
+      );
+      await startOnboardIntercept();
+      return get().fpgaArmed || get().sdrEmulation;
     },
     setAttackPaint: (p) => {
       if (get().scanPattern !== "auto") return;
@@ -4396,6 +4539,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Операторский СТОП режима FPGA+сканер: скан стоп, DISARM, USB хосту.
       // Авто-рестарта скана нет — решение оператора, не таймаут.
       gFpgaAirGen += 1; // handoff в полёте увидит смену поколения и откачет ARM
+      gSmartAccepted = null;
+      set({ smartGridAccepted: false, smartListenLive: false });
       get().stopScan();
       // Только ARM-фаза: disarm/release/reopen. Handoff в полёте (fpgaBusy
       // без armed) дожимать не надо — уборка за его abortIfRevoked, а reopen
@@ -4974,8 +5119,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       void (async () => {
         const s = get();
         if (isFpgaAirPattern(s.scanPattern)) {
-          await startOnboardIntercept();
-          return;
+          if (s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending) {
+            pushLog("sys", "СКАНИРОВАТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA. Хост-скан = мс, не µs");
+            return;
+          }
+          gSmartAccepted = null;
+          set({ smartGridAccepted: false });
         }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
@@ -5022,6 +5171,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", opened.reason);
           if (!opened.ok) return;
         }
+        if (isFpgaAirPattern(get().scanPattern) && get().transmitArmed) {
+          /* xA4 один BBPLL (Nuand t=13047): 61.44-слух на живой полке схлопнет TX.
+           * Старт умной атаки — слух, TX выкл. Тот же стоп, что перед ARM платы. */
+          await get().stopTransmit();
+        }
         if (gScanTimer) {
           clearInterval(gScanTimer);
           gScanTimer = null;
@@ -5032,8 +5186,13 @@ export const useLegion = create<LegionStore>((set, get) => {
         const caps = catalogCaps(st.sdrId);
         const analog = gLive ? caps.analogBwMhz : gSdr.analogBwMhz();
         const userWin = clampWindowMhz(parseFloat(st.scanWindowMhz), analog);
-        const attackLive = st.scanPattern === "auto";
-        const classLive = detectorListens(st.scanPattern);
+        const smartListen = isFpgaAirPattern(st.scanPattern);
+        if (smartListen) {
+          gSmartAccepted = null;
+          set({ smartListenLive: true, smartGridAccepted: false });
+        }
+        const attackLive = st.scanPattern === "auto" || smartListen;
+        const classLive = detectorListens(st.scanPattern) || smartListen;
         const listen0 = classLive
           ? attackLive
             ? attackListenPlan({
@@ -5086,8 +5245,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           "sys",
           classLive && listen0
             ? gLive
-              ? `${attackLive ? "АТАКА" : patternLabelRu(st.scanPattern)} слух: Thomson DPSS×3 · FFT ${listen0.fftN} · fs ${(listen0.fsHz / 1e6).toFixed(2)} · фильтр ${listen0.filterMhz.toFixed(1)} · crop ${listen0.cropFactor.toFixed(3)} · окно ${listen0.spanMhz.toFixed(1)} МГц · память IQ 2^24`
-              : `${attackLive ? "АТАКА" : "классы"} эмуляция: спектр эмулятора · FFT ${Math.min(listen0.fftN, 4096)} · окно ${listen0.spanMhz.toFixed(1)} МГц · разбор по бинам (IQ платы нет)`
+              ? `${smartListen ? FPGA_AIR_MODE_RU : attackLive ? "АТАКА" : patternLabelRu(st.scanPattern)} слух: Thomson DPSS×3 · FFT ${listen0.fftN} · fs ${(listen0.fsHz / 1e6).toFixed(2)} · фильтр ${listen0.filterMhz.toFixed(1)} · crop ${listen0.cropFactor.toFixed(3)} · окно ${listen0.spanMhz.toFixed(1)} МГц · память IQ 2^24 · last_live ${FPGA_SURVEY_GONE_MS} мс`
+              : `${smartListen ? FPGA_AIR_MODE_RU : attackLive ? "АТАКА" : "классы"} эмуляция: спектр эмулятора · FFT ${Math.min(listen0.fftN, 4096)} · окно ${listen0.spanMhz.toFixed(1)} МГц · разбор по бинам (IQ платы нет)`
             : `${gLive ? "SDR SCAN DIO-sys" : "SDR SCAN эмуляция"}: Hann+Welch-8 overlap 0.5 · crop 0.5 · ADC 40 MSPS · hop ${walker.windowMhz} МГц (soapy_power)`,
         );
         let inflight = false;
@@ -5111,7 +5270,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             if (!step?.centerMhz) return;
             centerMhz = step.centerMhz;
           }
-          const listen = detectorListens(get().scanPattern)
+          const listen = hostListenActive(get().scanPattern, get().smartListenLive)
             ? get().scanPattern === "auto"
               ? attackListenPlan({
                   analogMhz: analog,
@@ -5119,7 +5278,9 @@ export const useLegion = create<LegionStore>((set, get) => {
                   paint: get().attackPaint,
                   txLive: autoTxLive(get()),
                 })
-              : classListenPlan(analog)
+              : get().smartListenLive
+                ? attackListenPlan({ analogMhz: analog, paintOwnsTx: false, paint: null, txLive: false })
+                : classListenPlan(analog)
             : null;
           const spanMhz = listen ? listen.spanMhz : hostScanSpanMhz(analog);
           if (gLive) {
@@ -5170,17 +5331,15 @@ export const useLegion = create<LegionStore>((set, get) => {
             Object.assign(frame, ingestHostLab(bins, now));
           }
           const cur = get();
-          if (isFpgaAirPattern(cur.scanPattern)) {
-            // Fail-closed: Старт перехвата не ставит scanRunning и не отдаёт
-            // пик хост-FFT на USB-handoff. Живой таймер (остаток USB-цикла)
-            // не должен снова вставить ноутбук в круг «увидел → усилитель».
+          if (isFpgaAirPattern(cur.scanPattern) && !cur.smartListenLive) {
+            // Fail-closed: без фазы слуха хост-FFT не в круге увидел→усилитель.
             if (Object.keys(frame).length > 0) set(frame);
             get().stopScan();
             return;
           }
           let think: { snap: ReturnType<AttackTracker["snapshot"]>; fsHz: number; span: number; paintTx: boolean } | null =
             null;
-          if (detectorListens(cur.scanPattern) && bins.length > 0) {
+          if (hostListenActive(cur.scanPattern, cur.smartListenLive) && bins.length > 0) {
             const hits = detectAttackHits(bins, cur.scanThresholdDb, listen?.spanMhz).filter((h) => {
               if (cur.sdrBands.length > 0 && !cueFreqAllowed(h.freqMhz, cur.sdrBands)) return false;
               if (cur.scanPattern === "auto" && cur.attackPaint && !freqInCorridor(h.freqMhz, cur.attackPaint)) {
@@ -5271,7 +5430,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         gScanTimer = null;
       }
       gWalker = null;
-      if (get().scanRunning) set({ scanRunning: false });
+      if (get().scanRunning || get().smartListenLive) set({ scanRunning: false, smartListenLive: false });
       // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
       // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
       // что в меню выбран пункт «Умная атака».
@@ -5285,12 +5444,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     startTransmit: async () => {
       const s = get();
       if (isFpgaAirPattern(s.scanPattern)) {
-        // В режиме FPGA+СКАНЕР передача — автоматический цикл (СТАРТ/СТОП):
-        // ARM идёт из детекта сканера с парком на пик и порогом из полки,
-        // а не ручной ARM на середину полосы с порогом «на глаз».
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: после Старта хозяин — плата; ноутбук только Стоп`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: Старт — слух Soapy, ARM после Принять; ноутбук только Стоп`,
         );
         return;
       }

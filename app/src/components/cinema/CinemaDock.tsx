@@ -1,8 +1,8 @@
 import { catalogById } from "../../sdr/catalog";
-import { modeOf } from "../../sense/modes";
+import { FPGA_AIR_MODE_ACCEPT_RU, isFpgaAirPattern, modeOf } from "../../sense/modes";
 import { useLegion } from "../../state/store";
 import { connectionLabel } from "../graphite/connectionLabel";
-import { cinemaIsLive, type CinemaMode, runCinemaStop } from "./run";
+import { cinemaIsLive, type CinemaMode, runCinemaStop, runSmartAccept } from "./run";
 
 interface Props {
   mode: CinemaMode;
@@ -12,6 +12,9 @@ interface Props {
 }
 
 export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
+  const scanPattern = useLegion((s) => s.scanPattern);
+  const smartListenLive = useLegion((s) => s.smartListenLive);
+  const smartPeakOverride = useLegion((s) => s.smartPeakOverride);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
@@ -30,7 +33,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const txShelfMhz = useLegion((s) => s.txShelfMhz);
   const setTxShelfMhz = useLegion((s) => s.setTxShelfMhz);
   const sdrLink = sl22 ? "SDR" : connectionLabel(openedIface ?? catalogById(sdrId)?.iface).value;
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending });
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending, smartListenLive });
   const message = fpgaStopPending
     ? fpgaReleasing
       ? `Освобождаем соединение: ${fpgaStopReason ?? "ожидаем подтверждение шлюза"}`
@@ -86,6 +89,17 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Запустить
           </button>
         )}
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
+          <button
+            type="button"
+            className="cinema-go"
+            disabled={fpgaStopPending}
+            onClick={() => void runSmartAccept({ peak: smartPeakOverride })}
+            title={smartListenLive || scanRunning ? "Заморозить карточку и ARM" : "Принять текущую карточку"}
+          >
+            {FPGA_AIR_MODE_ACCEPT_RU}
+          </button>
+        ) : null}
         {transmitArmed ? (
           <button type="button" className="cinema-go stop" onClick={() => void useLegion.getState().stopTransmit()}>
             Стоп передачу
@@ -99,7 +113,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-          {message || "Запустить → коридор → умная атака, эфир+FPGA или только FPGA."}
+          {message || "Запустить → слух Soapy → Принять карточку → умная атака ARM. Эфир+FPGA или только FPGA — сразу."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки
