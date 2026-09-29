@@ -700,6 +700,24 @@ def main() -> int:
     check("смена fs: setSampleRate снова", md.dev.calls["rate"] == 2)
     check("смена fs: activate после", md.dev.calls["act"] == 2)
 
+    class _Alive:
+        def is_alive(self):
+            return True
+
+    held = w.Radio()
+    held.dev = _MockDev()
+    held.fake = False
+    held.tx = object()
+    held._thr = _Alive()
+    held._tx_fs = 20e6
+    held._rx_fs = 40e6
+    held._ensure_rx(40e6, 2450e6)
+    check("живой TX: setSampleRate не вызван", held.dev.calls["rate"] == 0)
+    check("живой TX: слух на часах полки", abs(float(held._rx_fs or 0) - 20e6) < 1)
+    held._ensure_rx(40e6, 2451e6)
+    check("живой TX: LO меняется", held.dev.calls["freq"] == 2)
+    check("живой TX: LO не трогает часы", held.dev.calls["rate"] == 0)
+
     tx = rpc(proc, {"op": "tx", "freqMhz": 2442.5})
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
     check("tx latency число", isinstance(tx.get("latencyUs"), int))
