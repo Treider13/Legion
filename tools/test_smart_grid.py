@@ -79,5 +79,21 @@ check("residual 0.0 → одна карточка mLRS n=80",
 amb = match_smart_grid({"hops_mhz": [2440.2, 2441.2, 2442.2]})
 check("середина сеток — одна карточка n=80",
       amb["smart"] and amb["n"] == 80 and amb["step_hz"] == 1_000_000)
+check("середина 2.4 — F0UNC (остатки равны)",
+      (amb["flags"] & GRID_FLAG_F0UNC) != 0)
+
+elrs900 = match_smart_grid({"hops_mhz": [903.5, 904.1, 904.7, 910.1]})
+check("ELRS FCC915 903.5 не mLRS 902.4",
+      elrs900["smart"] and elrs900["f0_hz"] == 903_500_000 and
+      elrs900["n"] == 40 and (elrs900["flags"] & GRID_FLAG_F0UNC) == 0)
+
+mlrs900 = match_smart_grid({"hops_mhz": [902.4, 903.0, 903.6, 909.0]})
+check("mLRS 902.4 не ELRS 903.5",
+      mlrs900["smart"] and mlrs900["f0_hz"] == 902_400_000 and
+      mlrs900["n"] == 43 and (mlrs900["flags"] & GRID_FLAG_F0UNC) == 0)
+
+mid900 = match_smart_grid({"hops_mhz": [903.55, 904.15, 904.75]})
+check("середина 900 — F0UNC",
+      mid900["smart"] and (mid900["flags"] & GRID_FLAG_F0UNC) != 0)
 
 print("smart_grid: ALL PASS")

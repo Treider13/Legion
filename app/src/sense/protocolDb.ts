@@ -110,6 +110,31 @@ export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
 
 const SPACING_TOL = 0.18;
 export const FREQCORR_MAX_MHZ = 0.20; // ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
+export const FREQCORR_SX127X_MHZ = 0.10; // Team900 SX127x
+export const FREQCORR_TIE_MHZ = 0.001; // 1 кГц — равные остатки → F0UNC
+
+export function fhssBandOf(freqMhz: number): string {
+  const f = freqMhz;
+  if (f >= 850 && f <= 950) return "p900";
+  if (f >= 2400 && f <= 2500) return "s24";
+  if (f >= 380 && f <= 525) return "uhf";
+  return "other";
+}
+
+export function fhssFreqcorrMaxMhz(band: string): number {
+  return band === "p900" ? FREQCORR_SX127X_MHZ : FREQCORR_MAX_MHZ;
+}
+
+export function fhssFreqcorrMaxHz(band: string): number {
+  return Math.round(fhssFreqcorrMaxMhz(band) * 1e6);
+}
+
+/** Worker `f0AbsMhz = f_ref + residual` (fhss_detect.py). classify хочет f_ref. */
+export function fhssF0RefMhz(residualMhz?: number, absMhz?: number): number | undefined {
+  if (absMhz == null || !Number.isFinite(absMhz)) return undefined;
+  if (residualMhz == null || !Number.isFinite(residualMhz)) return absMhz;
+  return absMhz - residualMhz;
+}
 
 function mhzToKhz(x: number): number {
   return Math.round(x * 1000);
@@ -148,6 +173,54 @@ export function fhssCircDistMhz(a: number, b: number, step: number): number {
   return Math.min(d, s - d) / 1000;
 }
 
+export function fhssHopSpacingMhz(hopsMhz: readonly number[]): number {
+  const hops = [...new Set(hopsMhz.map((h) => Math.round(h * 1000) / 1000).filter((h) => h > 0))].sort((a, b) => a - b);
+  if (hops.length < 2) return 0;
+  const diffs = hops.slice(1).map((h, i) => h - hops[i]!).sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)]!;
+}
+
+export function fhssResidualDistMhz(
+  residualMhz: number,
+  f0Mhz: number,
+  stepMhz: number,
+  fRefMhz: number,
+): number {
+  const expect = fhssResidualF0([f0Mhz], stepMhz, fRefMhz).residualMhz;
+  return fhssCircDistMhz(residualMhz, expect, stepMhz);
+}
+
+export function fhssResidualDistHops(hopsMhz: readonly number[], f0Mhz: number, stepMhz: number): number {
+  const { residualMhz, fRefMhz } = fhssResidualF0(hopsMhz, stepMhz);
+  return fhssResidualDistMhz(residualMhz, f0Mhz, stepMhz, fRefMhz);
+}
+
+export function fhssFilterResidual<T>(
+  items: readonly T[],
+  residualMhz: number,
+  fRefMhz: number,
+  band: string,
+  f0Of: (it: T) => number,
+  stepOf: (it: T) => number,
+  hopsMhz?: readonly number[],
+): T[] {
+  const gate = fhssFreqcorrMaxMhz(band);
+  const obs = hopsMhz ? fhssHopSpacingMhz(hopsMhz) : 0;
+  const scored: { dist: number; it: T }[] = [];
+  for (const it of items) {
+    const step = stepOf(it);
+    if (!(step > 0)) continue;
+    if (obs > 0 && Math.abs(step - obs) / obs > SPACING_TOL) continue;
+    const dist = hopsMhz
+      ? fhssResidualDistHops(hopsMhz, f0Of(it), step)
+      : fhssResidualDistMhz(residualMhz, f0Of(it), step, fRefMhz);
+    if (dist <= gate) scored.push({ dist, it });
+  }
+  if (scored.length === 0) return [...items];
+  const minD = Math.min(...scored.map((s) => s.dist));
+  return scored.filter((s) => s.dist <= minD + FREQCORR_TIE_MHZ).map((s) => s.it);
+}
+
 export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: string; hint: string }[] = [
   { id: "droneid", layer: "l3", label: "DJI DroneID O2/O3", hint: "proto17 ZC 600/147 + 91 байт. Модель — kismet product_type. O3+/O4 без decrypt" },
   { id: "opendroneid", layer: "l3", label: "OpenDroneID F3411", hint: "IE 221 FA:0B:BC / BLE 0xFFFA. PHY 802.11 нет" },
@@ -178,6 +251,7 @@ export function classifyFhssDomain(
   freqMhz = 0,
   residualMhz?: number,
   fRefMhz?: number,
+  hopsMhz?: readonly number[],
 ): ProtoMatch {
   let hits = FHSS_DOMAINS.filter((d) => {
     if (d.spacing <= 0) return false;
@@ -188,17 +262,21 @@ export function classifyFhssDomain(
   if (hits.length === 0) {
     return { id: "fhss-unknown", label: "FHSS, домен не сел", hint: "шаг не из открытых сеток", unique: false };
   }
-  if (residualMhz != null) {
+  const hasHops = hopsMhz != null && hopsMhz.length >= 2;
+  if (residualMhz != null || hasHops) {
     const fRef = fRefMhz ?? (freqMhz >= 2390 && freqMhz <= 2510 ? 2400 : freqMhz);
-    const tight = hits.filter((h) => {
-      if (!(h.spacing > 0)) return false;
-      const expect = fhssResidualF0([h.f0], h.spacing, fRef).residualMhz;
-      return fhssCircDistMhz(residualMhz, expect, h.spacing) <= FREQCORR_MAX_MHZ;
-    });
-    if (tight.length > 0) hits = tight;
+    hits = fhssFilterResidual(
+      hits,
+      residualMhz ?? 0,
+      fRef,
+      band,
+      (h) => h.f0,
+      (h) => h.spacing,
+      hopsMhz,
+    );
   }
   const families = new Set(hits.map((h) => h.family));
-  const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null);
+  const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null || hasHops);
   const labels = [...new Set(hits.map((h) => h.label))].join(", ");
   if (unique) {
     const fam = hits[0]!.family as RcId;

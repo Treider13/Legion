@@ -31,3 +31,15 @@ def test_sdr_worker_suite() -> None:
 
 def test_legion_fpga_suite() -> None:
     _run("fpga/test/test_legion_fpga.py")
+
+
+def test_smart_grid_suite() -> None:
+    _run("tools/test_smart_grid.py")
+
+
+def test_layer3_suite() -> None:
+    _run("tools/test_layer3.py")
+
+
+def test_drfm_strategy_suite() -> None:
+    _run("tools/test_drfm_strategy.py")

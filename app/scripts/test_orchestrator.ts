@@ -1543,7 +1543,19 @@ async function main(): Promise<void> {
   })());
   check("матчер: середина сеток — одна карточка n=80", (() => {
     const g = matchSmartGrid({ hopsMhz: [2440.2, 2441.2, 2442.2] });
-    return g.smart && g.n === 80 && g.stepHz === 1_000_000;
+    return g.smart && g.n === 80 && g.stepHz === 1_000_000 && (g.flags & GRID_FLAG_F0UNC) !== 0;
+  })());
+  check("матчер: 903.5 → ELRS FCC915 без F0UNC", (() => {
+    const g = matchSmartGrid({ hopsMhz: [903.5, 904.1, 904.7, 910.1] });
+    return g.smart && g.f0Hz === 903_500_000 && g.n === 40 && (g.flags & GRID_FLAG_F0UNC) === 0;
+  })());
+  check("матчер: 902.4 → mLRS без F0UNC", (() => {
+    const g = matchSmartGrid({ hopsMhz: [902.4, 903.0, 903.6, 909.0] });
+    return g.smart && g.f0Hz === 902_400_000 && g.n === 43 && (g.flags & GRID_FLAG_F0UNC) === 0;
+  })());
+  check("матчер: середина 900 — F0UNC", (() => {
+    const g = matchSmartGrid({ hopsMhz: [903.55, 904.15, 904.75] });
+    return g.smart && (g.flags & GRID_FLAG_F0UNC) !== 0;
   })());
   check("матчер: x40+5.8 отказ", matchSmartGrid({
     sdrId: "bladerf-x40", bands: [{ f1Mhz: 5725, f2Mhz: 5850 }],

@@ -13,7 +13,7 @@ import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { droneidPlainLines, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
-import { classifyFhssDomain, droneidModel, droneidState, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
+import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
 import { AttackSessionMemory } from "../src/sense/attackMemory";
 import { buildAttackScene } from "../src/sense/attackScene";
@@ -509,6 +509,109 @@ async function main(): Promise<void> {
   );
   check("шаг 1 МГц 2.4 не уникален", classifyFhssDomain(1.0, "s24").unique === false);
   check("шаг 0.6 900 не уникален", classifyFhssDomain(0.6, "p900").unique === false);
+  {
+    const a = fhssResidualF0([903.5, 904.1, 904.7, 910.1], 0.6);
+    const b = fhssResidualF0([902.4, 903.0, 903.6, 909.0], 0.6);
+    const elrs = classifyFhssDomain(0.6, "p900", 910, a.residualMhz, a.fRefMhz);
+    const mlrs = classifyFhssDomain(0.6, "p900", 910, b.residualMhz, b.fRefMhz);
+    check("0.6 + residual 903.5 = ELRS", elrs.unique && elrs.id === "elrs", JSON.stringify(elrs));
+    check("0.6 + residual 902.4 = mLRS", mlrs.unique && mlrs.id === "mlrs", JSON.stringify(mlrs));
+  }
+  {
+    // fhss_detect.py: f0AbsMhz = f_ref + residual. ISM2G4 f_ref=2400, residual=0.4 → 2400.4.
+    const hops = [2400.4, 2401.4, 2402.4, 2403.4];
+    const { residualMhz, fRefMhz } = fhssResidualF0(hops, 1.0);
+    const f0AbsMhz = fRefMhz + residualMhz;
+    check("2.4 ELRS residual 0.4 vs 2400", Math.abs(residualMhz - 0.4) < 1e-9 && Math.abs(fRefMhz - 2400) < 1e-9);
+    check("worker f0Abs = f_ref+residual", Math.abs(f0AbsMhz - 2400.4) < 1e-6);
+    check("f0Abs как f_ref — не f_ref", Math.abs((fhssF0RefMhz(residualMhz, f0AbsMhz) ?? -1) - 2400) < 1e-9);
+    const viaAbs = classifyFhssDomain(1, "s24", 2442, residualMhz, f0AbsMhz);
+    check("f0Abs как f_ref ломает 2.4 ELRS", viaAbs.id !== "elrs", JSON.stringify(viaAbs));
+    const viaRef = classifyFhssDomain(1, "s24", 2442, residualMhz, fhssF0RefMhz(residualMhz, f0AbsMhz));
+    check("f_ref = f0Abs−residual = ELRS", viaRef.unique && viaRef.id === "elrs", JSON.stringify(viaRef));
+    const look = parseFhssLook({
+      hit: true,
+      hops: hops.length,
+      unique: hops.length,
+      hopSetMhz: hops,
+      spacingMhz: 1,
+      dwellMs: 2,
+      intervalMs: 4,
+      rateHz: 250,
+      hopBwMhz: 0.5,
+      spanMhz: 3,
+      fLowMhz: 2400.4,
+      fHighMhz: 2403.4,
+      windowLimited: false,
+      f0ResidualMhz: residualMhz,
+      f0AbsMhz,
+    });
+    check(
+      "atlas worker 2400.4 → ELRS",
+      classifyAttackFamily(
+        { freqMhz: 2442, widthMhz: 0.5, duty: 0.2, streak: 1 },
+        undefined,
+        undefined,
+        extraFromLook({ fhss: look }),
+      ).id === "elrs",
+    );
+    const hopsM = [2440, 2441, 2442, 2443];
+    const m = fhssResidualF0(hopsM, 1.0);
+    const lookM = parseFhssLook({
+      hit: true,
+      hops: hopsM.length,
+      unique: hopsM.length,
+      hopSetMhz: hopsM,
+      spacingMhz: 1,
+      dwellMs: 2,
+      intervalMs: 4,
+      rateHz: 50,
+      hopBwMhz: 0.5,
+      spanMhz: 3,
+      fLowMhz: 2440,
+      fHighMhz: 2443,
+      windowLimited: false,
+      f0ResidualMhz: m.residualMhz,
+      f0AbsMhz: m.fRefMhz + m.residualMhz,
+    });
+    check(
+      "atlas worker 2440 → mLRS",
+      classifyAttackFamily(
+        { freqMhz: 2442, widthMhz: 0.5, duty: 0.2, streak: 1 },
+        undefined,
+        undefined,
+        extraFromLook({ fhss: lookM }),
+      ).id === "mlrs",
+    );
+    const hops900 = [903.5, 904.1, 904.7, 910.1];
+    const r900 = fhssResidualF0(hops900, 0.6);
+    const look900 = parseFhssLook({
+      hit: true,
+      hops: hops900.length,
+      unique: hops900.length,
+      hopSetMhz: hops900,
+      spacingMhz: 0.6,
+      dwellMs: 2,
+      intervalMs: 4,
+      rateHz: 100,
+      hopBwMhz: 0.5,
+      spanMhz: 6.6,
+      fLowMhz: 903.5,
+      fHighMhz: 910.1,
+      windowLimited: false,
+      f0ResidualMhz: r900.residualMhz,
+      f0AbsMhz: r900.fRefMhz + r900.residualMhz,
+    });
+    check(
+      "atlas worker 903.5 → ELRS",
+      classifyAttackFamily(
+        { freqMhz: 910, widthMhz: 0.5, duty: 0.2, streak: 1 },
+        undefined,
+        undefined,
+        extraFromLook({ fhss: look900 }),
+      ).id === "elrs",
+    );
+  }
   check("канал R5", nearestAnalogChannel(5806)?.id === "R5");
   check("канал A4 на 5805", nearestAnalogChannel(5805)?.id === "A4");
   check("2.4 не analog-канал", nearestAnalogChannel(2442) == null);
