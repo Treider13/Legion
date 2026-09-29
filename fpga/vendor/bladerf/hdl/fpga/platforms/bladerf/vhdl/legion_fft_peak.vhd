@@ -42,26 +42,35 @@ entity legion_fft_peak is
 end entity;
 
 architecture rtl of legion_fft_peak is
+    -- M10K simple dual-port: один адрес записи и один адрес чтения.
+    -- True dual-port M10K кончается на 512×20 (Cyclone V Handbook,
+    -- mixed-width table), поэтому 256×32 двумя записями за такт в блок
+    -- не встаёт. Бабочка пишет A, затем B; читает A, затем B.
     type ram_t is array (0 to 255) of std_logic_vector(31 downto 0);
     signal ram : ram_t := (others => (others => '0'));
+    attribute ramstyle : string;
+    attribute ramstyle of ram : signal is "M10K, no_rw_check";
 
     type mag_ram_t is array (0 to 255) of unsigned(15 downto 0);
     signal mag_ram : mag_ram_t := (others => (others => '0'));
+    attribute ramstyle of mag_ram : signal is "M10K, no_rw_check";
 
-    signal addr_a : unsigned(7 downto 0) := (others => '0');
-    signal addr_b : unsigned(7 downto 0) := (others => '0');
-    signal we_a   : std_logic := '0';
-    signal we_b   : std_logic := '0';
-    signal din_a  : std_logic_vector(31 downto 0) := (others => '0');
-    signal din_b  : std_logic_vector(31 downto 0) := (others => '0');
-    signal q_a    : std_logic_vector(31 downto 0) := (others => '0');
-    signal q_b    : std_logic_vector(31 downto 0) := (others => '0');
-    signal mag_addr : unsigned(7 downto 0) := (others => '0');
-    signal mag_q    : unsigned(15 downto 0) := (others => '0');
-    signal mag_we   : std_logic := '0';
-    signal mag_din  : unsigned(15 downto 0) := (others => '0');
+    signal rd_addr  : unsigned(7 downto 0) := (others => '0');
+    signal wr_addr  : unsigned(7 downto 0) := (others => '0');
+    signal we       : std_logic := '0';
+    signal wr_data  : std_logic_vector(31 downto 0) := (others => '0');
+    signal q_fft    : std_logic_vector(31 downto 0) := (others => '0');
+    signal tw_addr  : unsigned(7 downto 0) := (others => '0');
+    signal mag_waddr : unsigned(7 downto 0) := (others => '0');
+    signal mag_raddr : unsigned(7 downto 0) := (others => '0');
+    signal mag_q     : unsigned(15 downto 0) := (others => '0');
+    signal mag_we    : std_logic := '0';
+    signal mag_din   : unsigned(15 downto 0) := (others => '0');
+    signal din_b_r   : std_logic_vector(31 downto 0) := (others => '0');
 
-    type state_t is (ST_COLLECT, ST_FFT_RD, ST_FFT_WAIT, ST_FFT_WR,
+    type state_t is (ST_COLLECT,
+                    ST_FFT_RD_A, ST_FFT_RD_B, ST_FFT_CAP, ST_FFT_MATH,
+                    ST_FFT_WR_B, ST_FFT_GAP,
                     ST_PEAK_RD, ST_PEAK_WAIT, ST_PEAK_CMP, ST_LM_WRAP,
                     ST_TOP_RD, ST_TOP_WAIT, ST_TOP_CMP, ST_PUBLISH);
     signal state : state_t := ST_COLLECT;
@@ -80,8 +89,6 @@ architecture rtl of legion_fft_peak is
     signal word3_r   : std_logic_vector(31 downto 0) := (others => '0');
     signal a_i_r     : signed(15 downto 0) := (others => '0');
     signal a_q_r     : signed(15 downto 0) := (others => '0');
-    signal b_i_r     : signed(15 downto 0) := (others => '0');
-    signal b_q_r     : signed(15 downto 0) := (others => '0');
     signal wr_r      : signed(15 downto 0) := (others => '0');
     signal wi_r      : signed(15 downto 0) := (others => '0');
     signal ia_r      : unsigned(7 downto 0) := (others => '0');
@@ -166,44 +173,6 @@ architecture rtl of legion_fft_peak is
         return to_integer(e);
     end function;
 
-    -- 2400…2480 / 10 МГц при известном LO/fs; иначе октант bin/32.
-    function ch_slot(bin : natural; fs : unsigned(31 downto 0);
-                     lo : unsigned(31 downto 0)) return integer is
-        variable sb      : integer;
-        variable prod    : signed(47 downto 0);
-        variable off_khz : signed(31 downto 0);
-        variable f_khz   : integer;
-        variable slot    : integer;
-    begin
-        if fs = 0 or lo = 0 then
-            return bin / 32;
-        end if;
-        if bin < 128 then
-            sb := bin;
-        else
-            sb := bin - 256;
-        end if;
-        -- Тот же round, что legion_bin_to_khz: (k·fs ± 128000) / 256000.
-        -- Trunc здесь и round в NIOS расходились на границе 10 МГц.
-        prod := to_signed(sb, 16) * signed(resize(fs, 32));
-        if prod >= 0 then
-            off_khz := resize((prod + to_signed(128000, 48)) /
-                              to_signed(256000, 48), 32);
-        else
-            off_khz := resize((prod - to_signed(128000, 48)) /
-                              to_signed(256000, 48), 32);
-        end if;
-        f_khz := to_integer(signed(resize(lo, 32)) + off_khz);
-        if f_khz < LEGION_OCUSYNC_F0_KHZ or
-           f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then
-            return -1;
-        end if;
-        slot := (f_khz - LEGION_OCUSYNC_F0_KHZ) / LEGION_OCUSYNC_BW_KHZ;
-        if slot < 0 or slot > 7 then
-            return -1;
-        end if;
-        return slot;
-    end function;
 begin
     peak_word  <= word_r;
     peak1_word <= word1_r;
@@ -218,21 +187,38 @@ begin
     ch_bins    <= bins_r;
     ch_active  <= act_r;
 
+    -- Intel recommended HDL: один процесс, запись и зарегистрированное чтение,
+    -- без сброса. Адрес и данные записи выставлены на предыдущем такте.
     ram_p : process(clock)
     begin
         if rising_edge(clock) then
-            q_a <= ram(to_integer(addr_a));
-            q_b <= ram(to_integer(addr_b));
-            if we_a = '1' then
-                ram(to_integer(addr_a)) <= din_a;
+            if we = '1' then
+                ram(to_integer(wr_addr)) <= wr_data;
             end if;
-            if we_b = '1' then
-                ram(to_integer(addr_b)) <= din_b;
-            end if;
-            mag_q <= mag_ram(to_integer(mag_addr));
+            q_fft <= ram(to_integer(rd_addr));
+        end if;
+    end process;
+
+    mag_p : process(clock)
+    begin
+        if rising_edge(clock) then
             if mag_we = '1' then
-                mag_ram(to_integer(mag_addr)) <= mag_din;
+                mag_ram(to_integer(mag_waddr)) <= mag_din;
             end if;
+            mag_q <= mag_ram(to_integer(mag_raddr));
+        end if;
+    end process;
+
+    -- Синхронное чтение константы, процесс только от clock, без сброса:
+    -- шаблон ROM из Quartus Prime Handbook (Inferring ROM Functions).
+    -- Атрибут romstyle на переменную роняет GHDL 4.1 (CONSTRAINT_ERROR),
+    -- поэтому таблица берётся прямо из пакета. 256×16 Quartus и так
+    -- кладёт в блок, а не в логику.
+    tw_p : process(clock)
+    begin
+        if rising_edge(clock) then
+            wr_r <= LEGION_TWIDDLE_RE(to_integer(tw_addr));
+            wi_r <= LEGION_TWIDDLE_IM(to_integer(tw_addr));
         end if;
     end process;
 
@@ -278,12 +264,10 @@ begin
             g_acc     <= (others => (others => '0'));
             g_pk      <= (others => (others => '0'));
             g_bin     <= (others => (others => '0'));
-            we_a      <= '0';
-            we_b      <= '0';
-            addr_a    <= (others => '0');
-            addr_b    <= (others => '0');
-            din_a     <= (others => '0');
-            din_b     <= (others => '0');
+            we        <= '0';
+            wr_addr   <= (others => '0');
+            rd_addr   <= (others => '0');
+            wr_data   <= (others => '0');
             mag_valid_r <= '0';
             mag_last_r  <= '0';
             mag_bin_r   <= (others => '0');
@@ -298,8 +282,7 @@ begin
             sel_ok2     <= '0';
             sel_ok3     <= '0';
         elsif rising_edge(clock) then
-            we_a        <= '0';
-            we_b        <= '0';
+            we          <= '0';
             mag_we      <= '0';
             mag_valid_r <= '0';
             mag_last_r  <= '0';
@@ -319,57 +302,69 @@ begin
                 case state is
                     when ST_COLLECT =>
                         if in_valid = '1' then
-                            addr_a    <= bitrev8(collect_n(7 downto 0));
-                            din_a     <= pack_iq(in_i, in_q);
-                            we_a      <= '1';
+                            wr_addr   <= bitrev8(collect_n(7 downto 0));
+                            wr_data   <= pack_iq(in_i, in_q);
+                            we        <= '1';
                             collect_n <= collect_n + 1;
                             if collect_n = 255 then
                                 collect_n <= (others => '0');
                                 stage     <= (others => '0');
                                 pair      <= (others => '0');
-                                state     <= ST_FFT_RD;
+                                state     <= ST_FFT_RD_A;
                             end if;
                         end if;
 
-                    when ST_FFT_RD =>
+                    -- Адрес чтения виден RAM на следующем фронте, q_fft —
+                    -- ещё через фронт. Поэтому между выдачей адреса и
+                    -- использованием q_fft стоит один такт.
+                    when ST_FFT_RD_A =>
                         half := shift_left(to_unsigned(1, 8), to_integer(stage));
                         j    := resize(pair, 8) and (half - 1);
                         grp  := shift_right(resize(pair, 8), to_integer(stage));
                         ia   := shift_left(grp, to_integer(stage) + 1) + j;
                         ib   := ia + half;
                         tw_idx := shift_left(j, 8 - to_integer(stage) - 1);
-                        addr_a <= ia;
-                        addr_b <= ib;
-                        ia_r   <= ia;
-                        ib_r   <= ib;
-                        wr_r   <= LEGION_TWIDDLE_RE(to_integer(tw_idx));
-                        wi_r   <= LEGION_TWIDDLE_IM(to_integer(tw_idx));
-                        state  <= ST_FFT_WAIT;
+                        rd_addr <= ia;
+                        tw_addr <= tw_idx;
+                        ia_r    <= ia;
+                        ib_r    <= ib;
+                        state   <= ST_FFT_RD_B;
 
-                    when ST_FFT_WAIT =>
-                        state <= ST_FFT_WR;
+                    when ST_FFT_RD_B =>
+                        rd_addr <= ib_r;
+                        state   <= ST_FFT_CAP;
 
-                    when ST_FFT_WR =>
-                        a_i_r <= signed(q_a(31 downto 16));
-                        a_q_r <= signed(q_a(15 downto 0));
-                        b_i_r <= signed(q_b(31 downto 16));
-                        b_q_r <= signed(q_b(15 downto 0));
-                        pr := wr_r * signed(q_b(31 downto 16)) - wi_r * signed(q_b(15 downto 0));
-                        pi := wr_r * signed(q_b(15 downto 0)) + wi_r * signed(q_b(31 downto 16));
+                    when ST_FFT_CAP =>
+                        a_i_r <= signed(q_fft(31 downto 16));
+                        a_q_r <= signed(q_fft(15 downto 0));
+                        state <= ST_FFT_MATH;
+
+                    when ST_FFT_MATH =>
+                        pr := wr_r * signed(q_fft(31 downto 16))
+                            - wi_r * signed(q_fft(15 downto 0));
+                        pi := wr_r * signed(q_fft(15 downto 0))
+                            + wi_r * signed(q_fft(31 downto 16));
                         tr := resize(shift_right(pr, 15), 16);
                         ti := resize(shift_right(pi, 15), 16);
-                        sa := resize(signed(q_a(31 downto 16)), 17) + resize(tr, 17);
-                        da := resize(signed(q_a(31 downto 16)), 17) - resize(tr, 17);
-                        sb := resize(signed(q_a(15 downto 0)), 17) + resize(ti, 17);
-                        db := resize(signed(q_a(15 downto 0)), 17) - resize(ti, 17);
-                        addr_a <= ia_r;
-                        addr_b <= ib_r;
-                        din_a  <= pack_iq(resize(shift_right(sa, 1), 16),
-                                          resize(shift_right(sb, 1), 16));
-                        din_b  <= pack_iq(resize(shift_right(da, 1), 16),
-                                          resize(shift_right(db, 1), 16));
-                        we_a   <= '1';
-                        we_b   <= '1';
+                        sa := resize(a_i_r, 17) + resize(tr, 17);
+                        da := resize(a_i_r, 17) - resize(tr, 17);
+                        sb := resize(a_q_r, 17) + resize(ti, 17);
+                        db := resize(a_q_r, 17) - resize(ti, 17);
+                        wr_addr <= ia_r;
+                        wr_data <= pack_iq(resize(shift_right(sa, 1), 16),
+                                           resize(shift_right(sb, 1), 16));
+                        din_b_r <= pack_iq(resize(shift_right(da, 1), 16),
+                                           resize(shift_right(db, 1), 16));
+                        we    <= '1';
+                        state <= ST_FFT_WR_B;
+
+                    when ST_FFT_WR_B =>
+                        wr_addr <= ib_r;
+                        wr_data <= din_b_r;
+                        we      <= '1';
+                        state   <= ST_FFT_GAP;
+
+                    when ST_FFT_GAP =>
                         if pair = 127 then
                             pair <= (others => '0');
                             if stage = 7 then
@@ -389,26 +384,26 @@ begin
                                 state     <= ST_PEAK_RD;
                             else
                                 stage <= stage + 1;
-                                state <= ST_FFT_RD;
+                                state <= ST_FFT_RD_A;
                             end if;
                         else
                             pair  <= pair + 1;
-                            state <= ST_FFT_RD;
+                            state <= ST_FFT_RD_A;
                         end if;
 
                     when ST_PEAK_RD =>
-                        addr_a <= peak_i(7 downto 0);
-                        state  <= ST_PEAK_WAIT;
+                        rd_addr <= peak_i(7 downto 0);
+                        state   <= ST_PEAK_WAIT;
 
                     when ST_PEAK_WAIT =>
                         state <= ST_PEAK_CMP;
 
                     when ST_PEAK_CMP =>
-                        ii := signed(q_a(31 downto 16));
-                        qq := signed(q_a(15 downto 0));
+                        ii := signed(q_fft(31 downto 16));
+                        qq := signed(q_fft(15 downto 0));
                         mag := unsigned(ii * ii) + unsigned(qq * qq);
                         mag16 := mag(31 downto 16);
-                        mag_addr    <= peak_i(7 downto 0);
+                        mag_waddr   <= peak_i(7 downto 0);
                         mag_din     <= mag16;
                         mag_we      <= '1';
                         mag_valid_r <= '1';
@@ -438,7 +433,7 @@ begin
                             best_mag <= mag;
                             best_bin <= peak_i(7 downto 0);
                         end if;
-                        gi := ch_slot(to_integer(peak_i(7 downto 0)), fs_hz, lo_khz);
+                        gi := legion_ch_slot(to_integer(peak_i(7 downto 0)), fs_hz, lo_khz);
                         if (not skip_dc) and gi >= 0 and gi <= 7 then
                             sum := resize(g_acc(gi), 33) + resize(mag, 33);
                             if sum(32) = '1' then
@@ -473,7 +468,7 @@ begin
                         state        <= ST_TOP_RD;
 
                     when ST_TOP_RD =>
-                        mag_addr <= top_i(7 downto 0);
+                        mag_raddr <= top_i(7 downto 0);
                         state    <= ST_TOP_WAIT;
 
                     when ST_TOP_WAIT =>

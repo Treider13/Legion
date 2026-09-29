@@ -89,7 +89,8 @@ begin
         ctrl <= x"0014"; -- [4:2]=5, map=raw, n80=0
         mag_f <= to_unsigned(3, 7);
         feed_frame(clk, mag_v, mag_l, mag_b, mag_p, 32, 16#1234#);
-        for k in 0 to 3 loop
+        -- 80 тактов копии + публикация + регистр слова.
+        for k in 0 to 89 loop
             tick(clk);
         end loop;
         idx <= to_unsigned(1, 7);
@@ -115,7 +116,7 @@ begin
         -- последний бин один несёт энергию: ch = 255>>5 = 7, без двойного счёта
         mag_f <= to_unsigned(4, 7);
         feed_frame(clk, mag_v, mag_l, mag_b, mag_p, 255, 16#00AB#);
-        for k in 0 to 3 loop
+        for k in 0 to 89 loop
             tick(clk);
         end loop;
         idx <= to_unsigned(7, 7);
@@ -138,7 +139,7 @@ begin
         lut_we <= '0';
         mag_f <= to_unsigned(5, 7);
         feed_frame(clk, mag_v, mag_l, mag_b, mag_p, 16, 16#2222#);
-        for k in 0 to 3 loop
+        for k in 0 to 89 loop
             tick(clk);
         end loop;
         idx <= to_unsigned(3, 7);
@@ -167,7 +168,7 @@ begin
         mag_f <= to_unsigned(6, 7);
         feed_bin(clk, mag_v, mag_l, mag_b, mag_p, 16, 16#3333#, true);
         lut_we <= '0';
-        for k in 0 to 3 loop
+        for k in 0 to 89 loop
             tick(clk);
         end loop;
         idx <= to_unsigned(3, 7);
@@ -187,7 +188,7 @@ begin
         -- конвейерного такта и переносит энергию в канал 4.
         mag_f <= to_unsigned(7, 7);
         feed_bin(clk, mag_v, mag_l, mag_b, mag_p, 16, 16#4444#, true);
-        for k in 0 to 3 loop
+        for k in 0 to 89 loop
             tick(clk);
         end loop;
         idx <= to_unsigned(4, 7);

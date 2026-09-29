@@ -38,6 +38,12 @@ architecture rtl of legion_fft_channelize is
 
     signal acc   : acc_t := (others => (others => '0'));
     signal snap  : pwr_t := (others => (others => '0'));
+    -- hold копится по одному каналу за такт и публикуется в snap целиком,
+    -- чтобы CH_PWR не показывал рваный кадр. Цикл 0..79 в одном такте
+    -- разворачивался в 80 сумматоров (~5495 ALM на xA4).
+    signal hold  : pwr_t := (others => (others => '0'));
+    signal copy_i : integer range 0 to LEGION_CH_N + 1 := LEGION_CH_N + 1;
+    signal pend_fr : unsigned(6 downto 0) := (others => '0');
     signal lut   : lut_t := (others => x"FF");
     -- Mapping is intentionally available in the same cycle as mag_bin.
     -- Declaring logic storage preserves that contract on Cyclone IV and V
@@ -77,65 +83,71 @@ begin
         variable rd       : integer;
         variable pwr      : unsigned(15 downto 0);
         variable skip_dc  : boolean;
+        constant COPY_IDLE : integer := LEGION_CH_N + 1;
     begin
         if reset = '1' then
-            acc    <= (others => (others => '0'));
-            snap   <= (others => (others => '0'));
-            fr_r   <= (others => '0');
-            vld_r  <= '0';
-            word_r <= (others => '0');
+            acc     <= (others => (others => '0'));
+            snap    <= (others => (others => '0'));
+            hold    <= (others => (others => '0'));
+            fr_r    <= (others => '0');
+            vld_r   <= '0';
+            word_r  <= (others => '0');
+            copy_i  <= COPY_IDLE;
+            pend_fr <= (others => '0');
         elsif rising_edge(clock) then
             if enable = '0' then
-                acc    <= (others => (others => '0'));
-                snap   <= (others => (others => '0'));
-                vld_r  <= '0';
-                word_r <= (others => '0');
+                acc     <= (others => (others => '0'));
+                snap    <= (others => (others => '0'));
+                hold    <= (others => (others => '0'));
+                vld_r   <= '0';
+                word_r  <= (others => '0');
+                copy_i  <= COPY_IDLE;
             else
-                map_mode := unsigned(ch_ctrl(1 downto 0));
-                sh := to_integer(unsigned(ch_ctrl(4 downto 2)));
-                if ch_ctrl(LEGION_CH_N80) = '1' then
-                    n_ch := LEGION_CH_N;
+                -- 80 тактов копии + 1 такт публикации. Пока идёт копия,
+                -- snap и valid остаются прошлым целым кадром.
+                -- Пик FFT после mag_last занят top-N тысячи тактов, так что
+                -- следующий mag_valid сюда не попадает.
+                if copy_i < LEGION_CH_N then
+                    hold(copy_i) <= sat16(acc(copy_i));
+                    copy_i <= copy_i + 1;
+                elsif copy_i = LEGION_CH_N then
+                    snap    <= hold;
+                    acc     <= (others => (others => '0'));
+                    fr_r    <= pend_fr;
+                    vld_r   <= '1';
+                    copy_i  <= COPY_IDLE;
                 else
-                    n_ch := 8;
-                end if;
-                skip_dc := ch_ctrl(LEGION_CH_DC_SKIP) = '1';
-
-                if mag_valid = '1' then
-                    b := mag_bin;
-                    if map_mode = to_unsigned(LEGION_CH_MAP_LUT, 2) then
-                        ch := lut(to_integer(b));
+                    map_mode := unsigned(ch_ctrl(1 downto 0));
+                    sh := to_integer(unsigned(ch_ctrl(4 downto 2)));
+                    if ch_ctrl(LEGION_CH_N80) = '1' then
+                        n_ch := LEGION_CH_N;
                     else
-                        if ch_ctrl(LEGION_CH_FFTSHIFT) = '1' then
-                            b := b + 128;
-                        end if;
-                        ch := shift_right(b, sh);
+                        n_ch := 8;
                     end if;
-                    if (not skip_dc or mag_bin /= 0) and ch < n_ch then
-                        idx := to_integer(ch);
-                        if acc(idx) > (x"FFFFFF" - resize(mag_pow, 24)) then
-                            acc(idx) <= x"FFFFFF";
+                    skip_dc := ch_ctrl(LEGION_CH_DC_SKIP) = '1';
+
+                    if mag_valid = '1' then
+                        b := mag_bin;
+                        if map_mode = to_unsigned(LEGION_CH_MAP_LUT, 2) then
+                            ch := lut(to_integer(b));
                         else
-                            acc(idx) <= acc(idx) + resize(mag_pow, 24);
-                        end if;
-                    end if;
-                    if mag_last = '1' then
-                        -- snap в следующем такте от обновлённого acc нельзя:
-                        -- здесь добиваем текущий бин в копии и защёлкиваем.
-                        for k in 0 to LEGION_CH_N - 1 loop
-                            if k = to_integer(ch) and ch < n_ch
-                               and (not skip_dc or mag_bin /= 0) then
-                                if acc(k) > (x"FFFFFF" - resize(mag_pow, 24)) then
-                                    snap(k) <= x"FFFF";
-                                else
-                                    snap(k) <= sat16(acc(k) + resize(mag_pow, 24));
-                                end if;
-                            else
-                                snap(k) <= sat16(acc(k));
+                            if ch_ctrl(LEGION_CH_FFTSHIFT) = '1' then
+                                b := b + 128;
                             end if;
-                        end loop;
-                        acc   <= (others => (others => '0'));
-                        fr_r  <= mag_frame;
-                        vld_r <= '1';
+                            ch := shift_right(b, sh);
+                        end if;
+                        if (not skip_dc or mag_bin /= 0) and ch < n_ch then
+                            idx := to_integer(ch);
+                            if acc(idx) > (x"FFFFFF" - resize(mag_pow, 24)) then
+                                acc(idx) <= x"FFFFFF";
+                            else
+                                acc(idx) <= acc(idx) + resize(mag_pow, 24);
+                            end if;
+                        end if;
+                        if mag_last = '1' then
+                            pend_fr <= mag_frame;
+                            copy_i  <= 0;
+                        end if;
                     end if;
                 end if;
 
