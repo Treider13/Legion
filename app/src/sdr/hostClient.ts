@@ -175,12 +175,17 @@ export async function hostIperf3(opts: {
 }
 
 export async function hostScan(centerMhz: number, bwMhz: number, bins: number): Promise<HostScanResult> {
-  const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
-    op: "scan",
-    centerMhz,
-    bwMhz,
-    bins,
-  });
+  let r: HostScanResult & { bins?: ScanBin[] };
+  try {
+    r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
+      op: "scan",
+      centerMhz,
+      bwMhz,
+      bins,
+    });
+  } catch (e) {
+    return { ok: false, bins: [], reason: String(e) };
+  }
   return {
     ok: !!r.ok,
     bins: r.bins ?? [],
@@ -195,14 +200,19 @@ export async function hostAttackScan(
   centerMhz: number,
   plan: { fsHz: number; filterMhz: number; cropFactor: number; fftN: number },
 ): Promise<HostScanResult> {
-  const r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
-    op: "attack_scan",
-    centerMhz,
-    fsHz: plan.fsHz,
-    bwMhz: plan.filterMhz,
-    bins: plan.fftN,
-    cropFactor: plan.cropFactor,
-  });
+  let r: HostScanResult & { bins?: ScanBin[] };
+  try {
+    r = await hostRpc<HostScanResult & { bins?: ScanBin[] }>({
+      op: "attack_scan",
+      centerMhz,
+      fsHz: plan.fsHz,
+      bwMhz: plan.filterMhz,
+      bins: plan.fftN,
+      cropFactor: plan.cropFactor,
+    });
+  } catch (e) {
+    return { ok: false, bins: [], reason: String(e) };
+  }
   return {
     ok: !!r.ok,
     bins: r.bins ?? [],
