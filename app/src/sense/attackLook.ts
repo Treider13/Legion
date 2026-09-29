@@ -378,6 +378,17 @@ export function droneidPlainLines(p: DroneidPlain): string[] {
   return lines;
 }
 
+// Sort-A: детерминированные улики без обучения — счёт ZC-корреляции, корень ZC
+// и причина, по которой turbo/CRC не сошёлся. Оператору видно, на чём стоит
+// детект, даже когда plaintext нет (O3+/O4 или шум добил кадр).
+export function droneidSortA(look: DroneidLook): string {
+  const bits: string[] = [];
+  if (look.zcScore > 0) bits.push(`ZC ${look.zcScore.toFixed(2)}`);
+  if (look.zcRoot) bits.push(`root ${look.zcRoot}`);
+  if (!look.ok && look.reason) bits.push(`причина: ${look.reason}`);
+  return bits.join(" · ");
+}
+
 export function lookRu(look: AttackLook | undefined): string {
   if (!look) return "разбор ещё копится";
   const pct = Math.round(look.conf * 100);
@@ -388,7 +399,9 @@ export function lookRu(look: AttackLook | undefined): string {
   if (look.droneid?.ok && look.droneid.plain?.serial) {
     bits.push(droneidPlainLines(look.droneid.plain)[0] || `DroneID ${look.droneid.plain.serial}`);
   } else if (look.droneid?.hit) {
-    bits.push(look.droneid.encrypted ? "DroneID без plaintext" : "DroneID ZC");
+    const head = look.droneid.encrypted ? "DroneID без plaintext" : "DroneID ZC";
+    const m = droneidSortA(look.droneid);
+    bits.push(m ? `${head} · ${m}` : head);
   }
   if (look.opendroneid?.uas?.uasId) {
     const od = look.opendroneid.uas;

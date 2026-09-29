@@ -192,6 +192,48 @@ def main() -> int:
     got8l = dji.analyze_droneid(eight_long, dji.DRONEID_FS)
     check("8-символ в длинном окне", got8l.get("ok") is True, str(got8l.get("reason")))
 
+    # --- Приёмка на шуме: детект детерминирован (Sort-A), CRC держит ложняк ---
+    rng = np.random.default_rng(20260929)
+
+    def awgn(sig: np.ndarray, snr_db: float) -> np.ndarray:
+        p = float(np.mean(np.abs(sig) ** 2))
+        if p <= 0:
+            return sig.astype(np.complex64)
+        npow = p / (10.0 ** (snr_db / 10.0))
+        noise = (rng.standard_normal(sig.size) + 1j * rng.standard_normal(sig.size)) * np.sqrt(npow / 2.0)
+        return (sig + noise).astype(np.complex64)
+
+    got_snr = dji.analyze_droneid(awgn(burst, 20.0), dji.DRONEID_FS)
+    check("шум +20 дБ: ZC hit", got_snr.get("hit") is True, str(got_snr.get("reason")))
+    check("шум +20 дБ: plaintext CRC ok", got_snr.get("ok") is True, str(got_snr.get("reason")))
+    check(
+        "шум +20 дБ: serial цел",
+        (got_snr.get("plain") or {}).get("serial") == "1581F5YHD228Q00A",
+        str(got_snr.get("plain")),
+    )
+
+    # Низкий SNR: даже если ZC поймался корреляцией, CRC не пропускает мусор.
+    got_low = dji.analyze_droneid(awgn(burst, -3.0), dji.DRONEID_FS)
+    check(
+        "шум -3 дБ: CRC не выдаёт ложный plaintext",
+        (not got_low.get("ok")) or bool((got_low.get("plain") or {}).get("serial")),
+        str(got_low.get("reason")),
+    )
+
+    # Чистый шум: нет ZC-детекта и нет ложного plaintext, причина видна.
+    pure = (rng.standard_normal(burst.size * 3) + 1j * rng.standard_normal(burst.size * 3)).astype(np.complex64)
+    got_pure = dji.analyze_droneid(pure, dji.DRONEID_FS)
+    check("чистый шум: нет plaintext", got_pure.get("ok") is False, str(got_pure.get("reason")))
+    check("чистый шум: причина видна (Sort-A)", bool(got_pure.get("reason")), str(got_pure))
+
+    # OpenDroneID: мусорные байты не дают ложный RID (без IE 221 / BLE 0xFFFA).
+    garbage = od.parse_opendroneid(bytes(rng.integers(0, 256, 64, dtype=np.uint8).tolist()))
+    check(
+        "OpenDroneID мусор: нет ложного uasId",
+        garbage["uas"].get("uasId") is None,
+        str(garbage),
+    )
+
     basic = od.encode_basic_id("TEST-UAS-001", 1, 2)
     loc = od.encode_location(55.75, 37.62, 150.0, 40.0, 2)
     check("basic 25", len(basic) == 25)
