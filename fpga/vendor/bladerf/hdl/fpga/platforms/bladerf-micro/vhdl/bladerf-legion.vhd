@@ -1275,50 +1275,21 @@ begin
         det_count   => lg_det_count
       );
 
-    -- FFT-пик + 8-slot энергия + Top-N / occupancy
-    U_legion_fft_peak : entity work.legion_fft_peak
-      port map (
-        clock      => rx_clock,
-        reset      => rx_reset,
-        enable     => lg_fft_en,
-        dc_notch   => lg_fft_dc_notch,
-        excl       => lg_fft_excl,
-        fs_hz      => lg_ch_fs_hz,
-        lo_khz     => lg_ch_lo_khz,
-        in_i       => adc_streams(0).data_i,
-        in_q       => adc_streams(0).data_q,
-        in_valid   => adc_streams(0).data_v,
-        peak_word  => lg_peak_word,
-        peak1_word => lg_peak1_word,
-        peak2_word => lg_peak2_word,
-        peak3_word => lg_peak3_word,
-        mag_valid  => lg_mag_valid,
-        mag_last   => lg_mag_last,
-        mag_bin    => lg_mag_bin,
-        mag_pow    => lg_mag_pow,
-        mag_frame  => lg_mag_frame,
-        ch_energy  => lg_ch_energy,
-        ch_bins    => lg_ch_bins_rx,
-        ch_active  => lg_ch_active
-      );
-
-    U_legion_fft_channelize : entity work.legion_fft_channelize
-      port map (
-        clock     => rx_clock,
-        reset     => rx_reset,
-        enable    => lg_fft_en,
-        ch_ctrl   => lg_ch_ctrl,
-        ch_idx    => lg_ch_idx,
-        lut_we    => lg_lut_we,
-        lut_addr  => lg_lut_addr,
-        lut_data  => lg_lut_data,
-        mag_valid => lg_mag_valid,
-        mag_last  => lg_mag_last,
-        mag_bin   => lg_mag_bin,
-        mag_pow   => lg_mag_pow,
-        mag_frame => lg_mag_frame,
-        ch_word   => lg_ch_word
-      );
+    -- Спектр считает компьютер и пишет PEAK_BIN. Эти два блока на xA4
+    -- занимали 19923 ALM при бюджете 18480.
+    lg_peak_word  <= (others => '0');
+    lg_peak1_word <= (others => '0');
+    lg_peak2_word <= (others => '0');
+    lg_peak3_word <= (others => '0');
+    lg_ch_word    <= (others => '0');
+    lg_mag_valid  <= '0';
+    lg_mag_last   <= '0';
+    lg_mag_bin    <= (others => '0');
+    lg_mag_pow    <= (others => '0');
+    lg_mag_frame  <= (others => '0');
+    lg_ch_energy  <= (others => (others => '0'));
+    lg_ch_bins_rx <= (others => '0');
+    lg_ch_active  <= (others => '0');
 
     -- Gemini / два тона ≥ fs/16: MA-16 режет вторую; bypass = in→out.
     lg_xlat_en <= lg_fft_en and not lg_fft_xlat_bypass;

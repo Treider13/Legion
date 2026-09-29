@@ -1281,9 +1281,17 @@ static void legion_dual_from_peak1(uint32_t w0)
     legion_xlat_bypass_auto = true;
 }
 
+static uint32_t legion_host_peak;
+
 static uint32_t legion_peak_word(void)
 {
-    return legion_mux_word(LEGION_REG_PEAK_BIN);
+    uint32_t const hw = legion_mux_word(LEGION_REG_PEAK_BIN);
+
+    /* HDL-спектр снят с кристалла. Действительное слово пишет компьютер. */
+    if ((hw & 0x80000000u) != 0) {
+        return hw;
+    }
+    return legion_host_peak;
 }
 
 static uint32_t legion_walk_cur_word(void)
@@ -1496,6 +1504,11 @@ static void legion_event(uint8_t code);
 static void legion_ch_read_map(void)
 {
     uint32_t b03;
+
+    /* Нулевая карта HDL не должна затирать слот, собранный из PEAK_BIN. */
+    if ((legion_host_peak & 0x80000000u) != 0) {
+        return;
+    }
     uint32_t b47;
     uint32_t i;
 
@@ -3234,6 +3247,17 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             return true;
 
         case LEGION_REG_PEAK_BIN:
+            legion_host_peak = data;
+            if ((data & 0x80000000u) != 0) {
+                uint32_t const bin = data & 0xffu;
+                uint32_t const slot = (bin >> 5) & 7u;
+
+                legion_ch_bin[slot] = bin;
+                legion_ch_e[slot] = (data >> 8) & 0xffffu;
+                if (legion_ch_hits[slot] < 255u) {
+                    legion_ch_hits[slot]++;
+                }
+            }
             return true;
 
         case LEGION_REG_FFT_CTRL:
