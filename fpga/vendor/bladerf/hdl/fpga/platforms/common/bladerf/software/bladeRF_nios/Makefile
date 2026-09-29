@@ -227,6 +227,12 @@ QUARTUS_PROJECT_DIR := $(QUARTUS_OUTDIR)
 #                            GENERATED SETTINGS END                           ^
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+# Keep application code/data independently collectable.  libad936x already
+# uses these section flags; enabling linker GC removes only unreachable
+# sections while preserving every symbol referenced by code or command tables.
+APP_CFLAGS_USER_FLAGS += -ffunction-sections -fdata-sections
+APP_LDFLAGS_USER += -Wl,--gc-sections
+
 
 #------------------------------------------------------------------------------
 #                           DEFAULT TARGET
