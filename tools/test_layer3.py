@@ -117,6 +117,18 @@ def main() -> int:
     bad24, fs24 = dji.prepare_droneid_iq(np.ones(4096, dtype=np.complex64), 24e6)
     check("24 MSPS не DroneID fs", bad24.size == 0 and fs24 == 0.0)
 
+    need = int(dji.DRONEID_FS * dji.DRONEID_RING_S)
+    clip, fs_c = dji._clip_and_mix(np.ones(need + 4096, dtype=np.complex64), dji.DRONEID_FS)
+    check(
+        "clip 1.30 с @ 15.36",
+        clip.size == need and clip.size >= 19_900_000 and abs(fs_c - dji.DRONEID_FS) < 1.0,
+        str((clip.size, need, dji.DRONEID_RING_S)),
+    )
+    y4, hold4 = dji.decimate_droneid_block(np.ones(61, dtype=np.complex64), 61.44e6)
+    check("decim 61.44 leftover %4", y4.size == 15 and hold4.size == 1, str((y4.size, hold4.size)))
+    y4b, hold4b = dji.decimate_droneid_block(np.ones(4095, dtype=np.complex64), 61.44e6, hold4)
+    check("decim hold склейка", y4b.size == 1024 and hold4b.size == 0, str((y4b.size, hold4b.size)))
+
     n40 = int(round(burst.size * 40.0e6 / dji.DRONEID_FS))
     x40 = dji._fft_resample(burst, n40)
     got40 = dji.analyze_droneid(x40, 40.0e6)
@@ -242,7 +254,21 @@ def main() -> int:
     xf = pdb.classify_fhss_domain(0.26, 915.0)
     check("шаг 260 кГц = Crossfire", xf["family"] == "crossfire" and xf["unique"] is True, str(xf))
     ov = pdb.classify_fhss_domain(1.0, 2442.0)
-    check("шаг 1 МГц 2.4 не уникален", ov["unique"] is False, str(ov))
+    check("шаг 1 МГц 2.4 без residual не уникален", ov["unique"] is False, str(ov))
+    r0, _ = pdb.fhss_residual_f0([2440.0 + i for i in range(6)], 1.0)
+    r4, _ = pdb.fhss_residual_f0([2400.4 + i for i in range(6)], 1.0)
+    r55, _ = pdb.fhss_residual_f0([2400.55 + i for i in range(6)], 1.0)
+    check("residual 2440+i = 0.0", abs(r0 - 0.0) < 1e-9, str(r0))
+    check("residual 2400.4+i = 0.4", abs(r4 - 0.4) < 1e-9, str(r4))
+    check("residual +150 кГц = 0.55", abs(r55 - 0.55) < 1e-9, str(r55))
+    ov_m = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.0)
+    ov_e = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.4)
+    ov_c = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.55)
+    ov_mid = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.2)
+    check("1 МГц + residual 0.0 = mLRS", ov_m["unique"] is True and ov_m["family"] == "mlrs", str(ov_m))
+    check("1 МГц + residual 0.4 = ELRS", ov_e["unique"] is True and ov_e["family"] == "elrs", str(ov_e))
+    check("FreqCorrection +150 residual 0.55 = ELRS", ov_c["unique"] is True and ov_c["family"] == "elrs", str(ov_c))
+    check("residual 0.2 обеих сеток не уникален", ov_mid["unique"] is False, str(ov_mid))
     ov6 = pdb.classify_fhss_domain(0.6, 915.0)
     check("шаг 0.6 900 не уникален", ov6["unique"] is False, str(ov6))
 
@@ -269,9 +295,12 @@ def main() -> int:
     a24 = fh.analyze_fhss(x24, fs_h, 2442.5)
     check("FHSS 2.4 hit", a24.get("hit") is True, str(a24))
     check(
-        "FHSS 1 МГц не уникален",
-        (a24.get("domain") or {}).get("unique") is False,
-        str(a24.get("domain")),
+        "FHSS 2440+i residual 0 → mLRS",
+        (a24.get("domain") or {}).get("unique") is True
+        and (a24.get("domain") or {}).get("family") == "mlrs"
+        and abs(float(a24.get("f0ResidualMhz", -1)) - 0.0) < 0.05
+        and int(a24.get("nSlots") or 0) == 6,
+        str((a24.get("domain"), a24.get("f0ResidualMhz"), a24.get("nSlots"))),
     )
 
     tone = rc.synth_rc_train(fs, 250.0, int(fs * 0.04), css=True, pkt_s=0.001)

@@ -55,6 +55,9 @@ export interface FhssLook {
   hint: string;
   domain?: { id: string; family: string; label: string; hint: string; unique: boolean } | null;
   pathMhz?: number[];
+  f0ResidualMhz?: number;
+  f0AbsMhz?: number;
+  nSlots?: number;
 }
 
 export interface ProtoMatch {
@@ -106,6 +109,44 @@ export const ANALOG_CHANNELS: readonly AnalogChannel[] = [
 ];
 
 const SPACING_TOL = 0.18;
+export const FREQCORR_MAX_MHZ = 0.20; // ExpressLRS FHSS.h SX1280 FreqCorrectionMax = 200 кГц
+
+function mhzToKhz(x: number): number {
+  return Math.round(x * 1000);
+}
+
+export function fhssResidualF0(
+  hopsMhz: readonly number[],
+  stepMhz: number,
+  fRefMhz?: number,
+): { residualMhz: number; fRefMhz: number } {
+  const hops = hopsMhz.map(Number).filter((h) => Number.isFinite(h) && h > 0);
+  const step = stepMhz;
+  if (hops.length === 0 || !(step > 0)) return { residualMhz: 0, fRefMhz: 2400 };
+  const mid = hops.length < 3
+    ? hops[Math.floor(hops.length / 2)]!
+    : [...hops].sort((a, b) => a - b)[Math.floor(hops.length / 2)]!;
+  const fRef = fRefMhz ?? (mid >= 2390 && mid <= 2510 ? 2400 : Math.min(...hops));
+  const stepK = mhzToKhz(step);
+  const refK = mhzToKhz(fRef);
+  if (!(stepK > 0)) return { residualMhz: 0, fRefMhz: refK / 1000 };
+  const rs = hops.map((f) => {
+    const fk = mhzToKhz(f);
+    const k = Math.round((fk - refK) / stepK);
+    let r = (fk - refK) - k * stepK;
+    r %= stepK;
+    if (r < 0) r += stepK;
+    return r;
+  }).sort((a, b) => a - b);
+  return { residualMhz: rs[Math.floor(rs.length / 2)]! / 1000, fRefMhz: refK / 1000 };
+}
+
+export function fhssCircDistMhz(a: number, b: number, step: number): number {
+  const s = mhzToKhz(step);
+  if (!(s > 0)) return Math.abs(a - b);
+  const d = Math.abs(mhzToKhz(a) - mhzToKhz(b)) % s;
+  return Math.min(d, s - d) / 1000;
+}
 
 export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: string; hint: string }[] = [
   { id: "droneid", layer: "l3", label: "DJI DroneID O2/O3", hint: "proto17 ZC 600/147 + 91 байт. Модель — kismet product_type. O3+/O4 без decrypt" },
@@ -131,8 +172,14 @@ export const PROTOCOL_CATALOG: readonly { id: string; layer: string; label: stri
   })),
 ];
 
-export function classifyFhssDomain(spacingMhz: number, band: string, freqMhz = 0): ProtoMatch {
-  const hits = FHSS_DOMAINS.filter((d) => {
+export function classifyFhssDomain(
+  spacingMhz: number,
+  band: string,
+  freqMhz = 0,
+  residualMhz?: number,
+  fRefMhz?: number,
+): ProtoMatch {
+  let hits = FHSS_DOMAINS.filter((d) => {
     if (d.spacing <= 0) return false;
     if (band !== "other" && d.band !== band) return false;
     if (freqMhz > 0 && (freqMhz < d.f0 - 5 || freqMhz > d.f1 + 5)) return false;
@@ -141,8 +188,17 @@ export function classifyFhssDomain(spacingMhz: number, band: string, freqMhz = 0
   if (hits.length === 0) {
     return { id: "fhss-unknown", label: "FHSS, домен не сел", hint: "шаг не из открытых сеток", unique: false };
   }
+  if (residualMhz != null) {
+    const fRef = fRefMhz ?? (freqMhz >= 2390 && freqMhz <= 2510 ? 2400 : freqMhz);
+    const tight = hits.filter((h) => {
+      if (!(h.spacing > 0)) return false;
+      const expect = fhssResidualF0([h.f0], h.spacing, fRef).residualMhz;
+      return fhssCircDistMhz(residualMhz, expect, h.spacing) <= FREQCORR_MAX_MHZ;
+    });
+    if (tight.length > 0) hits = tight;
+  }
   const families = new Set(hits.map((h) => h.family));
-  const unique = families.size === 1 && hits.every((h) => h.unique);
+  const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null);
   const labels = [...new Set(hits.map((h) => h.label))].join(", ");
   if (unique) {
     const fam = hits[0]!.family as RcId;
@@ -192,6 +248,9 @@ export function parseFhssLook(raw: unknown): FhssLook | null {
     windowLimited: o.windowLimited === true,
     ibwMhz: Number(o.ibwMhz) || XA4_IBW_MHZ,
     hint: String(o.hint ?? ""),
+    f0ResidualMhz: Number.isFinite(Number(o.f0ResidualMhz)) ? Number(o.f0ResidualMhz) : undefined,
+    f0AbsMhz: Number.isFinite(Number(o.f0AbsMhz)) ? Number(o.f0AbsMhz) : undefined,
+    nSlots: Number.isFinite(Number(o.nSlots)) ? Number(o.nSlots) : undefined,
     domain: domainRaw
       ? {
           id: String(domainRaw.id ?? ""),

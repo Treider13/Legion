@@ -20,7 +20,7 @@
  *             выдержка SCAN_DWELL_US, затем следующий взгляд 2484.
  *   FFT+PARK: 2400–2487 → один центр 2443.5; dwell+энергия не гоняет PLL.
  *   FFT+SURVEY: 2000–3000 глухой 18 клеток; пик 2434 → LO 2434;
- *             SCAN_SURVEY_US → снова 2028. События: PASS / STARE / LOCK /
+ *             occupancy gone 1.5 с → снова 2028. События: PASS / STARE / LOCK /
  *             SWITCH / RESURVEY (один код на work — иначе хост теряет).
  *             Внутри окна: обычный держит выдержку; приоритет тоже держит
  *             и на сильнее перескакивает с новой выдержкой.
@@ -1338,7 +1338,7 @@ int main(void)
     CHECK("FFT SURVEY: стоянка unmute после SETTLE",
           rfic_idx(BLADERF_RFIC_COMMAND_TXMUTE, BLADERF_CHANNEL_TX(0), 0) >= 0);
     rfic_n = 0;
-    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
     legion_work(); /* T → снова обзор, клетка 0 = 2028, mute */
     CHECK("FFT SURVEY: после T hop на 2028, mute",
           rfic_idx(BLADERF_RFIC_COMMAND_FREQUENCY, BLADERF_CHANNEL_RX(0),
@@ -1395,7 +1395,7 @@ int main(void)
     legion_work(); /* stare unmute */
     rfic_fail_tx_freq = true;
     rfic_n = 0;
-    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
     legion_work(); /* T → hop 2028 отказ */
     {
         uint32_t khz = 0;
@@ -1465,7 +1465,7 @@ int main(void)
     }
     t_tamer += 8;
     legion_work(); /* stare unmute */
-    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
     legion_work(); /* restart pass */
     t_status = 0;
     t_peak_word = 0;
@@ -1638,7 +1638,7 @@ int main(void)
     t_tamer += 8;
     legion_work(); /* stare unmute */
     pio_n = 0;
-    t_tamer += (uint64_t)56000000 * 400 / 1000000 + 1;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
     legion_work(); /* T → обзор, invalidate вернёт notch */
     CHECK("FFT SURVEY notch: после T HDL снова enable|notch",
           pio_wrote_reg(LEGION_REG_FFT_CTRL,
@@ -1785,12 +1785,32 @@ int main(void)
         legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
         CHECK("FFT SURVEY ordinary: событие SWITCH", (ev & 0xffu) == LEGION_EVT_SWITCH);
     }
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 5, 0x4000, 32);
     t_tamer += (uint64_t)56000000 * 5000000 / 1000000 + 1;
     legion_work();
     {
         uint32_t ev = 0;
         legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
-        CHECK("FFT SURVEY ordinary: после периода — RESURVEY",
+        CHECK("FFT SURVEY ordinary: 5 с живой — не RESURVEY",
+              (ev & 0xffu) != LEGION_EVT_RESURVEY);
+    }
+    t_tamer += (uint64_t)56000000 * 10000000 / 1000000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY ordinary: ещё 10 с живой — не RESURVEY",
+              (ev & 0xffu) != LEGION_EVT_RESURVEY);
+    }
+    t_status = 0;
+    t_peak_word = 0;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY ordinary: occupancy gone 1.5 с — RESURVEY",
               (ev & 0xffu) == LEGION_EVT_RESURVEY);
     }
 
@@ -1900,12 +1920,32 @@ int main(void)
         CHECK("FFT SURVEY priority: снова SWITCH",
               (ev & 0xffu) == LEGION_EVT_SWITCH);
     }
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 8, 0x5000, 80);
     t_tamer += (uint64_t)56000000 * 5000000 / 1000000 + 1;
     legion_work();
     {
         uint32_t ev = 0;
         legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
-        CHECK("FFT SURVEY priority: после периода — RESURVEY",
+        CHECK("FFT SURVEY priority: 5 с живой — не RESURVEY",
+              (ev & 0xffu) != LEGION_EVT_RESURVEY);
+    }
+    t_tamer += (uint64_t)56000000 * 10000000 / 1000000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: ещё 10 с живой — не RESURVEY",
+              (ev & 0xffu) != LEGION_EVT_RESURVEY);
+    }
+    t_status = 0;
+    t_peak_word = 0;
+    t_tamer += (uint64_t)56000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
+    legion_work();
+    {
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("FFT SURVEY priority: occupancy gone 1.5 с — RESURVEY",
               (ev & 0xffu) == LEGION_EVT_RESURVEY);
     }
 

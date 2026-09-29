@@ -1661,9 +1661,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       const f = t.freqMhz;
       return (f >= 2395 && f <= 2505) || (f >= 5725 && f <= 5875);
     });
-    // NDSS: вспышка раз в 640 мс. Think 450 + окно 160 оставляли дыру.
-    // Кольцо ≈273 мс @ 61.44 — think ≤220 мс перекрывает хвост.
-    const thinkGapMs = droneidListen ? 220 : 450;
+    // Кольцо 1.30 с @ 15.36 (NDSS live --duration 1.3). Think 700 после кольца:
+    // период вспышки 640 мс; 220/450 были под clip 0.42 с @ native.
+    const thinkGapMs = droneidListen ? 700 : 450;
     if (!residual && Date.now() - gAttackThinkAt < thinkGapMs) return;
     const live = pickAttackThinkTracks(tracks, centerMhz, spanMhz, 3);
     if (live.length === 0 && !residual) return;

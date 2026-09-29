@@ -247,7 +247,13 @@ from attack_dsp import (  # noqa: E402
     spectral_flatness,
     synth_look_iq,
 )
-from droneid import analyze_droneid  # noqa: E402
+from droneid import (  # noqa: E402
+    DRONEID_FS,
+    DRONEID_RING_CAP,
+    DRONEID_RING_S,
+    analyze_droneid,
+    decimate_droneid_block,
+)
 from fhss_detect import analyze_fhss, attach_rc  # noqa: E402
 from opendroneid import parse_opendroneid  # noqa: E402
 from protocol_db import nearest_analog_channel  # noqa: E402
@@ -1097,6 +1103,10 @@ class Radio:
         self._ring: IqRing | None = None
         self._attack_mem: IqRing | None = None
         self._attack_mem_live = False
+        self._droneid_mem: IqRing | None = None
+        self._droneid_mem_live = False
+        self._droneid_hold = None
+        self._droneid_hold_fs = 0.0
         self._discard_left = 0
         self._rx_gen = 0
         self._tune_until = 0.0
@@ -1422,6 +1432,7 @@ class Radio:
                             self._ring.push_block(rest)
                         if self._attack_mem is not None and self._attack_mem_live:
                             self._attack_mem.push_block(rest)
+                        self._feed_droneid_ring(rest, fs)
                     if self._discard_left <= 0:
                         self._rx_gen += 1
                     continue
@@ -1429,6 +1440,7 @@ class Radio:
                     self._ring.push_block(chunk)
                 if self._attack_mem is not None and self._attack_mem_live:
                     self._attack_mem.push_block(chunk)
+                self._feed_droneid_ring(chunk, fs)
 
     def _apply_rx_clock(self, fs: float, bw: float) -> float:
         """setSampleRate + setBandwidth. Фактический rate — из Soapy."""
@@ -1502,6 +1514,10 @@ class Radio:
                         self._ring.reset()
                     if self._attack_mem is not None:
                         self._attack_mem.reset()
+                    if self._droneid_mem is not None:
+                        self._droneid_mem.reset()
+                    self._droneid_hold = None
+                    self._droneid_hold_fs = 0.0
                     self._discard_left = settle_samples(fs)
                     self._tune_until = time.monotonic() + TUNE_DELAY_S
                     pending = self._rx_gen + 1
@@ -1630,8 +1646,13 @@ class Radio:
     def _pause_attack_mem(self) -> None:
         """scan() гасит запись в память Атаки. Кольцо scan() не трогаем."""
         self._attack_mem_live = False
+        self._droneid_mem_live = False
         if self._attack_mem is not None:
             self._attack_mem.reset()
+        if self._droneid_mem is not None:
+            self._droneid_mem.reset()
+        self._droneid_hold = None
+        self._droneid_hold_fs = 0.0
 
     def _ensure_attack_mem(self) -> None:
         if not NUMPY:
@@ -1639,6 +1660,37 @@ class Radio:
         if self._attack_mem is None:
             self._attack_mem = IqRing(ATTACK_MEM_CAP)
         self._attack_mem_live = True
+        self._droneid_mem_live = True
+
+    def _feed_droneid_ring(self, samples: Any, fs: float) -> None:
+        """Децимация в RX до записи. Не analyze_droneid и не native-кольцо."""
+        if not self._droneid_mem_live or not NUMPY or samples is None:
+            return
+        rate = float(fs) if fs and fs > 0 else float(self._rx_fs or 0.0)
+        if rate <= 0:
+            return
+        if abs(rate - self._droneid_hold_fs) > 1.0:
+            self._droneid_hold = None
+            self._droneid_hold_fs = rate
+        y, hold = decimate_droneid_block(samples, rate, self._droneid_hold)
+        self._droneid_hold = hold
+        if y is None or len(y) == 0:
+            return
+        if self._droneid_mem is None:
+            self._droneid_mem = IqRing(DRONEID_RING_CAP)
+        self._droneid_mem.push_block(y)
+
+    def _droneid_think_iq(self) -> tuple[Any, float] | None:
+        if self._droneid_mem is None or not self._droneid_mem_live:
+            return None
+        have = int(self._droneid_mem.available())
+        want = min(have, int(DRONEID_FS * DRONEID_RING_S), DRONEID_RING_CAP)
+        if want < int(DRONEID_FS * ATTACK_DRONEID_S):
+            return None
+        block = self._droneid_mem.latest(want)
+        if block is None:
+            return None
+        return block, DRONEID_FS
 
     def _attack_memory_fields(self, fs: float) -> dict[str, Any]:
         have = int(self._attack_mem.available()) if self._attack_mem is not None else 0
@@ -1789,8 +1841,13 @@ class Radio:
                 # Не channelize_look(target 15.36, BW 12): want_fs≠15.36.
                 key = int(round(freq * 2.0))
                 if key not in droneid_by_lo:
-                    src_d = iq_long if iq_long is not None else work
-                    droneid_by_lo[key] = analyze_droneid(src_d, work_fs, freq, center_mhz)
+                    ring_d = None if self.fake else self._droneid_think_iq()
+                    if ring_d is not None:
+                        src_d, src_fs = ring_d
+                    else:
+                        src_d = iq_long if iq_long is not None else work
+                        src_fs = work_fs
+                    droneid_by_lo[key] = analyze_droneid(src_d, src_fs, freq, center_mhz)
                 parsed["droneid"] = droneid_by_lo[key]
             frames = row.get("odidFrames") or row.get("odid_frames")
             if frames:
@@ -1799,6 +1856,11 @@ class Radio:
         clip_all = bool(clip_all or any(bool(x.get("clip")) for x in out_looks))
         extra["thinkFsHz"] = work_fs
         extra["cancelClock"] = bool(same_clock)
+        extra["droneidFsHz"] = DRONEID_FS
+        extra["droneidRingSamples"] = (
+            int(self._droneid_mem.available()) if self._droneid_mem is not None else 0
+        )
+        extra["droneidRingCap"] = DRONEID_RING_CAP
         if fhss:
             extra["fhss"] = fhss
         return {
