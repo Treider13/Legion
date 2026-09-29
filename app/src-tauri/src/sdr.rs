@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
@@ -17,7 +17,22 @@ struct Session {
     lines: Receiver<Result<String, String>>,
 }
 
-static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+/// Живой воркер или уже убитый, который ещё не отпустил USB.
+enum Hold {
+    Live(Session),
+    Dying { child: Child, reset_tried: bool },
+}
+
+static SESSION: Mutex<Option<Hold>> = Mutex::new(None);
+
+/// Nuand bladeRF.h: USB_NUAND_VENDOR_ID, BLADERF_PRODUCT_ID, BLADERF2_PRODUCT_ID.
+const NUAND_VID: &str = "2cf0";
+const NUAND_PIDS: &[&str] = &["5246", "5250"];
+/// linux/usbdevice_fs.h: `#define USBDEVFS_RESET _IO('U', 20)`.
+const USBDEVFS_RESET: u64 = 21_780;
+/// Сколько ждём SIGKILL, не блокируя сессию навечно.
+const REAP_BUDGET: Duration = Duration::from_millis(200);
+const RESET_BUDGET: Duration = Duration::from_millis(800);
 
 fn worker_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("LEGION_SDR_WORKER") {
@@ -115,24 +130,169 @@ fn spawn_reader(stdout: std::process::ChildStdout) -> Receiver<Result<String, St
     rx
 }
 
-fn kill_session(slot: &mut Option<Session>) {
-    if let Some(mut s) = slot.take() {
-        let _ = s.child.kill();
-        let _ = s.child.wait();
+fn is_nuand_blade(vid: &str, pid: &str) -> bool {
+    vid.trim().eq_ignore_ascii_case(NUAND_VID)
+        && NUAND_PIDS
+            .iter()
+            .any(|p| pid.trim().eq_ignore_ascii_case(p))
+}
+
+fn usb_node(bus: u32, dev: u32) -> String {
+    format!("/dev/bus/usb/{bus:03}/{dev:03}")
+}
+
+/// true — процесс уже завершился. Не вызывает wait(): зависший в USB
+/// процесс из wait() не возвращается.
+fn exited_within(child: &mut Child, budget: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if start.elapsed() >= budget => return false,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => return true,
+        }
     }
 }
 
-/// Гарантированно живая сессия под УЖЕ взятым мьютексом.
-/// Раньше ensure() лочил/отпускал SESSION, а rpc_line лочил снова — в окне
-/// между ними соседний вызов по таймауту убивал сессию, и наш запрос падал
-/// с «нет сессии SDR» вместо respawn (аудит №27).
-fn ensure_locked(app: &AppHandle, guard: &mut Option<Session>) -> Result<(), String> {
-    if let Some(s) = guard.as_mut() {
-        if s.child.try_wait().ok().flatten().is_none() {
-            return Ok(());
+fn begin_reap(slot: &mut Option<Hold>) {
+    let Some(hold) = slot.take() else {
+        return;
+    };
+    match hold {
+        Hold::Live(mut session) => {
+            drop(session.stdin);
+            let _ = session.child.kill();
+            if exited_within(&mut session.child, REAP_BUDGET) {
+                return;
+            }
+            *slot = Some(Hold::Dying {
+                child: session.child,
+                reset_tried: false,
+            });
+        }
+        Hold::Dying { mut child, reset_tried } => {
+            let _ = child.kill();
+            if exited_within(&mut child, REAP_BUDGET) {
+                return;
+            }
+            *slot = Some(Hold::Dying { child, reset_tried });
         }
     }
-    kill_session(guard);
+}
+
+/// Пока старый процесс держит плату, новый воркер не стартует.
+/// Один раз сбрасывает USB Nuand (ioctl), без выдёргивания кабеля.
+fn settle_dying(slot: &mut Option<Hold>) -> Result<(), String> {
+    let Some(hold) = slot.take() else {
+        return Ok(());
+    };
+    let Hold::Dying { mut child, reset_tried } = hold else {
+        // Живой слот сюда не попадает: вызывающий уже проверил try_wait.
+        *slot = Some(hold);
+        return Ok(());
+    };
+    if exited_within(&mut child, Duration::from_millis(20)) {
+        return Ok(());
+    }
+    if !reset_tried {
+        let note = reset_nuand_ports();
+        if exited_within(&mut child, RESET_BUDGET) {
+            return Ok(());
+        }
+        *slot = Some(Hold::Dying {
+            child,
+            reset_tried: true,
+        });
+        return Err(format!(
+            "SDR USB занят зависшим процессом. Сброс порта: {note}. Новый воркер не запущен"
+        ));
+    }
+    *slot = Some(Hold::Dying {
+        child,
+        reset_tried: true,
+    });
+    Err("SDR USB всё ещё занят зависшим процессом после сброса порта. Новый воркер не запущен".into())
+}
+
+fn reset_nuand_ports() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        reset_nuand_ports_linux()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "программный сброс USB есть только на Linux".into()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn reset_nuand_ports_linux() -> String {
+    let root = Path::new("/sys/bus/usb/devices");
+    let rd = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(e) => return format!("sysfs недоступен: {e}"),
+    };
+    let mut notes = Vec::new();
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if name.contains(':') {
+            continue;
+        }
+        let vid = std::fs::read_to_string(path.join("idVendor")).unwrap_or_default();
+        let pid = std::fs::read_to_string(path.join("idProduct")).unwrap_or_default();
+        if !is_nuand_blade(&vid, &pid) {
+            continue;
+        }
+        let bus: u32 = std::fs::read_to_string(path.join("busnum"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let dev: u32 = std::fs::read_to_string(path.join("devnum"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        if bus == 0 || dev == 0 {
+            notes.push(format!("{name}: нет bus/dev"));
+            continue;
+        }
+        let node = usb_node(bus, dev);
+        match usbdevfs_reset(&node) {
+            Ok(()) => notes.push(format!("{node} сброшен")),
+            Err(e) => notes.push(format!("{node}: {e}")),
+        }
+    }
+    if notes.is_empty() {
+        "плата Nuand в sysfs не найдена".into()
+    } else {
+        notes.join("; ")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn usbdevfs_reset(node: &str) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(node)
+        .map_err(|e| format!("открыть {node}: {e}"))?;
+    let rc = unsafe { ioctl(file.as_raw_fd(), USBDEVFS_RESET) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+extern "C" {
+    fn ioctl(fd: i32, request: u64) -> i32;
+}
+
+fn spawn_session(app: &AppHandle) -> Result<Hold, String> {
     let script = worker_path(app)?;
     // stderr inherit: piped+нечитаемый stderr заполняет pipe (64 КБ) и вешает Soapy.
     let mut child = Command::new(python_bin())
@@ -144,29 +304,62 @@ fn ensure_locked(app: &AppHandle, guard: &mut Option<Session>) -> Result<(), Str
         .map_err(|e| format!("запуск sdr_worker: {e}"))?;
     let stdin = child.stdin.take().ok_or("нет stdin worker")?;
     let stdout = child.stdout.take().ok_or("нет stdout worker")?;
-    *guard = Some(Session {
+    Ok(Hold::Live(Session {
         child,
         stdin,
         lines: spawn_reader(stdout),
-    });
+    }))
+}
+
+/// Гарантированно живая сессия под УЖЕ взятым мьютексом.
+/// Раньше ensure() лочил/отпускал SESSION, а rpc_line лочил снова — в окне
+/// между ними соседний вызов по таймауту убивал сессию, и наш запрос падал
+/// с «нет сессии SDR» вместо respawn (аудит №27).
+fn ensure_locked(app: &AppHandle, guard: &mut Option<Hold>) -> Result<(), String> {
+    match guard.take() {
+        None => {}
+        Some(Hold::Live(mut session)) => match session.child.try_wait() {
+            // Ещё работает — вернуть как было. try_wait здесь процесс не забирает.
+            Ok(None) => {
+                *guard = Some(Hold::Live(session));
+                return Ok(());
+            }
+            // Уже вышел: try_wait забрал статус. Повторный kill бил бы по чужому pid.
+            Ok(Some(_)) => {}
+            Err(_) => {}
+        },
+        Some(dying @ Hold::Dying { .. }) => {
+            *guard = Some(dying);
+            settle_dying(guard)?;
+        }
+    }
+    *guard = Some(spawn_session(app)?);
     Ok(())
 }
 
 fn rpc_line(app: &AppHandle, req: &str) -> Result<String, String> {
     let mut guard = SESSION.lock().map_err(|_| "sdr lock")?;
     ensure_locked(app, &mut guard)?;
-    let s = guard.as_mut().ok_or("нет сессии SDR")?;
-    writeln!(s.stdin, "{req}").map_err(|e| format!("write worker: {e}"))?;
-    s.stdin.flush().map_err(|e| format!("flush worker: {e}"))?;
-    match s.lines.recv_timeout(Duration::from_secs(15)) {
+    let Hold::Live(session) = guard.as_mut().ok_or("нет сессии SDR")? else {
+        return Err("нет сессии SDR".into());
+    };
+    if let Err(e) = writeln!(session.stdin, "{req}") {
+        begin_reap(&mut *guard);
+        return Err(format!("write worker: {e}"));
+    }
+    if let Err(e) = session.stdin.flush() {
+        begin_reap(&mut *guard);
+        return Err(format!("flush worker: {e}"));
+    }
+    match session.lines.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(line)) => Ok(line),
         Ok(Err(e)) => {
-            kill_session(&mut *guard);
+            begin_reap(&mut *guard);
             Err(e)
         }
         Err(_) => {
-            kill_session(&mut *guard);
-            Err("timeout sdr_worker (15s) — Soapy/сеть зависли, процесс убит".into())
+            begin_reap(&mut *guard);
+            Err("timeout sdr_worker (15s) — процесс убит, USB освобождается без перетыкания кабеля".into())
         }
     }
 }
@@ -443,6 +636,29 @@ mod tests {
             PathBuf::from("/opt/legion/python3")
         );
         assert_eq!(resolve_python(Some("  ")).file_name().is_some(), true);
+    }
+
+    #[test]
+    fn nuand_ids_only() {
+        assert!(is_nuand_blade("2cf0", "5250"));
+        assert!(is_nuand_blade("2CF0", "5246"));
+        assert!(!is_nuand_blade("2cf0", "0001"));
+        assert!(!is_nuand_blade("1d6b", "5250"));
+        assert_eq!(usb_node(2, 5), "/dev/bus/usb/002/005");
+    }
+
+    #[test]
+    fn reap_does_not_block_on_a_live_child() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep");
+        let started = Instant::now();
+        let _ = child.kill();
+        assert!(exited_within(&mut child, Duration::from_millis(500)));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

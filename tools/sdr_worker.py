@@ -1136,6 +1136,12 @@ class Radio:
             return True
         return self._thr is not None and self._thr.is_alive()
 
+    def _tx_holds_clock(self) -> bool:
+        """Живой TX-поток держит BBPLL. setSampleRate в этот момент гасит полку."""
+        if self.fake or self.tx is None:
+            return False
+        return self._thr is not None and self._thr.is_alive()
+
     def close(self) -> None:
         self.tx_off()
         self._stop_rx_capture()
@@ -1470,9 +1476,14 @@ class Radio:
         setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
         Rate — только при смене, через deactivate→перестройка→activate.
         LO (setFrequency) на живом потоке безопасен.
+        Живой TX: часы уже стоят (Nuand t=13047, один BBPLL). Повторный
+        setSampleRate, даже на то же число, обрывает горб до иголки.
         bw=None — DIO 40 МГц (scan). Атака передаёт фильтр 56 или FD.
         """
         assert self.dev is not None
+        tx_holds = self._tx_holds_clock()
+        if tx_holds and self._tx_fs and float(self._tx_fs) > 0:
+            fs = float(self._tx_fs)
         want_bw = float(bw) if bw and bw > 0 else float(DIO_BANDWIDTH_HZ)
         alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
         parked = rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive)
@@ -1483,6 +1494,15 @@ class Radio:
         try:
             with self._rx_io, self._lock:
                 rate_changed = self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
+                if tx_holds:
+                    # PLL не трогаем. Фильтр RX — не часы.
+                    rate_changed = False
+                    if self._rx_bw != want_bw:
+                        try:
+                            self.dev.setBandwidth(SOAPY_SDR_RX, 0, want_bw)
+                            self._rx_bw = float(want_bw)
+                        except Exception:
+                            pass
                 if rate_changed and self.rx is not None and self._rx_on:
                     try:
                         self.dev.deactivateStream(self.rx)
@@ -2478,16 +2498,23 @@ class Radio:
         def loop() -> None:
             while not self._stop.is_set() and self.dev is not None and self.tx is not None:
                 with self._lock:
-                    # Кусок, не весь период: цифровой hop не ждёт 32 мс WAVE_N.
+                    # Срез и поворот под замком. writeStream снаружи, чтобы
+                    # setFrequency слуха не держал ЦАП на время перестройки LO.
                     pulled = self._tx_chunk_locked()
-                    if pulled is None:
-                        break
-                    buf, timeout = pulled
-                    try:
-                        _written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
-                    except Exception as e:
+                if pulled is None:
+                    break
+                buf, timeout = pulled
+                dev = self.dev
+                stream = self.tx
+                if dev is None or stream is None:
+                    break
+                try:
+                    _written, kind = write_stream_all(dev, stream, buf, timeout)
+                except Exception as e:
+                    with self._lock:
                         self.tx_error = f"writeStream exception: {e}"
-                        break
+                    break
+                with self._lock:
                     if kind == "ok":
                         self.tx_fail = 0
                         continue
