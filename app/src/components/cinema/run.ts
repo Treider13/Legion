@@ -43,12 +43,12 @@ export async function runSmartStart(opts: {
     // Волна ПЕРЕДАТЬ в умной атаке не участвует — только эта цифра ЦАП.
     s.setSignalParam("amp", WAVE_AMP_MAX);
     s.startScan();
-    if (useLegion.getState().sdrEmulation) return true;
     const t0 = Date.now();
     while (Date.now() - t0 < 8000) {
       const st = useLegion.getState();
-      if (st.fpgaBusy || st.fpgaArmed) return true;
-      await new Promise((r) => setTimeout(r, 100));
+      if (st.fpgaArmed) return false;
+      if (st.scanRunning || st.smartListenLive) return true;
+      await new Promise((r) => setTimeout(r, 50));
     }
     return false;
   }
@@ -68,6 +68,10 @@ export async function runSmartStart(opts: {
     if (opts.pattern !== undefined) s.setFpgaSoloPattern(opts.pattern);
   }
   return s.startFpgaPath(opts.path);
+}
+
+export async function runSmartAccept(opts?: { peak?: boolean; acceptO4?: boolean }): Promise<boolean> {
+  return useLegion.getState().acceptSmartGridAndArm(opts);
 }
 
 export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boolean }): Promise<void> {
@@ -94,7 +98,7 @@ export async function runCinemaStop(): Promise<void> {
   s.abortFpgaArm();
   if (s.fpgaArmed || s.fpgaStopPending) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
-  if (s.scanRunning) s.stopScan();
+  if (s.scanRunning || s.smartListenLive) s.stopScan();
   if (s.corridorRunning) await s.corridorStop();
 }
 
@@ -106,6 +110,7 @@ export function cinemaIsLive(s: {
   fpgaArmed: boolean;
   fpgaBusy: boolean;
   fpgaStopPending?: boolean;
+  smartListenLive?: boolean;
 }): boolean {
-  return s.scanRunning || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending === true;
+  return s.scanRunning || s.smartListenLive === true || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending === true;
 }

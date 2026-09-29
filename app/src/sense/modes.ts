@@ -49,10 +49,19 @@ export function detectorListens(pattern: SdrWalkPattern): boolean {
   return pattern === "auto" || pattern === "sweep" || pattern === "band" || pattern === "hop";
 }
 
+/** Хост-слух Soapy: Атака / классы, либо фаза 1 умной атаки (TX выкл). */
+export function hostListenActive(pattern: SdrWalkPattern, smartListenLive = false): boolean {
+  return detectorListens(pattern) || (pattern === "fpga" && smartListenLive);
+}
+
 /** Имя онбордового режима для оператора. Wire id — scanPattern="fpga". */
 export const FPGA_AIR_MODE_RU = "Умная атака";
 export const FPGA_AIR_MODE_RU_CAPS = "УМНАЯ АТАКА";
 export const FPGA_AIR_MODE_START_RU = "СТАРТ УМНОЙ АТАКИ";
+/** Фаза 2: заморозить карточку и ARM. Старт сам не ARM'ит. */
+export const FPGA_AIR_MODE_ACCEPT_RU = "ПРИНЯТЬ";
+export const SMART_ARM_NEED_ACCEPT_RU = "ARM без Принять запрещён";
+export const SMART_PEAK_OVERRIDE_RU = "пик без сетки (не умная)";
 
 /** Имя хост-режима для оператора. Wire id — scanPattern="auto". */
 export const HOST_ATTACK_MODE_RU = "Атака";
@@ -85,7 +94,7 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (слух классов — СКАНИРОВАТЬ)";
     case "fpga":
-      return `${FPGA_AIR_MODE_RU} (плата сама: глухой обзор → ИИ окно на всплеск → выдержка внутри → снова обзор; USB не в круге)`;
+      return `${FPGA_AIR_MODE_RU} (слух Soapy → Принять карточку → плата; USB не в круге)`;
   }
 }
 
@@ -133,8 +142,9 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        `${FPGA_AIR_MODE_RU}: после Старта хозяин — SDR. Плата сама видит энергию в аналоговом окне и сама открывает TX. ` +
-        "Гейт в текущем взгляде — микросекунды. ИИ: глухой обзор коридора, затем 56 МГц на всплеск. Внутри окна — обычный (выдержка по очереди) или приоритет (сильнее — перескок и новая выдержка). USB не в круге увидел→усилитель. Ноутбук — коридор, два времени, Старт/Стоп и наблюдение.",
+        `${FPGA_AIR_MODE_RU}: Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает карточку и отдаёт ARM плате. ` +
+        "Пустая сетка / аналог 5.8 / x40+C58 — ARM нет (пик без сетки — только явный override). " +
+        "Гейт в текущем взгляде — микросекунды. Живой канал last_live 1.5 с, не таймер SCAN_SURVEY. USB не в круге увидел→усилитель.",
     };
   }
   if (pattern === "auto") {
