@@ -488,6 +488,14 @@ async function main(): Promise<void> {
       return c.length === 36 && new Set(c).size === 36 && c[c.length - 1] === 5732.7;
     })(),
   );
+  // Суб-кГц взгляд: плата квантует bw_hz=round(2.5009e6)=2500900, look_khz=2500
+  // (усечение /1000). round(2.5009*1000)=2501 дал бы другой шаг. Целые кГц как
+  // на плате.
+  check(
+    "look-квант: 2.5009 МГц → шаг 2500 кГц (усечение, как NIOS)",
+    planCenters([{ f1Mhz: 2400, f2Mhz: 2412 }], 2.5009).join(",")
+      === "2401.25,2403.75,2406.25,2408.75,2410.75",
+  );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);

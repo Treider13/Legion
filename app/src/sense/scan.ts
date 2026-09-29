@@ -201,7 +201,10 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
   // взгляд у платы в кГц). float f2-f1 на ГГц-краю копит ошибку (7.2 →
   // 7.2000000000003) и Math.ceil(span/bw) даёт лишний взгляд, который кламп ниже
   // схлопнул бы в дубль последней стоянки. Целые кГц убирают это в корне.
-  const lookKhz = Math.round(bw * 1000);
+  // Взгляд квантуем как плата: bw_hz = round(bw*1e6) (legion_gateway), затем
+  // look_khz = bw_hz/1000 с усечением (legion_look_hz /1000u) — иначе на
+  // дробном-кГц взгляде (2.5007 МГц) round(bw*1000)=2501, а плата видит 2500.
+  const lookKhz = Math.floor(Math.round(bw * 1_000_000) / 1000);
   const half = Math.floor(lookKhz / 2);
   const out: number[] = [];
   for (const b of bands) {
