@@ -590,10 +590,8 @@ def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.9):
 # ============================================================================
 
 WAVE_N = 65536  # буфер TX; OFDM укорачивается до 819×80 = 65520
-# Soapy MTU часто 4096, write_stream_all дописывает сам. Кусок крупнее,
-# чтобы петля Python успевала на полке 5…40 Мвыб/с и ЦАП не оставался
-# на утечке LO. 32768 при 40 МГц — это 0,8 мс, цифровой hop столько и ждёт.
-TX_ROT_CHUNK = 32768
+# Soapy MTU 4096: rotator в петле по куску — hop не ждёт весь период волны.
+TX_ROT_CHUNK = 4096
 
 WAVE_KINDS = (
     "sine", "tone", "square", "sawtooth", "triangle", "chirp", "awgn",
@@ -2500,8 +2498,8 @@ class Radio:
         def loop() -> None:
             while not self._stop.is_set() and self.dev is not None and self.tx is not None:
                 with self._lock:
-                    # Срез и поворот под замком. writeStream снаружи: иначе
-                    # слух ждёт USB и не успевает кормить ЦАП на полке.
+                    # Срез и поворот под замком. writeStream снаружи, чтобы
+                    # setFrequency слуха не держал ЦАП на время перестройки LO.
                     pulled = self._tx_chunk_locked()
                 if pulled is None:
                     break
