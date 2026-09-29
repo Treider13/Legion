@@ -474,6 +474,16 @@ async function main(): Promise<void> {
     "F2-clamp: 2000..2100 / 56 → вторая подтянута к 2072",
     planCenters([{ f1Mhz: 2000, f2Mhz: 2100 }], 56).join(",") === "2028,2072",
   );
+  // Произвольный коридор на ГГц-краю: span=7.2 кратен look=0.2, но float f2-f1
+  // (=7.2000000000003) в Math.ceil дал бы 37-й лишний взгляд → дубль. Целые кГц
+  // держат 36 стоянок без дублей, байт-в-байт с NIOS.
+  check(
+    "F2-clamp: 5725.6..5732.8 / 0.2 — 36 взглядов, без дубля (ГГц float)",
+    (() => {
+      const c = planCenters([{ f1Mhz: 5725.6, f2Mhz: 5732.8 }], 0.2);
+      return c.length === 36 && new Set(c).size === 36 && c[c.length - 1] === 5732.7;
+    })(),
+  );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);

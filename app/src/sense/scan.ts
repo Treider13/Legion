@@ -192,22 +192,35 @@ export function planParkCenters(bands: readonly AllowBand[]): number[] {
 
 export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[] {
   const bw = bwMhz > 0 ? bwMhz : 20;
-  const half = bw / 2;
+  // Считаем в целых кГц — байт-в-байт с NIOS legion_center_in (реестры F1/F2/
+  // взгляд у платы в кГц). float f2-f1 на ГГц-краю копит ошибку (7.2 →
+  // 7.2000000000003) и Math.ceil(span/bw) даёт лишний взгляд, который кламп ниже
+  // схлопнул бы в дубль последней стоянки. Целые кГц убирают это в корне.
+  const lookKhz = Math.round(bw * 1000);
+  const half = Math.floor(lookKhz / 2);
   const out: number[] = [];
   for (const b of bands) {
-    if (b.f2Mhz < b.f1Mhz) continue;
-    const span = b.f2Mhz - b.f1Mhz;
-    if (span <= bw) {
-      out.push((b.f1Mhz + b.f2Mhz) / 2);
+    const f1 = Math.round(b.f1Mhz * 1000);
+    const f2 = Math.round(b.f2Mhz * 1000);
+    if (f2 < f1 || lookKhz === 0) continue;
+    const span = f2 - f1;
+    if (span <= lookKhz) {
+      out.push((Math.floor(f1 / 2) + Math.floor(f2 / 2)) / 1000);
       continue;
     }
-    const n = Math.ceil(span / bw);
+    const n = Math.floor((span + lookKhz - 1) / lookKhz);
     for (let i = 0; i < n; i++) {
-      let c = b.f1Mhz + half + i * bw;
-      // Обрезаем по краю окна (центр + bw/2), не по центру: последний взгляд
-      // не должен слышать за F2. Байт-в-байт с NIOS legion_center_in.
-      if (c + half > b.f2Mhz) c = b.f2Mhz - half;
-      out.push(c);
+      let c = f1 + half + i * lookKhz;
+      // Обрезаем по краю окна (центр + look/2), не по центру: последний взгляд
+      // не должен слышать за F2. Страховка prev+1 — как в NIOS, от округления half.
+      if (c + half > f2) {
+        c = f2 - half;
+        if (i > 0) {
+          const prev = f1 + half + (i - 1) * lookKhz;
+          if (c <= prev) c = prev + 1;
+        }
+      }
+      out.push(c / 1000);
     }
   }
   return out;
