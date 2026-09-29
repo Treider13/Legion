@@ -496,6 +496,14 @@ async function main(): Promise<void> {
     planCenters([{ f1Mhz: 2400, f2Mhz: 2412 }], 2.5009).join(",")
       === "2401.25,2403.75,2406.25,2408.75,2410.75",
   );
+  // f1==0 — «незаданный коридор» (sentinel регистров платы): NIOS не сканирует,
+  // хост тоже не должен планировать. Так же для park и суб-кГц f1 → 0 кГц.
+  check(
+    "sentinel: f1=0 — нет взглядов (как NIOS legion_looks_in)",
+    planCenters([{ f1Mhz: 0, f2Mhz: 100 }], 20).length === 0
+      && planParkCenters([{ f1Mhz: 0, f2Mhz: 100 }]).length === 0
+      && planCenters([{ f1Mhz: 0.0004, f2Mhz: 100 }], 20).length === 0,
+  );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);

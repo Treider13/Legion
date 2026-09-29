@@ -186,7 +186,7 @@ export function planParkCenters(bands: readonly AllowBand[]): number[] {
   for (const b of bands) {
     const f1 = Math.round(b.f1Mhz * 1000);
     const f2 = Math.round(b.f2Mhz * 1000);
-    if (f2 < f1) continue;
+    if (f1 === 0 || f2 < f1) continue;
     // Середина в целых кГц — байт-в-байт с NIOS legion_center_in (ветка n==1):
     // (f1k/2)+(f2k/2). float (f1+f2)/2 на нечётной кГц-сумме уходит на 1 кГц
     // (напр. LPD433 433.075..434.775) и копит артефакты (…2450.1499999996).
@@ -210,7 +210,10 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
   for (const b of bands) {
     const f1 = Math.round(b.f1Mhz * 1000);
     const f2 = Math.round(b.f2Mhz * 1000);
-    if (f2 < f1 || lookKhz === 0) continue;
+    // f1==0 — «незаданный коридор» (sentinel: регистры платы по умолчанию 0);
+    // NIOS legion_looks_in для f1_khz==0 даёт 0 взглядов. Зеркалим, иначе хост
+    // планирует сетку там, где плата не сканирует.
+    if (f1 === 0 || f2 < f1 || lookKhz === 0) continue;
     const span = f2 - f1;
     if (span <= lookKhz) {
       out.push((Math.floor(f1 / 2) + Math.floor(f2 / 2)) / 1000);
