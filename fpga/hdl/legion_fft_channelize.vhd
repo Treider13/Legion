@@ -39,6 +39,11 @@ architecture rtl of legion_fft_channelize is
     signal acc   : acc_t := (others => (others => '0'));
     signal snap  : pwr_t := (others => (others => '0'));
     signal lut   : lut_t := (others => x"FF");
+    -- Mapping is intentionally available in the same cycle as mag_bin.
+    -- Declaring logic storage preserves that contract on Cyclone IV and V
+    -- instead of asking Quartus to infer an unsupported asynchronous M9K/M10K.
+    attribute ramstyle : string;
+    attribute ramstyle of lut : signal is "logic";
     signal fr_r  : unsigned(6 downto 0) := (others => '0');
     signal vld_r : std_logic := '0';
     signal word_r : std_logic_vector(31 downto 0) := (others => '0');
