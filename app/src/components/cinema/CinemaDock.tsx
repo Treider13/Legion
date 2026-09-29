@@ -113,7 +113,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-          {message || "Запустить → слух Soapy → Принять карточку → ARM. Эфир+FPGA или только FPGA — сразу."}
+          {message || "Запустить → слух Soapy → Принять карточку → умная атака ARM. Эфир+FPGA или только FPGA — сразу."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

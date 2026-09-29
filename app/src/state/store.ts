@@ -5171,6 +5171,11 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", opened.reason);
           if (!opened.ok) return;
         }
+        if (isFpgaAirPattern(get().scanPattern) && get().transmitArmed) {
+          /* xA4 один BBPLL (Nuand t=13047): 61.44-слух на живой полке схлопнет TX.
+           * Старт умной атаки — слух, TX выкл. Тот же стоп, что перед ARM платы. */
+          await get().stopTransmit();
+        }
         if (gScanTimer) {
           clearInterval(gScanTimer);
           gScanTimer = null;
