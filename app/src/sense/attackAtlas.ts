@@ -6,7 +6,7 @@
 import type { AnalogComb } from "./analogComb";
 import type { AttackTrack } from "./attackTracks";
 import { ATTACK_VIDEO_BW_MHZ } from "./attackDetect";
-import { classifyFhssDomain, droneidModel, nearestAnalogChannel, type AnalogChannel, type FhssLook, type RcId } from "./protocolDb";
+import { classifyFhssDomain, droneidModel, fhssF0RefMhz, nearestAnalogChannel, type AnalogChannel, type FhssLook, type RcId } from "./protocolDb";
 
 export type AttackBand =
   | "vhf"
@@ -105,7 +105,8 @@ export function classifyAttackFamily(
       band,
       t.freqMhz,
       fhss.f0ResidualMhz,
-      fhss.f0AbsMhz,
+      fhssF0RefMhz(fhss.f0ResidualMhz, fhss.f0AbsMhz),
+      fhss.hopSetMhz,
     );
     if (dom.unique) {
       return { id: dom.id, label: dom.label, hint: dom.hint };

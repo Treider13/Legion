@@ -275,11 +275,12 @@ def main() -> int:
     check("шаг 260 кГц = Crossfire", xf["family"] == "crossfire" and xf["unique"] is True, str(xf))
     ov = pdb.classify_fhss_domain(1.0, 2442.0)
     check("шаг 1 МГц 2.4 без residual не уникален", ov["unique"] is False, str(ov))
-    r0, _ = pdb.fhss_residual_f0([2440.0 + i for i in range(6)], 1.0)
-    r4, _ = pdb.fhss_residual_f0([2400.4 + i for i in range(6)], 1.0)
+    r0, ref0 = pdb.fhss_residual_f0([2440.0 + i for i in range(6)], 1.0)
+    r4, ref4 = pdb.fhss_residual_f0([2400.4 + i for i in range(6)], 1.0)
     r55, _ = pdb.fhss_residual_f0([2400.55 + i for i in range(6)], 1.0)
     check("residual 2440+i = 0.0", abs(r0 - 0.0) < 1e-9, str(r0))
     check("residual 2400.4+i = 0.4", abs(r4 - 0.4) < 1e-9, str(r4))
+    check("2.4 f_ref=2400 не 2400.4", abs(ref0 - 2400.0) < 1e-9 and abs(ref4 - 2400.0) < 1e-9, str((ref0, ref4)))
     check("residual +150 кГц = 0.55", abs(r55 - 0.55) < 1e-9, str(r55))
     ov_m = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.0)
     ov_e = pdb.classify_fhss_domain(1.0, 2442.0, 2440.0, 2445.0, 0.4)
@@ -333,8 +334,9 @@ def main() -> int:
         (a24.get("domain") or {}).get("unique") is True
         and (a24.get("domain") or {}).get("family") == "mlrs"
         and abs(float(a24.get("f0ResidualMhz", -1)) - 0.0) < 0.05
+        and abs(float(a24.get("f0AbsMhz", -1)) - 2400.0) < 0.05
         and int(a24.get("nSlots") or 0) == 6,
-        str((a24.get("domain"), a24.get("f0ResidualMhz"), a24.get("nSlots"))),
+        str((a24.get("domain"), a24.get("f0ResidualMhz"), a24.get("f0AbsMhz"), a24.get("nSlots"))),
     )
 
     tone = rc.synth_rc_train(fs, 250.0, int(fs * 0.04), css=True, pkt_s=0.001)

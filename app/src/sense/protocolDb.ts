@@ -129,6 +129,13 @@ export function fhssFreqcorrMaxHz(band: string): number {
   return Math.round(fhssFreqcorrMaxMhz(band) * 1e6);
 }
 
+/** Worker `f0AbsMhz = f_ref + residual` (fhss_detect.py). classify хочет f_ref. */
+export function fhssF0RefMhz(residualMhz?: number, absMhz?: number): number | undefined {
+  if (absMhz == null || !Number.isFinite(absMhz)) return undefined;
+  if (residualMhz == null || !Number.isFinite(residualMhz)) return absMhz;
+  return absMhz - residualMhz;
+}
+
 function mhzToKhz(x: number): number {
   return Math.round(x * 1000);
 }
@@ -244,6 +251,7 @@ export function classifyFhssDomain(
   freqMhz = 0,
   residualMhz?: number,
   fRefMhz?: number,
+  hopsMhz?: readonly number[],
 ): ProtoMatch {
   let hits = FHSS_DOMAINS.filter((d) => {
     if (d.spacing <= 0) return false;
@@ -254,12 +262,21 @@ export function classifyFhssDomain(
   if (hits.length === 0) {
     return { id: "fhss-unknown", label: "FHSS, домен не сел", hint: "шаг не из открытых сеток", unique: false };
   }
-  if (residualMhz != null) {
+  const hasHops = hopsMhz != null && hopsMhz.length >= 2;
+  if (residualMhz != null || hasHops) {
     const fRef = fRefMhz ?? (freqMhz >= 2390 && freqMhz <= 2510 ? 2400 : freqMhz);
-    hits = fhssFilterResidual(hits, residualMhz, fRef, band, (h) => h.f0, (h) => h.spacing);
+    hits = fhssFilterResidual(
+      hits,
+      residualMhz ?? 0,
+      fRef,
+      band,
+      (h) => h.f0,
+      (h) => h.spacing,
+      hopsMhz,
+    );
   }
   const families = new Set(hits.map((h) => h.family));
-  const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null);
+  const unique = families.size === 1 && (hits.every((h) => h.unique) || residualMhz != null || hasHops);
   const labels = [...new Set(hits.map((h) => h.label))].join(", ");
   if (unique) {
     const fam = hits[0]!.family as RcId;
