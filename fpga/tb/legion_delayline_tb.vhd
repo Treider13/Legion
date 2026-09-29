@@ -105,6 +105,90 @@ begin
         assert captured = sample(16)
             report "FAIL: frozen without sample_en" severity failure;
 
+        -- delay=0 не пишет скрытую историю и не двигает указатель.
+        reset <= '1';
+        wait until rising_edge(clock);
+        reset <= '0';
+        delay <= to_unsigned(0, 12);
+        for i in 30 to 32 loop
+            din <= sample(i);
+            sample_en <= '1';
+            wait until rising_edge(clock);
+            sample_en <= '0';
+            wait until rising_edge(clock);
+        end loop;
+
+        delay <= to_unsigned(2, 12);
+        for i in 40 to 42 loop
+            din <= sample(i);
+            sample_en <= '1';
+            wait until rising_edge(clock);
+            wait for 1 ns;
+            if i < 42 then
+                assert unsigned(captured) = 0
+                    report "FAIL: delay=0 polluted RAM history" severity failure;
+            else
+                assert captured = sample(40)
+                    report "FAIL: delay=2 after bypass mismatch" severity failure;
+            end if;
+            sample_en <= '0';
+            wait until rising_edge(clock);
+        end loop;
+
+        -- Выбор источника q меняется только на принятом сэмпле. Изменение
+        -- delay в паузе не должно мгновенно подменять последний результат.
+        reset <= '1';
+        wait until rising_edge(clock);
+        reset <= '0';
+        delay <= to_unsigned(1, 12);
+
+        din <= sample(50);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert unsigned(captured) = 0 report "FAIL: dynamic D1 first" severity failure;
+        sample_en <= '0';
+        wait until rising_edge(clock);
+
+        din <= sample(51);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert captured = sample(50) report "FAIL: dynamic D1 second" severity failure;
+        sample_en <= '0';
+        delay <= to_unsigned(3, 12);
+        wait for 1 ns;
+        assert dout = sample(51)
+            report "FAIL: idle D1->D3 changed previous result" severity failure;
+
+        din <= sample(52);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert captured = sample(51) report "FAIL: dynamic D3 capture" severity failure;
+        assert dout = sample(50) report "FAIL: dynamic D3 RAM result" severity failure;
+
+        sample_en <= '0';
+        delay <= to_unsigned(1, 12);
+        wait for 1 ns;
+        assert dout = sample(50)
+            report "FAIL: idle D3->D1 changed previous result" severity failure;
+
+        din <= sample(53);
+        sample_en <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert captured = sample(50) report "FAIL: dynamic return capture" severity failure;
+        assert dout = sample(53) report "FAIL: dynamic return D1 result" severity failure;
+        sample_en <= '0';
+
+        -- При sample_en=0 зарегистрированный выход остаётся неизменным.
+        din <= sample(99);
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert dout = sample(53) report "FAIL: dout changed while frozen" severity failure;
+
         report "legion_delayline_tb: PASS" severity note;
         done <= true;
         wait;

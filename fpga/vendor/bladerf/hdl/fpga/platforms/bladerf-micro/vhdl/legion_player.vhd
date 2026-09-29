@@ -39,9 +39,8 @@ end entity;
 architecture rtl of legion_player is
     type ram_t is array (0 to DEPTH-1) of std_logic_vector(31 downto 0);
     signal ram : ram_t := (others => (others => '0'));
-    -- Подсказка фиттеру Quartus: разместить в M9K (не в LE)
-    attribute ramstyle : string;
-    attribute ramstyle of ram : signal is "M9K";
+    -- Тип блока намеренно не фиксирован: Quartus выбирает M9K для Cyclone IV
+    -- и M10K для Cyclone V из одного переносимого синхронного шаблона.
 
     signal wr_addr    : unsigned(11 downto 0);
     signal rd_addr    : unsigned(11 downto 0);

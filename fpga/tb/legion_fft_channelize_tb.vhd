@@ -156,6 +156,53 @@ begin
         assert unsigned(word(23 downto 8)) = 0
             report "FAIL: lut unmapped ch leftover" severity failure;
 
+        -- Одновременные запись и чтение LUT сохраняют текущий VHDL-контракт:
+        -- этот бин идёт по старой карте, новая карта действует со следующего.
+        en <= '0';
+        tick(clk);
+        en <= '1';
+        lut_a <= to_unsigned(16, 8);
+        lut_d <= to_unsigned(4, 8);
+        lut_we <= '1';
+        mag_f <= to_unsigned(6, 7);
+        feed_bin(clk, mag_v, mag_l, mag_b, mag_p, 16, 16#3333#, true);
+        lut_we <= '0';
+        for k in 0 to 3 loop
+            tick(clk);
+        end loop;
+        idx <= to_unsigned(3, 7);
+        for k in 0 to 2 loop
+            tick(clk);
+        end loop;
+        assert unsigned(word(23 downto 8)) = to_unsigned(16#3333#, 16)
+            report "FAIL: LUT same-cycle write changed current read" severity failure;
+        idx <= to_unsigned(4, 7);
+        for k in 0 to 2 loop
+            tick(clk);
+        end loop;
+        assert unsigned(word(23 downto 8)) = 0
+            report "FAIL: LUT same-cycle write leaked to new channel" severity failure;
+
+        -- Следующий бин видит уже записанную карту без дополнительного
+        -- конвейерного такта и переносит энергию в канал 4.
+        mag_f <= to_unsigned(7, 7);
+        feed_bin(clk, mag_v, mag_l, mag_b, mag_p, 16, 16#4444#, true);
+        for k in 0 to 3 loop
+            tick(clk);
+        end loop;
+        idx <= to_unsigned(4, 7);
+        for k in 0 to 2 loop
+            tick(clk);
+        end loop;
+        assert unsigned(word(23 downto 8)) = to_unsigned(16#4444#, 16)
+            report "FAIL: LUT update not visible on next read" severity failure;
+        idx <= to_unsigned(3, 7);
+        for k in 0 to 2 loop
+            tick(clk);
+        end loop;
+        assert unsigned(word(23 downto 8)) = 0
+            report "FAIL: previous LUT channel retained energy" severity failure;
+
         -- enable=0 снимает valid
         en <= '0';
         for k in 0 to 3 loop
