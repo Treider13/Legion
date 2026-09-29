@@ -5444,12 +5444,9 @@ export const useLegion = create<LegionStore>((set, get) => {
     startTransmit: async () => {
       const s = get();
       if (isFpgaAirPattern(s.scanPattern)) {
-        // В режиме FPGA+СКАНЕР передача — автоматический цикл (СТАРТ/СТОП):
-        // ARM идёт из детекта сканера с парком на пик и порогом из полки,
-        // а не ручной ARM на середину полосы с порогом «на глаз».
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: после Старта хозяин — плата; ноутбук только Стоп`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: Старт — слух Soapy, ARM после Принять; ноутбук только Стоп`,
         );
         return;
       }

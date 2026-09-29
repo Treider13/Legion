@@ -32,7 +32,7 @@ export async function runSmartStart(opts: {
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
   if (opts.path === "auto") {
-    // Онбордовый перехват: после Старта хозяин — SDR. Ноутбук — рубильник.
+    // Фаза 1: слух Soapy. ARM только после Принять.
     s.setScanPattern("fpga");
     if (opts.dispatch) s.setAutoDispatch(opts.dispatch === "priority" ? "priority" : "turn");
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
