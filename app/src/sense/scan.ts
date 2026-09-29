@@ -192,6 +192,7 @@ export function planParkCenters(bands: readonly AllowBand[]): number[] {
 
 export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[] {
   const bw = bwMhz > 0 ? bwMhz : 20;
+  const half = bw / 2;
   const out: number[] = [];
   for (const b of bands) {
     if (b.f2Mhz < b.f1Mhz) continue;
@@ -202,8 +203,11 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
     }
     const n = Math.ceil(span / bw);
     for (let i = 0; i < n; i++) {
-      const c = b.f1Mhz + bw / 2 + i * bw;
-      out.push(Math.min(c, b.f2Mhz));
+      let c = b.f1Mhz + half + i * bw;
+      // Обрезаем по краю окна (центр + bw/2), не по центру: последний взгляд
+      // не должен слышать за F2. Байт-в-байт с NIOS legion_center_in.
+      if (c + half > b.f2Mhz) c = b.f2Mhz - half;
+      out.push(c);
     }
   }
   return out;

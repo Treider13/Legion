@@ -460,6 +460,23 @@ async function main(): Promise<void> {
     "полоса ≤ BW → одна стойка (ice9 park)",
     planCenters([{ f1Mhz: 2440, f2Mhz: 2448 }], 56).length === 1,
   );
+  // П.1: обрезка последнего взгляда по краю окна (центр + W/2 ≤ F2).
+  check(
+    "F2-clamp: 2000..2200 / 56 → …2172, не 2196",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2200 }], 56).join(",") === "2028,2084,2140,2172",
+  );
+  check(
+    "F2-clamp: 2000..2020 / 56 → одна стойка 2010",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2020 }], 56).join(",") === "2010",
+  );
+  check(
+    "F2-clamp: 2000..2200 / 20 → край ровно на F2, без изменений",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2200 }], 20).slice(-1)[0] === 2190,
+  );
+  check(
+    "F2-clamp: 2000..2100 / 56 → вторая подтянута к 2072",
+    planCenters([{ f1Mhz: 2000, f2Mhz: 2100 }], 56).join(",") === "2028,2072",
+  );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);
