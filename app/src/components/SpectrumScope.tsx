@@ -490,8 +490,35 @@ export function SpectrumScope() {
     };
   }, []);
 
-  const st = useLegion();
-  const range = displayRange(st);
+  // displayRange() builds a new object per call; zustand v5 selectors must return stable values.
+  const f1 = useLegion((s) => displayRange(s)?.f1 ?? null);
+  const f2 = useLegion((s) => displayRange(s)?.f2 ?? null);
+  const range = f1 != null && f2 != null ? { f1, f2 } : null;
+  const st = {
+    scanRunning: useLegion((s) => s.scanRunning),
+    fpgaArmed: useLegion((s) => s.fpgaArmed),
+    scanPattern: useLegion((s) => s.scanPattern),
+    labPsd: useLegion((s) => s.labPsd),
+    labCoverage: useLegion((s) => s.labCoverage),
+    labShowPeak: useLegion((s) => s.labShowPeak),
+    labShowMin: useLegion((s) => s.labShowMin),
+    labShowPersistence: useLegion((s) => s.labShowPersistence),
+    labShowBaseline: useLegion((s) => s.labShowBaseline),
+    labSubtractBaseline: useLegion((s) => s.labSubtractBaseline),
+    labShowRtsa: useLegion((s) => s.labShowRtsa),
+    labShowAlloc: useLegion((s) => s.labShowAlloc),
+    labSpurOn: useLegion((s) => s.labSpurOn),
+    labSpurReady: useLegion((s) => s.labSpurReady),
+    setLabShowPeak: useLegion((s) => s.setLabShowPeak),
+    setLabShowMin: useLegion((s) => s.setLabShowMin),
+    setLabShowPersistence: useLegion((s) => s.setLabShowPersistence),
+    setLabShowBaseline: useLegion((s) => s.setLabShowBaseline),
+    setLabSubtractBaseline: useLegion((s) => s.setLabSubtractBaseline),
+    setLabShowRtsa: useLegion((s) => s.setLabShowRtsa),
+    setLabShowAlloc: useLegion((s) => s.setLabShowAlloc),
+    setLabSpurOn: useLegion((s) => s.setLabSpurOn),
+    resetLabHolds: useLegion((s) => s.resetLabHolds),
+  };
   const live = st.scanRunning || st.fpgaArmed;
   const peak = strongestFinite(st.labSubtractBaseline ? subtractBaseline(st.labPsd.composite, st.labPsd.baseline) : st.labPsd.composite);
   const w3 = peak ? width3dbMhz(st.labPsd.composite, peak.freqMhz) : 0;
