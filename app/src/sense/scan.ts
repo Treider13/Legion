@@ -180,12 +180,26 @@ export class AllowlistScanner {
   }
 }
 
+/** Округление .5 к чётному — как Python round() в шлюзе: f1_khz/f2_khz пишутся
+ * int(round(mhz*1000.0)) (legion_fpga.set_scan_corridor/set_band_table), а плата
+ * — источник истины по регистру. JS Math.round округляет .5 вверх, и на точной
+ * кГц-половине (напр. коридор 2450.0005 МГц → 2450000.5) даёт на 1 кГц больше,
+ * чем видит NIOS: вся сетка хоста уезжает от реальной. Зеркалим банковское. */
+export function roundKhzHalfEven(mhz: number, scale: number): number {
+  const x = mhz * scale;
+  if (Math.abs(x - Math.trunc(x)) === 0.5) {
+    const f = Math.floor(x);
+    return f % 2 === 0 ? f : f + 1;
+  }
+  return Math.round(x);
+}
+
 /** ICE9-стоянка: один центр на коридор (середина), без плитки взглядов. */
 export function planParkCenters(bands: readonly AllowBand[]): number[] {
   const out: number[] = [];
   for (const b of bands) {
-    const f1 = Math.round(b.f1Mhz * 1000);
-    const f2 = Math.round(b.f2Mhz * 1000);
+    const f1 = roundKhzHalfEven(b.f1Mhz, 1000);
+    const f2 = roundKhzHalfEven(b.f2Mhz, 1000);
     if (f1 === 0 || f2 < f1) continue;
     // Середина в целых кГц — байт-в-байт с NIOS legion_center_in (ветка n==1):
     // (f1k/2)+(f2k/2). float (f1+f2)/2 на нечётной кГц-сумме уходит на 1 кГц
@@ -204,12 +218,12 @@ export function planCenters(bands: readonly AllowBand[], bwMhz: number): number[
   // Взгляд квантуем как плата: bw_hz = round(bw*1e6) (legion_gateway), затем
   // look_khz = bw_hz/1000 с усечением (legion_look_hz /1000u) — иначе на
   // дробном-кГц взгляде (2.5007 МГц) round(bw*1000)=2501, а плата видит 2500.
-  const lookKhz = Math.floor(Math.round(bw * 1_000_000) / 1000);
+  const lookKhz = Math.floor(roundKhzHalfEven(bw, 1_000_000) / 1000);
   const half = Math.floor(lookKhz / 2);
   const out: number[] = [];
   for (const b of bands) {
-    const f1 = Math.round(b.f1Mhz * 1000);
-    const f2 = Math.round(b.f2Mhz * 1000);
+    const f1 = roundKhzHalfEven(b.f1Mhz, 1000);
+    const f2 = roundKhzHalfEven(b.f2Mhz, 1000);
     // f1==0 — «незаданный коридор» (sentinel: регистры платы по умолчанию 0);
     // NIOS legion_looks_in для f1_khz==0 даёт 0 взглядов. Зеркалим, иначе хост
     // планирует сетку там, где плата не сканирует.

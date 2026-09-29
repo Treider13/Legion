@@ -504,6 +504,13 @@ async function main(): Promise<void> {
       && planParkCenters([{ f1Mhz: 0, f2Mhz: 100 }]).length === 0
       && planCenters([{ f1Mhz: 0.0004, f2Mhz: 100 }], 20).length === 0,
   );
+  // Точная кГц-половина: 4264.7985 МГц = 4264798.5 кГц. Шлюз пишет регистр
+  // int(round(...))=4264798 (банковское, к чётному). JS Math.round дал бы 4264799
+  // и сдвинул бы ВСЮ сетку хоста на 1 кГц от платы. Зеркалим банковское.
+  check(
+    "half-even: 4264.7985 МГц → f1=4264798 кГц (как шлюз), сетка не уезжает",
+    planCenters([{ f1Mhz: 4264.7985, f2Mhz: 5835.775 }], 56)[0] === 4292.798,
+  );
   check("тик parked 16 мс", scanTickMs(1) === 16);
   check("тик hop 40 мс", scanTickMs(2) === 40);
   check("окно 1 МГц не режется", clampWindowMhz(1, 56) === 1);
