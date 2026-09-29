@@ -93,7 +93,6 @@ import {
   FPGA_OBSERVE_MS,
   FPGA_DEFAULT_DET_THR,
   FPGA_TURN_DWELL_DEFAULT_MS,
-  FPGA_SURVEY_PERIOD_DEFAULT_MS,
   FPGA_SURVEY_GONE_MS,
   FPGA_US_DET_SHIFT,
   airThrTable,
@@ -417,8 +416,6 @@ interface LegionStore {
   fpgaDetShift: number;
   /** Выдержка на сигнал внутри окна, мс (строка UI). Обычный и приоритет. */
   fpgaTurnDwellMs: string;
-  /** Период сканирования коридора, мс (строка UI). */
-  fpgaSurveyPeriodMs: string;
   /** Полоса канала подавления lb_* (fs = max(полоса, 520834 Гц)), МГц, строка UI. */
   fpgaAirBwMhz: string;
   /** Эфир-обход (air-hop): выдержка на стоянке, мс (строка UI). */
@@ -538,7 +535,6 @@ interface LegionStore {
   setFpgaDetThr(v: number): void;
   setFpgaDetShift(v: number): void;
   setFpgaTurnDwellMs(v: string): void;
-  setFpgaSurveyPeriodMs(v: string): void;
   setFpgaAirBwMhz(v: string): void;
   setFpgaAirDwellMs(v: string): void;
   setFpgaAirWalkPattern(p: FpgaSoloPattern): void;
@@ -2120,17 +2116,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       Number.isFinite(s.fpgaDetThr) && s.fpgaDetThr > 0 ? s.fpgaDetThr : FPGA_DEFAULT_DET_THR;
     const lookRaw = parseLocaleNumber(s.fpgaAirBwMhz);
     const dwellRaw = parseLocaleNumber(s.fpgaTurnDwellMs);
-    const periodRaw = parseLocaleNumber(s.fpgaSurveyPeriodMs);
     if (!Number.isFinite(lookRaw) || lookRaw <= 0) {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте ширину взгляда числом (например 10 или 0.2)`);
       return;
     }
     if (!Number.isFinite(dwellRaw) || dwellRaw <= 0) {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте выдержку числом (0,4 и 0.4 — 400 мкс)`);
-      return;
-    }
-    if (!Number.isFinite(periodRaw) || periodRaw <= 0) {
-      pushLog("sys", `${FPGA_AIR_MODE_RU}: leftover SCAN_SURVEY_US — задайте число (например 5)`);
       return;
     }
     const grid: SmartGridCard = acceptedCard;
@@ -2146,7 +2137,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       turn: fpgaInnerDispatch(s.autoDispatch) === "turn",
       park: true,
       dwellMs: dwellRaw,
-      surveyPeriodMs: periodRaw,
       fftEnable: true,
       grid,
       peakOverride: get().smartPeakOverride,
@@ -2241,7 +2231,6 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanPark: plan.park,
           scanSurvey: plan.survey,
           scanDwellMs: plan.dwellMs,
-          scanSurveyMs: plan.surveyPeriodMs,
           fftEnable: true,
           fireBwMhz: plan.fireBwMhz,
           settleN: plan.settleN,
@@ -2492,7 +2481,6 @@ export const useLegion = create<LegionStore>((set, get) => {
     fpgaDetThr: FPGA_DEFAULT_DET_THR,
     fpgaDetShift: FPGA_US_DET_SHIFT,
     fpgaTurnDwellMs: String(FPGA_TURN_DWELL_DEFAULT_MS),
-    fpgaSurveyPeriodMs: String(FPGA_SURVEY_PERIOD_DEFAULT_MS),
     fpgaAirBwMhz: String(FPGA_AIR_BW_DEFAULT_MHZ),
     fpgaAirDwellMs: String(FPGA_SOLO_DWELL_DEFAULT_MS),
     fpgaAirWalkPattern: "sweep",
@@ -3668,7 +3656,6 @@ export const useLegion = create<LegionStore>((set, get) => {
     setFpgaDetShift: (v) => set({ fpgaDetShift: clampDetShift(v) }),
 
     setFpgaTurnDwellMs: (v) => set({ fpgaTurnDwellMs: v }),
-    setFpgaSurveyPeriodMs: (v) => set({ fpgaSurveyPeriodMs: v }),
     setFpgaAirBwMhz: (v) => set({ fpgaAirBwMhz: v }),
     setFpgaAirDwellMs: (v) => set({ fpgaAirDwellMs: v }),
     setFpgaAirWalkPattern: (p) => set({ fpgaAirWalkPattern: p === "hop" ? "hop" : "sweep" }),

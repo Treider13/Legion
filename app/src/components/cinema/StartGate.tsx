@@ -40,7 +40,6 @@ export function StartGate({ mode, onClose }: Props) {
   const storedAirDwell = useLegion((s) => s.fpgaAirDwellMs);
   const storedAirPattern = useLegion((s) => s.fpgaAirWalkPattern);
   const storedTurnDwell = useLegion((s) => s.fpgaTurnDwellMs);
-  const storedSurveyPeriod = useLegion((s) => s.fpgaSurveyPeriodMs);
   const storedDispatch = useLegion((s) => s.autoDispatch);
   const storedDetThr = useLegion((s) => s.fpgaDetThr);
   const detShift = useLegion((s) => s.fpgaDetShift);
@@ -62,7 +61,6 @@ export function StartGate({ mode, onClose }: Props) {
   const [dwellMs, setDwellMs] = useState(
     path === "air" ? storedAirDwell : path === "auto" ? storedTurnDwell : storedDwell,
   );
-  const [surveyPeriodMs] = useState(storedSurveyPeriod);
   const [pattern, setPattern] = useState<FpgaSoloPattern>(path === "air" ? storedAirPattern : storedPattern);
   const [detThr, setDetThr] = useState(String(storedDetThr));
   const [busy, setBusy] = useState(false);
@@ -139,7 +137,6 @@ export function StartGate({ mode, onClose }: Props) {
         path,
         windowMhz,
         dwellMs,
-        surveyPeriodMs,
         pattern,
         dispatch,
         detThr,
@@ -251,7 +248,7 @@ export function StartGate({ mode, onClose }: Props) {
               карточку и отдаёт ARM плате. Пустая сетка / аналог 5.8 / x40+C58 —
               ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
               Ноутбук задаёт коридор, выдержку на сигнал, Старт, Принять и Стоп.
-              Живой канал last_live {FPGA_SURVEY_GONE_MS} мс, не таймер SCAN_SURVEY.
+              Живой канал last_live {FPGA_SURVEY_GONE_MS} мс, не таймер периода прохода.
               USB не в круге «увидел → усилитель».
             </p>
             <div className="cinema-gate-row">
@@ -282,7 +279,7 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
               </label>
             </div>
-            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · живой канал last_live {FPGA_SURVEY_GONE_MS} мс · не таймер SCAN_SURVEY.</p>
+            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · живой канал last_live {FPGA_SURVEY_GONE_MS} мс · не таймер периода прохода.</p>
             <div className="cinema-paths" role="radiogroup" aria-label="Стратегия внутри окна">
               <button
                 type="button"

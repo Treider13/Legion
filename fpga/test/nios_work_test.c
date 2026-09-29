@@ -1310,7 +1310,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1391,7 +1390,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1452,7 +1450,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1536,7 +1533,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1576,7 +1572,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1623,7 +1618,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL,
@@ -1679,7 +1673,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2300000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
@@ -1740,7 +1733,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_PARK |
                      LEGION_SCAN_CTRL_SURVEY | LEGION_SCAN_CTRL_TURN);
@@ -1849,7 +1841,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2000000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 3000000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_PARK |
                      LEGION_SCAN_CTRL_SURVEY);
@@ -1995,9 +1986,6 @@ int main(void)
         CHECK("U5: FIRE_BW readback", v == 2000000);
         legion_reg_read(LEGION_REG_SETTLE_N, &v);
         CHECK("U5: SETTLE_N readback", v == 16);
-        legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 5000000);
-        legion_reg_read(LEGION_REG_SCAN_SURVEY_US, &v);
-        CHECK("U5: SCAN_SURVEY_US readback", v == 5000000);
         legion_reg_read(LEGION_REG_SCAN_EVENT, &v);
         CHECK("U5: SCAN_EVENT не STATUS", v != t_status);
         legion_reg_read(LEGION_REG_BAND_F1_KHZ, &v);
@@ -2175,7 +2163,6 @@ int main(void)
     legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
     legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2450000);
     legion_reg_write(LEGION_REG_SCAN_DWELL_US, 400);
-    legion_reg_write(LEGION_REG_SCAN_SURVEY_US, 400);
     legion_reg_write(LEGION_REG_SCAN_CTRL,
                      LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
     legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);

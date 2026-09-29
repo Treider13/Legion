@@ -18,7 +18,6 @@ export async function runSmartStart(opts: {
   /** Solo: шаг стоянок. Пусто — равен окну (полке). */
   stepMhz?: string;
   dwellMs?: string;
-  surveyPeriodMs?: string;
   pattern?: FpgaSoloPattern;
   /** Умная атака: приоритет сильнейшей или очередь с выдержкой. */
   dispatch?: AutoDispatch;
@@ -37,7 +36,6 @@ export async function runSmartStart(opts: {
     if (opts.dispatch) s.setAutoDispatch(opts.dispatch === "priority" ? "priority" : "turn");
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
     if (opts.dwellMs !== undefined) s.setFpgaTurnDwellMs(opts.dwellMs);
-    if (opts.surveyPeriodMs !== undefined) s.setFpgaSurveyPeriodMs(opts.surveyPeriodMs);
     if (opts.detThr !== undefined) s.setFpgaDetThr(parseFloat(opts.detThr));
     // Гейт lb_gated открывает TX на дефолте ЦАП (0.9 Q15 в HDL).
     // Волна ПЕРЕДАТЬ в умной атаке не участвует — только эта цифра ЦАП.

@@ -106,8 +106,7 @@ TI LMX2594/2595 (калибровка <20 мкс, аппаратная рамп�
   TX на усилитель. USB в круге «увидел → усилитель» нет. Два времени:
   гейт I²+Q² в текущем взгляде — микросекунды (окно 16 сэмплов); живой
   канал — `last_live` occupancy **1.5 с** (`LEGION_SURVEY_GONE_MS`), не
-  таймер `SCAN_SURVEY_US` (хост leftover-запись, NIOS её не использует
-  для RESURVEY). Сетка стоянок — `planCenters`. PRIORITY / TURN — внутри
+  таймер периода прохода. Сетка стоянок — `planCenters`. PRIORITY / TURN — внутри
   окна. Порог — поле оператора / дефолт 5000, не полка USB-IQ. На micro hop =
   TX mute → FREQUENCY RX+TX → unmute (без INIT). На x40 hop = integer-копия
   `lms_calculate_tuning_params` → `lms_set_precalculated_frequency` RX+TX +

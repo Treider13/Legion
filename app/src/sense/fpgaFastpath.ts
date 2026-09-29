@@ -115,24 +115,8 @@ export function fpgaTurnDwellUs(ms: number): number {
   return Math.round(fpgaTurnDwellClamp(ms) * 1000);
 }
 
-/** Период сканирования коридора (Умная атака). 0 / мусор → 5 с.
- *  Хост всё ещё пишет SCAN_SURVEY_US (leftover). NIOS RESURVEY —
- *  last_live occupancy FPGA_SURVEY_GONE_MS, не этот таймер. */
-export const FPGA_SURVEY_PERIOD_DEFAULT_MS = 5000;
-export const FPGA_SURVEY_PERIOD_MIN_MS = FPGA_TURN_DWELL_MIN_MS;
-export const FPGA_SURVEY_PERIOD_MAX_MS = FPGA_TURN_DWELL_MAX_MS;
-/** Зеркало LEGION_SURVEY_GONE_MS. Occupancy текущего канала, не SCAN_SURVEY_US. */
+/** Зеркало LEGION_SURVEY_GONE_MS. Occupancy текущего канала (не таймер прохода). */
 export const FPGA_SURVEY_GONE_MS = 1500;
-
-export function fpgaSurveyPeriodClamp(ms: number): number {
-  if (!Number.isFinite(ms) || ms <= 0) return FPGA_SURVEY_PERIOD_DEFAULT_MS;
-  const c = Math.min(FPGA_SURVEY_PERIOD_MAX_MS, Math.max(FPGA_SURVEY_PERIOD_MIN_MS, ms));
-  return Math.round(c * 10) / 10;
-}
-
-export function fpgaSurveyPeriodUs(ms: number): number {
-  return Math.round(fpgaSurveyPeriodClamp(ms) * 1000);
-}
 
 /** Полоса канала подавления lb_*-тракта: fs = max(полоса, минимум sample-rate
  *  чипа), analog BW = полоса. Дефолт 2 МГц — поведение до появления параметра.
@@ -353,8 +337,6 @@ export interface OnboardInterceptInput {
   lookMhz?: number;
   turn: boolean;
   dwellMs: number;
-  /** Период сканирования, мс. 0 / мусор → 5 с. */
-  surveyPeriodMs?: number;
   /** ICE9: один LO на середине коридора, без плитки взглядов.
    *  Умная атака (FFT): ИИ всегда — PARK+SURVEY, плитка не схлопывается. */
   park?: boolean;
@@ -387,7 +369,6 @@ export interface OnboardInterceptPlan {
   detThr: number;
   detShift: number;
   dwellMs: number;
-  surveyPeriodMs: number;
   turn: boolean;
   park: boolean;
   /** Глухой обзор плитки, затем 56 МГц на всплеск. */
@@ -415,7 +396,6 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   const park = fftEnable ? true : wantPark;
   const centers = !fftEnable && park ? planParkCenters(i.bands) : tile;
   const dwellMs = fpgaTurnDwellClamp(i.dwellMs);
-  const surveyPeriodMs = fpgaSurveyPeriodClamp(i.surveyPeriodMs ?? FPGA_SURVEY_PERIOD_DEFAULT_MS);
   const fireBwMhz = fftEnable
     ? clampAirBwMhz(i.fireBwMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog)
     : FPGA_AIR_BW_DEFAULT_MHZ;
@@ -451,7 +431,6 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detThr: i.detThr,
     detShift,
     dwellMs,
-    surveyPeriodMs,
     turn: i.turn,
     park,
     survey,
@@ -518,7 +497,6 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     detThr: i.detThr,
     detShift,
     dwellMs,
-    surveyPeriodMs,
     turn: i.turn,
     park,
     survey,
@@ -618,8 +596,6 @@ export function fpgaArmCmd(
     scanSurvey?: boolean;
     scanDwellMs?: number;
     scanDwellUs?: number;
-    scanSurveyMs?: number;
-    scanSurveyUs?: number;
     fftEnable?: boolean;
     fftDcNotch?: boolean;
     fireBwMhz?: number;
@@ -709,12 +685,6 @@ export function fpgaArmCmd(
     } else if (opts.scanDwellMs !== undefined) {
       cmd.scan_dwell_us = fpgaTurnDwellUs(opts.scanDwellMs);
       cmd.scan_dwell_ms = fpgaTurnDwellClamp(opts.scanDwellMs);
-    }
-    if (opts.scanSurveyUs !== undefined && Number.isFinite(opts.scanSurveyUs)) {
-      cmd.scan_survey_us = Math.max(0, Math.round(opts.scanSurveyUs));
-    } else if (opts.scanSurveyMs !== undefined) {
-      cmd.scan_survey_us = fpgaSurveyPeriodUs(opts.scanSurveyMs);
-      cmd.scan_survey_ms = fpgaSurveyPeriodClamp(opts.scanSurveyMs);
     }
     if (opts.fftEnable) {
       cmd.fft_enable = true;
