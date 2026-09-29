@@ -284,6 +284,7 @@ def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
                 band_of(mid),
                 f0_of=lambda s: s["d"]["f0"],
                 step_of=lambda s: s["d"].get("spacing") or 0.0,
+                hops_mhz=hops,
             )
             best = scored[0]
             families = {s["d"]["family"] for s in scored if s["hits"] == best["hits"]}

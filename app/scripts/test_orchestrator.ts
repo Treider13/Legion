@@ -1554,7 +1554,7 @@ async function main(): Promise<void> {
     return g.smart && g.f0Hz === 902_400_000 && g.n === 43 && (g.flags & GRID_FLAG_F0UNC) === 0;
   })());
   check("матчер: середина 900 — F0UNC", (() => {
-    const g = matchSmartGrid({ hopsMhz: [903.45, 904.05, 904.65] });
+    const g = matchSmartGrid({ hopsMhz: [903.55, 904.15, 904.75] });
     return g.smart && (g.flags & GRID_FLAG_F0UNC) !== 0;
   })());
   check("матчер: x40+5.8 отказ", matchSmartGrid({

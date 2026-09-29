@@ -92,7 +92,7 @@ check("mLRS 902.4 не ELRS 903.5",
       mlrs900["smart"] and mlrs900["f0_hz"] == 902_400_000 and
       mlrs900["n"] == 43 and (mlrs900["flags"] & GRID_FLAG_F0UNC) == 0)
 
-mid900 = match_smart_grid({"hops_mhz": [903.45, 904.05, 904.65]})
+mid900 = match_smart_grid({"hops_mhz": [903.55, 904.15, 904.75]})
 check("середина 900 — F0UNC",
       mid900["smart"] and (mid900["flags"] & GRID_FLAG_F0UNC) != 0)
 

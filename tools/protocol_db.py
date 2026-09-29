@@ -517,6 +517,16 @@ def fhss_circ_dist_mhz(a: float, b: float, step: float) -> float:
     return min(d, s - d) / 1000.0
 
 
+def fhss_hop_spacing_mhz(hops_mhz: list[float] | tuple[float, ...]) -> float:
+    """Медиана соседних Δ. Не шаг Crossfire 0.26, если hop-set сидит на 0.6."""
+    hops = sorted({round(float(h) * 1000.0) / 1000.0 for h in hops_mhz if h and float(h) > 0})
+    if len(hops) < 2:
+        return 0.0
+    diffs = [hops[i + 1] - hops[i] for i in range(len(hops) - 1)]
+    diffs.sort()
+    return diffs[len(diffs) // 2]
+
+
 def fhss_residual_dist_mhz(
     residual_mhz: float,
     f0_mhz: float,
@@ -527,6 +537,15 @@ def fhss_residual_dist_mhz(
     return fhss_circ_dist_mhz(float(residual_mhz), expect, float(step_mhz))
 
 
+def fhss_residual_dist_hops(
+    hops_mhz: list[float] | tuple[float, ...],
+    f0_mhz: float,
+    step_mhz: float,
+) -> float:
+    residual, f_ref = fhss_residual_f0(hops_mhz, float(step_mhz))
+    return fhss_residual_dist_mhz(residual, f0_mhz, step_mhz, f_ref)
+
+
 def fhss_filter_residual(
     items: list[Any],
     residual_mhz: float,
@@ -535,15 +554,26 @@ def fhss_filter_residual(
     *,
     f0_of: Any,
     step_of: Any,
+    hops_mhz: list[float] | tuple[float, ...] | None = None,
 ) -> list[Any]:
-    """Окно FreqCorrection, затем ближайший остаток. 903.5 vs 902.4: 0.10 ≤ 0.10/0.20 — без nearest оба живы."""
+    """Окно FreqCorrection, затем ближайший остаток. 903.5 vs 902.4: 0.10 ≤ 0.10/0.20 — без nearest оба живы.
+
+    hops_mhz: остаток и допуск шага считаются на сетке кандидата, не на шаге первого scored
+    (иначе Crossfire 0.26 перетягивает 0.6).
+    """
     gate = fhss_freqcorr_max_mhz(band)
+    obs = fhss_hop_spacing_mhz(hops_mhz) if hops_mhz else 0.0
     scored: list[tuple[float, Any]] = []
     for it in items:
         step = float(step_of(it) or 0.0)
         if step <= 0:
             continue
-        dist = fhss_residual_dist_mhz(residual_mhz, float(f0_of(it)), step, f_ref_mhz)
+        if obs > 0 and abs(step - obs) / obs > SPACING_TOL:
+            continue
+        if hops_mhz:
+            dist = fhss_residual_dist_hops(hops_mhz, float(f0_of(it)), step)
+        else:
+            dist = fhss_residual_dist_mhz(residual_mhz, float(f0_of(it)), step, f_ref_mhz)
         if dist <= gate:
             scored.append((dist, it))
     if not scored:

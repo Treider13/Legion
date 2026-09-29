@@ -113,6 +113,14 @@ export const FREQCORR_MAX_MHZ = 0.20; // ExpressLRS FHSS.h SX1280 FreqCorrection
 export const FREQCORR_SX127X_MHZ = 0.10; // Team900 SX127x
 export const FREQCORR_TIE_MHZ = 0.001; // 1 кГц — равные остатки → F0UNC
 
+export function fhssBandOf(freqMhz: number): string {
+  const f = freqMhz;
+  if (f >= 850 && f <= 950) return "p900";
+  if (f >= 2400 && f <= 2500) return "s24";
+  if (f >= 380 && f <= 525) return "uhf";
+  return "other";
+}
+
 export function fhssFreqcorrMaxMhz(band: string): number {
   return band === "p900" ? FREQCORR_SX127X_MHZ : FREQCORR_MAX_MHZ;
 }
@@ -158,6 +166,13 @@ export function fhssCircDistMhz(a: number, b: number, step: number): number {
   return Math.min(d, s - d) / 1000;
 }
 
+export function fhssHopSpacingMhz(hopsMhz: readonly number[]): number {
+  const hops = [...new Set(hopsMhz.map((h) => Math.round(h * 1000) / 1000).filter((h) => h > 0))].sort((a, b) => a - b);
+  if (hops.length < 2) return 0;
+  const diffs = hops.slice(1).map((h, i) => h - hops[i]!).sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)]!;
+}
+
 export function fhssResidualDistMhz(
   residualMhz: number,
   f0Mhz: number,
@@ -168,6 +183,11 @@ export function fhssResidualDistMhz(
   return fhssCircDistMhz(residualMhz, expect, stepMhz);
 }
 
+export function fhssResidualDistHops(hopsMhz: readonly number[], f0Mhz: number, stepMhz: number): number {
+  const { residualMhz, fRefMhz } = fhssResidualF0(hopsMhz, stepMhz);
+  return fhssResidualDistMhz(residualMhz, f0Mhz, stepMhz, fRefMhz);
+}
+
 export function fhssFilterResidual<T>(
   items: readonly T[],
   residualMhz: number,
@@ -175,13 +195,18 @@ export function fhssFilterResidual<T>(
   band: string,
   f0Of: (it: T) => number,
   stepOf: (it: T) => number,
+  hopsMhz?: readonly number[],
 ): T[] {
   const gate = fhssFreqcorrMaxMhz(band);
+  const obs = hopsMhz ? fhssHopSpacingMhz(hopsMhz) : 0;
   const scored: { dist: number; it: T }[] = [];
   for (const it of items) {
     const step = stepOf(it);
     if (!(step > 0)) continue;
-    const dist = fhssResidualDistMhz(residualMhz, f0Of(it), step, fRefMhz);
+    if (obs > 0 && Math.abs(step - obs) / obs > SPACING_TOL) continue;
+    const dist = hopsMhz
+      ? fhssResidualDistHops(hopsMhz, f0Of(it), step)
+      : fhssResidualDistMhz(residualMhz, f0Of(it), step, fRefMhz);
     if (dist <= gate) scored.push({ dist, it });
   }
   if (scored.length === 0) return [...items];

@@ -9,6 +9,7 @@
 import {
   FHSS_DOMAINS,
   XA4_IBW_MHZ,
+  fhssBandOf,
   fhssFilterResidual,
   fhssFreqcorrMaxHz,
   fhssResidualF0,
@@ -16,7 +17,6 @@ import {
   type FhssDomain,
   type FhssLook,
 } from "./protocolDb";
-import { bandBucket } from "./attackAtlas";
 import type { AttackLook } from "./attackLook";
 import type { AllowBand } from "../policy/allowlist";
 
@@ -353,9 +353,10 @@ export function matchSmartGrid(i: SmartGridInput): SmartGridCard {
         scored,
         residualMhz,
         fRefMhz,
-        bandBucket(mid),
+        fhssBandOf(mid),
         (s) => s.d.f0,
         (s) => s.d.spacing,
+        hops,
       );
       const best = scored[0]!;
       const families = new Set(scored.filter((s) => s.hits === best.hits).map((s) => s.d.family));
