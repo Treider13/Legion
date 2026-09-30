@@ -118,7 +118,7 @@ import {
   SMART_X40_C58_RU,
   type SmartGridCard,
 } from "../sense/smartGrid";
-import { openLoopShelfTxPlan, shelfFsHz } from "../sense/txShelf";
+import { openLoopShelfTxPlan } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
   airHopBlockedReason,
@@ -1263,10 +1263,6 @@ export const useLegion = create<LegionStore>((set, get) => {
   const runHandoff = (mhz: number, powerDbm = 0): void => {
     void runHandoffAsync(mhz, powerDbm);
   };
-
-  /** Часы и фильтр TX = полка. Шаг сюда не входит. */
-  const shelfFsNow = (): number =>
-    shelfFsHz(parseLocaleNumber(get().txShelfMhz), catalogCaps(get().sdrId).analogBwMhz);
 
   /** Атака без рамки: часы USB FD (общий BBPLL, не 61.44), occupy = полка. */
   const attackNoPaintShelf = (): {
