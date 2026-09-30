@@ -862,6 +862,53 @@ def main() -> int:
         buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
         err = rt._tx_prime(buf, 2442e6, None, 10e6)
         check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+        rt.tx_off()
+
+        class _ClockOrder:
+            def __init__(self) -> None:
+                self.events: list[str] = []
+
+            def deactivateStream(self, _s):
+                self.events.append("deact")
+
+            def setSampleRate(self, *_a):
+                self.events.append("rate")
+
+            def getSampleRate(self, *_a):
+                return 20e6
+
+            def setBandwidth(self, *_a):
+                return None
+
+            def setFrequency(self, *_a):
+                return None
+
+            def setupStream(self, *_a, **_k):
+                return object()
+
+            def activateStream(self, *_a):
+                return None
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": 64})()
+
+        clk = w.Radio()
+        clk.fake = False
+        clk.hardware_key = "bladerf2"
+        clk.full_duplex = True
+        clk._rx_on = True
+        clk._rx_fs = 40e6
+        clk.rx = object()
+        clk.dev = _ClockOrder()
+        clk_buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
+        clk_err = clk._tx_prime(clk_buf, 2442e6, None, 20e6)
+        deact_at = clk.dev.events.index("deact") if "deact" in clk.dev.events else -1
+        rate_at = clk.dev.events.index("rate") if "rate" in clk.dev.events else -1
+        check(
+            "смена часов: RX выключен до setSampleRate",
+            clk_err is None and deact_at >= 0 and rate_at > deact_at and clk._rx_on is False,
+        )
+        clk.tx_off()
 
         class _BwTx(_TxClk):
             def __init__(self) -> None:

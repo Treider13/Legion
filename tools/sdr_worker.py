@@ -1446,6 +1446,22 @@ class Radio:
                 _log("RX-захват пережил join 2.5 с — readStream завис в Soapy (плата отвалилась?)")
         self._rx_cap_thr = None
 
+    def _quiesce_rx_for_clock_change(self) -> None:
+        """setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
+
+        stopScan гасит только таймер хоста. readStream в воркере остаётся.
+        Общий BBPLL (Nuand t=13047) нельзя переписывать, пока RX включён.
+        """
+        self._stop_rx_capture()
+        if self.dev is not None and self.rx is not None and self._rx_on:
+            try:
+                self.dev.deactivateStream(self.rx)
+            except Exception:
+                pass
+        self._rx_on = False
+        self._rx_fs = None
+        self._rx_bw = None
+
     def _start_rx_capture(self) -> None:
         if self.fake or not NUMPY:
             return
@@ -2285,6 +2301,17 @@ class Radio:
         tx_fs = float(fs) if fs and fs > 0 else float(TX_FS)
         prev_fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
         created = False
+        rx_now = float(self._rx_fs) if self._rx_fs else 0.0
+        have_now = float(self._tx_fs) if self._tx_fs else 0.0
+        shared_pll = classify_bladerf_hw(self.hardware_key) == "ad9361"
+        adopts_clock = _same_attack_clock(have_now, tx_fs) or (
+            shared_pll and _same_attack_clock(rx_now, tx_fs)
+        )
+        rx_live = bool(self._rx_on) or (
+            self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
+        )
+        if not adopts_clock and rx_live:
+            self._quiesce_rx_for_clock_change()
         if not self.full_duplex:
             self._rx_pause.set()
             # Тот же порядок, что _ensure_rx: сначала _rx_io, потом _lock.
@@ -2446,14 +2473,21 @@ class Radio:
             self._tx_disable_module()
             return False
 
-    def _tx_stop_pump(self) -> None:
-        """Стоп насоса и выключение модуля перед сменой полки или типа."""
+    def _tx_stop_pump(self) -> bool:
+        """Стоп насоса и выключение модуля перед сменой полки или типа.
+
+        False: поток ещё в writeStream. Второй насос на тот же стрим не поднимаем.
+        """
         self._stop.set()
         thr = self._thr
         if thr is not None and thr.is_alive():
             thr.join(timeout=3.0)
+            if thr.is_alive():
+                _log("TX-поток не остановился за 3 с — writeStream ещё в Soapy")
+                return False
         self._thr = None
         self._tx_disable_module()
+        return True
 
     def _tx_commit(self, buf: Any, freq_mhz: float, t0: float, label: str) -> dict[str, Any]:
         self._tone = buf
@@ -2644,7 +2678,12 @@ class Radio:
         if not SOAPY:
             return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
         if self._thr is not None and self._thr.is_alive():
-            self._tx_stop_pump()
+            if not self._tx_stop_pump():
+                return {
+                    "ok": False,
+                    "reason": "TX насос не остановился — полку и тип не меняем, пока writeStream висит",
+                    "latencyUs": 0,
+                }
         buf = rotator_shift(play, mix_hz, tx_fs)
         n_play = int(play.size)
         phase_after = (
