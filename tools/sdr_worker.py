@@ -2403,23 +2403,26 @@ class Radio:
         finally:
             if not self.full_duplex:
                 self._rx_io.release()
+        self.tx_fail = 0
         self._tx_start_err = None
         self._tx_ready.clear()
         self._stop.clear()
         self._start_tx_loop()
         if not self._tx_ready.wait(2.0):
-            # Первый кадр ещё не записан, но насос жив и повторяет writeStream.
-            # Один USB timeout не должен гасить сессию.
-            if self._thr is not None and self._thr.is_alive() and self._tx_start_err is None:
-                pass
-            else:
-                self._stop.set()
-                self._tx_disable_module()
-                return {
-                    "ok": False,
-                    "reason": "TX насос не записал первый кадр — сигнала на RF out нет",
-                    "latencyUs": 0,
-                }
+            # Кадра нет. Ждём выход из writeStream и гасим модуль:
+            # иначе AD9361 остаётся включённым без отсчётов и светит иглу.
+            self._stop.set()
+            thr = self._thr
+            if thr is not None:
+                thr.join(timeout=3.0)
+            self._thr = None
+            self._tx_disable_module()
+            self._tx_start_err = None
+            return {
+                "ok": False,
+                "reason": "TX насос не записал первый кадр — сигнала на RF out нет",
+                "latencyUs": 0,
+            }
         if self._tx_start_err is not None:
             err = self._tx_start_err
             self._tx_start_err = None
@@ -2542,6 +2545,17 @@ class Radio:
         if self.tx is None or bool(self._tx_play_cs16) != was_cs16:
             return False
         return True
+
+    def _tx_abort_unwritten(self, kind: str, written: int) -> None:
+        """Серия таймаутов: модуль выключаем. Иначе после ret=0 на выходе игла."""
+        self.tx_error = f"writeStream {kind} ret={written}"
+        self._tx_start_err = {
+            "ok": False,
+            "reason": f"writeStream {kind} ret={written} — сигнала на RF out нет",
+            "latencyUs": 0,
+        }
+        self._tx_disable_module()
+        self._tx_ready.set()
 
     def _tx_rearm(self) -> bool:
         """Выключить и снова включить тот же поток с той же B."""
@@ -2898,19 +2912,18 @@ class Radio:
                     self._apply_pending_lo(dev)
                     continue
                 if action == "retry":
-                    # Недобор и timeout открытого burst не гасят модуль и не ставят txError.
+                    # Один недобор или один timeout открытого burst — тот же кусок.
+                    # Серия таймаутов значит, что буфер так и не освободился: модуль гасим.
+                    if kind == "timeout":
+                        self.tx_fail += 1
+                        if self.tx_fail >= TX_FAIL_LIMIT:
+                            self._tx_abort_unwritten(kind, written)
+                            return
                     continue
                 if action == "reset_sync":
-                    if not self._tx_reset_sync():
-                        self.tx_fail += 1
-                        self.tx_error = f"writeStream {kind} ret={written}"
-                        self._tx_start_err = {
-                            "ok": False,
-                            "reason": f"writeStream {kind} ret={written} — сигнала на RF out нет",
-                            "latencyUs": 0,
-                        }
-                        self._tx_disable_module()
-                        self._tx_ready.set()
+                    self.tx_fail += 1
+                    if self.tx_fail >= TX_FAIL_LIMIT or not self._tx_reset_sync():
+                        self._tx_abort_unwritten(kind, written)
                         return
                     continue
                 if not self._tx_rearm():

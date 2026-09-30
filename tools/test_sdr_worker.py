@@ -1042,14 +1042,46 @@ def main() -> int:
         bad.dev = _FailTx()
         refused = bad._tx_prime(big, 2442e6, None, 2e6)
         check(
-            "writeStream timeout не гасит TX и не ставит txError",
-            refused is None
-            and bad._thr is not None
-            and bad._thr.is_alive()
-            and bad.tx_error is None
-            and bad.dev.setups >= 2,
+            "серия таймаутов первого кадра гасит модуль",
+            isinstance(refused, dict)
+            and refused.get("ok") is False
+            and bad.tx is None
+            and bad.dev.setups >= 2
+            and (bad._thr is None or not bad._thr.is_alive()),
         )
         bad.tx_off()
+
+        class _StallTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.n = 0
+
+            def writeStream(self, *_a, **_k):
+                self.n += 1
+                # 32768/4096 = 8: один целый кадр, дальше таймаут уже открытого burst.
+                if self.n <= 8:
+                    return type("S", (), {"ret": 4096})()
+                time.sleep(0.02)
+                return type("S", (), {"ret": -1})()
+
+        stall = w.Radio()
+        stall.fake = False
+        stall.hardware_key = "bladerf2"
+        stall._tx_fs = 2e6
+        stall.dev = _StallTx()
+        started = stall._tx_prime(big, 2442e6, None, 2e6)
+        stall_deadline = time.time() + 2.0
+        while stall._thr is not None and stall._thr.is_alive() and time.time() < stall_deadline:
+            time.sleep(0.01)
+        check(
+            "серия таймаутов открытого burst гасит модуль",
+            started is None
+            and stall.tx is None
+            and stall.tx_error is not None
+            and "timeout" in stall.tx_error
+            and (stall._thr is None or not stall._thr.is_alive()),
+        )
+        stall.tx_off()
 
         class _RollbackTx(_TxClk):
             def __init__(self) -> None:
