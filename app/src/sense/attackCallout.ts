@@ -6,8 +6,13 @@
 // Рамка в помощнике центрируется на выбранном следе (attackAdvisor), поэтому
 // частота карточки — след ближе к центру рамки, не самый громкий рядом.
 // ============================================================================
-import type { AttackAdvice, AttackHint, AttackHintKind } from "./attackAdvisor";
+import { buildAttackAdvice, type AttackAdvice, type AttackHint, type AttackHintKind } from "./attackAdvisor";
+import type { AttackRow } from "./attackScene";
 import { ATTACK_ASSOC_MHZ } from "./attackTracks";
+import type { AttackMemStats } from "./attackMemory";
+import type { AllowBand } from "../policy/allowlist";
+import type { AttackPaint } from "./attackPaint";
+import type { WaveKind } from "../sdr/waveforms";
 
 export interface CalloutRow {
   freqMhz: number;
@@ -123,6 +128,60 @@ export function holdPeakMhz(shownMhz: number | null, nextMhz: number | null, bin
 }
 
 /** Частота строки «Сигнал»: пик того же следа, что на карточке, с удержанием соседнего бина. */
+const EMPTY_MEMORY: AttackMemStats = {
+  hopRemembered: 0,
+  scenes: 0,
+  residuals: 0,
+  workerSamples: 0,
+  workerCap: 0,
+  workerMs: 0,
+};
+
+/** Совет только по одному следу. Чужие, даже более громкие, в расчёт не входят. */
+export function calloutForMarker(
+  row: AttackRow,
+  opts: {
+    windowMhz: number;
+    paint: AttackPaint | null;
+    wave: WaveKind | null;
+    holdMs: number;
+    bands: readonly AllowBand[];
+    transmitArmed: boolean;
+  },
+): AttackCallout {
+  const widths = new Map([
+    [row.id, { width3Mhz: row.width3Mhz, width26Mhz: row.width26Mhz, occ99Mhz: row.occ99Mhz }],
+  ]);
+  const looks = new Map(row.look ? [[row.id, row.look] as const] : []);
+  const advice = buildAttackAdvice({
+    tracks: [row],
+    families: [],
+    widths,
+    looks,
+    windowMhz: opts.windowMhz > 0 ? opts.windowMhz : 56,
+    paint: opts.paint,
+    wave: opts.wave,
+    holdMs: opts.holdMs,
+    bands: opts.bands,
+    residual: null,
+    memory: EMPTY_MEMORY,
+    transmitArmed: opts.transmitArmed,
+    sweep: row.lastSweep,
+  });
+  const card = buildAttackCallout([rowToCallout(row)], advice);
+  return { ...card, freqMhz: row.freqMhz, typeLabel: row.look?.label ?? row.atlas.label };
+}
+
+function rowToCallout(row: AttackRow): CalloutRow {
+  return {
+    freqMhz: row.freqMhz,
+    powerDbm: row.powerDbm,
+    state: row.state,
+    atlasId: row.atlas.id,
+    typeLabel: row.look?.label ?? row.atlas.label,
+  };
+}
+
 export function signalReadoutMhz(
   cardMhz: number | null,
   liveMhz: number | null,

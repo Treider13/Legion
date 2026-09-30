@@ -7,6 +7,7 @@ import { allocAtMhz, bandsInSpan } from "../sense/labAlloc";
 import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
 import { normalizePaint } from "../sense/attackPaint";
+import { focusAdvisorTrack, trackUnderMhz } from "./graphite/advisorFocus";
 import { dbmToUnit, heatRgb } from "../sense/waterfall";
 import { useLegion } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
@@ -438,12 +439,19 @@ export function SpectrumScope() {
     const onMove = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       cursorX = e.clientX - r.left;
+      const st = useLegion.getState();
       if (brushRef.current.down) {
-        const st = useLegion.getState();
         if (st.scanPattern === "auto") {
           st.setAttackPaintDraft(normalizePaint(brushRef.current.a, mhzAt(e.clientX)));
         }
+        return;
       }
+      if (st.scanPattern !== "auto") return;
+      const g = geomRef.current;
+      if (cursorX < g.padL || cursorX > g.padL + g.plotW) return;
+      const pxPerMhz = g.span > 0 ? g.plotW / g.span : 0;
+      const hit = trackUnderMhz(st.attackTracks, mhzAt(e.clientX), pxPerMhz, 2);
+      if (hit) focusAdvisorTrack(hit.id);
     };
     const onDown = (e: PointerEvent) => {
       const st = useLegion.getState();
