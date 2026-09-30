@@ -1,60 +1,52 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import type { Slide } from "./modes";
 
-export const CUE_MS = 4000;
-
-/** Удержание карточки по часам. Смена режима начинает отсчёт заново и не перескакивает вперёд. */
-export function useCue(slides: readonly Slide[], paused: boolean, resetKey: string): { key: string; progress: number } {
-  const slidesRef = useRef(slides);
-  slidesRef.current = slides;
-  const dueRef = useRef(performance.now() + CUE_MS);
-  const keyRef = useRef(slides[0]?.key ?? "");
+/**
+ * Ручные шаги. Автопрокрутки нет: w3c/aria-practices (carousel-pattern)
+ * требует кнопку стоп и запрещает продолжать вращение после фокуса.
+ * Здесь вращение не включается — остаются «Назад» и «Дальше».
+ */
+export function useCue(slides: readonly Slide[], resetKey: string): {
+  key: string;
+  index: number;
+  count: number;
+  showKey: (key: string) => void;
+  next: () => void;
+  prev: () => void;
+} {
   const [key, setKey] = useState(slides[0]?.key ?? "");
-  const [progress, setProgress] = useState(0);
   const [seenReset, setSeenReset] = useState(resetKey);
 
   if (seenReset !== resetKey) {
-    const first = slides[0]?.key ?? "";
-    keyRef.current = first;
-    dueRef.current = performance.now() + CUE_MS;
     setSeenReset(resetKey);
-    setKey(first);
-    setProgress(0);
+    setKey(slides[0]?.key ?? "");
+  } else if (slides.length > 0 && !slides.some((slide) => slide.key === key)) {
+    setKey(slides[0].key);
   }
 
-  useEffect(() => {
-    if (paused) return;
-    dueRef.current = performance.now() + CUE_MS;
-    setProgress(0);
-    const id = window.setInterval(() => {
-      const now = performance.now();
-      const list = slidesRef.current;
-      if (list.length === 0) return;
-      const held = 1 - (dueRef.current - now) / CUE_MS;
-      setProgress(Math.min(1, Math.max(0, held)));
-      if (list.length < 2) {
-        dueRef.current = now + CUE_MS;
-        return;
-      }
-      const idx = list.findIndex((slide) => slide.key === keyRef.current);
-      if (idx < 0) {
-        keyRef.current = list[0].key;
-        setKey(list[0].key);
-        dueRef.current = now + CUE_MS;
-        setProgress(0);
-        return;
-      }
-      if (now >= dueRef.current) {
-        const next = list[(idx + 1) % list.length];
-        keyRef.current = next.key;
-        setKey(next.key);
-        dueRef.current = now + CUE_MS;
-        setProgress(0);
-      }
-    }, 100);
-    return () => window.clearInterval(id);
-  }, [paused]);
+  const found = slides.findIndex((slide) => slide.key === key);
+  const index = found < 0 ? 0 : found;
+  const current = slides[index];
 
-  return { key, progress };
+  const showKey = (nextKey: string) => {
+    if (slides.some((slide) => slide.key === nextKey)) setKey(nextKey);
+  };
+
+  const step = (dir: -1 | 1) => {
+    if (slides.length < 2) return;
+    const at = slides.findIndex((slide) => slide.key === (current?.key ?? key));
+    const from = at < 0 ? 0 : at;
+    const nextSlide = slides[(from + dir + slides.length) % slides.length];
+    if (nextSlide) setKey(nextSlide.key);
+  };
+
+  return {
+    key: current?.key ?? "",
+    index,
+    count: slides.length,
+    showKey,
+    next: () => step(1),
+    prev: () => step(-1),
+  };
 }

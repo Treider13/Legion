@@ -1,198 +1,27 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { AttackAdvice, AttackHintKind } from "../../sense/attackAdvisor";
+import { useMemo, useState } from "react";
+import { buildAttackCallout, settleCallout, type AttackCallout, type CalloutRow } from "../../sense/attackCallout";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
-
-const STEP_MS = 12000;
-
-interface Slide {
-  key: string;
-  kicker: string;
-  title: string;
-  text: string;
-  why: string;
-  freqMhz: number | null;
-  typeLabel: string | null;
-  applyKind: AttackHintKind | null;
-  applyLabel: string | null;
-}
 
 function typeOf(row: AttackRow): string {
   return row.look?.label ?? row.atlas.label;
 }
 
-function liveRows(rows: readonly AttackRow[]): AttackRow[] {
-  return rows
-    .filter((row) => row.state === "new" || row.state === "confirmed" || row.state === "held")
-    .slice()
-    .sort((a, b) => b.powerDbm - a.powerDbm);
-}
-
-function signalSlide(row: AttackRow, key: string): Slide {
-  const type = typeOf(row);
-  const role = row.infoRu ? ` · ${row.infoRu}` : "";
-  const family = row.atlas.label !== type ? `${row.atlas.label}. ` : "";
-  return {
-    key,
-    kicker: "Сигнал",
-    title: type,
-    text: `${row.freqMhz.toFixed(3)} МГц${role}. ${family}${row.atlas.hint}`,
-    why: "",
+function calloutRows(rows: readonly AttackRow[]): CalloutRow[] {
+  return rows.map((row) => ({
     freqMhz: row.freqMhz,
-    typeLabel: type,
-    applyKind: null,
-    applyLabel: null,
-  };
+    powerDbm: row.powerDbm,
+    state: row.state,
+    atlasId: row.atlas.id,
+    typeLabel: typeOf(row),
+  }));
 }
 
-function buildAssistantSlides(rows: readonly AttackRow[], advice: AttackAdvice): Slide[] {
-  const live = liveRows(rows);
-  const primary = live[0];
-  if (!primary && !advice.scene && advice.hints.length === 0) {
-    return [
-      {
-        key: "wait",
-        kicker: "Помощник",
-        title: "Ждёт сигнал",
-        text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 12 секунд.",
-        why: "",
-        freqMhz: null,
-        typeLabel: null,
-        applyKind: null,
-        applyLabel: null,
-      },
-    ];
-  }
-
-  const slides: Slide[] = [];
-  if (primary) {
-    slides.push(signalSlide(primary, "signal"));
-    if (advice.scene) {
-      slides.push({
-        key: "scene",
-        kicker: `${primary.freqMhz.toFixed(3)} МГц · ${typeOf(primary)}`,
-        title: "Эфир",
-        text: advice.scene,
-        why: "",
-        freqMhz: primary.freqMhz,
-        typeLabel: typeOf(primary),
-        applyKind: null,
-        applyLabel: null,
-      });
-    }
-    for (const hint of advice.hints) {
-      slides.push({
-        key: `hint-${hint.kind}`,
-        kicker: `${primary.freqMhz.toFixed(3)} МГц · ${typeOf(primary)}`,
-        title: hint.title,
-        text: hint.text,
-        why: hint.why,
-        freqMhz: primary.freqMhz,
-        typeLabel: typeOf(primary),
-        applyKind: hint.applyLabel ? hint.kind : null,
-        applyLabel: hint.applyLabel,
-      });
-    }
-    live.slice(1, 5).forEach((row, index) => slides.push(signalSlide(row, `signal-${index + 2}`)));
-  } else {
-    slides.push({
-      key: "scene",
-      kicker: "Помощник",
-      title: "Эфир",
-      text: advice.scene,
-      why: "",
-      freqMhz: null,
-      typeLabel: null,
-      applyKind: null,
-      applyLabel: null,
-    });
-    for (const hint of advice.hints) {
-      slides.push({
-        key: `hint-quiet-${hint.kind}`,
-        kicker: "Совет",
-        title: hint.title,
-        text: hint.text,
-        why: hint.why,
-        freqMhz: null,
-        typeLabel: null,
-        applyKind: hint.applyLabel ? hint.kind : null,
-        applyLabel: hint.applyLabel,
-      });
-    }
-  }
-  if (advice.after) {
-    slides.push({
-      key: "after",
-      kicker: primary ? `${primary.freqMhz.toFixed(3)} МГц · ${typeOf(primary)}` : "После передачи",
-      title: "Остаток",
-      text: advice.after,
-      why: "",
-      freqMhz: primary?.freqMhz ?? null,
-      typeLabel: primary ? typeOf(primary) : null,
-      applyKind: null,
-      applyLabel: null,
-    });
-  }
-  return slides;
-}
-
-function useAssistantCue() {
-  const rows = useLegion((s) => s.attackRows);
-  const advice = useLegion((s) => s.attackAdvice);
-  const transmitArmed = useLegion((s) => s.transmitArmed);
-  const applyAttackHint = useLegion((s) => s.applyAttackHint);
-  const slides = useMemo(() => buildAssistantSlides(rows, advice), [rows, advice]);
-  const slidesRef = useRef(slides);
-  slidesRef.current = slides;
-  const dueRef = useRef(Date.now() + STEP_MS);
-  const [stepKey, setStepKey] = useState<string | null>(null);
-  const stepKeyRef = useRef<string | null>(null);
-  const heldRef = useRef<Slide | null>(null);
-  const [paused, setPaused] = useState(false);
-
-  // Двенадцать секунд — сколько одна карточка остаётся на экране.
-  // Смена самого громкого следа обновляет текст и не перелистывает раньше срока.
-  useEffect(() => {
-    if (paused) return;
-    dueRef.current = Date.now() + STEP_MS;
-    const id = window.setInterval(() => {
-      const list = slidesRef.current;
-      if (list.length < 2) {
-        dueRef.current = Date.now() + STEP_MS;
-        return;
-      }
-      const at = list.findIndex((item) => item.key === stepKeyRef.current);
-      if (at < 0) {
-        if (stepKeyRef.current == null) {
-          stepKeyRef.current = list[0].key;
-          setStepKey(list[0].key);
-          return;
-        }
-        if (Date.now() < dueRef.current) return;
-        dueRef.current = Date.now() + STEP_MS;
-        stepKeyRef.current = list[0].key;
-        setStepKey(list[0].key);
-        return;
-      }
-      if (Date.now() < dueRef.current) return;
-      dueRef.current = Date.now() + STEP_MS;
-      const next = list[(at + 1) % list.length].key;
-      stepKeyRef.current = next;
-      setStepKey(next);
-    }, 200);
-    return () => window.clearInterval(id);
-  }, [paused]);
-
-  const showKey = (key: string) => {
-    dueRef.current = Date.now() + STEP_MS;
-    stepKeyRef.current = key;
-    setStepKey(key);
-  };
-
-  const matched = stepKey ? slides.find((item) => item.key === stepKey) : undefined;
-  if (matched) heldRef.current = matched;
-  const slide = matched ?? heldRef.current ?? slides[0];
-  return { slide, slides, paused, setPaused, showKey, transmitArmed, applyAttackHint };
+function useSettledCallout(next: AttackCallout): AttackCallout {
+  const [shown, setShown] = useState(next);
+  const settled = settleCallout(shown, next);
+  if (settled !== shown) setShown(settled);
+  return settled;
 }
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
@@ -221,8 +50,13 @@ export function GraphiteFacts({
   range: string;
   rangeNote: string;
 }) {
-  const cue = useAssistantCue();
-  const slide = cue.slide;
+  const rows = useLegion((s) => s.attackRows);
+  const advice = useLegion((s) => s.attackAdvice);
+  const transmitArmed = useLegion((s) => s.transmitArmed);
+  const applyAttackHint = useLegion((s) => s.applyAttackHint);
+  const live = useMemo(() => buildAttackCallout(calloutRows(rows), advice), [rows, advice]);
+  const shown = useSettledCallout(live);
+
   return (
     <>
       <div className="graphite-stats">
@@ -247,58 +81,33 @@ export function GraphiteFacts({
           </div>
           <small>{rangeNote}</small>
         </div>
-        <SignalStat typeLabel={slide?.typeLabel ?? null} freqMhz={slide?.freqMhz ?? null} />
+        <SignalStat typeLabel={live.typeLabel} freqMhz={live.freqMhz} />
       </div>
-      {slide && (
-        <section
-          className={cue.paused ? "graphite-assist is-paused" : "graphite-assist"}
-          style={{ "--graphite-cue-ms": `${STEP_MS}ms` } as CSSProperties}
-          aria-live="polite"
-          aria-atomic="true"
-          aria-label="Советы помощника"
-          onMouseEnter={() => cue.setPaused(true)}
-          onMouseLeave={() => cue.setPaused(false)}
-        >
-          <div className="graphite-assist-kicker">
-            <span>Помощник</span>
-            <span>{slide.kicker}</span>
-          </div>
-          <div key={slide.key} className="graphite-assist-body">
-            <h2>{slide.title}</h2>
-            <p>{slide.text}</p>
-            {slide.why && <small>{slide.why}</small>}
-          </div>
+      <section className="graphite-assist" aria-label="Совет помощника">
+        <div className="graphite-assist-kicker">
+          <span>Помощник</span>
+          <span>{shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц` : shown.kicker}</span>
+        </div>
+        <div className="graphite-assist-body" aria-live="polite" aria-atomic="true">
+          <h2>{shown.title}</h2>
+          <p>{shown.text}</p>
+          {shown.why && <small>{shown.why}</small>}
+        </div>
+        {shown.applyLabel && shown.applyKind && shown.hint && (
           <div className="graphite-assist-side">
-            {slide.applyLabel && slide.applyKind && (
-              <button
-                type="button"
-                className="graphite-assist-apply"
-                disabled={cue.transmitArmed}
-                onClick={() => {
-                  if (slide.applyKind) cue.applyAttackHint(slide.applyKind);
-                }}
-              >
-                {slide.applyLabel}
-              </button>
-            )}
-            {cue.slides.length > 1 && (
-              <div className="graphite-assist-dots">
-                {cue.slides.map((item, n) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={item.key === slide.key ? "on" : ""}
-                    aria-label={`Шаг ${n + 1}: ${item.title}`}
-                    aria-current={item.key === slide.key ? "step" : undefined}
-                    onClick={() => cue.showKey(item.key)}
-                  />
-                ))}
-              </div>
-            )}
+            <button
+              type="button"
+              className="graphite-assist-apply"
+              disabled={transmitArmed}
+              onClick={() => {
+                if (shown.hint && shown.applyKind) applyAttackHint(shown.applyKind, shown.hint);
+              }}
+            >
+              {shown.applyLabel}
+            </button>
           </div>
-          {cue.slides.length > 1 && <span key={`meter-${slide.key}`} className="graphite-assist-meter" aria-hidden="true" />}
-        </section>
-      )}
+        )}
+      </section>
     </>
   );
 }

@@ -204,7 +204,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
       key: "wait",
       kicker: "Помощник",
       title: "Ждёт сигнал",
-      text: "Когда в эфире появится след, здесь по очереди будут его тип и совет. Каждый шаг держится 4 секунды.",
+      text: "Когда в эфире появится след, здесь будет один шаг. Остальные открываются кнопками «Назад» и «Дальше».",
       why: "",
       freqMhz: null as number | null,
       typeLabel: null as string | null,
@@ -222,8 +222,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     }));
   }, [capture, cueId]);
 
-  const [cuePaused, setCuePaused] = useState(false);
-  const cue = useCue(attackSlides, cuePaused, cueId);
+  const cue = useCue(attackSlides, cueId);
   const slide = attackSlides.find((item) => item.key === cue.key) ?? attackSlides[0];
 
   const read = showTrace && rxMhz != null
@@ -327,33 +326,24 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
             <small>{slide.freqMhz != null ? `${slide.freqMhz.toFixed(3)} МГц` : "ожидание"}</small>
           </div>
         </div>
-        <section
-          className={cuePaused ? "graphite-assist is-paused" : "graphite-assist"}
-          aria-live="polite"
-          aria-atomic="true"
-          aria-label="Советы помощника"
-          data-cue-key={slide.key}
-          onMouseEnter={() => setCuePaused(true)}
-          onMouseLeave={() => setCuePaused(false)}
-        >
+        <section className="graphite-assist" aria-label="Советы помощника" data-cue-key={slide.key}>
           <div className="graphite-assist-kicker">
             <span>Помощник</span>
             <span>{slide.kicker}</span>
           </div>
-          <div key={slide.key} className="graphite-assist-body">
+          <div key={slide.key} className="graphite-assist-body" aria-live="polite" aria-atomic="true">
             <h2>{slide.title}</h2>
             <p>{slide.text}</p>
           </div>
-          {attackSlides.length > 1 && (
+          {cue.count > 1 && (
             <div className="graphite-assist-side">
-              <div className="graphite-assist-dots">
-                {attackSlides.map((item, n) => (
-                  <button key={item.key} type="button" className={item.key === slide.key ? "on" : ""} aria-label={`Шаг ${n + 1}: ${item.title}`} aria-current={item.key === slide.key ? "step" : undefined} />
-                ))}
+              <div className="graphite-assist-nav">
+                <button type="button" className="graphite-assist-step" onClick={cue.prev} aria-label="Предыдущий шаг">Назад</button>
+                <span>{cue.index + 1} / {cue.count}</span>
+                <button type="button" className="graphite-assist-step" onClick={cue.next} aria-label="Следующий шаг">Дальше</button>
               </div>
             </div>
           )}
-          {attackSlides.length > 1 && <span key={`meter-${slide.key}`} className="graphite-assist-meter" aria-hidden="true" />}
         </section>
         <div className="graphite-spectrum">
           <DemoScope f1={lo} f2={hi} capture={capture} showTrace={showTrace} scanning={showTrace} markerMhz={showTrace ? null : moving} />
