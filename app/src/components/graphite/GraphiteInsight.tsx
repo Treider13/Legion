@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
-import { buildAttackCallout, settleCallout, type AttackCallout, type CalloutRow } from "../../sense/attackCallout";
+import {
+  binStepMhz,
+  buildAttackCallout,
+  settleCallout,
+  signalReadoutMhz,
+  type AttackCallout,
+  type CalloutRow,
+} from "../../sense/attackCallout";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
 
@@ -22,6 +29,13 @@ function useSettledCallout(next: AttackCallout): AttackCallout {
   const settled = settleCallout(shown, next);
   if (settled !== shown) setShown(settled);
   return settled;
+}
+
+function useSignalMhz(cardMhz: number | null, liveMhz: number | null, binMhz: number): number | null {
+  const [printed, setPrinted] = useState<number | null>(liveMhz ?? cardMhz);
+  const next = signalReadoutMhz(cardMhz, liveMhz, printed, binMhz);
+  if (next !== printed) setPrinted(next);
+  return next;
 }
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
@@ -54,8 +68,10 @@ export function GraphiteFacts({
   const advice = useLegion((s) => s.attackAdvice);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const applyAttackHint = useLegion((s) => s.applyAttackHint);
+  const bins = useLegion((s) => s.scanBins);
   const live = useMemo(() => buildAttackCallout(calloutRows(rows), advice), [rows, advice]);
   const shown = useSettledCallout(live);
+  const signalMhz = useSignalMhz(shown.freqMhz, live.freqMhz, binStepMhz(bins.map((bin) => bin.freqMhz)));
 
   return (
     <>
@@ -81,7 +97,7 @@ export function GraphiteFacts({
           </div>
           <small>{rangeNote}</small>
         </div>
-        <SignalStat typeLabel={live.typeLabel} freqMhz={live.freqMhz} />
+        <SignalStat typeLabel={shown.typeLabel} freqMhz={signalMhz} />
       </div>
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">

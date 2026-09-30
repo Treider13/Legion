@@ -1,12 +1,13 @@
 // ============================================================================
 // LEGION — один совет на главном кадре. Не карусель.
 // Sonner, issue #422: повтор с тем же id обновляет существующее сообщение,
-// второе не создаётся. Id здесь — класс ситуации. Пока он тот же, карточка
-// держит прежний hint, и «Взять» записывает именно его.
+// второе не создаётся. Id здесь — действие совета (кнопка и передача).
+// Пока оно то же и след не ушёл дальше 0.2 МГц, карточка держит прежний hint.
 // Рамка в помощнике центрируется на выбранном следе (attackAdvisor), поэтому
 // частота карточки — след ближе к центру рамки, не самый громкий рядом.
 // ============================================================================
 import type { AttackAdvice, AttackHint, AttackHintKind } from "./attackAdvisor";
+import { ATTACK_ASSOC_MHZ } from "./attackTracks";
 
 export interface CalloutRow {
   freqMhz: number;
@@ -66,20 +67,72 @@ function primaryOf(rows: readonly CalloutRow[], frame: { f1Mhz: number; f2Mhz: n
   return live.reduce(louder);
 }
 
-/** Пока класс тот же — остаётся прежний hint. Новый класс подменяет его целиком. */
+function spanMhz(callout: AttackCallout): number | null {
+  const paint = callout.hint?.paint;
+  if (!paint) return null;
+  const span = Math.abs(paint.f2Mhz - paint.f1Mhz);
+  return Number.isFinite(span) ? span : null;
+}
+
+/**
+ * Карточка меняется, когда сменилось действие, ширина рамки ушла минимум
+ * на 1 МГц от уже показанной, или след ушёл дальше ворот трекера.
+ * Имя класса и корзина полмегагерца сюда не входят: они дёргаются на том же сигнале.
+ */
 export function settleCallout(shown: AttackCallout, next: AttackCallout): AttackCallout {
-  return shown.situation === next.situation ? shown : next;
+  if (shown.situation !== next.situation) return next;
+  const shownSpan = spanMhz(shown);
+  const nextSpan = spanMhz(next);
+  if (shownSpan == null || nextSpan == null) {
+    if (shownSpan !== nextSpan) return next;
+  } else if (Math.abs(nextSpan - shownSpan) >= 1) {
+    return next;
+  }
+  if (shown.freqMhz == null || next.freqMhz == null) {
+    if (shown.freqMhz !== next.freqMhz) return next;
+  } else if (Math.abs(next.freqMhz - shown.freqMhz) > ATTACK_ASSOC_MHZ) {
+    return next;
+  }
+  return shown;
 }
 
-/** Полмегагерца: дрожание пика внутри коридора не меняет совет. */
-function bucketMhz(mhz: number): string {
-  return (Math.round(mhz * 2) / 2).toFixed(1);
+/** Шаг бина по частотам соседних точек спектра. Это fs/N на текущей сетке. */
+export function binStepMhz(freqs: readonly number[]): number {
+  let sum = 0;
+  let n = 0;
+  const take = Math.min(freqs.length - 1, 32);
+  for (let i = 1; i <= take; i++) {
+    const step = Math.abs(freqs[i]! - freqs[i - 1]!);
+    if (step > 0) {
+      sum += step;
+      n += 1;
+    }
+  }
+  return n > 0 ? sum / n : 0;
 }
 
-/** Целый мегагерц ширины рамки. Сотые кадра не меняют класс, смена «узкая / семья» меняет. */
-function spanBucket(hint: AttackHint | null): string {
-  if (!hint?.paint) return "none";
-  return String(Math.round(Math.abs(hint.paint.f2Mhz - hint.paint.f1Mhz)));
+/**
+ * Подпись частоты. Соседний бин (сдвиг не больше шага) не меняет цифру.
+ * Дальше одного бина — меняет. binMhz <= 0 значит сетки ещё нет, берём новое значение.
+ */
+export function holdPeakMhz(shownMhz: number | null, nextMhz: number | null, binMhz: number): number | null {
+  if (nextMhz == null || !Number.isFinite(nextMhz)) return null;
+  if (shownMhz == null || !Number.isFinite(shownMhz) || !(binMhz > 0)) return nextMhz;
+  if (Math.abs(nextMhz - shownMhz) > binMhz + 1e-9) return nextMhz;
+  return shownMhz;
+}
+
+/** Частота строки «Сигнал»: пик того же следа, что на карточке, с удержанием соседнего бина. */
+export function signalReadoutMhz(
+  cardMhz: number | null,
+  liveMhz: number | null,
+  printedMhz: number | null,
+  binMhz: number,
+): number | null {
+  const same =
+    cardMhz != null && liveMhz != null && Math.abs(liveMhz - cardMhz) <= ATTACK_ASSOC_MHZ;
+  const candidate = same ? liveMhz : (cardMhz ?? liveMhz);
+  return holdPeakMhz(printedMhz, candidate, binMhz);
 }
 
 function pickHint(advice: AttackAdvice): AttackHint | null {
@@ -98,9 +151,6 @@ export function buildAttackCallout(rows: readonly CalloutRow[], advice: AttackAd
   const situation = [
     hint?.kind ?? "scene",
     hint?.applyLabel ?? "note",
-    spanBucket(hint),
-    primary?.atlasId ?? "none",
-    primary ? bucketMhz(primary.freqMhz) : "none",
     tx ? "tx" : "rx",
   ].join("|");
   if (!hint) {
