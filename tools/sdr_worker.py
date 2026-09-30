@@ -616,6 +616,28 @@ def stream_kind(ret: int) -> str:
     return "error"
 
 
+def tx_write_action(kind: str, first: bool) -> str:
+    """Что делать с ответом writeStream.
+
+    timeout открытого burst — тот же кусок. sync.c (Nuand master) ставит
+    in_burst до ожидания буфера и снимает его только после успешного BURST_END,
+    не на BLADERF_ERR_TIMEOUT (issue #457). Повтор с flags=0 законен.
+
+    timeout первого кадра — reset_sync. Soapy ставит _inTxBurst только после
+    успешного writeStream, поэтому deactivateStream BURST_END не шлёт, а
+    повторный BURST_START даёт BLADERF_ERR_INVAL в handle_tx_parameters.
+    """
+    if kind == "ok":
+        return "advance"
+    if kind in ("underflow", "timeout") and not first:
+        return "retry"
+    if kind == "timeout" and first:
+        return "reset_sync"
+    if kind == "underflow":
+        return "retry"
+    return "fatal"
+
+
 def write_stream_all(dev: Any, stream: Any, buf: Any, timeout_us: int, underflow_limit: int = 8) -> tuple[int, str]:
     """Дописывает буфер кусками. SoapySDR writeStream имеет право вернуть меньше,
     чем просили: короткий ret>0 — не отказ (пачка 4096 из 65536). Ошибка — ret≤0.
@@ -1189,6 +1211,7 @@ class Radio:
         self._tx_fs = float(TX_FS)
         # Стоящий TX LO: цифровой hop (GNU Radio rotator) пока цель в окне.
         self._tx_lo_hz: float | None = None
+        self._tx_lo_pending: float | None = None
         self._tx_mix_hz: float | None = None
         self._tx_phase = 0.0
         self._tx_off = 0
@@ -1196,6 +1219,7 @@ class Radio:
         self._tx_play_n = 0
         self._tx_play_cs16 = False
         self._tx_buflen = TRANSFER_SAMPLES
+        self._tx_buffers = TX_TRANSFERS + 1
         self._tx_wave_key: tuple[Any, ...] | None = None
         self._tx_ready = threading.Event()
         self._tx_start_err: dict[str, Any] | None = None
@@ -2364,6 +2388,7 @@ class Radio:
                         self._open_tx_stream(buflen, buffers)
                         created = True
                     self._tx_buflen = int(buflen)
+                    self._tx_buffers = int(buffers)
                     self._install_tx_play(buf)
                     self._tx_fs = tx_fs
                 except Exception as e:
@@ -2376,9 +2401,18 @@ class Radio:
         self._stop.clear()
         self._start_tx_loop()
         if not self._tx_ready.wait(2.0):
-            self._stop.set()
-            self._tx_disable_module()
-            return {"ok": False, "reason": "TX насос не записал первый кадр — сигнала на RF out нет", "latencyUs": 0}
+            # Первый кадр ещё не записан, но насос жив и повторяет writeStream.
+            # Один USB timeout не должен гасить сессию.
+            if self._thr is not None and self._thr.is_alive() and self._tx_start_err is None:
+                pass
+            else:
+                self._stop.set()
+                self._tx_disable_module()
+                return {
+                    "ok": False,
+                    "reason": "TX насос не записал первый кадр — сигнала на RF out нет",
+                    "latencyUs": 0,
+                }
         if self._tx_start_err is not None:
             err = self._tx_start_err
             self._tx_start_err = None
@@ -2467,6 +2501,40 @@ class Radio:
                 self.dev.deactivateStream(stream)
             except Exception:
                 pass
+
+    def _tx_reset_sync(self) -> bool:
+        """Новый sync после таймаута первого кадра. Модуль снова включается setupStream.
+
+        closeStream вызывает bladerf_enable_module(false) и sync_deinit.
+        Следующий setupStream ставит in_burst = false. Иначе повторный
+        BURST_START — BLADERF_ERR_INVAL, и передача умирает на первом таймауте.
+        """
+        dev = self.dev
+        if dev is None:
+            return False
+        buflen = int(self._tx_buflen) if self._tx_buflen else TRANSFER_SAMPLES
+        buffers = int(self._tx_buffers) if self._tx_buffers else (TX_TRANSFERS + 1)
+        was_cs16 = bool(self._tx_play_cs16)
+        old = self.tx
+        # Сначала close: enable_module(false) и sync_deinit. Иначе второй
+        # setupStream включит модуль, а close старого тут же выключит его.
+        self.tx = None
+        if old is not None:
+            close = getattr(dev, "closeStream", None)
+            if callable(close):
+                try:
+                    close(old)
+                except Exception as e:
+                    _log(f"TX reset closeStream: {e}")
+        try:
+            self._open_tx_stream(buflen, buffers)
+        except Exception as e:
+            _log(f"TX reset setupStream: {e}")
+            self.tx = None
+            return False
+        if self.tx is None or bool(self._tx_play_cs16) != was_cs16:
+            return False
+        return True
 
     def _tx_rearm(self) -> bool:
         """Выключить и снова включить тот же поток с той же B."""
@@ -2641,10 +2709,9 @@ class Radio:
                 }
             if self.dev is None:
                 return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
-            try:
-                self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
-            except Exception as e:
-                return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
+            # USB setFrequency делает насос между writeStream. Экран не ждёт.
+            with self._tx_play_lock:
+                self._tx_lo_pending = float(lo_hz)
             self.tx_mhz = freq_mhz
             self._tx_lo_hz = lo_hz
             self._tx_mix_hz = float(mix_hz)
@@ -2742,6 +2809,18 @@ class Radio:
         )
         return self._tx_wave_key == key
 
+    def _apply_pending_lo(self, dev: Any) -> None:
+        """setFrequency между записями. Часы, фильтр и буфер не трогает."""
+        with self._tx_play_lock:
+            lo = self._tx_lo_pending
+            self._tx_lo_pending = None
+        if lo is None or dev is None:
+            return
+        try:
+            dev.setFrequency(SOAPY_SDR_TX, 0, float(lo))
+        except Exception as e:
+            _log(f"TX setFrequency {float(lo):.0f}: {e}")
+
     def _start_tx_loop(self) -> None:
         if self._thr and self._thr.is_alive():
             return
@@ -2802,18 +2881,30 @@ class Radio:
                         self._tx_ready.set()
                         return
                     continue
-                if kind == "ok" and written > 0:
+                action = tx_write_action(kind, first)
+                if action == "advance" and written > 0:
                     off = (off + int(written)) % n
                     self.tx_fail = 0
                     if first:
                         first = False
                         self._tx_ready.set()
+                    self._apply_pending_lo(dev)
                     continue
-                if kind == "underflow":
-                    # Один недобор не гасит поток и не ставит txError.
-                    if first:
-                        first = False
+                if action == "retry":
+                    # Недобор и timeout открытого burst не гасят модуль и не ставят txError.
+                    continue
+                if action == "reset_sync":
+                    if not self._tx_reset_sync():
+                        self.tx_fail += 1
+                        self.tx_error = f"writeStream {kind} ret={written}"
+                        self._tx_start_err = {
+                            "ok": False,
+                            "reason": f"writeStream {kind} ret={written} — сигнала на RF out нет",
+                            "latencyUs": 0,
+                        }
+                        self._tx_disable_module()
                         self._tx_ready.set()
+                        return
                     continue
                 if not self._tx_rearm():
                     self.tx_fail += 1
@@ -2841,12 +2932,19 @@ class Radio:
                         self._tx_disable_module()
                         self._tx_ready.set()
                         return
-                    if kind2 == "ok" and written2 > 0:
+                    action2 = tx_write_action(kind2, True)
+                    if action2 == "advance" and written2 > 0:
                         off = (off + int(written2)) % n
                         first = False
                         self.tx_fail = 0
                         self._tx_ready.set()
+                        self._apply_pending_lo(dev)
                         continue
+                    if action2 == "retry":
+                        continue
+                    if action2 == "reset_sync":
+                        if self._tx_reset_sync():
+                            continue
                     self.tx_error = f"writeStream {kind2} ret={written2}"
                     self._tx_start_err = {
                         "ok": False,
@@ -2902,6 +3000,7 @@ class Radio:
         self.tx_error = None
         self.tx_fail = 0
         self._tx_lo_hz = None
+        self._tx_lo_pending = None
         self._tx_mix_hz = None
         self._tx_phase = 0.0
         self._tx_off = 0
