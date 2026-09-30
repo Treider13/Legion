@@ -3,11 +3,10 @@ import { calloutForMarker, type AttackCallout } from "../../sense/attackCallout"
 import { useLegion } from "../../state/store";
 import {
   ADVICE_HOLD_MS,
-  advanceAdviceMhz,
+  advanceAdviceId,
   mergeAdviceQueue,
-  queueIndexForFreq,
-  resolveAdviceMhz,
-  sameAdviceEmitter,
+  queueIndexForId,
+  resolveAdviceId,
   useAdvisorPick,
   type AdviceQueueItem,
 } from "./advisorFocus";
@@ -16,7 +15,7 @@ const HOVER_WAIT: AttackCallout = {
   situation: "hover",
   kicker: "очередь",
   title: "Ждёт сигнал",
-  text: "На обнаруженном следе совет стоит 8 секунд и не прыгает на более громкий. Затем очередь показывает следующий. Наведение на маркер откроет его, если пауза уже кончилась, и снова удержит на 8 секунд.",
+  text: "На обнаруженном следе совет стоит 8 секунд и не сбрасывается, если частота следа чуть ушла или хит на кадр пропал. Затем очередь показывает следующий. Наведение на другой маркер не перебивает эти 8 секунд: этот след станет следующим.",
   why: "",
   freqMhz: null,
   typeLabel: null,
@@ -66,70 +65,84 @@ export function GraphiteFacts({
   });
   const pick = useAdvisorPick();
   const [queue, setQueue] = useState<readonly AdviceQueueItem[]>([]);
-  const [currentMhz, setCurrentMhz] = useState<number | null>(null);
-  const [hold, setHold] = useState(0);
+  const [currentId, setCurrentId] = useState<number | null>(null);
+  const [slot, setSlot] = useState(0);
   const [pin, setPin] = useState<AttackCallout | null>(null);
   const [snap, setSnap] = useState("");
   const queueRef = useRef(queue);
-  const currentRef = useRef(currentMhz);
+  const currentRef = useRef(currentId);
+  const liveRef = useRef(rows);
   const dwellUntil = useRef(0);
+  const pendingTrackId = useRef<number | null>(null);
   queueRef.current = queue;
-  currentRef.current = currentMhz;
+  currentRef.current = currentId;
+  liveRef.current = rows;
   const calloutOpts = { windowMhz, paint, wave, holdMs, bands, transmitArmed };
+  const armed = currentId != null;
 
   useEffect(() => {
     const prev = queueRef.current;
-    const next = mergeAdviceQueue(prev, rows);
-    if (next === prev) return;
-    setQueue(next);
-    setCurrentMhz((mhz) => resolveAdviceMhz(mhz, prev, next));
+    const merged = mergeAdviceQueue(prev, rows, currentRef.current);
+    if (merged.same) return;
+    const prevId = currentRef.current;
+    const rebound = prevId == null ? null : merged.rebind.find(([from]) => from === prevId)?.[1] ?? null;
+    setQueue(merged.queue);
+    setCurrentId(rebound ?? resolveAdviceId(prevId, merged.queue));
   }, [rows]);
 
   useEffect(() => {
-    if (pick.seq === 0 || pick.freqMhz == null) return;
+    if (pick.seq === 0 || pick.freqMhz == null || pick.trackId == null) return;
     const freq = pick.freqMhz;
-    const trackId = pick.trackId ?? -1;
+    const trackId = pick.trackId;
     setQueue((prev) => {
-      if (queueIndexForFreq(prev, freq) >= 0) return prev;
+      if (prev.some((item) => item.trackId === trackId)) return prev;
       return [...prev, { freqMhz: freq, trackId }];
     });
-    if (currentRef.current != null && Date.now() < dwellUntil.current) return;
+    if (currentRef.current != null && Date.now() < dwellUntil.current) {
+      pendingTrackId.current = trackId;
+      return;
+    }
     dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
-    setCurrentMhz(freq);
-    setHold((n) => n + 1);
+    pendingTrackId.current = null;
+    setCurrentId(trackId);
+    setSlot((n) => n + 1);
   }, [pick.seq, pick.freqMhz, pick.trackId]);
 
   useEffect(() => {
-    if (currentMhz == null) {
+    if (!armed) {
       dwellUntil.current = 0;
       return;
     }
     dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
     const timer = window.setTimeout(() => {
-      setCurrentMhz(advanceAdviceMhz(queueRef.current, currentRef.current));
-      setHold((n) => n + 1);
+      const pending = pendingTrackId.current;
+      pendingTrackId.current = null;
+      const q = queueRef.current;
+      const cur = currentRef.current;
+      const picked = pending != null && pending !== cur && q.some((item) => item.trackId === pending)
+        ? pending
+        : advanceAdviceId(q, cur, liveRef.current);
+      setCurrentId(picked);
+      setSlot((n) => n + 1);
     }, ADVICE_HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [currentMhz, hold]);
+  }, [slot, armed]);
 
-  const row =
-    currentMhz == null
-      ? undefined
-      : rows.find((item) => item.state !== "cooled" && sameAdviceEmitter(item.freqMhz, currentMhz));
-  if (currentMhz == null) {
+  const row = currentId == null ? undefined : rows.find((item) => item.id === currentId && item.state !== "cooled");
+  if (currentId == null) {
     if (pin) {
       setPin(null);
       setSnap("");
     }
   } else if (row) {
-    const token = `${Math.round(currentMhz * 1000)}:${hold}`;
+    const token = String(slot);
     if (token !== snap) {
       setSnap(token);
       setPin(calloutForMarker(row, calloutOpts));
     }
   }
   const shown = pin ?? HOVER_WAIT;
-  const place = currentMhz == null ? -1 : queueIndexForFreq(queue, currentMhz);
+  const place = currentId == null ? -1 : queueIndexForId(queue, currentId);
   const queueLabel = place >= 0 ? `${place + 1} из ${queue.length}` : shown.kicker;
 
   return (
