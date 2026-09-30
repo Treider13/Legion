@@ -1242,8 +1242,13 @@ class Radio:
         return self._thr is not None and self._thr.is_alive()
 
     def _tx_holds_clock(self) -> bool:
-        """Живой TX-поток держит BBPLL. setSampleRate в этот момент гасит полку."""
-        if self.fake or self.tx is None:
+        """Живой TX-поток держит BBPLL. setSampleRate в этот момент гасит полку.
+
+        reset_sync обнуляет self.tx на время closeStream+setupStream.
+        Поток при этом жив и снова включит модуль. Указатель стрима
+        в этом окне не значит, что PLL свободен.
+        """
+        if self.fake:
             return False
         return self._thr is not None and self._thr.is_alive()
 
@@ -2090,8 +2095,10 @@ class Radio:
                 f"park: {snap['hardwareKey'] or 'плата без hardwareKey'} — "
                 "FPGA эфир: bladeRF 1 / micro (LMS6002D/AD9361); прочие не подменяются"
             )
-        if tx and self.tx is not None:
-            # setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27)
+        pump_alive = self._thr is not None and self._thr.is_alive()
+        if tx and (self.tx is not None or pump_alive):
+            # setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
+            # reset_sync на мгновение ставит self.tx = None, насос при этом жив.
             return _fail("park: TX стрим активен — сначала tx_off")
 
         # 1 МГц: ловит «не записалось» (0 / другой ГГц), не фазовый шум PLL.

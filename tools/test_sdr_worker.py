@@ -862,6 +862,17 @@ def main() -> int:
         "насос применяет LO между записями",
         len(freq.calls) == 1 and abs(freq.calls[0] - want_lo) < 1 and live_hop._tx_lo_pending is None,
     )
+    live_hop.tx = None
+    check(
+        "reset_sync: живой насос держит BBPLL, даже если указатель стрима пуст",
+        live_hop._tx_holds_clock() is True,
+    )
+    live_hop.dev.getHardwareKey = lambda: "bladerf2"
+    parked = live_hop.park(2442.0, 28.0, 2e6, False, True)
+    check(
+        "park не перестраивает часы, пока насос жив",
+        parked.get("ok") is False and "tx_off" in str(parked.get("reason")),
+    )
     check("банк 31 волны на месте", len(w.WAVE_KINDS) == 31 and "p4" in w.WAVE_KINDS)
 
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
