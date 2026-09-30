@@ -41,8 +41,9 @@ export function useAdvisorFocusId(): number | null {
 
 /**
  * Самый узкий живой след под курсором.
- * На широкой полосе след уже одного пикселя всё равно рисуется полоской minPx:
- * зона наведения равна этой полоске, а не только частотной ширине.
+ * Полоска рисуется от нижней частоты вправо и не уже minPx
+ * (fillRect от x(fLow), ширина max(пиксели следа, minPx)).
+ * Зона наведения — этот прямоугольник, не полоса симметрично вокруг центра.
  * Широкая полка не перекрывает узкий маркер внутри неё.
  */
 export function trackUnderMhz<T extends MarkerHit>(
@@ -58,8 +59,8 @@ export function trackUnderMhz<T extends MarkerHit>(
     const lo = Math.min(track.fLowMhz, track.fHighMhz);
     const hi = Math.max(track.fLowMhz, track.fHighMhz);
     const width = Math.max(hi - lo, 0);
-    const pad = pxPerMhz > 0 ? Math.max(0, (minPx / pxPerMhz - width) / 2) : 0;
-    if (mhz < lo - pad || mhz > hi + pad) continue;
+    const drawn = pxPerMhz > 0 ? Math.max(width, minPx / pxPerMhz) : width;
+    if (mhz < lo || mhz > lo + drawn) continue;
     if (!best || track.widthMhz < best.widthMhz) best = track;
   }
   return best;
