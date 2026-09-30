@@ -1,13 +1,21 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { calloutForMarker, type AttackCallout } from "../../sense/attackCallout";
 import { useLegion } from "../../state/store";
-import { clearAdvisorFocus, useAdvisorFocusId } from "./advisorFocus";
+import {
+  ADVICE_HOLD_MS,
+  advanceAdviceId,
+  mergeAdviceQueue,
+  queueIndexForId,
+  resolveAdviceId,
+  useAdvisorPick,
+  type AdviceQueueItem,
+} from "./advisorFocus";
 
 const HOVER_WAIT: AttackCallout = {
   situation: "hover",
-  kicker: "маркер",
-  title: "Наведите на маркер",
-  text: "Совет откроется по этому следу и останется здесь, пока не наведёте на другой маркер.",
+  kicker: "очередь",
+  title: "Ждёт сигнал",
+  text: "На обнаруженном следе совет стоит 8 секунд и не сбрасывается, если частота следа чуть ушла или хит на кадр пропал. Затем очередь показывает следующий. Наведение на другой маркер не перебивает эти 8 секунд: этот след станет следующим.",
   why: "",
   freqMhz: null,
   typeLabel: null,
@@ -55,19 +63,87 @@ export function GraphiteFacts({
     const parsed = parseFloat(s.scanWindowMhz);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 56;
   });
-  const focusId = useAdvisorFocusId();
-  const [pinId, setPinId] = useState<number | null>(null);
+  const pick = useAdvisorPick();
+  const [queue, setQueue] = useState<readonly AdviceQueueItem[]>([]);
+  const [currentId, setCurrentId] = useState<number | null>(null);
+  const [slot, setSlot] = useState(0);
   const [pin, setPin] = useState<AttackCallout | null>(null);
-  const row = rows.find((item) => item.id === focusId && item.state !== "cooled");
-  if (pinId != null && !rows.some((item) => item.id === pinId)) {
-    setPinId(null);
-    setPin(null);
-    if (focusId === pinId) clearAdvisorFocus();
-  } else if (focusId != null && row && focusId !== pinId) {
-    setPinId(focusId);
-    setPin(calloutForMarker(row, { windowMhz, paint, wave, holdMs, bands, transmitArmed }));
+  const [snap, setSnap] = useState("");
+  const queueRef = useRef(queue);
+  const currentRef = useRef(currentId);
+  const liveRef = useRef(rows);
+  const dwellUntil = useRef(0);
+  const pendingTrackId = useRef<number | null>(null);
+  queueRef.current = queue;
+  currentRef.current = currentId;
+  liveRef.current = rows;
+  const calloutOpts = { windowMhz, paint, wave, holdMs, bands, transmitArmed };
+  const armed = currentId != null;
+
+  useEffect(() => {
+    const prev = queueRef.current;
+    const merged = mergeAdviceQueue(prev, rows, currentRef.current);
+    if (merged.same) return;
+    const prevId = currentRef.current;
+    const rebound = prevId == null ? null : merged.rebind.find(([from]) => from === prevId)?.[1] ?? null;
+    setQueue(merged.queue);
+    setCurrentId(rebound ?? resolveAdviceId(prevId, merged.queue));
+  }, [rows]);
+
+  useEffect(() => {
+    if (pick.seq === 0 || pick.freqMhz == null || pick.trackId == null) return;
+    const freq = pick.freqMhz;
+    const trackId = pick.trackId;
+    setQueue((prev) => {
+      if (prev.some((item) => item.trackId === trackId)) return prev;
+      return [...prev, { freqMhz: freq, trackId }];
+    });
+    if (currentRef.current != null && Date.now() < dwellUntil.current) {
+      pendingTrackId.current = trackId;
+      return;
+    }
+    dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
+    pendingTrackId.current = null;
+    setCurrentId(trackId);
+    setSlot((n) => n + 1);
+  }, [pick.seq, pick.freqMhz, pick.trackId]);
+
+  useEffect(() => {
+    if (!armed) {
+      dwellUntil.current = 0;
+      return;
+    }
+    dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
+    const timer = window.setTimeout(() => {
+      const pending = pendingTrackId.current;
+      pendingTrackId.current = null;
+      const q = queueRef.current;
+      const cur = currentRef.current;
+      const picked = pending != null && pending !== cur && q.some((item) => item.trackId === pending)
+        ? pending
+        : advanceAdviceId(q, cur, liveRef.current);
+      setCurrentId(picked);
+      setSlot((n) => n + 1);
+    }, ADVICE_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [slot, armed]);
+
+  const row = currentId == null ? undefined : rows.find((item) => item.id === currentId && item.state !== "cooled");
+  if (currentId == null) {
+    if (pin) {
+      setPin(null);
+      setSnap("");
+    }
+  } else if (row) {
+    const token = String(slot);
+    if (token !== snap) {
+      setSnap(token);
+      setPin(calloutForMarker(row, calloutOpts));
+    }
   }
   const shown = pin ?? HOVER_WAIT;
+  const place = currentId == null ? -1 : queueIndexForId(queue, currentId);
+  const queueLabel = place >= 0 ? `${place + 1} из ${queue.length}` : shown.kicker;
 
   return (
     <>
@@ -98,7 +174,9 @@ export function GraphiteFacts({
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">
           <span>Помощник</span>
-          <span>{shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц` : shown.kicker}</span>
+          <span>
+            {shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц · ${queueLabel}` : queueLabel}
+          </span>
         </div>
         <div className="graphite-assist-body" aria-live="polite" aria-atomic="true">
           <h2>{shown.title}</h2>

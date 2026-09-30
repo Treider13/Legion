@@ -13,7 +13,15 @@ import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { buildAttackCallout, holdPeakMhz, settleCallout } from "../src/sense/attackCallout";
-import { trackUnderMhz } from "../src/components/graphite/advisorFocus";
+import {
+  ADVICE_HOLD_MS,
+  advanceAdviceId,
+  advisorPick,
+  focusAdvisorTrack,
+  mergeAdviceQueue,
+  resolveAdviceId,
+  trackUnderMhz,
+} from "../src/components/graphite/advisorFocus";
 import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
@@ -2718,6 +2726,75 @@ async function main(): Promise<void> {
   check(
     "правее двух пикселей след не выбирается",
     trackUnderMhz([thin], 2442.1, 1, 2) == null,
+  );
+  check("совет держит обнаруженный сигнал 8 секунд", ADVICE_HOLD_MS === 8000);
+  const q0 = mergeAdviceQueue([], [
+    { id: 1, freqMhz: 2440, state: "confirmed" },
+    { id: 2, freqMhz: 5800, state: "new" },
+  ], null);
+  check("очередь идёт в порядке появления, не по громкости", q0.queue[0]?.freqMhz === 2440 && q0.queue[1]?.freqMhz === 5800);
+  const louder = mergeAdviceQueue(q0.queue, [
+    { id: 9, freqMhz: 2440.1, state: "confirmed" },
+    { id: 2, freqMhz: 5800, state: "confirmed" },
+    { id: 3, freqMhz: 900, state: "confirmed" },
+  ], 1);
+  check(
+    "тот же излучатель не дублируется и не вылезает вперёд",
+    louder.queue.length === 3 && louder.queue[0]?.trackId === 9 && louder.queue[2]?.freqMhz === 900
+      && louder.rebind.some(([from, to]) => from === 1 && to === 9),
+  );
+  const walkedQueue = mergeAdviceQueue(q0.queue, [
+    { id: 1, freqMhz: 2440.4, state: "confirmed" },
+    { id: 2, freqMhz: 5800, state: "confirmed" },
+  ], 1);
+  check(
+    "два шага трекера по 0.2 МГц не заводят тот же id заново",
+    walkedQueue.same && walkedQueue.queue.length === 2 && walkedQueue.queue[0]?.trackId === 1,
+  );
+  check("сдвиг частоты не сбрасывает текущий след", resolveAdviceId(1, walkedQueue.queue) === 1);
+  const twinned = mergeAdviceQueue(
+    [...q0.queue, { freqMhz: 2440.1, trackId: 9 }],
+    [
+      { id: 9, freqMhz: 2440.1, state: "confirmed" },
+      { id: 2, freqMhz: 5800, state: "confirmed" },
+    ],
+    9,
+  );
+  check(
+    "повторный номер той же частоты не двоит очередь",
+    twinned.queue.filter((item) => item.trackId === 9).length === 1 && twinned.queue.length === 2,
+  );
+  const cooled = mergeAdviceQueue(q0.queue, [
+    { id: 2, freqMhz: 5800, state: "confirmed" },
+  ], 1);
+  check(
+    "остывший текущий след остаётся, пока не кончились 8 секунд",
+    cooled.queue.some((item) => item.trackId === 1) && resolveAdviceId(1, cooled.queue) === 1,
+  );
+  const dropped = mergeAdviceQueue(q0.queue, [
+    { id: 2, freqMhz: 5800, state: "confirmed" },
+  ], 2);
+  check("остывший не текущий след из очереди уходит", dropped.queue.length === 1 && dropped.queue[0]?.trackId === 2);
+  check(
+    "через 8 секунд очередь шагает к следующему живому",
+    advanceAdviceId(cooled.queue, 1, [{ id: 2, state: "confirmed" }]) === 2,
+  );
+  check(
+    "один живой сигнал остаётся на экране",
+    advanceAdviceId(q0.queue, 1, [{ id: 1, state: "confirmed" }]) === 1,
+  );
+  check(
+    "если живых не осталось, очередь не крутит остывшие",
+    advanceAdviceId(cooled.queue, 1, []) === null,
+  );
+  focusAdvisorTrack(1, 2440);
+  const stay = advisorPick().seq;
+  focusAdvisorTrack(99, 2440.1);
+  check("курсор на том же излучателе не сбрасывает 8 секунд", advisorPick().seq === stay);
+  focusAdvisorTrack(2, 5800);
+  check(
+    "другой маркер открывает свой совет",
+    advisorPick().seq === stay + 1 && advisorPick().freqMhz === 5800,
   );
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
