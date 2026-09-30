@@ -234,7 +234,6 @@ if _TOOLS_DIR not in sys.path:
 from attack_dsp import (  # noqa: E402
     ATTACK_MEM_CAP,
     ATTACK_THINK_N,
-    analog_window_covers,
     analyze_iq,
     cancel_own,
     leftover_ratio,
@@ -242,7 +241,6 @@ from attack_dsp import (  # noqa: E402
     channelize_look,
     multitaper_dbm,
     resample_iq,
-    rotator_apply,
     rotator_shift,
     spectral_flatness,
     synth_look_iq,
@@ -310,6 +308,82 @@ def rx_stream_kwargs(samples: int) -> dict[str, str]:
     }
 
 
+# Очередь TX ≥ 100 мс: FIFO платы 8192 сэмпла короче открытия USB и 5 мс PLL.
+TX_QUEUE_S = 0.1
+TX_TRANSFERS = 16
+
+
+def tx_queue_layout(fs: float) -> tuple[int, int]:
+    """(buflen, buffers) так, чтобы buffers×buflen покрывали TX_QUEUE_S."""
+    rate = float(fs) if fs and fs > 0 else float(TX_FS)
+    need = max(int(math.ceil(rate * TX_QUEUE_S)), RX_STREAM_ALIGN)
+    buflen = RX_STREAM_MAX
+    if need < buflen:
+        buflen = max(RX_STREAM_ALIGN, ((need + RX_STREAM_ALIGN - 1) // RX_STREAM_ALIGN) * RX_STREAM_ALIGN)
+        if buflen > RX_STREAM_MAX:
+            buflen = RX_STREAM_MAX
+    buffers = max(TX_TRANSFERS + 1, (need + buflen - 1) // buflen)
+    return int(buflen), int(buffers)
+
+
+def tx_stream_kwargs(buflen: int, buffers: int) -> dict[str, str]:
+    return {
+        "buflen": str(int(buflen)),
+        "buffers": str(int(buffers)),
+        "transfers": str(TX_TRANSFERS),
+    }
+
+
+def cf32_to_cs16_q11(x: Any) -> Any:
+    """Один раз в CS16 Q11 (полная шкала 2048). Дальше writeStream без скалярного CF32."""
+    if not NUMPY:
+        raise RuntimeError("numpy required")
+    z = np.asarray(x, dtype=np.complex64).ravel()
+    i = np.clip(np.round(z.real * 2048.0), -2048, 2047).astype(np.int16)
+    q = np.clip(np.round(z.imag * 2048.0), -2048, 2047).astype(np.int16)
+    out = np.empty(int(z.size) * 2, dtype=np.int16)
+    out[0::2] = i
+    out[1::2] = q
+    return out
+
+
+def write_tx_chunk(
+    dev: Any,
+    stream: Any,
+    buf: Any,
+    n_samples: int,
+    timeout_us: int,
+    cs16: bool,
+    underflow_limit: int = 8,
+) -> tuple[int, str]:
+    """Пишет n_samples. CS16: buf — int16 I,Q, в writeStream уходит число сэмплов, не len(buf)."""
+    total = int(n_samples)
+    if total <= 0:
+        return 0, "empty"
+    off = 0
+    underflows = 0
+    while off < total:
+        if cs16:
+            view = buf[off * 2 : total * 2]
+        else:
+            view = buf[off:total]
+        count = total - off
+        sr = dev.writeStream(stream, [view], int(count), timeoutUs=timeout_us)
+        ret = stream_ret(sr)
+        if ret > 0:
+            off += min(int(ret), count)
+            underflows = 0
+            continue
+        kind = stream_kind(ret)
+        if kind == "underflow":
+            underflows += 1
+            if underflows >= underflow_limit:
+                return off, "underflow"
+            continue
+        return off, kind
+    return total, "ok"
+
+
 def cs16_q11_to_cf32(buf_i16: Any, n: int) -> Any:
     """То же, что скалярный цикл SoapyBladeRF для CF32: int16 / 2048.
 
@@ -331,10 +405,10 @@ def dio_rx_rate(_analog_bw_mhz: float = 0.0) -> float:
 
 
 def _same_attack_clock(tx_fs: float, rx_fs: float) -> bool:
-    """Вычет только при тех же часах. 61.44 vs 40 — не ресемплируем, не врём leftover."""
+    """Те же часы. 0.2%: 39.3 и 40 МГц не склеиваются (горб стал бы 40), 61.44 и 40 тоже нет."""
     if tx_fs <= 0 or rx_fs <= 0:
         return False
-    return abs(float(tx_fs) - float(rx_fs)) / max(float(rx_fs), float(tx_fs)) < 0.02
+    return abs(float(tx_fs) - float(rx_fs)) / max(float(rx_fs), float(tx_fs)) < 0.002
 
 
 def attack_crop_factor(fs_hz: float, filter_hz: float) -> float:
@@ -590,8 +664,6 @@ def make_cw(n: int = TX_N, fs: float = TX_FS, amp: float = 0.9):
 # ============================================================================
 
 WAVE_N = 65536  # буфер TX; OFDM укорачивается до 819×80 = 65520
-# Soapy MTU 4096: rotator в петле по куску — hop не ждёт весь период волны.
-TX_ROT_CHUNK = 4096
 
 WAVE_KINDS = (
     "sine", "tone", "square", "sawtooth", "triangle", "chirp", "awgn",
@@ -917,7 +989,8 @@ def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, A
 
     if kind == "chirp":
         # Линейный чирп −span/2 → +span/2 за буфер; ∫f dt = 0 → фаза стыкуется.
-        span = _pfloat(pr, "spanKhz", 1000.0, 10.0, fs / 2e3) * 1e3
+        # Размах до всей полки: комплексный чирп от −fs/2 до +fs/2, не до fs/4.
+        span = _pfloat(pr, "spanKhz", 1000.0, 10.0, fs / 1e3) * 1e3
         f0 = -span / 2.0
         k = span / (n / fs)
         return (amp * np.exp(1j * 2.0 * np.pi * (f0 * t + 0.5 * k * t * t))).astype(np.complex64)
@@ -1119,6 +1192,14 @@ class Radio:
         self._tx_mix_hz: float | None = None
         self._tx_phase = 0.0
         self._tx_off = 0
+        self._tx_play = None
+        self._tx_play_n = 0
+        self._tx_play_cs16 = False
+        self._tx_buflen = TRANSFER_SAMPLES
+        self._tx_wave_key: tuple[Any, ...] | None = None
+        self._tx_ready = threading.Event()
+        self._tx_start_err: dict[str, Any] | None = None
+        self._tx_play_lock = threading.Lock()
         self._wave_bank: dict[tuple[Any, ...], Any] = {}
         self._wave_up = None
         self._wave_up_key: tuple[Any, ...] | None = None
@@ -1365,6 +1446,20 @@ class Radio:
                 _log("RX-захват пережил join 2.5 с — readStream завис в Soapy (плата отвалилась?)")
         self._rx_cap_thr = None
 
+    def _quiesce_rx_for_clock_change(self) -> None:
+        """setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
+
+        stopScan гасит только таймер хоста. readStream в воркере остаётся.
+        SoapyBladeRF::deactivateStream(RX) лишь очищает очередь команд.
+        Модуль RX выключает closeStream → bladerf_enable_module(false).
+        Общий BBPLL (Nuand t=13047) нельзя переписывать, пока этот модуль включён.
+        """
+        self._stop_rx_capture()
+        self._drop_rx_stream()
+        self._rx_fs = None
+        self._rx_bw = None
+        self._rx_hz = None
+
     def _start_rx_capture(self) -> None:
         if self.fake or not NUMPY:
             return
@@ -1470,7 +1565,7 @@ class Radio:
         """DIO-sys configure_device: 40 MSPS + 40 МГц. Фактический rate — из Soapy."""
         return self._apply_rx_clock(fs, float(DIO_BANDWIDTH_HZ))
 
-    def _ensure_rx(self, fs: float, center_hz: float, bw: float | None = None) -> int:
+    def _ensure_rx(self, fs: float, center_hz: float, bw: float | None = None) -> int | None:
         """Настроить LO/fs и вернуть поколение кольца, с которого IQ свежий.
 
         setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
@@ -1484,6 +1579,9 @@ class Radio:
         tx_holds = self._tx_holds_clock()
         if tx_holds and self._tx_fs and float(self._tx_fs) > 0:
             fs = float(self._tx_fs)
+        # Насос уже пишет. Открытие RX здесь длиннее очереди TX — кадр слуха пропускаем.
+        if tx_holds and not (self.rx is not None and self._rx_on):
+            return None
         want_bw = float(bw) if bw and bw > 0 else float(DIO_BANDWIDTH_HZ)
         alive = self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
         parked = rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive)
@@ -1602,6 +1700,14 @@ class Radio:
         fs = dio_rx_rate()
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6)
+            if gen is None:
+                return {
+                    "ok": True,
+                    "bins": [],
+                    "centerMhz": center_mhz,
+                    "reason": "слух пропущен: приём открывается до передачи",
+                    **extra,
+                }
             spec = self._wait_psd(gen, n, self._rx_fs or fs, center_mhz)
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
@@ -1651,6 +1757,14 @@ class Radio:
             return {"ok": False, "reason": "нужен numpy для FFT эфира", "bins": [], **extra}
         try:
             gen = self._ensure_rx(fs, center_mhz * 1e6, filt_mhz * 1e6)
+            if gen is None:
+                return {
+                    "ok": True,
+                    "bins": [],
+                    "centerMhz": center_mhz,
+                    "reason": "слух пропущен: приём открывается до передачи",
+                    **extra,
+                }
             # hint, не available(): после LO hop кольцо сброшено, 8192 ≈ 0.6 мс @ 61.44.
             fft_n = attack_pick_fft_n(hint)
             spec = self._wait_attack_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop)
@@ -2179,17 +2293,23 @@ class Radio:
         mix_hz: float | None = None,
         phase_after: float | None = None,
     ) -> dict[str, Any] | None:
-        """RX-пауза (half-duplex) + tune LO + первый writeStream. None = успех,
-        иначе dict с ошибкой. Откат: LO на прежнюю частоту или закрытие стрима.
-        Mix/полка/фаза коммитятся в том же локе, что setFrequency: петля
-        rotator_cc не должна крутить старый IF на новом LO (GNU Radio work()
-        держит mutex вокруг rotate + set_phase_inc).
-        fs=None → TX_FS (2 МГц, tx_cue и обычный ПЕРЕДАТЬ). Solo пишет окно.
-        tx_bw_hz: analog TX filter (полка Атаки). Часы могут быть шире (слух xA4)."""
+        """RX-пауза (half-duplex) + tune LO. Первый кадр пишет насос, не этот вызов.
+        None = насос пошёл. Откат: LO на прежнюю частоту или закрытие стрима.
+        fs=None → TX_FS (2 МГц, tx_cue). tx_bw_hz — фильтр полки, не часы ЦАП."""
         tx_fs = float(fs) if fs and fs > 0 else float(TX_FS)
         prev_fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
-        timeout = stream_timeout_us(len(buf), tx_fs)
         created = False
+        rx_now = float(self._rx_fs) if self._rx_fs else 0.0
+        have_now = float(self._tx_fs) if self._tx_fs else 0.0
+        shared_pll = classify_bladerf_hw(self.hardware_key) == "ad9361"
+        adopts_clock = _same_attack_clock(have_now, tx_fs) or (
+            shared_pll and _same_attack_clock(rx_now, tx_fs)
+        )
+        rx_live = bool(self._rx_on) or (
+            self._rx_cap_thr is not None and self._rx_cap_thr.is_alive()
+        )
+        if not adopts_clock and rx_live:
+            self._quiesce_rx_for_clock_change()
         if not self.full_duplex:
             self._rx_pause.set()
             # Тот же порядок, что _ensure_rx: сначала _rx_io, потом _lock.
@@ -2229,47 +2349,155 @@ class Radio:
                         pass
                     _apply_tx_gain(self.dev, self.tx_gain_db)
                     self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
+                    buflen, buffers = tx_queue_layout(tx_fs)
+                    if self.tx is not None and int(self._tx_buflen) != int(buflen):
+                        try:
+                            self.dev.deactivateStream(self.tx)
+                        except Exception:
+                            pass
+                        try:
+                            self.dev.closeStream(self.tx)
+                        except Exception:
+                            pass
+                        self.tx = None
                     if self.tx is None:
-                        self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
-                        self.dev.activateStream(self.tx)
+                        self._open_tx_stream(buflen, buffers)
                         created = True
-                    # Soapy: один writeStream часто отдаёт MTU (4096), не весь буфер.
-                    written, kind = write_stream_all(self.dev, self.tx, buf, timeout)
-                    if kind != "ok" or written != len(buf):
-                        # После цифрового hop стоящий LO ≠ last RF − fs/8.
-                        # Откат на фактический analog LO, иначе mix петли сядет на чужой RF.
-                        if self._tx_lo_hz is not None:
-                            self.dev.setFrequency(SOAPY_SDR_TX, 0, float(self._tx_lo_hz))
-                        elif prev_mhz is not None:
-                            self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, prev_fs))
-                        elif created and self.tx is not None:
-                            try:
-                                self.dev.deactivateStream(self.tx)
-                                self.dev.closeStream(self.tx)
-                            except Exception:
-                                pass
-                            self.tx = None
-                        return {
-                            "ok": False,
-                            "reason": f"writeStream {kind} ret={written} (ждали {len(buf)}) — сигнала на RF out нет",
-                            "latencyUs": 0,
-                        }
-                    self._tone = buf
+                    self._tx_buflen = int(buflen)
+                    self._install_tx_play(buf)
                     self._tx_fs = tx_fs
-                    self._tx_lo_hz = lo_hz
-                    if play_bb is not None:
-                        self._tone_bb = play_bb
-                        self._tx_off = 0
-                    if mix_hz is not None:
-                        self._tx_mix_hz = float(mix_hz)
-                    if phase_after is not None:
-                        self._tx_phase = float(phase_after)
                 except Exception as e:
                     return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
         finally:
             if not self.full_duplex:
                 self._rx_io.release()
+        self._tx_start_err = None
+        self._tx_ready.clear()
+        self._stop.clear()
+        self._start_tx_loop()
+        if not self._tx_ready.wait(2.0):
+            self._stop.set()
+            self._tx_disable_module()
+            return {"ok": False, "reason": "TX насос не записал первый кадр — сигнала на RF out нет", "latencyUs": 0}
+        if self._tx_start_err is not None:
+            err = self._tx_start_err
+            self._tx_start_err = None
+            if self._tx_lo_hz is not None:
+                try:
+                    self.dev.setFrequency(SOAPY_SDR_TX, 0, float(self._tx_lo_hz))
+                except Exception:
+                    pass
+            elif prev_mhz is not None:
+                try:
+                    self.dev.setFrequency(SOAPY_SDR_TX, 0, cw_lo_hz(prev_mhz * 1e6, prev_fs))
+                except Exception:
+                    pass
+            elif created and self.tx is not None:
+                try:
+                    self.dev.deactivateStream(self.tx)
+                    self.dev.closeStream(self.tx)
+                except Exception:
+                    pass
+                self.tx = None
+            else:
+                self._tx_disable_module()
+            return err
+        self._tone = buf
+        self._tx_fs = tx_fs
+        self._tx_lo_hz = lo_hz
+        if play_bb is not None:
+            self._tone_bb = play_bb
+            self._tx_off = 0
+        if mix_hz is not None:
+            self._tx_mix_hz = float(mix_hz)
+        if phase_after is not None:
+            self._tx_phase = float(phase_after)
         return None
+
+    def _open_tx_stream(self, buflen: int, buffers: int) -> None:
+        """CS16 и явная очередь. CF32 только если плата не bladeRF или CS16 не открылся."""
+        assert self.dev is not None
+        kwargs = tx_stream_kwargs(buflen, buffers)
+        cs16 = classify_bladerf_hw(self.hardware_key) in ("lms", "ad9361")
+        if cs16:
+            try:
+                try:
+                    self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CS16, [0], kwargs)
+                except TypeError:
+                    self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CS16)
+                self._tx_play_cs16 = True
+                return
+            except Exception as e:
+                _log(f"TX CS16 не открылся ({e}) — запасной CF32")
+        try:
+            self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0], kwargs)
+        except TypeError:
+            self.tx = self.dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
+        self._tx_play_cs16 = False
+
+    def _install_tx_play(self, buf: Any) -> None:
+        """Готовый сдвинутый буфер. Насос только режет его, без поворота в петле."""
+        if self._tx_play_cs16 and NUMPY:
+            play = cf32_to_cs16_q11(buf)
+            n = int(len(buf))
+        else:
+            play = buf
+            n = int(len(buf))
+        with self._tx_play_lock:
+            self._tx_play = play
+            self._tx_play_n = n
+
+    def _tx_disable_module(self) -> None:
+        """Выключить TX-модуль. deactivateStream этого не делает.
+
+        SoapyBladeRF::deactivateStream только завершает burst одним нулём.
+        bladerf_enable_module(false) вызывается в closeStream. Пока модуль
+        включён и сэмплов нет, AD9361 светит утечку гетеродина.
+        """
+        if self.dev is None or self.tx is None:
+            return
+        stream = self.tx
+        self.tx = None
+        self._tx_play_cs16 = False
+        try:
+            self.dev.closeStream(stream)
+        except Exception as e:
+            _log(f"TX closeStream: {e}")
+            try:
+                self.dev.deactivateStream(stream)
+            except Exception:
+                pass
+
+    def _tx_rearm(self) -> bool:
+        """Выключить и снова включить тот же поток с той же B."""
+        if self.dev is None or self.tx is None:
+            return False
+        try:
+            self.dev.deactivateStream(self.tx)
+        except Exception:
+            return False
+        try:
+            self.dev.activateStream(self.tx)
+            return True
+        except Exception:
+            self._tx_disable_module()
+            return False
+
+    def _tx_stop_pump(self) -> bool:
+        """Стоп насоса и выключение модуля перед сменой полки или типа.
+
+        False: поток ещё в writeStream. Второй насос на тот же стрим не поднимаем.
+        """
+        self._stop.set()
+        thr = self._thr
+        if thr is not None and thr.is_alive():
+            thr.join(timeout=3.0)
+            if thr.is_alive():
+                _log("TX-поток не остановился за 3 с — writeStream ещё в Soapy")
+                return False
+        self._thr = None
+        self._tx_disable_module()
+        return True
 
     def _tx_commit(self, buf: Any, freq_mhz: float, t0: float, label: str) -> dict[str, Any]:
         self._tone = buf
@@ -2354,13 +2582,13 @@ class Radio:
         tx_bw_hz: float | None = None,
         design_fs_hz: float | None = None,
     ) -> dict[str, Any]:
-        """TX волны из WAVE_KINDS. Стоящий LO + GNU Radio rotator, пока цель
-        в analog-окне (ice9). Analog setFrequency — только вне окна.
-        design_fs_hz — часы синтеза полки; fs_hz — часы DAC/BBPLL (USB FD ≤40).
-        Без design — как раньше: синтез на fs_hz, mix +fs/8, LO = RF − fs/8."""
+        """TX волны из WAVE_KINDS. Буфер B синтезируется на полке.
+        Шаг двигает только LO (RF − fs/8), B не пересобирается.
+        design_fs_hz — часы синтеза горба; fs_hz — часы ЦАП.
+        В атаке fs_hz = слух (один BBPLL), фильтр = полка.
+        В качании, сплошной, случайной и зашивке fs_hz = фильтр = полка."""
         tx_fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(TX_FS)
         design_fs = float(design_fs_hz) if design_fs_hz and design_fs_hz > 0 else tx_fs
-        occupy_hz = float(design_fs)
         if wave not in WAVE_KINDS:
             return {"ok": False, "reason": f"неизвестный тип сигнала: {wave}", "latencyUs": 0}
         if not self.can_tx:
@@ -2375,23 +2603,9 @@ class Radio:
         play = np.asarray(bb, dtype=np.complex64)
         self._design_fs = design_fs
         rf_hz = float(freq_mhz) * 1e6
-        analog_hz = float(self.analog_bw) * 1e6
-        lo_now = self._tx_lo_hz
-        live = self.tx_mhz is not None and lo_now is not None and (
-            self.fake or (self._thr is not None and self._thr.is_alive())
-        )
-        digital = (
-            live
-            and _same_attack_clock(float(self._tx_fs or 0.0), tx_fs)
-            and analog_window_covers(rf_hz, float(lo_now), tx_fs, analog_hz, occupy_hz)
-        )
-        if digital:
-            lo_hz = float(lo_now)
-            mix_hz = rf_hz - lo_hz
-        else:
-            lo_hz = cw_lo_hz(rf_hz, tx_fs)
-            mix_hz = tx_fs / 8.0
-        hop = "цифра" if digital else "аналог"
+        lo_hz = cw_lo_hz(rf_hz, tx_fs)
+        mix_hz = tx_fs / 8.0
+        hop = "аналог"
         label = (
             f"SDR TX {wave} {freq_mhz:.6f} МГц · {hop} mix {mix_hz / 1e6:.3f} "
             f"· LO {lo_hz / 1e6:.6f}"
@@ -2399,25 +2613,62 @@ class Radio:
         extra = {
             "fsHz": tx_fs,
             "designFsHz": design_fs,
-            "digitalHop": bool(digital),
+            "digitalHop": False,
             "loMhz": lo_hz / 1e6,
             "mixHz": mix_hz,
         }
         if tx_bw_hz and tx_bw_hz > 0:
             extra["txBwHz"] = float(tx_bw_hz)
+        # Фильтр = полка. designFs не раздувает его до часов ЦАП.
+        analog_tx_bw = tx_bw_hz
+        live = self.tx_mhz is not None and self._tx_lo_hz is not None and (
+            self.fake or (self._thr is not None and self._thr.is_alive())
+        )
+        if live and self._tx_same_wave(wave, params, design_fs, tx_fs, analog_tx_bw):
+            if self.fake:
+                self.tx_mhz = freq_mhz
+                self._tx_lo_hz = lo_hz
+                self._tx_mix_hz = float(mix_hz)
+                self.tx_error = None
+                us = int((time.perf_counter() - t0) * 1e6)
+                return {
+                    "ok": True,
+                    "reason": f"FAKE TX {wave} {freq_mhz:.6f} МГц · {hop}",
+                    "latencyUs": us,
+                    "freqMhz": freq_mhz,
+                    "fake": True,
+                    **extra,
+                }
+            if self.dev is None:
+                return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
+            try:
+                self.dev.setFrequency(SOAPY_SDR_TX, 0, lo_hz)
+            except Exception as e:
+                return {"ok": False, "reason": f"TX tune: {e}", "latencyUs": 0}
+            self.tx_mhz = freq_mhz
+            self._tx_lo_hz = lo_hz
+            self._tx_mix_hz = float(mix_hz)
+            self.tx_error = None
+            us = int((time.perf_counter() - t0) * 1e6)
+            out = {
+                "ok": True,
+                "reason": f"{label} · {us} µs host",
+                "latencyUs": us,
+                "freqMhz": freq_mhz,
+            }
+            out.update(extra)
+            return out
 
-        def _publish_play(reset_phase: bool) -> None:
-            if play is not self._tone_bb:
-                self._tx_off = 0
+        def _publish_play() -> None:
             self._tone_bb = play
             self._tx_mix_hz = float(mix_hz)
-            if reset_phase:
-                self._tx_phase = 0.0
-                self._tx_off = 0
+            self._tx_phase = 0.0
+            self._tx_off = 0
+            self._tx_mark_wave(wave, params, design_fs, tx_fs, analog_tx_bw)
 
         if self.fake:
             with self._lock:
-                _publish_play(not digital)
+                _publish_play()
             self._tone = rotator_shift(play, mix_hz, tx_fs)
             self.tx_mhz = freq_mhz
             self._tx_fs = tx_fs
@@ -2436,22 +2687,14 @@ class Radio:
             return {"ok": False, "reason": "SDR не открыт", "latencyUs": 0}
         if not SOAPY:
             return {"ok": False, "reason": "нет Soapy", "latencyUs": 0}
-        if digital:
-            with self._lock:
-                _publish_play(False)
-            out = self._tx_commit(
-                self._tone if self._tone is not None else play,
-                freq_mhz,
-                t0,
-                label,
-            )
-            out.update(extra)
-            return out
-        # Analog: setFrequency + mix/полка в одном локе (_tx_prime).
+        if self._thr is not None and self._thr.is_alive():
+            if not self._tx_stop_pump():
+                return {
+                    "ok": False,
+                    "reason": "TX насос не остановился — полку и тип не меняем, пока writeStream висит",
+                    "latencyUs": 0,
+                }
         buf = rotator_shift(play, mix_hz, tx_fs)
-        analog_tx_bw = (
-            min(analog_hz, tx_fs) if design_fs_hz and design_fs_hz > 0 else tx_bw_hz
-        )
         n_play = int(play.size)
         phase_after = (
             math.remainder(2.0 * math.pi * (mix_hz / tx_fs) * float(n_play), 2.0 * math.pi)
@@ -2463,71 +2706,163 @@ class Radio:
         )
         if err is not None:
             return err
+        self._tx_mark_wave(wave, params, design_fs, tx_fs, analog_tx_bw)
         out = self._tx_commit(buf, freq_mhz, t0, label)
         out.update(extra)
         return out
 
-    def _tx_chunk_locked(self) -> tuple[Any, int] | None:
-        """Кусок TX. Вызывать под self._lock. Hop = смена _tx_mix_hz, не 1.3M exp."""
-        fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
-        bb = self._tone_bb
-        if bb is not None and NUMPY:
-            n = int(len(bb))
-            if n <= 0:
-                return None
-            off = int(self._tx_off)
-            if off >= n:
-                off = 0
-            take = min(TX_ROT_CHUNK, n - off)
-            mix = float(self._tx_mix_hz or 0.0)
-            chunk, self._tx_phase = rotator_apply(bb[off : off + take], mix, fs, float(self._tx_phase))
-            self._tx_off = off + take
-            return chunk, stream_timeout_us(take, fs)
-        baked = self._tone
-        if baked is None:
-            return None
-        return baked, stream_timeout_us(len(baked), fs)
+    def _tx_mark_wave(
+        self,
+        wave: str,
+        params: dict[str, Any],
+        design_fs: float,
+        tx_fs: float,
+        tx_bw_hz: float | None,
+    ) -> None:
+        self._tx_wave_key = (
+            wave,
+            _wave_bank_key(wave, design_fs, params),
+            round(float(tx_fs), 3),
+            round(float(tx_bw_hz) if tx_bw_hz else 0.0, 3),
+        )
+
+    def _tx_same_wave(
+        self,
+        wave: str,
+        params: dict[str, Any],
+        design_fs: float,
+        tx_fs: float,
+        tx_bw_hz: float | None,
+    ) -> bool:
+        key = (
+            wave,
+            _wave_bank_key(wave, design_fs, params),
+            round(float(tx_fs), 3),
+            round(float(tx_bw_hz) if tx_bw_hz else 0.0, 3),
+        )
+        return self._tx_wave_key == key
 
     def _start_tx_loop(self) -> None:
         if self._thr and self._thr.is_alive():
             return
         self._stop.clear()
-        if self._tone is None and self._tone_bb is None:
-            self._tone = make_cw()
+        if self._tx_play is None and self._tone is None and NUMPY:
+            cw = make_cw()
+            self._tone = cw
+            self._install_tx_play(cw)
 
         def loop() -> None:
+            off = 0
+            first = True
             while not self._stop.is_set() and self.dev is not None and self.tx is not None:
-                with self._lock:
-                    # Срез и поворот под замком. writeStream снаружи, чтобы
-                    # setFrequency слуха не держал ЦАП на время перестройки LO.
-                    pulled = self._tx_chunk_locked()
-                if pulled is None:
+                with self._tx_play_lock:
+                    play = self._tx_play
+                    n = int(self._tx_play_n)
+                    cs16 = bool(self._tx_play_cs16)
+                    buflen = int(self._tx_buflen) if self._tx_buflen else TRANSFER_SAMPLES
+                    fs = float(self._tx_fs) if self._tx_fs and self._tx_fs > 0 else float(TX_FS)
+                if play is None or n <= 0:
                     break
-                buf, timeout = pulled
+                if off >= n:
+                    off = 0
+                take = min(buflen, n - off)
+                if cs16:
+                    buf = play[off * 2 : (off + take) * 2]
+                else:
+                    buf = play[off : off + take]
                 dev = self.dev
                 stream = self.tx
                 if dev is None or stream is None:
                     break
+                if first:
+                    try:
+                        dev.activateStream(stream)
+                    except Exception as e:
+                        self._tx_start_err = {
+                            "ok": False,
+                            "reason": f"TX activate: {e} — сигнала на RF out нет",
+                            "latencyUs": 0,
+                        }
+                        self._tx_disable_module()
+                        self._tx_ready.set()
+                        return
                 try:
-                    _written, kind = write_stream_all(dev, stream, buf, timeout)
+                    written, kind = write_tx_chunk(
+                        dev, stream, buf, take, stream_timeout_us(take, fs), cs16,
+                    )
                 except Exception as e:
-                    with self._lock:
+                    if first or not self._tx_rearm():
                         self.tx_error = f"writeStream exception: {e}"
-                    break
-                with self._lock:
-                    if kind == "ok":
-                        self.tx_fail = 0
-                        continue
-                    if kind == "underflow":
-                        # не хватило сэмплов вовремя — пишем снова, это не «нет RF»
-                        continue
-                    if kind == "error":
-                        self.tx_error = f"writeStream {kind} ret={_written}"
-                        break
+                        self._tx_start_err = {
+                            "ok": False,
+                            "reason": f"writeStream exception: {e} — сигнала на RF out нет",
+                            "latencyUs": 0,
+                        }
+                        self._tx_disable_module()
+                        self._tx_ready.set()
+                        return
+                    continue
+                if kind == "ok" and written > 0:
+                    off = (off + int(written)) % n
+                    self.tx_fail = 0
+                    if first:
+                        first = False
+                        self._tx_ready.set()
+                    continue
+                if kind == "underflow":
+                    # Один недобор не гасит поток и не ставит txError.
+                    if first:
+                        first = False
+                        self._tx_ready.set()
+                    continue
+                if not self._tx_rearm():
                     self.tx_fail += 1
-                    if self.tx_fail >= TX_FAIL_LIMIT:
-                        self.tx_error = f"writeStream {kind} ×{self.tx_fail} — TX оборван"
-                        break
+                    self.tx_error = f"writeStream {kind} ret={written}"
+                    self._tx_start_err = {
+                        "ok": False,
+                        "reason": f"writeStream {kind} ret={written} — сигнала на RF out нет",
+                        "latencyUs": 0,
+                    }
+                    self._tx_disable_module()
+                    self._tx_ready.set()
+                    return
+                if first:
+                    try:
+                        written2, kind2 = write_tx_chunk(
+                            dev, stream, buf, take, stream_timeout_us(take, fs), cs16,
+                        )
+                    except Exception as e:
+                        self.tx_error = f"writeStream exception: {e}"
+                        self._tx_start_err = {
+                            "ok": False,
+                            "reason": f"writeStream exception: {e} — сигнала на RF out нет",
+                            "latencyUs": 0,
+                        }
+                        self._tx_disable_module()
+                        self._tx_ready.set()
+                        return
+                    if kind2 == "ok" and written2 > 0:
+                        off = (off + int(written2)) % n
+                        first = False
+                        self.tx_fail = 0
+                        self._tx_ready.set()
+                        continue
+                    self.tx_error = f"writeStream {kind2} ret={written2}"
+                    self._tx_start_err = {
+                        "ok": False,
+                        "reason": f"writeStream {kind2} ret={written2} — сигнала на RF out нет",
+                        "latencyUs": 0,
+                    }
+                    self._tx_disable_module()
+                    self._tx_ready.set()
+                    return
+            if first:
+                self._tx_start_err = {
+                    "ok": False,
+                    "reason": "TX насос остановился до первого кадра — сигнала на RF out нет",
+                    "latencyUs": 0,
+                }
+                self._tx_ready.set()
 
         self._thr = threading.Thread(target=loop, name="legion-sdr-tx", daemon=True)
         self._thr.start()
@@ -2575,6 +2910,9 @@ class Radio:
         self._wave_up = None
         self._wave_up_key = None
         self._design_fs = 0.0
+        self._tx_wave_key = None
+        self._tx_play = None
+        self._tx_play_n = 0
         if self.dev is not None and self.tx is not None and SOAPY:
             with self._lock:
                 try:

@@ -2270,7 +2270,7 @@ async function main(): Promise<void> {
   const hopChirp = openLoopShelfTxPlan({ shelfMhz: 15, analogMhz: 56, kind: "chirp", params: {} });
   check(
     "open-loop чирп размах = полка, не 1 МГц",
-    (hopChirp.waveParams.spanKhz ?? 0) >= 7000,
+    hopChirp.waveParams.spanKhz === 15000,
     `spanKhz=${hopChirp.waveParams.spanKhz}`,
   );
   const hopCap = openLoopShelfTxPlan({ shelfMhz: 80, analogMhz: 28, kind: "awgn", params: {} });
@@ -2312,7 +2312,7 @@ async function main(): Promise<void> {
   check("SC-FDMA класс часть", waveClassOf("scfdma") === "part");
   check("текст заливки без SC-FDMA", waveClassRu("fill").includes("OFDM") && !waveClassRu("fill").includes("SC-FDMA"));
   const chirp = attackWaveParams("chirp", p, {});
-  check("чирп размах = рамка, не 1 МГц", (chirp.spanKhz ?? 0) >= 10000);
+  check("чирп размах = рамка, не 1 МГц", chirp.spanKhz === 20000);
   check("fs рамки в потолке USB", paintTxFsHz(p) <= 40e6 && paintTxFsHz(p) >= 20e6 * 0.99);
   check("подсказка волны честная", paintWaveHint("sine", p, {}).includes("не всю"));
   check(

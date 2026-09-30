@@ -98,7 +98,7 @@ export function waveOccupiesPaintMhz(kind: WaveKind | null, paint: AttackPaint, 
 export function attackWaveParams(kind: WaveKind, paint: AttackPaint, base: Record<string, number>): Record<string, number> {
   const next = { ...defaultParams(kind), ...base };
   if (kind === "chirp") {
-    next.spanKhz = Math.min(paintSpanMhz(paint) * 1000, paintTxFsHz(paint) / 2 / 1e3);
+    next.spanKhz = Math.min(paintSpanMhz(paint) * 1000, paintTxFsHz(paint) / 1e3);
   }
   return next;
 }

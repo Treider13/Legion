@@ -707,16 +707,51 @@ def main() -> int:
     held = w.Radio()
     held.dev = _MockDev()
     held.fake = False
+    held._ensure_rx(20e6, 2450e6)
+    opened = held.dev.calls["setup"]
     held.tx = object()
     held._thr = _Alive()
     held._tx_fs = 20e6
-    held._rx_fs = 40e6
-    held._ensure_rx(40e6, 2450e6)
-    check("живой TX: setSampleRate не вызван", held.dev.calls["rate"] == 0)
-    check("живой TX: слух на часах полки", abs(float(held._rx_fs or 0) - 20e6) < 1)
     held._ensure_rx(40e6, 2451e6)
+    check("живой TX: setSampleRate не вызван повторно", held.dev.calls["rate"] == 1)
+    check("живой TX: слух на часах полки", abs(float(held._rx_fs or 0) - 20e6) < 1)
     check("живой TX: LO меняется", held.dev.calls["freq"] == 2)
-    check("живой TX: LO не трогает часы", held.dev.calls["rate"] == 0)
+    check("живой TX: поток приёма не переоткрыт", held.dev.calls["setup"] == opened)
+    bare = w.Radio()
+    bare.dev = _MockDev()
+    bare.fake = False
+    bare.tx = object()
+    bare._thr = _Alive()
+    bare._tx_fs = 20e6
+    skipped = bare._ensure_rx(40e6, 2450e6)
+    check(
+        "живой TX без приёма: RX не открываем",
+        skipped is None and bare.dev.calls["setup"] == 0 and bare.dev.calls["rate"] == 0,
+    )
+    q_len, q_n = w.tx_queue_layout(56e6)
+    check("очередь TX на 56 МГц не короче 100 мс", (q_len * q_n) / 56e6 >= 0.1 - 1e-9)
+    check("39.3 и 40 МГц не одни часы", w._same_attack_clock(39.3e6, 40e6) is False)
+    check("40 и 40 одни часы", w._same_attack_clock(40e6, 40e6) is True)
+
+    class _CloseTx:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def closeStream(self, _s):
+            self.events.append("close")
+
+        def deactivateStream(self, _s):
+            self.events.append("deact")
+
+    shut = w.Radio()
+    shut.fake = False
+    shut.dev = _CloseTx()
+    shut.tx = object()
+    shut._tx_disable_module()
+    check(
+        "TX гасится через closeStream, не через deactivate",
+        shut.tx is None and shut.dev.events == ["close"],
+    )
 
     tx = rpc(proc, {"op": "tx", "freqMhz": 2442.5})
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
@@ -767,16 +802,13 @@ def main() -> int:
     bb0 = hop._tone_bb
     second = hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
     check(
-        "второй hop в окне — цифра, LO стоит",
+        "шаг двигает LO и не пересобирает полку",
         second.get("ok") is True
-        and second.get("digitalHop") is True
-        and hop._tx_lo_hz == lo0
-        and abs(float(second.get("mixHz") or 0) - (2445e6 - lo0)) < 1,
-    )
-    check("цифровой hop не пересобирает полку", hop._tone_bb is bb0)
-    check(
-        "цифровой hop только меняет mix",
-        hop._tx_mix_hz is not None and abs(float(hop._tx_mix_hz) - (2445e6 - lo0)) < 1,
+        and second.get("digitalHop") is False
+        and hop._tone_bb is bb0
+        and hop._tx_lo_hz is not None
+        and abs(float(hop._tx_lo_hz) - (2445e6 - 40e6 / 8)) < 1
+        and abs(float(second.get("mixHz") or 0) - 40e6 / 8) < 1,
     )
     dc = hop.tx_wave(lo0 / 1e6, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
     check(
@@ -850,6 +882,53 @@ def main() -> int:
         buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
         err = rt._tx_prime(buf, 2442e6, None, 10e6)
         check("AD9361: TX не setSampleRate если RX уже на этих часах", err is None and rt.dev.rates == 0)
+        rt.tx_off()
+
+        class _ClockOrder:
+            def __init__(self) -> None:
+                self.events: list[str] = []
+
+            def deactivateStream(self, _s):
+                self.events.append("deact")
+
+            def setSampleRate(self, *_a):
+                self.events.append("rate")
+
+            def getSampleRate(self, *_a):
+                return 20e6
+
+            def setBandwidth(self, *_a):
+                return None
+
+            def setFrequency(self, *_a):
+                return None
+
+            def setupStream(self, *_a, **_k):
+                return object()
+
+            def activateStream(self, *_a):
+                return None
+
+            def writeStream(self, *_a, **_k):
+                return type("S", (), {"ret": 64})()
+
+        clk = w.Radio()
+        clk.fake = False
+        clk.hardware_key = "bladerf2"
+        clk.full_duplex = True
+        clk._rx_on = True
+        clk._rx_fs = 40e6
+        clk.rx = object()
+        clk.dev = _ClockOrder()
+        clk_buf = np_bbpll.ones(64, dtype=np_bbpll.complex64)
+        clk_err = clk._tx_prime(clk_buf, 2442e6, None, 20e6)
+        deact_at = clk.dev.events.index("deact") if "deact" in clk.dev.events else -1
+        rate_at = clk.dev.events.index("rate") if "rate" in clk.dev.events else -1
+        check(
+            "смена часов: RX выключен до setSampleRate",
+            clk_err is None and deact_at >= 0 and rate_at > deact_at and clk._rx_on is False,
+        )
+        clk.tx_off()
 
         class _BwTx(_TxClk):
             def __init__(self) -> None:
@@ -887,10 +966,14 @@ def main() -> int:
         chunk.dev = _ChunkTx()
         big = np_bbpll.zeros(65536, dtype=np_bbpll.complex64)
         chunked = chunk._tx_prime(big, 2442e6, None, 2e6)
+        deadline = time.time() + 2.0
+        while chunk.dev.got < 65536 and time.time() < deadline:
+            time.sleep(0.01)
         check(
-            "writeStream 4096 из 65536 дописывается, TX не гасится",
-            chunked is None and chunk.dev.got == 65536,
+            "насос дописывает 65536 короткими writeStream и не гаснет",
+            chunked is None and chunk.dev.got >= 65536 and chunk._thr is not None and chunk._thr.is_alive(),
         )
+        chunk.tx_off()
 
         class _FailTx(_TxClk):
             def writeStream(self, *_a, **_k):

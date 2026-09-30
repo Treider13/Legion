@@ -78,7 +78,7 @@ export function ScanPanel() {
         aria-label="Полка передачи, МГц"
         value={s.txShelfMhz}
         onChange={(e) => s.setTxShelfMhz(e.target.value)}
-        disabled={busy}
+        disabled={busy && !s.transmitArmed}
       />
     </label>
   );
@@ -384,7 +384,6 @@ export function ScanPanel() {
                   if (!v) s.disarmTxWave();
                   else s.armTxWave(v as WaveKind);
                 }}
-                disabled={s.transmitArmed}
               >
                 <option value="">CW тон</option>
                 {WAVE_CATALOG.map((w) => (

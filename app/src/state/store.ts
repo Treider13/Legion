@@ -1351,6 +1351,52 @@ export const useLegion = create<LegionStore>((set, get) => {
     }
   };
 
+  let gLiveWave = 0;
+  /** Смена полки или типа при живой передаче: модуль гаснет, новая B, модуль снова. Умную атаку не трогает. */
+  const pushLiveWave = async (): Promise<void> => {
+    const gen = ++gLiveWave;
+    const st = get();
+    if (!st.transmitArmed || !gLive) return;
+    if (isFpgaAirPattern(st.scanPattern)) return;
+    const mhz = st.lastForwardMhz;
+    if (mhz == null) return;
+    const analog = catalogCaps(st.sdrId).analogBwMhz;
+    const kind = st.txWaveKind;
+    let tx: { ok: boolean; reason: string };
+    if (st.signalTxActive || st.scanPattern !== "auto") {
+      const shelf = openLoopShelfTxPlan({
+        shelfMhz: parseLocaleNumber(st.txShelfMhz),
+        analogMhz: analog,
+        kind,
+        params: st.txWaveParams,
+      });
+      tx = await hostTxWave(mhz, shelf.waveKind, shelf.waveParams, shelf.fsHz, shelf.filterMhz);
+    } else if (st.attackPaint) {
+      const plan = attackShelfTxPlan({
+        f0Mhz: mhz,
+        paint: st.attackPaint,
+        shelfMhz: parseLocaleNumber(st.txShelfMhz),
+        analogMhz: analog,
+        kind,
+        params: st.txWaveParams,
+      });
+      if (!plan || gen !== gLiveWave) return;
+      tx = await hostTxWave(
+        plan.loMhz,
+        kind ?? "sine",
+        plan.waveParams,
+        plan.fsHz,
+        plan.filterMhz,
+        plan.occupyMhz * 1e6,
+      );
+    } else {
+      const shelf = attackNoPaintShelf();
+      tx = await hostTxWave(mhz, shelf.kind, shelf.params, shelf.fsHz, shelf.filterMhz, shelf.designFsHz);
+    }
+    if (gen !== gLiveWave) return;
+    if (!tx.ok) pushLog("sys", tx.reason);
+  };
+
   const restoreHeldTx = async (mhz: number): Promise<boolean> => {
     // СТОП во время re-sense: не воскрешаем TX (аудит: restore не проверял
     // transmitArmed — тон возвращался в эфир после команды оператора).
@@ -1900,7 +1946,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (gen === gTxGen) {
         const queued = gGate.release();
         if (queued !== null) void runOpenLoopShelfTx(queued.mhz, queued.powerDbm);
-        else void classOpenLoopAt(plan.freqMhz, shelf);
+        else if (!get().transmitArmed) void classOpenLoopAt(plan.freqMhz, shelf);
       }
     }
   };
@@ -1966,6 +2012,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       seed: Date.now() & 0xffffffff,
     });
     gWalker = walker;
+    const stands = walker.centers.length;
+    pushLog(
+      "sys",
+      stands <= 1 ? "полка: 1 стоянка, центр не прыгает" : `полка: ${stands} стоянок`,
+    );
     let inflight = false;
     const stepTx = (): void => {
       if (inflight || !get().transmitArmed) return;
@@ -2827,7 +2878,12 @@ export const useLegion = create<LegionStore>((set, get) => {
     },
     setAutoDispatch: (d) => set({ autoDispatch: d }),
     setScanWindowMhz: (v) => set({ scanWindowMhz: v }),
-    setTxShelfMhz: (v) => set({ txShelfMhz: v }),
+    setTxShelfMhz: (v) => {
+      set({ txShelfMhz: v });
+      const n = parseLocaleNumber(v);
+      if (!Number.isFinite(n) || n <= 0) return;
+      void pushLiveWave();
+    },
     setScanDwellMs: (v) => set({ scanDwellMs: v }),
     clearLog: () => set({ log: [] }),
     startLabBaseline: () => {
@@ -3520,13 +3576,10 @@ export const useLegion = create<LegionStore>((set, get) => {
       const params = defaultParams(k);
       // Выбор типа и есть вшивание: качание, атака и одна частота берут его.
       set({ signalKind: k, signalParams: params, txWaveKind: k, txWaveParams: params });
+      void pushLiveWave();
     },
 
     armTxWave: (kind) => {
-      if (get().signalTxActive) {
-        pushLog("sys", "ВОЛНА: идёт TX зашитого сигнала — сначала СТОП");
-        return;
-      }
       const params = defaultParams(kind);
       set({
         signalKind: kind,
@@ -3535,15 +3588,18 @@ export const useLegion = create<LegionStore>((set, get) => {
         txWaveParams: params,
       });
       pushLog("sys", `тип помехи вшит: ${kind}. В эфир — по ПЕРЕДАТЬ. Полка задаёт ширину шума, не тона`);
+      void pushLiveWave();
     },
 
-    setSignalParam: (key, v) =>
+    setSignalParam: (key, v) => {
       set((s) => {
         const signalParams = { ...s.signalParams, [key]: v };
         // Вшитая волна и предпросмотр — одни параметры. CW (не вшито) не трогаем.
         if (s.txWaveKind === null) return { signalParams };
         return { signalParams, txWaveParams: { ...s.txWaveParams, [key]: v } };
-      }),
+      });
+      void pushLiveWave();
+    },
 
     setSignalFreqMhz: (v) => set({ signalFreqMhz: v }),
 
@@ -3603,13 +3659,18 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "ЗАШИТЬ: у этого SDR нет TX — усилитель подключать некуда");
         return;
       }
-      const kind = get().signalKind;
+      const flashed = openLoopShelfTxPlan({
+        shelfMhz: parseLocaleNumber(get().txShelfMhz),
+        analogMhz: catalogCaps(get().sdrId).analogBwMhz,
+        kind: get().signalKind,
+        params: get().signalParams,
+      });
       gSignalBusy = true;
       let tx;
       try {
         tx = gLive
-          ? await hostTxWave(mhz, kind, get().signalParams, shelfFsNow())
-          : gSdr.txWave(mhz, kind);
+          ? await hostTxWave(mhz, flashed.waveKind, flashed.waveParams, flashed.fsHz, flashed.filterMhz)
+          : gSdr.txWave(mhz, flashed.waveKind);
       } finally {
         gSignalBusy = false;
       }
@@ -3619,26 +3680,23 @@ export const useLegion = create<LegionStore>((set, get) => {
         transmitArmed: true,
         signalTxActive: true,
         // Волна зашита: теперь её используют и Атака/приоритет, и open-loop TX.
-        txWaveKind: kind,
-        txWaveParams: { ...get().signalParams },
+        txWaveKind: flashed.waveKind,
+        txWaveParams: { ...flashed.waveParams },
         lastForwardMhz: mhz,
         lastSdrTxUs: tx.latencyUs || null,
         sdrHoldSince: Date.now(),
-        lastCueReason: `сигнал ${kind} → SDR ${mhz.toFixed(3)} МГц · полка ${get().txShelfMhz} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
+        lastCueReason: `сигнал ${flashed.waveKind} → SDR ${mhz.toFixed(3)} МГц · полка ${get().txShelfMhz} МГц · нагрузка 50Ω · зашит для всех TX-режимов`,
       });
     },
 
     disarmTxWave: () => {
-      if (get().transmitArmed) {
-        pushLog("sys", "СБРОС НА CW: TX активен — сначала СТОП");
-        return;
-      }
       if (get().txWaveKind === null) {
         pushLog("sys", "СБРОС НА CW: волна не зашита (уже CW тон)");
         return;
       }
       set({ txWaveKind: null, txWaveParams: {} });
       pushLog("sys", "TX-контент снят: Атака/приоритет и open-loop снова на CW тоне");
+      void pushLiveWave();
     },
 
     setFpgaMode: (m) => set({ fpgaMode: m }),
@@ -5495,6 +5553,7 @@ export const useLegion = create<LegionStore>((set, get) => {
             const h = await hostHealth();
             if (gResense) return;
             const armedOnAir = get().lastForwardMhz != null;
+            // Один недобор насос не пишет в txError и поток не гасит.
             if (h.txError || (armedOnAir && h.txLive === false)) {
               pushLog("sys", h.txError || "SDR TX поток мёртв — HUD снят");
               await get().stopTransmit();
