@@ -433,6 +433,18 @@ export interface FpgaStatus {
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.
  *  gw — IP шлюза передаём явно: управление FPGA не зависит от того,
  *  открыт ли Soapy-стрим (прошивка/мониторинг до старта потока). */
+/** Локальный legion_gateway на 127.0.0.1:5531. Уже слушающий порт не трогает. */
+export async function hostStartFpgaGateway(): Promise<{ ok: boolean; reason?: string; already?: boolean; host?: string; port?: number }> {
+  if (!hostSdrAvailable()) {
+    return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };
+  }
+  try {
+    return await hostRpc({ op: "fpga_gateway_start" });
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 export async function hostFpga(cmd: Record<string, unknown>, gw: string): Promise<FpgaStatus> {
   if (!hostSdrAvailable()) {
     return { ok: false, reason: "нужен desktop LEGION (Tauri), не браузер" };

@@ -100,6 +100,17 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             {FPGA_AIR_MODE_ACCEPT_RU}
           </button>
         ) : null}
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
+          <button
+            type="button"
+            className="cinema-go"
+            disabled={fpgaStopPending}
+            onClick={() => void useLegion.getState().startLocalFpgaGateway()}
+            title="Поднять legion_gateway на этом ПК. Soapy отпустит USB."
+          >
+            Шлюз
+          </button>
+        ) : null}
         {transmitArmed ? (
           <button type="button" className="cinema-go stop" onClick={() => void useLegion.getState().stopTransmit()}>
             Стоп передачу

@@ -3310,6 +3310,99 @@ def fpga_gw_host(args: str) -> str:
     return ""
 
 
+def _gateway_port_open(host: str, port: int) -> bool:
+    import socket as _socket
+
+    try:
+        with _socket.create_connection((host, int(port)), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_local_gateway(port: int | None = None) -> dict[str, Any]:
+    """Поднять legion_gateway на этом ПК (127.0.0.1:5531), если порт ещё пуст.
+
+    Агент при старте сам занимает USB. Вызывать после того, как Soapy его отпустил.
+    Уже слушающий порт не трогаем: второй процесс делил бы плату.
+    """
+    host = "127.0.0.1"
+    use_port = int(port if port is not None else FPGA_GW_PORT)
+    if _gateway_port_open(host, use_port):
+        return {
+            "ok": True,
+            "already": True,
+            "host": host,
+            "port": use_port,
+            "reason": f"шлюз уже слушает {host}:{use_port}",
+        }
+    script = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "fpga",
+        "host",
+        "legion_gateway.py",
+    )
+    if not os.path.isfile(script):
+        return {"ok": False, "reason": f"нет {script}"}
+    import subprocess
+
+    log_path = os.environ.get("LEGION_FPGA_LOG", "/tmp/legion-gateway.log")
+    try:
+        logf = open(log_path, "ab", buffering=0)
+    except OSError as e:
+        return {"ok": False, "reason": f"лог шлюза {log_path}: {e}"}
+    env = os.environ.copy()
+    env["LEGION_FPGA_PORT"] = str(use_port)
+    env.pop("LEGION_FPGA_FAKE", None)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdin=subprocess.DEVNULL,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as e:
+        logf.close()
+        return {"ok": False, "reason": f"запуск шлюза: {e}"}
+    threading.Thread(target=proc.wait, name="legion-gateway-reap", daemon=True).start()
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if _gateway_port_open(host, use_port):
+            return {
+                "ok": True,
+                "already": False,
+                "host": host,
+                "port": use_port,
+                "reason": f"шлюз запущен {host}:{use_port}",
+            }
+        if proc.poll() is not None:
+            if _gateway_port_open(host, use_port):
+                return {
+                    "ok": True,
+                    "already": True,
+                    "host": host,
+                    "port": use_port,
+                    "reason": f"шлюз уже слушает {host}:{use_port}",
+                }
+            tail = ""
+            try:
+                with open(log_path, "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(max(0, size - 800))
+                    tail = f.read().decode("utf-8", "replace").strip()
+            except OSError:
+                tail = ""
+            return {
+                "ok": False,
+                "reason": tail or f"шлюз завершился с кодом {proc.returncode}",
+            }
+        time.sleep(0.1)
+    return {"ok": False, "reason": f"шлюз не открыл {host}:{use_port}"}
+
+
 def fpga_rpc(host: str, msg: dict[str, Any]) -> dict[str, Any]:
     """Релей команды FPGA на legion_gateway шлюза (TCP, одна JSON-строка).
     Работает и когда Soapy не открыт: управление FPGA не зависит от стрима."""
@@ -3445,6 +3538,8 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
     if op == "tx_off":
         radio.tx_off()
         return {"ok": True, "reason": "TX off"}
+    if op == "fpga_gateway_start":
+        return ensure_local_gateway()
     if op == "fpga":
         # Релей на legion_gateway шлюза: {"op":"fpga", "cmd":{...}, "gw"?:ip}
         cmd = msg.get("cmd")

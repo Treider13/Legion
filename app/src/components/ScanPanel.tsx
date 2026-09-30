@@ -516,6 +516,14 @@ export function ScanPanel() {
                 СТОП СЛУХ
               </button>
               <button
+                className="btn-ghost"
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
+                onClick={() => void s.startLocalFpgaGateway()}
+                title="Поднять legion_gateway на этом ПК (127.0.0.1:5531). Soapy отпустит USB."
+              >
+                ШЛЮЗ
+              </button>
+              <button
                 className="btn-primary"
                 disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
                 onClick={() => void s.acceptSmartGridAndArm({ peak: s.smartPeakOverride })}

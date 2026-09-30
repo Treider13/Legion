@@ -1113,6 +1113,19 @@ def main() -> int:
             and rb._tx_lo_hz == 2437e6,
         )
 
+    # Уже открытый порт не порождает второй legion_gateway (тот занял бы USB).
+    import socket as _sock
+    hold = _sock.socket()
+    hold.bind(("127.0.0.1", 0))
+    hold.listen(1)
+    held_port = hold.getsockname()[1]
+    already = w.ensure_local_gateway(held_port)
+    hold.close()
+    check(
+        "шлюз: занятый порт не запускает второй процесс",
+        already.get("ok") is True and already.get("already") is True and already.get("port") == held_port,
+    )
+
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading
     gw_env = os.environ.copy()
