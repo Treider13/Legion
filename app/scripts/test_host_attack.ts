@@ -2610,6 +2610,28 @@ async function main(): Promise<void> {
   const still = buildAttackCallout([rowAt(2442.02)], adviceAt("По честной ширине: 2441.90…2442.10 МГц."));
   const jitter = buildAttackCallout([rowAt(2442.08)], adviceAt("По честной ширине: 2441.96…2442.16 МГц."));
   check("дрожание внутри полмегагерца не меняет совет", still.situation === jitter.situation && still.title === "Рамка");
+  const familyAdvice = {
+    scene: "1 след(ов) в кадре.",
+    after: "",
+    hints: [{
+      ...calloutPaint,
+      text: "Обведите семью hop 2436.00…2448.00 МГц, не одну вспышку.",
+      applyLabel: "Взять рамку семьи",
+      paint: { f1Mhz: 2436, f2Mhz: 2448 },
+    }, calloutWave],
+    suggestPaint: { f1Mhz: 2436, f2Mhz: 2448 },
+  };
+  const familyCard = buildAttackCallout([rowAt(2442.02)], familyAdvice);
+  check(
+    "смена «эту рамку» на «рамку семьи» меняет класс",
+    familyCard.situation !== still.situation && settleCallout(still, familyCard).applyLabel === "Взять рамку семьи",
+  );
+  const slightlyWider = buildAttackCallout([rowAt(2442.02)], {
+    ...adviceAt("шире на десятую"),
+    hints: [{ ...calloutPaint, text: "шире на десятую", paint: { f1Mhz: 2441.85, f2Mhz: 2442.15 } }, calloutWave],
+    suggestPaint: { f1Mhz: 2441.85, f2Mhz: 2442.15 },
+  });
+  check("ширина рамки внутри одного мегагерца не меняет класс", slightlyWider.situation === still.situation);
   check("главный совет — рамка, не волна", still.applyLabel === "Взять эту рамку" && !still.text.includes("узкий тон"));
   const hopped = buildAttackCallout([rowAt(2443.1)], adviceAt("другая частота"));
   check("другая стоянка меняет совет", hopped.situation !== still.situation);

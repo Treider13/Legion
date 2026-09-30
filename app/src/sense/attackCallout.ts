@@ -76,6 +76,12 @@ function bucketMhz(mhz: number): string {
   return (Math.round(mhz * 2) / 2).toFixed(1);
 }
 
+/** Целый мегагерц ширины рамки. Сотые кадра не меняют класс, смена «узкая / семья» меняет. */
+function spanBucket(hint: AttackHint | null): string {
+  if (!hint?.paint) return "none";
+  return String(Math.round(Math.abs(hint.paint.f2Mhz - hint.paint.f1Mhz)));
+}
+
 function pickHint(advice: AttackAdvice): AttackHint | null {
   return advice.hints.find((hint) => hint.kind === "paint")
     ?? advice.hints.find((hint) => hint.applyLabel)
@@ -91,7 +97,8 @@ export function buildAttackCallout(rows: readonly CalloutRow[], advice: AttackAd
   const tx = advice.scene.includes("Идёт передача");
   const situation = [
     hint?.kind ?? "scene",
-    hint?.applyLabel ? "act" : "note",
+    hint?.applyLabel ?? "note",
+    spanBucket(hint),
     primary?.atlasId ?? "none",
     primary ? bucketMhz(primary.freqMhz) : "none",
     tx ? "tx" : "rx",
