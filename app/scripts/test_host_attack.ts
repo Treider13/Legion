@@ -13,6 +13,7 @@ import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
 import { buildAttackCallout, holdPeakMhz, settleCallout } from "../src/sense/attackCallout";
+import { trackUnderMhz } from "../src/components/graphite/advisorFocus";
 import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
@@ -2696,6 +2697,15 @@ async function main(): Promise<void> {
   const bin = 0.0075;
   check("соседний бин не меняет подпись частоты", holdPeakMhz(2442, 2442 + bin, bin) === 2442);
   check("два бина меняют подпись частоты", holdPeakMhz(2442, 2442 + bin * 2, bin) === 2442 + bin * 2);
+  const under = trackUnderMhz(
+    [
+      { id: 1, fLowMhz: 2400, fHighMhz: 2480, widthMhz: 80, state: "confirmed" },
+      { id: 2, fLowMhz: 2439, fHighMhz: 2441, widthMhz: 2, state: "confirmed" },
+      { id: 3, fLowMhz: 1000, fHighMhz: 1010, widthMhz: 10, state: "cooled" },
+    ],
+    2440,
+  );
+  check("наведение берёт узкий маркер, не широкую полку и не остывший", under?.id === 2);
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

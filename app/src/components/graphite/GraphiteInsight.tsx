@@ -1,42 +1,20 @@
-import { useMemo, useState } from "react";
-import {
-  binStepMhz,
-  buildAttackCallout,
-  settleCallout,
-  signalReadoutMhz,
-  type AttackCallout,
-  type CalloutRow,
-} from "../../sense/attackCallout";
-import type { AttackRow } from "../../sense/attackScene";
+import { useState } from "react";
+import { calloutForMarker, type AttackCallout } from "../../sense/attackCallout";
 import { useLegion } from "../../state/store";
+import { useAdvisorFocusId } from "./advisorFocus";
 
-function typeOf(row: AttackRow): string {
-  return row.look?.label ?? row.atlas.label;
-}
-
-function calloutRows(rows: readonly AttackRow[]): CalloutRow[] {
-  return rows.map((row) => ({
-    freqMhz: row.freqMhz,
-    powerDbm: row.powerDbm,
-    state: row.state,
-    atlasId: row.atlas.id,
-    typeLabel: typeOf(row),
-  }));
-}
-
-function useSettledCallout(next: AttackCallout): AttackCallout {
-  const [shown, setShown] = useState(next);
-  const settled = settleCallout(shown, next);
-  if (settled !== shown) setShown(settled);
-  return settled;
-}
-
-function useSignalMhz(cardMhz: number | null, liveMhz: number | null, binMhz: number): number | null {
-  const [printed, setPrinted] = useState<number | null>(liveMhz ?? cardMhz);
-  const next = signalReadoutMhz(cardMhz, liveMhz, printed, binMhz);
-  if (next !== printed) setPrinted(next);
-  return next;
-}
+const HOVER_WAIT: AttackCallout = {
+  situation: "hover",
+  kicker: "маркер",
+  title: "Наведите на маркер",
+  text: "Совет откроется по этому следу и останется здесь, пока не наведёте на другой маркер.",
+  why: "",
+  freqMhz: null,
+  typeLabel: null,
+  applyKind: null,
+  applyLabel: null,
+  hint: null,
+};
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
   return (
@@ -65,13 +43,27 @@ export function GraphiteFacts({
   rangeNote: string;
 }) {
   const rows = useLegion((s) => s.attackRows);
-  const advice = useLegion((s) => s.attackAdvice);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const applyAttackHint = useLegion((s) => s.applyAttackHint);
-  const bins = useLegion((s) => s.scanBins);
-  const live = useMemo(() => buildAttackCallout(calloutRows(rows), advice), [rows, advice]);
-  const shown = useSettledCallout(live);
-  const signalMhz = useSignalMhz(shown.freqMhz, live.freqMhz, binStepMhz(bins.map((bin) => bin.freqMhz)));
+  const paint = useLegion((s) => s.attackPaint);
+  const wave = useLegion((s) => s.txWaveKind);
+  const holdMs = useLegion((s) => s.attackHoldMs);
+  const bands = useLegion((s) => s.sdrBands);
+  const windowMhz = useLegion((s) => {
+    const bins = s.scanBins;
+    if (bins.length >= 2) return Math.abs(bins[bins.length - 1].freqMhz - bins[0].freqMhz);
+    const parsed = parseFloat(s.scanWindowMhz);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 56;
+  });
+  const focusId = useAdvisorFocusId();
+  const [pinId, setPinId] = useState<number | null>(null);
+  const [pin, setPin] = useState<AttackCallout | null>(null);
+  const row = rows.find((item) => item.id === focusId && item.state !== "cooled");
+  if (focusId != null && row && focusId !== pinId) {
+    setPinId(focusId);
+    setPin(calloutForMarker(row, { windowMhz, paint, wave, holdMs, bands, transmitArmed }));
+  }
+  const shown = pin ?? HOVER_WAIT;
 
   return (
     <>
@@ -97,7 +89,7 @@ export function GraphiteFacts({
           </div>
           <small>{rangeNote}</small>
         </div>
-        <SignalStat typeLabel={shown.typeLabel} freqMhz={signalMhz} />
+        <SignalStat typeLabel={shown.typeLabel} freqMhz={shown.freqMhz} />
       </div>
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">
