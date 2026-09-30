@@ -43,6 +43,7 @@ import {
   hostTxOff,
   hostTxWave,
   hostFpga,
+  hostStartFpgaGateway,
   hostLegionBuildCancel,
   hostLegionBuildStart,
   hostLegionBuildStatus,
@@ -550,6 +551,8 @@ interface LegionStore {
   setFpgaLbDelay(v: string): void;
   setFpgaLbShiftHz(v: string): void;
   fpgaArm(): Promise<void>;
+  /** Поднять legion_gateway на этом ПК и записать 127.0.0.1, если IP шлюза пуст. */
+  startLocalFpgaGateway(): Promise<boolean>;
   /** Главный кадр: ARM ревизии legion. air = lb_gated, solo = nco/player. */
   startFpgaPath(path: "solo" | "air"): Promise<boolean>;
   /** Отозвать solo-старт в полёте (кино СТОП, даже если ещё не ARM). */
@@ -2128,6 +2131,35 @@ export const useLegion = create<LegionStore>((set, get) => {
    *  USB не в круге «увидел → усилитель». x40: один park Soapy (Si5338 fs/BW
    *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy.
    *  ARM только после Принять (замороженная карточка). */
+  const localGatewayHost = (raw: string): boolean => {
+    const h = raw.trim().toLowerCase();
+    return h === "" || h === "127.0.0.1" || h === "localhost" || h === "::1";
+  };
+
+  /** Пустой IP и плата в этом ПК: отпустить USB и поднять legion_gateway здесь. */
+  const ensureLocalFpgaGateway = async (): Promise<boolean> => {
+    const gw = get().sdrGateway.trim();
+    if (!localGatewayHost(gw)) return true;
+    if (get().sdrId === "bladerf-x40") {
+      if (!gw) {
+        pushLog(
+          "sys",
+          `${FPGA_AIR_MODE_RU}: укажите IP шлюза x40 — локальный агент занял бы USB до установки LO`,
+        );
+      }
+      return !gw ? false : true;
+    }
+    if (!gw) set({ sdrGateway: "127.0.0.1" });
+    await releaseSoapyForFpga();
+    const boot = await hostStartFpgaGateway();
+    if (!boot.ok) {
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: шлюз не запустился — ${boot.reason ?? "отказ"}`);
+      return false;
+    }
+    pushLog("sys", `${FPGA_AIR_MODE_RU}: ${boot.reason ?? "шлюз 127.0.0.1:5531"}`);
+    return true;
+  };
+
   const startOnboardIntercept = async (): Promise<void> => {
     const s = get();
     const acceptedCard = gSmartAccepted;
@@ -2218,6 +2250,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       get().stopScan();
       stopAirWalk();
       if (get().transmitArmed) await get().stopTransmit();
+      if (gFpgaAirGen !== airGen) return;
+      if (!(await ensureLocalFpgaGateway())) return;
       if (gFpgaAirGen !== airGen) return;
       const ping = await gw({ op: "ping" });
       if (gFpgaAirGen !== airGen) return;
@@ -2752,6 +2786,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gAttackMemory.reset();
     },
     setSmartPeakOverride: (v) => set({ smartPeakOverride: !!v }),
+    startLocalFpgaGateway: async () => ensureLocalFpgaGateway(),
     acceptSmartGridAndArm: async (opts) => {
       const s = get();
       if (!isFpgaAirPattern(s.scanPattern)) {
