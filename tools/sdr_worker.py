@@ -3320,10 +3320,88 @@ def _gateway_port_open(host: str, port: int) -> bool:
         return False
 
 
+def _gateway_log_tail(log_path: str, start: int = 0) -> str:
+    """Хвост одного запуска. start — размер файла до Popen.
+
+    Лог открыт на дозапись. Последние 800 байт без среза включают traceback
+    прошлого процесса, и «USB занят» оттуда повторяло бы чужой отказ.
+    """
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if size <= start:
+                return ""
+            f.seek(max(start, size - 800))
+            return f.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+
+
+def _spawn_local_gateway(script: str, port: int, log_path: str) -> dict[str, Any]:
+    """Один запуск. ok/already — порт открылся. Иначе reason из лога агента."""
+    import subprocess
+
+    host = "127.0.0.1"
+    try:
+        start = os.path.getsize(log_path)
+    except OSError:
+        start = 0
+    try:
+        logf = open(log_path, "ab", buffering=0)
+    except OSError as e:
+        return {"ok": False, "reason": f"лог шлюза {log_path}: {e}"}
+    env = os.environ.copy()
+    env["LEGION_FPGA_PORT"] = str(port)
+    env.pop("LEGION_FPGA_FAKE", None)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdin=subprocess.DEVNULL,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as e:
+        logf.close()
+        return {"ok": False, "reason": f"запуск шлюза: {e}"}
+    # Дочерний процесс уже получил свою копию fd.
+    logf.close()
+    threading.Thread(target=proc.wait, name="legion-gateway-reap", daemon=True).start()
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if _gateway_port_open(host, port):
+            return {
+                "ok": True,
+                "already": False,
+                "host": host,
+                "port": port,
+                "reason": f"шлюз запущен {host}:{port}",
+            }
+        if proc.poll() is not None:
+            if _gateway_port_open(host, port):
+                return {
+                    "ok": True,
+                    "already": True,
+                    "host": host,
+                    "port": port,
+                    "reason": f"шлюз уже слушает {host}:{port}",
+                }
+            tail = _gateway_log_tail(log_path, start)
+            return {
+                "ok": False,
+                "reason": tail or f"шлюз завершился с кодом {proc.returncode}",
+            }
+        time.sleep(0.1)
+    return {"ok": False, "reason": f"шлюз не открыл {host}:{port}"}
+
+
 def ensure_local_gateway(port: int | None = None) -> dict[str, Any]:
     """Поднять legion_gateway на этом ПК (127.0.0.1:5531), если порт ещё пуст.
 
-    Агент при старте сам занимает USB. Вызывать после того, как Soapy его отпустил.
+    Агент в UsbTransport.__init__ сразу claim'ит интерфейс. errno 16 он сам
+    называет «USB занят»: Soapy ещё держит FX3 (SoapySDR #225, стенд 2026-08-27).
     Уже слушающий порт не трогаем: второй процесс делил бы плату.
     """
     host = "127.0.0.1"
@@ -3344,63 +3422,26 @@ def ensure_local_gateway(port: int | None = None) -> dict[str, Any]:
     )
     if not os.path.isfile(script):
         return {"ok": False, "reason": f"нет {script}"}
-    import subprocess
-
     log_path = os.environ.get("LEGION_FPGA_LOG", "/tmp/legion-gateway.log")
-    try:
-        logf = open(log_path, "ab", buffering=0)
-    except OSError as e:
-        return {"ok": False, "reason": f"лог шлюза {log_path}: {e}"}
-    env = os.environ.copy()
-    env["LEGION_FPGA_PORT"] = str(use_port)
-    env.pop("LEGION_FPGA_FAKE", None)
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, script],
-            stdin=subprocess.DEVNULL,
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-    except OSError as e:
-        logf.close()
-        return {"ok": False, "reason": f"запуск шлюза: {e}"}
-    threading.Thread(target=proc.wait, name="legion-gateway-reap", daemon=True).start()
-    deadline = time.monotonic() + 8.0
-    while time.monotonic() < deadline:
+    last = ""
+    for _ in range(4):
         if _gateway_port_open(host, use_port):
             return {
                 "ok": True,
-                "already": False,
+                "already": True,
                 "host": host,
                 "port": use_port,
-                "reason": f"шлюз запущен {host}:{use_port}",
+                "reason": f"шлюз уже слушает {host}:{use_port}",
             }
-        if proc.poll() is not None:
-            if _gateway_port_open(host, use_port):
-                return {
-                    "ok": True,
-                    "already": True,
-                    "host": host,
-                    "port": use_port,
-                    "reason": f"шлюз уже слушает {host}:{use_port}",
-                }
-            tail = ""
-            try:
-                with open(log_path, "rb") as f:
-                    f.seek(0, os.SEEK_END)
-                    size = f.tell()
-                    f.seek(max(0, size - 800))
-                    tail = f.read().decode("utf-8", "replace").strip()
-            except OSError:
-                tail = ""
-            return {
-                "ok": False,
-                "reason": tail or f"шлюз завершился с кодом {proc.returncode}",
-            }
-        time.sleep(0.1)
-    return {"ok": False, "reason": f"шлюз не открыл {host}:{use_port}"}
+        got = _spawn_local_gateway(script, use_port, log_path)
+        if got.get("ok"):
+            return got
+        last = str(got.get("reason") or "")
+        # Только errno 16. Нет платы или нет pyusb повтором не лечится.
+        if "USB занят" not in last:
+            return got
+        time.sleep(0.4)
+    return {"ok": False, "reason": last or "шлюз не занял USB"}
 
 
 def fpga_rpc(host: str, msg: dict[str, Any]) -> dict[str, Any]:
@@ -3539,6 +3580,8 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
         radio.tx_off()
         return {"ok": True, "reason": "TX off"}
     if op == "fpga_gateway_start":
+        # Этот процесс держит Soapy. Закрыть здесь, до чужого claim.
+        radio.close()
         return ensure_local_gateway()
     if op == "fpga":
         # Релей на legion_gateway шлюза: {"op":"fpga", "cmd":{...}, "gw"?:ip}
