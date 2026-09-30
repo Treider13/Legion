@@ -86,7 +86,7 @@ export function GraphiteFacts({
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">
           <span>Помощник</span>
-          <span>{live.freqMhz != null ? `${live.freqMhz.toFixed(3)} МГц` : live.kicker}</span>
+          <span>{shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц` : shown.kicker}</span>
         </div>
         <div className="graphite-assist-body" aria-live="polite" aria-atomic="true">
           <h2>{shown.title}</h2>
