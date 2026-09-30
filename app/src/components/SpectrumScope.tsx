@@ -451,7 +451,7 @@ export function SpectrumScope() {
       if (cursorX < g.padL || cursorX > g.padL + g.plotW) return;
       const pxPerMhz = g.span > 0 ? g.plotW / g.span : 0;
       const hit = trackUnderMhz(st.attackTracks, mhzAt(e.clientX), pxPerMhz, 2);
-      if (hit) focusAdvisorTrack(hit.id);
+      if (hit) focusAdvisorTrack(hit.id, hit.freqMhz);
     };
     const onDown = (e: PointerEvent) => {
       const st = useLegion.getState();

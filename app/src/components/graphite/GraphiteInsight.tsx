@@ -1,13 +1,22 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { calloutForMarker, type AttackCallout } from "../../sense/attackCallout";
 import { useLegion } from "../../state/store";
-import { clearAdvisorFocus, useAdvisorFocusId } from "./advisorFocus";
+import {
+  ADVICE_HOLD_MS,
+  advanceAdviceMhz,
+  mergeAdviceQueue,
+  queueIndexForFreq,
+  resolveAdviceMhz,
+  sameAdviceEmitter,
+  useAdvisorPick,
+  type AdviceQueueItem,
+} from "./advisorFocus";
 
 const HOVER_WAIT: AttackCallout = {
   situation: "hover",
-  kicker: "маркер",
-  title: "Наведите на маркер",
-  text: "Совет откроется по этому следу и останется здесь, пока не наведёте на другой маркер.",
+  kicker: "очередь",
+  title: "Ждёт сигнал",
+  text: "На обнаруженном следе совет стоит 8 секунд и не прыгает на более громкий. Затем очередь показывает следующий. Наведение на маркер откроет его, если пауза уже кончилась, и снова удержит на 8 секунд.",
   why: "",
   freqMhz: null,
   typeLabel: null,
@@ -55,19 +64,73 @@ export function GraphiteFacts({
     const parsed = parseFloat(s.scanWindowMhz);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 56;
   });
-  const focusId = useAdvisorFocusId();
-  const [pinId, setPinId] = useState<number | null>(null);
+  const pick = useAdvisorPick();
+  const [queue, setQueue] = useState<readonly AdviceQueueItem[]>([]);
+  const [currentMhz, setCurrentMhz] = useState<number | null>(null);
+  const [hold, setHold] = useState(0);
   const [pin, setPin] = useState<AttackCallout | null>(null);
-  const row = rows.find((item) => item.id === focusId && item.state !== "cooled");
-  if (pinId != null && !rows.some((item) => item.id === pinId)) {
-    setPinId(null);
-    setPin(null);
-    if (focusId === pinId) clearAdvisorFocus();
-  } else if (focusId != null && row && focusId !== pinId) {
-    setPinId(focusId);
-    setPin(calloutForMarker(row, { windowMhz, paint, wave, holdMs, bands, transmitArmed }));
+  const [snap, setSnap] = useState("");
+  const queueRef = useRef(queue);
+  const currentRef = useRef(currentMhz);
+  const dwellUntil = useRef(0);
+  queueRef.current = queue;
+  currentRef.current = currentMhz;
+  const calloutOpts = { windowMhz, paint, wave, holdMs, bands, transmitArmed };
+
+  useEffect(() => {
+    const prev = queueRef.current;
+    const next = mergeAdviceQueue(prev, rows);
+    if (next === prev) return;
+    setQueue(next);
+    setCurrentMhz((mhz) => resolveAdviceMhz(mhz, prev, next));
+  }, [rows]);
+
+  useEffect(() => {
+    if (pick.seq === 0 || pick.freqMhz == null) return;
+    const freq = pick.freqMhz;
+    const trackId = pick.trackId ?? -1;
+    setQueue((prev) => {
+      if (queueIndexForFreq(prev, freq) >= 0) return prev;
+      return [...prev, { freqMhz: freq, trackId }];
+    });
+    if (currentRef.current != null && Date.now() < dwellUntil.current) return;
+    dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
+    setCurrentMhz(freq);
+    setHold((n) => n + 1);
+  }, [pick.seq, pick.freqMhz, pick.trackId]);
+
+  useEffect(() => {
+    if (currentMhz == null) {
+      dwellUntil.current = 0;
+      return;
+    }
+    dwellUntil.current = Date.now() + ADVICE_HOLD_MS;
+    const timer = window.setTimeout(() => {
+      setCurrentMhz(advanceAdviceMhz(queueRef.current, currentRef.current));
+      setHold((n) => n + 1);
+    }, ADVICE_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [currentMhz, hold]);
+
+  const row =
+    currentMhz == null
+      ? undefined
+      : rows.find((item) => item.state !== "cooled" && sameAdviceEmitter(item.freqMhz, currentMhz));
+  if (currentMhz == null) {
+    if (pin) {
+      setPin(null);
+      setSnap("");
+    }
+  } else if (row) {
+    const token = `${Math.round(currentMhz * 1000)}:${hold}`;
+    if (token !== snap) {
+      setSnap(token);
+      setPin(calloutForMarker(row, calloutOpts));
+    }
   }
   const shown = pin ?? HOVER_WAIT;
+  const place = currentMhz == null ? -1 : queueIndexForFreq(queue, currentMhz);
+  const queueLabel = place >= 0 ? `${place + 1} из ${queue.length}` : shown.kicker;
 
   return (
     <>
@@ -98,7 +161,9 @@ export function GraphiteFacts({
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">
           <span>Помощник</span>
-          <span>{shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц` : shown.kicker}</span>
+          <span>
+            {shown.freqMhz != null ? `${shown.freqMhz.toFixed(3)} МГц · ${queueLabel}` : queueLabel}
+          </span>
         </div>
         <div className="graphite-assist-body" aria-live="polite" aria-atomic="true">
           <h2>{shown.title}</h2>
