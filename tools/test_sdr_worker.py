@@ -65,6 +65,10 @@ def main() -> int:
     check("stream_kind underflow", w.stream_kind(-7) == "underflow")
     check("stream_kind error", w.stream_kind(-2) == "error")
     check("stream_kind ok", w.stream_kind(4096) == "ok")
+    check("timeout открытого burst — тот же кусок", w.tx_write_action("timeout", False) == "retry")
+    check("timeout первого кадра — сброс sync", w.tx_write_action("timeout", True) == "reset_sync")
+    check("ошибка потока остаётся фатальной", w.tx_write_action("error", False) == "fatal")
+    check("успешная запись двигает буфер", w.tx_write_action("ok", False) == "advance")
 
     if not w.NUMPY:
         print("  FAIL  numpy обязателен (tools/requirements.txt) — без него скан DIO-sys не проверяется")
@@ -825,6 +829,50 @@ def main() -> int:
     )
     hop.tx_off()
     check("tx_off сбрасывает стоящий LO и опору", hop._tx_lo_hz is None and hop._tone_bb is None)
+
+    class _Alive:
+        def is_alive(self) -> bool:
+            return True
+
+    class _Freq:
+        def __init__(self) -> None:
+            self.calls: list[float] = []
+
+        def setFrequency(self, direction: int, channel: int, hz: float) -> None:
+            self.calls.append(float(hz))
+
+    live_hop = w.Radio()
+    live_hop.fake = True
+    live_hop.analog_bw = 56.0
+    live_hop.tx_wave(2442.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    live_hop.fake = False
+    live_hop._thr = _Alive()
+    live_hop.tx = object()
+    freq = _Freq()
+    live_hop.dev = freq
+    stepped = live_hop.tx_wave(2445.0, "qpsk", {"amp": 0.2}, 40e6, None, 2e6)
+    want_lo = 2445e6 - 40e6 / 8
+    check(
+        "шаг на живом TX не зовёт setFrequency из запроса",
+        stepped.get("ok") is True and freq.calls == [] and live_hop._tx_lo_pending is not None
+        and abs(float(live_hop._tx_lo_pending) - want_lo) < 1,
+    )
+    live_hop._apply_pending_lo(freq)
+    check(
+        "насос применяет LO между записями",
+        len(freq.calls) == 1 and abs(freq.calls[0] - want_lo) < 1 and live_hop._tx_lo_pending is None,
+    )
+    live_hop.tx = None
+    check(
+        "reset_sync: живой насос держит BBPLL, даже если указатель стрима пуст",
+        live_hop._tx_holds_clock() is True,
+    )
+    live_hop.dev.getHardwareKey = lambda: "bladerf2"
+    parked = live_hop.park(2442.0, 28.0, 2e6, False, True)
+    check(
+        "park не перестраивает часы, пока насос жив",
+        parked.get("ok") is False and "tx_off" in str(parked.get("reason")),
+    )
     check("банк 31 волны на месте", len(w.WAVE_KINDS) == 31 and "p4" in w.WAVE_KINDS)
 
     bad_wave = rpc(proc, {"op": "tx_wave", "freqMhz": 2442.0, "wave": "nonsense"})
@@ -976,6 +1024,14 @@ def main() -> int:
         chunk.tx_off()
 
         class _FailTx(_TxClk):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setups = 0
+
+            def setupStream(self, *_a, **_k):
+                self.setups += 1
+                return object()
+
             def writeStream(self, *_a, **_k):
                 return type("S", (), {"ret": -1})()
 
@@ -986,9 +1042,14 @@ def main() -> int:
         bad.dev = _FailTx()
         refused = bad._tx_prime(big, 2442e6, None, 2e6)
         check(
-            "writeStream timeout гасит TX",
-            isinstance(refused, dict) and refused.get("ok") is False and "сигнала на RF out нет" in str(refused.get("reason")),
+            "writeStream timeout не гасит TX и не ставит txError",
+            refused is None
+            and bad._thr is not None
+            and bad._thr.is_alive()
+            and bad.tx_error is None
+            and bad.dev.setups >= 2,
         )
+        bad.tx_off()
 
         class _RollbackTx(_TxClk):
             def __init__(self) -> None:
@@ -999,7 +1060,7 @@ def main() -> int:
                 self.freqs.append(float(hz))
 
             def writeStream(self, *_a, **_k):
-                return type("S", (), {"ret": -1})()
+                return type("S", (), {"ret": -2})()
 
         rb = w.Radio()
         rb.fake = False
