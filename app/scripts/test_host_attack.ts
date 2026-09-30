@@ -12,7 +12,7 @@ import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { buildAttackCallout } from "../src/sense/attackCallout";
+import { buildAttackCallout, settleCallout } from "../src/sense/attackCallout";
 import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
@@ -2637,6 +2637,18 @@ async function main(): Promise<void> {
     framed.freqMhz === 2460 && framed.situation.includes("digital-video") && framed.text.includes("2450.00"),
     framed.situation,
   );
+  const edgeLoud = { freqMhz: 2468, powerDbm: -10, state: "confirmed" as const, atlasId: "rc-24", typeLabel: "пульт" };
+  const centered = buildAttackCallout([edgeLoud, quietWide], wideFrame);
+  check(
+    "внутри рамки берётся след у центра, не более громкий с краю",
+    centered.freqMhz === 2460 && centered.situation.includes("digital-video"),
+    `${centered.freqMhz} ${centered.situation}`,
+  );
+  const moved = buildAttackCallout([rowAt(2442.08)], adviceAt("По честной ширине: 2441.96…2442.16 МГц."));
+  const kept = settleCallout(still, moved);
+  check("тот же класс ситуации оставляет прежний hint на экране", kept.text === still.text && kept.hint === still.hint);
+  const nextClass = settleCallout(still, hopped);
+  check("новый класс ситуации подменяет hint целиком", nextClass.text === hopped.text && nextClass.hint === hopped.hint);
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

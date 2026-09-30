@@ -1,10 +1,10 @@
 // ============================================================================
 // LEGION — один совет на главном кадре. Не карусель.
-// Sonner (issue #422, ответ мейнтейнера): то же id обновляет текст, а не
-// заводит второе сообщение. Карточка показывает текущий hint — тот же,
-// который запишет «Взять». Класс ситуации не меняется от дрожания пика
-// внутри полмегагерца. Частота карточки — след внутри предложенной рамки,
-// не самый громкий в эфире: помощник может обводить тихую полку.
+// Sonner, issue #422: повтор с тем же id обновляет существующее сообщение,
+// второе не создаётся. Id здесь — класс ситуации. Пока он тот же, карточка
+// держит прежний hint, и «Взять» записывает именно его.
+// Рамка в помощнике центрируется на выбранном следе (attackAdvisor), поэтому
+// частота карточки — след ближе к центру рамки, не самый громкий рядом.
 // ============================================================================
 import type { AttackAdvice, AttackHint, AttackHintKind } from "./attackAdvisor";
 
@@ -27,6 +27,8 @@ export interface AttackCallout {
   typeLabel: string | null;
   applyKind: AttackHintKind | null;
   applyLabel: string | null;
+  /** Тот hint, который записан в text. «Взять» кладёт в стор его, не более поздний. */
+  hint: AttackHint | null;
 }
 
 const WAIT: AttackCallout = {
@@ -39,6 +41,7 @@ const WAIT: AttackCallout = {
   typeLabel: null,
   applyKind: null,
   applyLabel: null,
+  hint: null,
 };
 
 function louder(a: CalloutRow, b: CalloutRow): CalloutRow {
@@ -50,9 +53,22 @@ function primaryOf(rows: readonly CalloutRow[], frame: { f1Mhz: number; f2Mhz: n
   if (live.length === 0) return null;
   if (frame) {
     const inside = live.filter((row) => row.freqMhz >= frame.f1Mhz - 0.2 && row.freqMhz <= frame.f2Mhz + 0.2);
-    if (inside.length > 0) return inside.reduce(louder);
+    if (inside.length > 0) {
+      const mid = (frame.f1Mhz + frame.f2Mhz) / 2;
+      return inside.reduce((best, row) => {
+        const closer = Math.abs(row.freqMhz - mid) < Math.abs(best.freqMhz - mid) - 1e-9;
+        const tie = Math.abs(Math.abs(row.freqMhz - mid) - Math.abs(best.freqMhz - mid)) <= 1e-9;
+        if (closer || (tie && row.powerDbm > best.powerDbm)) return row;
+        return best;
+      });
+    }
   }
   return live.reduce(louder);
+}
+
+/** Пока класс тот же — остаётся прежний hint. Новый класс подменяет его целиком. */
+export function settleCallout(shown: AttackCallout, next: AttackCallout): AttackCallout {
+  return shown.situation === next.situation ? shown : next;
 }
 
 /** Полмегагерца: дрожание пика внутри коридора не меняет совет. */
@@ -91,6 +107,7 @@ export function buildAttackCallout(rows: readonly CalloutRow[], advice: AttackAd
       typeLabel: primary?.typeLabel ?? null,
       applyKind: null,
       applyLabel: null,
+      hint: null,
     };
   }
   return {
@@ -103,5 +120,6 @@ export function buildAttackCallout(rows: readonly CalloutRow[], advice: AttackAd
     typeLabel: primary?.typeLabel ?? null,
     applyKind: hint.applyLabel ? hint.kind : null,
     applyLabel: hint.applyLabel,
+    hint,
   };
 }

@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { buildAttackCallout, type CalloutRow } from "../../sense/attackCallout";
+import { useMemo, useState } from "react";
+import { buildAttackCallout, settleCallout, type AttackCallout, type CalloutRow } from "../../sense/attackCallout";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
 
@@ -15,6 +15,13 @@ function calloutRows(rows: readonly AttackRow[]): CalloutRow[] {
     atlasId: row.atlas.id,
     typeLabel: typeOf(row),
   }));
+}
+
+function useSettledCallout(next: AttackCallout): AttackCallout {
+  const [shown, setShown] = useState(next);
+  const settled = settleCallout(shown, next);
+  if (settled !== shown) setShown(settled);
+  return settled;
 }
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
@@ -48,6 +55,7 @@ export function GraphiteFacts({
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const applyAttackHint = useLegion((s) => s.applyAttackHint);
   const live = useMemo(() => buildAttackCallout(calloutRows(rows), advice), [rows, advice]);
+  const shown = useSettledCallout(live);
 
   return (
     <>
@@ -80,22 +88,22 @@ export function GraphiteFacts({
           <span>Помощник</span>
           <span>{live.freqMhz != null ? `${live.freqMhz.toFixed(3)} МГц` : live.kicker}</span>
         </div>
-        <div className="graphite-assist-body">
-          <h2>{live.title}</h2>
-          <p>{live.text}</p>
-          {live.why && <small>{live.why}</small>}
+        <div className="graphite-assist-body" aria-live="polite" aria-atomic="true">
+          <h2>{shown.title}</h2>
+          <p>{shown.text}</p>
+          {shown.why && <small>{shown.why}</small>}
         </div>
-        {live.applyLabel && live.applyKind && (
+        {shown.applyLabel && shown.applyKind && shown.hint && (
           <div className="graphite-assist-side">
             <button
               type="button"
               className="graphite-assist-apply"
               disabled={transmitArmed}
               onClick={() => {
-                if (live.applyKind) applyAttackHint(live.applyKind);
+                if (shown.hint && shown.applyKind) applyAttackHint(shown.applyKind, shown.hint);
               }}
             >
-              {live.applyLabel}
+              {shown.applyLabel}
             </button>
           </div>
         )}

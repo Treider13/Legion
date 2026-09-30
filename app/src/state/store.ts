@@ -63,7 +63,7 @@ import { AttackTracker, type AttackTrack } from "../sense/attackTracks";
 import { matchAttackLook, parseWorkerLook, pickAttackThinkTracks, type AttackLook } from "../sense/attackLook";
 import { AttackSessionMemory } from "../sense/attackMemory";
 import { buildAttackScene, type AttackRow, type AttackSceneView } from "../sense/attackScene";
-import { type AttackAdvice, type AttackHintKind } from "../sense/attackAdvisor";
+import { type AttackAdvice, type AttackHint, type AttackHintKind } from "../sense/attackAdvisor";
 import {
   ATTACK_COOLDOWN_MS,
   ATTACK_HOLD_DEFAULT_MS,
@@ -482,7 +482,7 @@ interface LegionStore {
   setAttackPaintDraft(p: AttackPaint | null): void;
   clearAttackPaint(): void;
   setAttackHoldMs(ms: number): void;
-  applyAttackHint(kind: AttackHintKind): void;
+  applyAttackHint(kind: AttackHintKind, pinned?: AttackHint): void;
   resetSdrLock(): Promise<void>;
   refreshPorts(): Promise<void>;
   connect(): Promise<void>;
@@ -2803,13 +2803,13 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ attackHoldMs: clampAttackHoldMs(ms) });
       refreshAttackBrain();
     },
-    applyAttackHint: (kind) => {
+    applyAttackHint: (kind, pinned) => {
       if (get().scanPattern !== "auto") return;
       if (get().transmitArmed) {
         pushLog("sys", "подсказка: идёт передача — сначала Стоп, потом можно взять");
         return;
       }
-      const hint = get().attackAdvice.hints.find((h) => h.kind === kind);
+      const hint = pinned && pinned.kind === kind ? pinned : get().attackAdvice.hints.find((h) => h.kind === kind);
       if (!hint) return;
       if (kind === "paint" && hint.paint) {
         get().setAttackPaint(hint.paint);
