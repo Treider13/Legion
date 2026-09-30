@@ -1450,17 +1450,15 @@ class Radio:
         """setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
 
         stopScan гасит только таймер хоста. readStream в воркере остаётся.
-        Общий BBPLL (Nuand t=13047) нельзя переписывать, пока RX включён.
+        SoapyBladeRF::deactivateStream(RX) лишь очищает очередь команд.
+        Модуль RX выключает closeStream → bladerf_enable_module(false).
+        Общий BBPLL (Nuand t=13047) нельзя переписывать, пока этот модуль включён.
         """
         self._stop_rx_capture()
-        if self.dev is not None and self.rx is not None and self._rx_on:
-            try:
-                self.dev.deactivateStream(self.rx)
-            except Exception:
-                pass
-        self._rx_on = False
+        self._drop_rx_stream()
         self._rx_fs = None
         self._rx_bw = None
+        self._rx_hz = None
 
     def _start_rx_capture(self) -> None:
         if self.fake or not NUMPY:
