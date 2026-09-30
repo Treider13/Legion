@@ -12,6 +12,7 @@ import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
+import { buildAttackCallout } from "../src/sense/attackCallout";
 import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
@@ -248,6 +249,16 @@ async function main(): Promise<void> {
   tr.update([], 4);
   tr.update([], 5);
   check("три промаха остужают", tr.confirmed().length === 0);
+  if (one) {
+    const cooledId = tr.snapshot().find((t) => Math.abs(t.freqMhz - one.freqMhz) <= 0.2)?.id;
+    tr.update([one], 6);
+    const revived = tr.snapshot().find((t) => t.id === cooledId);
+    check(
+      "та же частота после промахов остаётся прежним следом",
+      revived != null && revived.state === "confirmed",
+      revived ? `id=${revived.id} state=${revived.state}` : "след пропал",
+    );
+  }
 
   const walkedTr = new AttackTracker();
   const shelfHit = { freqMhz: 5800, fLowMhz: 5792, fHighMhz: 5808, widthMhz: 16, powerDbm: -30, noiseDbm: -90, snrDb: 60 };
@@ -2562,6 +2573,47 @@ async function main(): Promise<void> {
   check("скан во время полки отказан", L().scanRunning === false);
   await L().stopTransmit();
   L().setScanPattern("auto");
+
+  const calloutPaint = {
+    kind: "paint" as const,
+    title: "Рамка",
+    text: "По честной ширине: 2441.90…2442.10 МГц.",
+    why: "ширина ≈ 0.20 МГц",
+    applyLabel: "Взять эту рамку",
+    paint: { f1Mhz: 2441.9, f2Mhz: 2442.1 },
+    wave: null,
+    holdMs: null,
+  };
+  const calloutWave = {
+    kind: "wave" as const,
+    title: "Волна",
+    text: "По картине ближе класс «узкий тон в центре».",
+    why: "по ширине",
+    applyLabel: "Поставить «синус»",
+    paint: null,
+    wave: "sine" as const,
+    holdMs: null,
+  };
+  const rowAt = (freqMhz: number) => ({
+    freqMhz,
+    powerDbm: -30,
+    state: "confirmed" as const,
+    atlasId: "rc-24",
+    typeLabel: "узкий пакетный RC 2.4",
+  });
+  const adviceAt = (text: string) => ({
+    scene: "1 след(ов) в кадре.",
+    after: "",
+    hints: [{ ...calloutPaint, text }, calloutWave],
+    suggestPaint: calloutPaint.paint,
+  });
+  const still = buildAttackCallout([rowAt(2442.02)], adviceAt("По честной ширине: 2441.90…2442.10 МГц."));
+  const jitter = buildAttackCallout([rowAt(2442.08)], adviceAt("По честной ширине: 2441.96…2442.16 МГц."));
+  check("дрожание внутри полмегагерца не меняет совет", still.situation === jitter.situation && still.title === "Рамка");
+  check("главный совет — рамка, не волна", still.applyLabel === "Взять эту рамку" && !still.text.includes("узкий тон"));
+  const hopped = buildAttackCallout([rowAt(2443.1)], adviceAt("другая частота"));
+  check("другая стоянка меняет совет", hopped.situation !== still.situation);
+  check("пустой эфир не обещает автолистание", buildAttackCallout([], { scene: "", after: "", hints: [], suggestPaint: null }).text.includes("не листается"));
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

@@ -129,13 +129,21 @@ export class AttackTracker {
     return t.hits >= ATTACK_MIN_HITS && windows >= ATTACK_MIN_WINDOWS && t.maxStreak >= ATTACK_MIN_HITS;
   }
 
+  /**
+   * Ближайший след в 0.2 МГц. Остывший, который ещё не выкинут из списка, тоже подходит:
+   * иначе та же частота после двух промахов получает новый id.
+   * При равной дистанции живой след важнее остывшего.
+   */
   private bestTrack(freqMhz: number, used: Set<number>): AttackTrack | null {
     let best: AttackTrack | null = null;
     let bestD = Infinity;
     for (const t of this.tracks) {
-      if (t.state === "cooled" || used.has(t.id)) continue;
+      if (used.has(t.id)) continue;
       const d = Math.abs(t.freqMhz - freqMhz);
-      if (d <= ATTACK_ASSOC_MHZ && d < bestD) {
+      if (d > ATTACK_ASSOC_MHZ) continue;
+      const closer = best == null || d < bestD - 1e-9;
+      const tieLive = best != null && Math.abs(d - bestD) <= 1e-9 && t.state !== "cooled" && best.state === "cooled";
+      if (closer || tieLive) {
         best = t;
         bestD = d;
       }

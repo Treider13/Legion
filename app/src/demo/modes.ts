@@ -36,7 +36,7 @@ export const DEMO_MODES: readonly DemoMode[] = [
     group: "SDR",
     scanner: true,
     hostHints: true,
-    summary: "Сканер стоит на центре снимка. Подсказка держится 4 секунды.",
+    summary: "Сканер стоит на центре снимка. Подсказка не листается сама.",
   },
   {
     id: "sweep",

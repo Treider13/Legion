@@ -212,6 +212,20 @@
 }
 .graphite-assist-apply:hover:not(:disabled) { background: #1a2126; color: #fff; }
 .graphite-assist-apply:disabled { opacity: .4; cursor: not-allowed; }
+.graphite-assist-nav { display: flex; align-items: center; gap: 8px; }
+.graphite-assist-nav span { color: #adb7bf; font-size: 10px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.graphite-assist-step {
+  min-height: 32px;
+  border: 1px solid #c5d0d6;
+  background: #101418;
+  color: #e7eef2;
+  font-size: 10px;
+  letter-spacing: .03em;
+  padding: 6px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.graphite-assist-step:hover { background: #1a2126; color: #fff; }
 .graphite-assist-meter {
   position: absolute;
   left: 0;
