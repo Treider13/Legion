@@ -1126,6 +1126,41 @@ def main() -> int:
         already.get("ok") is True and already.get("already") is True and already.get("port") == held_port,
     )
 
+    # Append-лог. Повтор смотрит только байты этого запуска: чужой «USB занят»
+    # в хвосте файла не должен считаться errno 16 текущей попытки.
+    import tempfile
+    old = "USB занят: закройте SDR в приложении LEGION и запустите агент снова\n"
+    fresh = "RuntimeError: bladeRF не найден по USB\n"
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        tf.write(old.encode())
+        cut = tf.tell()
+        tf.write(fresh.encode())
+        log_name = tf.name
+    tail = w._gateway_log_tail(log_name, cut)
+    whole = w._gateway_log_tail(log_name, 0)
+    os.unlink(log_name)
+    check(
+        "шлюз: срез лога не тащит прошлый USB занят",
+        "USB занят" not in tail and "bladeRF не найден" in tail and "USB занят" in whole,
+    )
+    calls = {"n": 0}
+
+    def _no_retry(script: str, port: int, log_path: str) -> dict:
+        del script, log_path
+        calls["n"] += 1
+        return {"ok": False, "reason": "bladeRF не найден по USB", "port": port}
+
+    saved_spawn = w._spawn_local_gateway
+    w._spawn_local_gateway = _no_retry
+    try:
+        missed = w.ensure_local_gateway(held_port)
+    finally:
+        w._spawn_local_gateway = saved_spawn
+    check(
+        "шлюз: нет платы не повторяется",
+        calls["n"] == 1 and missed.get("ok") is False and "bladeRF не найден" in str(missed.get("reason")),
+    )
+
     # --- FPGA-релей: воркер → legion_gateway (FAKE) по TCP ---
     import threading
     gw_env = os.environ.copy()

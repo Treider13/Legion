@@ -2150,6 +2150,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       return !gw ? false : true;
     }
     if (!gw) set({ sdrGateway: "127.0.0.1" });
+    // Один FX3. Таймер слуха после gLive=false берёт MockSdrBackend.scanWindow
+    // (пол около −92 дБм) и копит gap следов. Гасим его до close.
+    get().stopScan();
+    stopAirWalk();
+    if (get().transmitArmed) await get().stopTransmit();
     await releaseSoapyForFpga();
     const boot = await hostStartFpgaGateway();
     if (!boot.ok) {
