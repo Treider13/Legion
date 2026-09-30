@@ -2360,7 +2360,10 @@ async function main(): Promise<void> {
   check("solo park берёт soloParkOpts", storeSrc.includes("soloParkOpts(walk)"));
   check("player capture один раз на walk.fsHz", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, walk.fsHz)"));
   check("качание передаёт полку в часы TX", storeSrc.includes("hostTxWave(plan.freqMhz, shelf.waveKind, shelf.waveParams, shelf.fsHz, shelf.filterMhz)"));
-  check("зашить передаёт полку в часы TX", storeSrc.includes("hostTxWave(mhz, kind, get().signalParams, shelfFsNow())"));
+  check(
+    "зашить передаёт полку в часы и фильтр TX",
+    storeSrc.includes("hostTxWave(mhz, flashed.waveKind, flashed.waveParams, flashed.fsHz, flashed.filterMhz)"),
+  );
   check(
     "Атака без рамки: часы слуха, фильтр полки",
     storeSrc.includes("const attackNoPaintShelf") &&

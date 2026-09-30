@@ -164,7 +164,7 @@ export function SignalPanel() {
             aria-label="Тип сигнала"
             value={s.signalKind}
             onChange={(e) => s.setSignalKind(e.target.value as WaveKind)}
-            disabled={busy}
+            disabled={s.fpgaArmed || (s.scanRunning && !s.transmitArmed)}
           >
             {WAVE_CATALOG.map((w) => (
               <option key={w.id} value={w.id}>
@@ -179,7 +179,7 @@ export function SignalPanel() {
             aria-label="Полка передачи, МГц"
             value={s.txShelfMhz}
             onChange={(e) => s.setTxShelfMhz(e.target.value)}
-            disabled={busy}
+            disabled={s.fpgaArmed || (s.scanRunning && !s.transmitArmed)}
             inputMode="decimal"
           />
         </label>
