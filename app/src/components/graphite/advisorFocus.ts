@@ -22,6 +22,12 @@ export function focusAdvisorTrack(id: number): void {
   listeners.forEach((listener) => listener());
 }
 
+export function clearAdvisorFocus(): void {
+  if (focusId == null) return;
+  focusId = null;
+  listeners.forEach((listener) => listener());
+}
+
 export function useAdvisorFocusId(): number | null {
   return useSyncExternalStore(
     (onChange) => {
@@ -33,15 +39,27 @@ export function useAdvisorFocusId(): number | null {
   );
 }
 
-/** Самый узкий живой след под курсором. Широкая полка не перекрывает маркер внутри неё. */
-export function trackUnderMhz<T extends MarkerHit>(tracks: readonly T[], mhz: number): T | null {
+/**
+ * Самый узкий живой след под курсором.
+ * На широкой полосе след уже одного пикселя всё равно рисуется полоской minPx:
+ * зона наведения равна этой полоске, а не только частотной ширине.
+ * Широкая полка не перекрывает узкий маркер внутри неё.
+ */
+export function trackUnderMhz<T extends MarkerHit>(
+  tracks: readonly T[],
+  mhz: number,
+  pxPerMhz = 0,
+  minPx = 2,
+): T | null {
   if (!Number.isFinite(mhz)) return null;
   let best: T | null = null;
   for (const track of tracks) {
     if (track.state === "cooled") continue;
     const lo = Math.min(track.fLowMhz, track.fHighMhz);
     const hi = Math.max(track.fLowMhz, track.fHighMhz);
-    if (mhz < lo || mhz > hi) continue;
+    const width = Math.max(hi - lo, 0);
+    const pad = pxPerMhz > 0 ? Math.max(0, (minPx / pxPerMhz - width) / 2) : 0;
+    if (mhz < lo - pad || mhz > hi + pad) continue;
     if (!best || track.widthMhz < best.widthMhz) best = track;
   }
   return best;

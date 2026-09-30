@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { calloutForMarker, type AttackCallout } from "../../sense/attackCallout";
 import { useLegion } from "../../state/store";
-import { useAdvisorFocusId } from "./advisorFocus";
+import { clearAdvisorFocus, useAdvisorFocusId } from "./advisorFocus";
 
 const HOVER_WAIT: AttackCallout = {
   situation: "hover",
@@ -59,7 +59,11 @@ export function GraphiteFacts({
   const [pinId, setPinId] = useState<number | null>(null);
   const [pin, setPin] = useState<AttackCallout | null>(null);
   const row = rows.find((item) => item.id === focusId && item.state !== "cooled");
-  if (focusId != null && row && focusId !== pinId) {
+  if (pinId != null && !rows.some((item) => item.id === pinId)) {
+    setPinId(null);
+    setPin(null);
+    if (focusId === pinId) clearAdvisorFocus();
+  } else if (focusId != null && row && focusId !== pinId) {
     setPinId(focusId);
     setPin(calloutForMarker(row, { windowMhz, paint, wave, holdMs, bands, transmitArmed }));
   }

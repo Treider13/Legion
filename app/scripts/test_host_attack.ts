@@ -2706,6 +2706,19 @@ async function main(): Promise<void> {
     2440,
   );
   check("наведение берёт узкий маркер, не широкую полку и не остывший", under?.id === 2);
+  const wideAxis = trackUnderMhz(
+    [{ id: 7, fLowMhz: 2440, fHighMhz: 2440.2, widthMhz: 0.2, state: "confirmed" }],
+    2440.6,
+    1,
+    2,
+  );
+  check("на широкой полосе наведение попадает в нарисованные 2 пикселя", wideAxis?.id === 7);
+  check("мимо нарисованной полоски след не выбирается", trackUnderMhz(
+    [{ id: 7, fLowMhz: 2440, fHighMhz: 2440.2, widthMhz: 0.2, state: "confirmed" }],
+    2442,
+    1,
+    2,
+  ) == null);
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

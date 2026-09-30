@@ -449,7 +449,8 @@ export function SpectrumScope() {
       if (st.scanPattern !== "auto") return;
       const g = geomRef.current;
       if (cursorX < g.padL || cursorX > g.padL + g.plotW) return;
-      const hit = trackUnderMhz(st.attackTracks, mhzAt(e.clientX));
+      const pxPerMhz = g.span > 0 ? g.plotW / g.span : 0;
+      const hit = trackUnderMhz(st.attackTracks, mhzAt(e.clientX), pxPerMhz, 2);
       if (hit) focusAdvisorTrack(hit.id);
     };
     const onDown = (e: PointerEvent) => {
