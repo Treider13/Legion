@@ -733,6 +733,26 @@ def main() -> int:
     check("39.3 и 40 МГц не одни часы", w._same_attack_clock(39.3e6, 40e6) is False)
     check("40 и 40 одни часы", w._same_attack_clock(40e6, 40e6) is True)
 
+    class _CloseTx:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def closeStream(self, _s):
+            self.events.append("close")
+
+        def deactivateStream(self, _s):
+            self.events.append("deact")
+
+    shut = w.Radio()
+    shut.fake = False
+    shut.dev = _CloseTx()
+    shut.tx = object()
+    shut._tx_disable_module()
+    check(
+        "TX гасится через closeStream, не через deactivate",
+        shut.tx is None and shut.dev.events == ["close"],
+    )
+
     tx = rpc(proc, {"op": "tx", "freqMhz": 2442.5})
     check("tx ok", tx.get("ok") is True and tx.get("freqMhz") == 2442.5)
     check("tx latency число", isinstance(tx.get("latencyUs"), int))

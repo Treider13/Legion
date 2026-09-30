@@ -2450,13 +2450,25 @@ class Radio:
             self._tx_play_n = n
 
     def _tx_disable_module(self) -> None:
-        """Модуль выключен: пустой ЦАП не остаётся светить гетеродин."""
+        """Выключить TX-модуль. deactivateStream этого не делает.
+
+        SoapyBladeRF::deactivateStream только завершает burst одним нулём.
+        bladerf_enable_module(false) вызывается в closeStream. Пока модуль
+        включён и сэмплов нет, AD9361 светит утечку гетеродина.
+        """
         if self.dev is None or self.tx is None:
             return
+        stream = self.tx
+        self.tx = None
+        self._tx_play_cs16 = False
         try:
-            self.dev.deactivateStream(self.tx)
-        except Exception:
-            pass
+            self.dev.closeStream(stream)
+        except Exception as e:
+            _log(f"TX closeStream: {e}")
+            try:
+                self.dev.deactivateStream(stream)
+            except Exception:
+                pass
 
     def _tx_rearm(self) -> bool:
         """Выключить и снова включить тот же поток с той же B."""
