@@ -12,7 +12,7 @@ import { classListenPlan, shelfListenPlan } from "../src/sense/attackListen";
 import { stitchHopFamilies } from "../src/sense/attackFamily";
 import { honestWidthMhz, measureHitWidths, occupied99Mhz, width26dbMhz, width3dbMhzAttack } from "../src/sense/attackMeasure";
 import { buildAttackAdvice, waveClassOf, waveClassRu } from "../src/sense/attackAdvisor";
-import { buildAttackCallout, settleCallout } from "../src/sense/attackCallout";
+import { buildAttackCallout, holdPeakMhz, settleCallout } from "../src/sense/attackCallout";
 import { droneidPlainLines, droneidSortA, lookRu, matchAttackLook, parseWorkerLook, pickAttackThinkTracks } from "../src/sense/attackLook";
 import { classifyFhssDomain, droneidModel, droneidState, fhssF0RefMhz, fhssResidualF0, nearestAnalogChannel, parseFhssLook, PROTOCOL_CATALOG } from "../src/sense/protocolDb";
 import { readAttackInfo, type AttackInfoSnap } from "../src/sense/attackInfo";
@@ -2634,7 +2634,7 @@ async function main(): Promise<void> {
   check("ширина рамки внутри одного мегагерца не меняет класс", slightlyWider.situation === still.situation);
   check("главный совет — рамка, не волна", still.applyLabel === "Взять эту рамку" && !still.text.includes("узкий тон"));
   const hopped = buildAttackCallout([rowAt(2443.1)], adviceAt("другая частота"));
-  check("другая стоянка меняет совет", hopped.situation !== still.situation);
+  check("другая стоянка меняет совет", settleCallout(still, hopped).freqMhz === 2443.1);
   check("пустой эфир не обещает автолистание", buildAttackCallout([], { scene: "", after: "", hints: [], suggestPaint: null }).text.includes("не листается"));
   const loudNarrow = { freqMhz: 2440, powerDbm: -10, state: "confirmed" as const, atlasId: "rc-24", typeLabel: "пульт" };
   const quietWide = { freqMhz: 2460, powerDbm: -40, state: "confirmed" as const, atlasId: "digital-video", typeLabel: "цифра" };
@@ -2656,21 +2656,46 @@ async function main(): Promise<void> {
   const framed = buildAttackCallout([loudNarrow, quietWide], wideFrame);
   check(
     "карточка смотрит на след внутри рамки, не на более громкий снаружи",
-    framed.freqMhz === 2460 && framed.situation.includes("digital-video") && framed.text.includes("2450.00"),
-    framed.situation,
+    framed.freqMhz === 2460 && framed.typeLabel === "цифра" && framed.text.includes("2450.00"),
+    framed.typeLabel ?? "",
   );
   const edgeLoud = { freqMhz: 2468, powerDbm: -10, state: "confirmed" as const, atlasId: "rc-24", typeLabel: "пульт" };
   const centered = buildAttackCallout([edgeLoud, quietWide], wideFrame);
   check(
     "внутри рамки берётся след у центра, не более громкий с краю",
-    centered.freqMhz === 2460 && centered.situation.includes("digital-video"),
-    `${centered.freqMhz} ${centered.situation}`,
+    centered.freqMhz === 2460 && centered.typeLabel === "цифра",
+    `${centered.freqMhz} ${centered.typeLabel}`,
   );
   const moved = buildAttackCallout([rowAt(2442.08)], adviceAt("По честной ширине: 2441.96…2442.16 МГц."));
   const kept = settleCallout(still, moved);
   check("тот же класс ситуации оставляет прежний hint на экране", kept.text === still.text && kept.hint === still.hint);
   const nextClass = settleCallout(still, hopped);
   check("новый класс ситуации подменяет hint целиком", nextClass.text === hopped.text && nextClass.hint === hopped.hint);
+  const renamed = buildAttackCallout(
+    [{ ...rowAt(2442.02), atlasId: "digital-video", typeLabel: "цифра" }],
+    adviceAt("то же действие, другое имя класса"),
+  );
+  check(
+    "имя класса на том же следе не меняет совет",
+    settleCallout(still, renamed).hint === still.hint,
+  );
+  const spanCard = (text: string, f1Mhz: number, f2Mhz: number) => buildAttackCallout([rowAt(2442)], {
+    scene: "1 след(ов) в кадре.",
+    after: "",
+    hints: [{ ...calloutPaint, text, paint: { f1Mhz, f2Mhz } }, calloutWave],
+    suggestPaint: { f1Mhz, f2Mhz },
+  });
+  const at149 = spanCard("1.49", 2441.255, 2442.745);
+  const at151 = spanCard("1.51", 2441.245, 2442.755);
+  check(
+    "ширина 1.49 и 1.51 не переключает совет",
+    Math.abs(1.49 - (2442.745 - 2441.255)) < 1e-9
+      && Math.abs(1.51 - (2442.755 - 2441.245)) < 1e-9
+      && settleCallout(at149, at151).text === "1.49",
+  );
+  const bin = 0.0075;
+  check("соседний бин не меняет подпись частоты", holdPeakMhz(2442, 2442 + bin, bin) === 2442);
+  check("два бина меняют подпись частоты", holdPeakMhz(2442, 2442 + bin * 2, bin) === 2442 + bin * 2);
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
