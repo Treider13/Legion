@@ -1,12 +1,12 @@
 // ============================================================================
 // LEGION — один совет на главном кадре. Не карусель.
-// Образец: palantir/blueprint Callout (стоит, пока его не сменили)
-// и emilkowalski/sonner (то же сообщение обновляется по id, не выкладывается заново).
-// Живая частота сюда не входит: её рисует строка «Сигнал».
+// Sonner (issue #422, ответ мейнтейнера): то же id обновляет текст, а не
+// заводит второе сообщение. Карточка показывает текущий hint — тот же,
+// который запишет «Взять». Класс ситуации не меняется от дрожания пика
+// внутри полмегагерца. Частота карточки — след внутри предложенной рамки,
+// не самый громкий в эфире: помощник может обводить тихую полку.
 // ============================================================================
 import type { AttackAdvice, AttackHint, AttackHintKind } from "./attackAdvisor";
-
-export const SITUATION_HOLD_MS = 480;
 
 export interface CalloutRow {
   freqMhz: number;
@@ -41,10 +41,18 @@ const WAIT: AttackCallout = {
   applyLabel: null,
 };
 
-function primaryOf(rows: readonly CalloutRow[]): CalloutRow | null {
+function louder(a: CalloutRow, b: CalloutRow): CalloutRow {
+  return b.powerDbm > a.powerDbm ? b : a;
+}
+
+function primaryOf(rows: readonly CalloutRow[], frame: { f1Mhz: number; f2Mhz: number } | null): CalloutRow | null {
   const live = rows.filter((row) => row.state === "new" || row.state === "confirmed" || row.state === "held");
   if (live.length === 0) return null;
-  return live.reduce((a, b) => (b.powerDbm > a.powerDbm ? b : a));
+  if (frame) {
+    const inside = live.filter((row) => row.freqMhz >= frame.f1Mhz - 0.2 && row.freqMhz <= frame.f2Mhz + 0.2);
+    if (inside.length > 0) return inside.reduce(louder);
+  }
+  return live.reduce(louder);
 }
 
 /** Полмегагерца: дрожание пика внутри коридора не меняет совет. */
@@ -60,8 +68,9 @@ function pickHint(advice: AttackAdvice): AttackHint | null {
 }
 
 export function buildAttackCallout(rows: readonly CalloutRow[], advice: AttackAdvice): AttackCallout {
-  const primary = primaryOf(rows);
   const hint = pickHint(advice);
+  const frame = hint?.paint ?? advice.suggestPaint;
+  const primary = primaryOf(rows, frame);
   if (!hint && !advice.scene) return WAIT;
   const tx = advice.scene.includes("Идёт передача");
   const situation = [

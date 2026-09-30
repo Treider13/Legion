@@ -2614,6 +2614,29 @@ async function main(): Promise<void> {
   const hopped = buildAttackCallout([rowAt(2443.1)], adviceAt("другая частота"));
   check("другая стоянка меняет совет", hopped.situation !== still.situation);
   check("пустой эфир не обещает автолистание", buildAttackCallout([], { scene: "", after: "", hints: [], suggestPaint: null }).text.includes("не листается"));
+  const loudNarrow = { freqMhz: 2440, powerDbm: -10, state: "confirmed" as const, atlasId: "rc-24", typeLabel: "пульт" };
+  const quietWide = { freqMhz: 2460, powerDbm: -40, state: "confirmed" as const, atlasId: "digital-video", typeLabel: "цифра" };
+  const wideFrame = {
+    scene: "2 след(ов) в кадре.",
+    after: "",
+    hints: [{
+      kind: "paint" as const,
+      title: "Рамка",
+      text: "Широкая полка сейчас: 2450.00…2470.00 МГц.",
+      why: "информация: широкая полка",
+      applyLabel: "Взять широкую рамку",
+      paint: { f1Mhz: 2450, f2Mhz: 2470 },
+      wave: null,
+      holdMs: null,
+    }],
+    suggestPaint: { f1Mhz: 2450, f2Mhz: 2470 },
+  };
+  const framed = buildAttackCallout([loudNarrow, quietWide], wideFrame);
+  check(
+    "карточка смотрит на след внутри рамки, не на более громкий снаружи",
+    framed.freqMhz === 2460 && framed.situation.includes("digital-video") && framed.text.includes("2450.00"),
+    framed.situation,
+  );
 
   console.log(failures === 0 ? "\nHOST ATTACK: ALL PASS" : `\nHOST ATTACK: ${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);

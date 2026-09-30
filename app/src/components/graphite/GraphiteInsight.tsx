@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { buildAttackCallout, SITUATION_HOLD_MS, type AttackCallout, type CalloutRow } from "../../sense/attackCallout";
+import { useMemo } from "react";
+import { buildAttackCallout, type CalloutRow } from "../../sense/attackCallout";
 import type { AttackRow } from "../../sense/attackScene";
 import { useLegion } from "../../state/store";
 
@@ -15,28 +15,6 @@ function calloutRows(rows: readonly AttackRow[]): CalloutRow[] {
     atlasId: row.atlas.id,
     typeLabel: typeOf(row),
   }));
-}
-
-/** Текст совета держится, пока не сменилась ситуация. Частота в строке «Сигнал» живая. */
-function useHeldCallout(next: AttackCallout): AttackCallout {
-  const nextRef = useRef(next);
-  nextRef.current = next;
-  const [shown, setShown] = useState(next);
-  const situationRef = useRef(next.situation);
-
-  useEffect(() => {
-    if (next.situation === situationRef.current) return;
-    const situation = next.situation;
-    const id = window.setTimeout(() => {
-      const pending = nextRef.current;
-      if (pending.situation !== situation) return;
-      situationRef.current = pending.situation;
-      setShown(pending);
-    }, SITUATION_HOLD_MS);
-    return () => window.clearTimeout(id);
-  }, [next.situation]);
-
-  return shown;
 }
 
 function SignalStat({ typeLabel, freqMhz }: { typeLabel: string | null; freqMhz: number | null }) {
@@ -70,7 +48,6 @@ export function GraphiteFacts({
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const applyAttackHint = useLegion((s) => s.applyAttackHint);
   const live = useMemo(() => buildAttackCallout(calloutRows(rows), advice), [rows, advice]);
-  const held = useHeldCallout(live);
 
   return (
     <>
@@ -101,24 +78,24 @@ export function GraphiteFacts({
       <section className="graphite-assist" aria-label="Совет помощника">
         <div className="graphite-assist-kicker">
           <span>Помощник</span>
-          <span>{live.freqMhz != null ? `${live.freqMhz.toFixed(3)} МГц` : held.kicker}</span>
+          <span>{live.freqMhz != null ? `${live.freqMhz.toFixed(3)} МГц` : live.kicker}</span>
         </div>
-        <div key={held.situation} className="graphite-assist-body" aria-live="polite" aria-atomic="true">
-          <h2>{held.title}</h2>
-          <p>{held.text}</p>
-          {held.why && <small>{held.why}</small>}
+        <div className="graphite-assist-body">
+          <h2>{live.title}</h2>
+          <p>{live.text}</p>
+          {live.why && <small>{live.why}</small>}
         </div>
-        {held.applyLabel && held.applyKind && (
+        {live.applyLabel && live.applyKind && (
           <div className="graphite-assist-side">
             <button
               type="button"
               className="graphite-assist-apply"
               disabled={transmitArmed}
               onClick={() => {
-                if (held.applyKind) applyAttackHint(held.applyKind);
+                if (live.applyKind) applyAttackHint(live.applyKind);
               }}
             >
-              {held.applyLabel}
+              {live.applyLabel}
             </button>
           </div>
         )}
