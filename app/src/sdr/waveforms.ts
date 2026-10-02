@@ -38,6 +38,15 @@ export const WAVE_AMP_MAX = 0.9;
 export const WAVE_AMP_MIN = 0.05;
 export const WAVE_AMP_DEF = WAVE_AMP_MAX;
 
+/**
+ * Semtech SX1280Lib `GetLoRaBandwidth(LORA_BW_0800)` = 812500 Гц
+ * (https://os.mbed.com/teams/Semtech/code/SX1280Lib/). Даташит SX1280: 812 кГц.
+ * ExpressLRS common.cpp: все 2.4 LoRa AirRate — `SX1280_LORA_BW_0800`.
+ */
+export const CSS_SX1280_BW_KHZ = 812.5;
+/** ExpressLRS master `common.cpp` `RATE_LORA_2G4_250HZ`: `SX1280_LORA_SF6` + `BW_0800`. */
+export const CSS_ELRS_24_250_SF = 6;
+
 const AMP: WaveParam = { key: "amp", label: "АМПЛИТУДА", min: WAVE_AMP_MIN, max: WAVE_AMP_MAX, step: 0.05, def: WAVE_AMP_DEF };
 
 /** Q15 масштаб: 0.9 → 29491 = round(0.9·2¹⁵). Совпадает с LEGION_LB_AMP_Q15. */
@@ -126,8 +135,13 @@ export const WAVE_CATALOG: WaveMeta[] = [
   {
     id: "css",
     title: "CSS (LoRa-подобный)",
-    desc: "Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов на символ.",
-    params: [AMP, { key: "sf", label: "SF", min: 5, max: 10, step: 1, def: 6 }, SEED],
+    desc: "Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов. Дефолт SF6 / 812.5 кГц — ELRS 2.4 LoRa 250 Гц (common.cpp SX1280_LORA_SF6 + BW_0800). 2.4 500 Гц LoRa — SF5 / 812.5 кГц. 500 кГц — SX127x/LR11 900 (не SX1280). 2.4 500 Гц без CSS — FLRC.",
+    params: [
+      AMP,
+      { key: "sf", label: "SF", min: 5, max: 10, step: 1, def: CSS_ELRS_24_250_SF },
+      { key: "bwKhz", label: "ПОЛОСА", unit: "кГц", min: 125, max: 1625, step: 12.5, def: CSS_SX1280_BW_KHZ },
+      SEED,
+    ],
   },
   {
     id: "ofdm",
@@ -257,6 +271,15 @@ export function clampParams(kind: WaveKind, pr: Record<string, number>): Record<
     out[p.key] = Number.isFinite(v) ? Math.min(Math.max(v, p.min), p.max) : p.def;
   }
   return out;
+}
+
+/** SF/полоса CSS с одной поверхности: store, если тип уже CSS, иначе дефолт 2.4 250. */
+export function cssUiParams(
+  kind: WaveKind | string | null | undefined,
+  params: Record<string, number>,
+): { sf: number; bwKhz: number } {
+  const p = clampParams("css", kind === "css" ? params : {});
+  return { sf: p.sf, bwKhz: p.bwKhz };
 }
 
 // ---------------------------------------------------------------------------
@@ -800,15 +823,26 @@ export function previewWaveform(
       break;
     }
     case "css": {
-      const sf = Math.round(p.sf ?? 6);
+      const sf = Math.round(p.sf ?? CSS_ELRS_24_250_SF);
       const m = 1 << sf;
+      const bw = Math.min(Math.max((p.bwKhz ?? CSS_SX1280_BW_KHZ) * 1e3, 1), 0.95 * WAVE_FS);
+      const sampSym = Math.max(m, Math.round((WAVE_FS * m) / bw));
+      const scale = m / sampSym;
+      const baseRe = new Float64Array(sampSym);
+      const baseIm = new Float64Array(sampSym);
+      for (let i = 0; i < sampSym; i++) {
+        const k = i * scale;
+        const ph = 2 * Math.PI * ((k * k) / (2 * m) - 0.5 * k);
+        baseRe[i] = Math.cos(ph);
+        baseIm[i] = Math.sin(ph);
+      }
       const rand = mulberry32(p.seed ?? 1337);
-      for (let s = 0; s * m < n; s++) {
-        const sym = Math.floor(rand() * m);
-        for (let k = 0; k < m && s * m + k < n; k++) {
-          const ph = 2 * Math.PI * ((k * k) / (2 * m) + (sym / m) * k);
-          re[s * m + k] = amp * Math.cos(ph);
-          im[s * m + k] = amp * Math.sin(ph);
+      for (let s = 0; s * sampSym < n; s++) {
+        const shift = Math.round((Math.floor(rand() * m) * sampSym) / m);
+        for (let i = 0; i < sampSym && s * sampSym + i < n; i++) {
+          const src = (i + shift) % sampSym;
+          re[s * sampSym + i] = amp * baseRe[src];
+          im[s * sampSym + i] = amp * baseIm[src];
         }
       }
       break;

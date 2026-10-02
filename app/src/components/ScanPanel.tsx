@@ -21,7 +21,7 @@ import { airTractParams, FPGA_SURVEY_GONE_MS, fpgaAirSupported, fpgaObserveLine,
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
-import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
+import { WAVE_CATALOG, clampParams, waveMeta, type WaveKind } from "../sdr/waveforms";
 import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
@@ -67,6 +67,7 @@ export function ScanPanel() {
   const fpgaSpan = parkSpanMhz(fpgaBands);
   const tract = airTractParams(parseLocaleNumber(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
   const fpgaWindowUs = tract.windowUs;
+  const cssParams = s.txWaveKind === "css" ? clampParams("css", s.signalParams) : null;
   const shelfByGlance = fpgaAir && !taskLive;
   const shelfField = (
     <label
@@ -395,6 +396,32 @@ export function ScanPanel() {
             </label>
           </>
         )}
+        {s.txWaveKind === "css" &&
+          waveMeta("css")
+            .params.filter((p) => p.key === "sf" || p.key === "bwKhz")
+            .map((p) => (
+              <label
+                key={p.key}
+                title={
+                  p.key === "sf"
+                    ? "Spreading factor. ELRS 2.4 LoRa 250 Гц — SF6; 500 Гц LoRa — SF5 (common.cpp)"
+                    : "Полоса LoRa. ELRS 2.4 — 812.5 кГц (SX1280 BW_0800). 500 кГц — SX127x 900"
+                }
+              >
+                {p.label}
+                {p.unit ? ` (${p.unit})` : ""}
+                <input
+                  aria-label={`CSS ${p.label}`}
+                  type="number"
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  value={cssParams?.[p.key] ?? p.def}
+                  onChange={(e) => s.setSignalParam(p.key, parseFloat(e.target.value))}
+                  disabled={s.transmitArmed}
+                />
+              </label>
+            ))}
       </div>
       <p className="sens-hint">
         {taskLive

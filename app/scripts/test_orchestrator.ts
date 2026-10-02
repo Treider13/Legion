@@ -29,6 +29,7 @@ import {
   WAVE_CATALOG,
   clampParams,
   constellationPoints,
+  cssUiParams,
   defaultParams,
   previewWaveform,
   spectrumDb,
@@ -1298,6 +1299,19 @@ async function main(): Promise<void> {
   const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
   check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
   check("у синуса нет созвездия", constellationPoints("sine", defaultParams("sine")) === null);
+  const cssMeta = WAVE_CATALOG.find((w) => w.id === "css");
+  const cssSf = cssMeta?.params.find((p) => p.key === "sf");
+  const cssBw = cssMeta?.params.find((p) => p.key === "bwKhz");
+  check("CSS: поле SF", cssSf != null && cssSf.min === 5 && cssSf.max === 10 && cssSf.def === 6);
+  check("CSS: поле полосы SX1280 BW_0800", cssBw != null && cssBw.def === 812.5 && cssBw.unit === "кГц");
+  const cssDef = defaultParams("css");
+  check("CSS дефолт ELRS 2.4 LoRa 250 Гц", cssDef.sf === 6 && cssDef.bwKhz === 812.5);
+  const cssFromStore = cssUiParams("css", { sf: 5, bwKhz: 500 });
+  check("CSS UI с store: заданные SF/полоса не сбрасываются в дефолт", cssFromStore.sf === 5 && cssFromStore.bwKhz === 500);
+  check("CSS UI не-CSS: дефолт 2.4 250, чужой sf не течёт", cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).sf === 6 && cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).bwKhz === 812.5);
+  check("CSS UI пустое — дефолт ELRS 2.4 250", cssUiParams("css", {}).sf === 6 && cssUiParams("css", {}).bwKhz === 812.5);
+  check("CSS UI clamp SF 99 → 10", cssUiParams("css", { sf: 99, bwKhz: 812.5 }).sf === 10);
+  check("CSS не заливает окно FPGA", waveFillsSoloWindow("css") === false);
   const mockWave = new MockSdrBackend();
   mockWave.open("bladerf-micro-xa4");
   const mw = mockWave.txWave(2442, "qpsk");
@@ -2037,6 +2051,16 @@ async function main(): Promise<void> {
   check("cinema записал окно/задержку/ход до ARM",
     after.fpgaSoloWindowMhz === "20" && after.fpgaSoloDwellMs === "400" && after.fpgaSoloPattern === "sweep");
   check("без шлюза solo не ARM (как air)", started === false && after.fpgaArmed === false);
+  await runSmartStart({
+    f1: "2400", f2: "2500", wave: "css", loadOk: true, path: "solo",
+    windowMhz: "2", dwellMs: "400", pattern: "sweep",
+    waveParams: { sf: 5, bwKhz: 812.5 },
+  });
+  const cssAfter = useLegion.getState();
+  check(
+    "cinema CSS: SF5 / 812.5 кГц после arm (ELRS 2.4 LoRa 500 Гц)",
+    cssAfter.signalKind === "css" && cssAfter.signalParams.sf === 5 && cssAfter.signalParams.bwKhz === 812.5,
+  );
 
   after.clearSdrBands();
   after.setSdrAllowField("sdrF1", "20");
@@ -2388,6 +2412,10 @@ async function main(): Promise<void> {
     && disarmBlock.indexOf("gFpgaAirGen += 1") < disarmBlock.indexOf("await hostFpga"));
   const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
   check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
+  check("StartGate CSS читает store через cssUiParams, не дефолт каталога",
+    gateSrc.includes("cssUiParams(signalKind, signalParams)")
+    && gateSrc.includes('cssUiParams("css", { sf: cssSf, bwKhz: cssBw })')
+    && !gateSrc.includes("defaultParams(\"css\")"));
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
   check("cinema: air проходит шаг walk (канал/выдержка/порядок)",
     gateSrc.includes("Канал, МГц") && gateSrc.includes("airHopBlockedReason") && gateSrc.includes("airWalkReason"));

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
+import { WAVE_CATALOG, cssUiParams, waveMeta, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
 import { FPGA_US_DET_SHIFT, FPGA_SURVEY_GONE_MS, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
@@ -30,6 +30,7 @@ export function StartGate({ mode, onClose }: Props) {
   const corrF1 = useLegion((s) => s.corrF1);
   const corrF2 = useLegion((s) => s.corrF2);
   const signalKind = useLegion((s) => s.signalKind);
+  const signalParams = useLegion((s) => s.signalParams);
   const sdrLoadOk = useLegion((s) => s.sdrLoadOk);
   const loadOk = useLegion((s) => s.loadOk);
   const sdrId = useLegion((s) => s.sdrId);
@@ -47,6 +48,11 @@ export function StartGate({ mode, onClose }: Props) {
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);
+  const cssSfP = waveMeta("css").params.find((p) => p.key === "sf");
+  const cssBwP = waveMeta("css").params.find((p) => p.key === "bwKhz");
+  const cssInit = cssUiParams(signalKind, signalParams);
+  const [cssSf, setCssSf] = useState(cssInit.sf);
+  const [cssBw, setCssBw] = useState(cssInit.bwKhz);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("auto");
   const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
@@ -141,6 +147,7 @@ export function StartGate({ mode, onClose }: Props) {
         dispatch,
         detThr,
         stepMhz: path === "solo" ? soloStepMhz : undefined,
+        waveParams: wave === "css" ? cssUiParams("css", { sf: cssSf, bwKhz: cssBw }) : undefined,
       });
       if (!ok) {
         setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
@@ -513,6 +520,34 @@ export function StartGate({ mode, onClose }: Props) {
                   ))}
                 </div>
                 <p className="cinema-wave-desc">{selected.desc}</p>
+                {wave === "css" && (
+                  <div className="cinema-gate-row">
+                    <label title="Spreading factor. ELRS 2.4 LoRa 250 Гц — SF6; 500 Гц LoRa — SF5 (common.cpp)">
+                      SF
+                      <input
+                        aria-label="CSS SF"
+                        type="number"
+                        min={cssSfP?.min}
+                        max={cssSfP?.max}
+                        step={cssSfP?.step}
+                        value={cssSf}
+                        onChange={(e) => setCssSf(parseFloat(e.target.value))}
+                      />
+                    </label>
+                    <label title="Полоса LoRa. ELRS 2.4 — 812.5 кГц (SX1280 BW_0800). 500 кГц — SX127x 900">
+                      Полоса, кГц
+                      <input
+                        aria-label="CSS полоса"
+                        type="number"
+                        min={cssBwP?.min}
+                        max={cssBwP?.max}
+                        step={cssBwP?.step}
+                        value={cssBw}
+                        onChange={(e) => setCssBw(parseFloat(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 

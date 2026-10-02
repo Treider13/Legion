@@ -23,6 +23,8 @@ export async function runSmartStart(opts: {
   dispatch?: AutoDispatch;
   /** Умная атака: порог I²+Q² (полка USB-IQ в круге не меряется). */
   detThr?: string;
+  /** Параметры волны (SF/полоса CSS). Накладываются после armTxWave. */
+  waveParams?: Record<string, number>;
 }): Promise<boolean> {
   const s = useLegion.getState();
   s.setWorkspace("scan");
@@ -51,6 +53,11 @@ export async function runSmartStart(opts: {
     return false;
   }
   s.armTxWave(opts.wave);
+  if (opts.waveParams) {
+    for (const [key, value] of Object.entries(opts.waveParams)) {
+      if (Number.isFinite(value)) s.setSignalParam(key, value);
+    }
+  }
   if (opts.path === "air") {
     // Эфир-обход: окно шага = канал подавления; выдержка/порядок — свои поля.
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);

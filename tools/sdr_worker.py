@@ -1059,16 +1059,25 @@ def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, A
 
     if kind == "css":
         # Chirp spread spectrum (LoRa-подобный): символ = циклический сдвиг чирпа.
+        # Дефолт SF6 / 812.5 кГц = ExpressLRS common.cpp RATE_LORA_2G4_250HZ
+        # (SX1280_LORA_SF6 + SX1280_LORA_BW_0800). Semtech GetLoRaBandwidth = 812500 Гц.
+        # 2.4 500 Гц LoRa — SF5 / 812.5 кГц. 500 кГц — SX127x 900, не SX1280.
         sf = int(_pfloat(pr, "sf", 6, 5, 10))
         m = 1 << sf
+        bw = _pfloat(pr, "bwKhz", 812.5, 125.0, 1625.0) * 1e3
+        bw = min(max(bw, 1.0), 0.95 * fs)
+        samp_sym = max(m, int(round(fs * m / bw)))
+        k = np.arange(samp_sym, dtype=np.float64) * (m / samp_sym)
+        base = np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) - 0.5 * k))
         rs = np.random.RandomState(_seed(pr))
-        k = np.arange(m, dtype=np.float64)
-        out = [
-            np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) + (float(s) / m) * k))
-            for s in rs.randint(0, m, n // m)
-        ]
-        y = np.concatenate(out) if out else np.zeros(n, dtype=complex)
-        return (amp * y).astype(np.complex64)
+        n_sym = n // samp_sym
+        out = [np.roll(base, -int(round(float(s) * samp_sym / m))) for s in rs.randint(0, m, max(n_sym, 0))]
+        y = np.concatenate(out) if out else np.zeros(0, dtype=complex)
+        if y.size < n:
+            s = int(rs.randint(0, m))
+            rem = n - int(y.size)
+            y = np.concatenate([y, np.roll(base, -int(round(float(s) * samp_sym / m)))[:rem]]) if y.size else np.roll(base, -int(round(float(s) * samp_sym / m)))[:rem]
+        return (amp * y[:n]).astype(np.complex64)
 
     if kind == "ofdm":
         # 802.11a-подобный: NFFT=64, CP=16, 52 поднесущие QPSK (π/4, Gray-порядок).
