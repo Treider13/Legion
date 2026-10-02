@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { WAVE_CATALOG, defaultParams, waveMeta, type WaveKind } from "../../sdr/waveforms";
+import { WAVE_CATALOG, cssUiParams, waveMeta, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
 import { FPGA_US_DET_SHIFT, FPGA_SURVEY_GONE_MS, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
@@ -30,6 +30,7 @@ export function StartGate({ mode, onClose }: Props) {
   const corrF1 = useLegion((s) => s.corrF1);
   const corrF2 = useLegion((s) => s.corrF2);
   const signalKind = useLegion((s) => s.signalKind);
+  const signalParams = useLegion((s) => s.signalParams);
   const sdrLoadOk = useLegion((s) => s.sdrLoadOk);
   const loadOk = useLegion((s) => s.loadOk);
   const sdrId = useLegion((s) => s.sdrId);
@@ -47,11 +48,11 @@ export function StartGate({ mode, onClose }: Props) {
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);
-  const cssDefaults = defaultParams("css");
   const cssSfP = waveMeta("css").params.find((p) => p.key === "sf");
   const cssBwP = waveMeta("css").params.find((p) => p.key === "bwKhz");
-  const [cssSf, setCssSf] = useState(cssDefaults.sf);
-  const [cssBw, setCssBw] = useState(cssDefaults.bwKhz);
+  const cssInit = cssUiParams(signalKind, signalParams);
+  const [cssSf, setCssSf] = useState(cssInit.sf);
+  const [cssBw, setCssBw] = useState(cssInit.bwKhz);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("auto");
   const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
@@ -146,7 +147,7 @@ export function StartGate({ mode, onClose }: Props) {
         dispatch,
         detThr,
         stepMhz: path === "solo" ? soloStepMhz : undefined,
-        waveParams: wave === "css" ? { sf: cssSf, bwKhz: cssBw } : undefined,
+        waveParams: wave === "css" ? cssUiParams("css", { sf: cssSf, bwKhz: cssBw }) : undefined,
       });
       if (!ok) {
         setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");

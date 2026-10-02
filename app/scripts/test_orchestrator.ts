@@ -29,6 +29,7 @@ import {
   WAVE_CATALOG,
   clampParams,
   constellationPoints,
+  cssUiParams,
   defaultParams,
   previewWaveform,
   spectrumDb,
@@ -1305,6 +1306,11 @@ async function main(): Promise<void> {
   check("CSS: поле полосы SX1280 BW_0800", cssBw != null && cssBw.def === 812.5 && cssBw.unit === "кГц");
   const cssDef = defaultParams("css");
   check("CSS дефолт ELRS 2.4 LoRa 250 Гц", cssDef.sf === 6 && cssDef.bwKhz === 812.5);
+  const cssFromStore = cssUiParams("css", { sf: 5, bwKhz: 500 });
+  check("CSS UI с store: SX127x 900 100 Гц SF7 не подставляется вместо заданных", cssFromStore.sf === 5 && cssFromStore.bwKhz === 500);
+  check("CSS UI не-CSS: дефолт 2.4 250, чужой sf не течёт", cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).sf === 6 && cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).bwKhz === 812.5);
+  check("CSS UI пустое — дефолт ELRS 2.4 250", cssUiParams("css", {}).sf === 6 && cssUiParams("css", {}).bwKhz === 812.5);
+  check("CSS UI clamp SF 99 → 10", cssUiParams("css", { sf: 99, bwKhz: 812.5 }).sf === 10);
   check("CSS не заливает окно FPGA", waveFillsSoloWindow("css") === false);
   const mockWave = new MockSdrBackend();
   mockWave.open("bladerf-micro-xa4");
@@ -2406,6 +2412,10 @@ async function main(): Promise<void> {
     && disarmBlock.indexOf("gFpgaAirGen += 1") < disarmBlock.indexOf("await hostFpga"));
   const hopBlock = storeSrc.slice(storeSrc.indexOf("beginSoloWalk"), storeSrc.indexOf("const beginFpgaKick"));
   check("таймер hop не зовёт hostTxWave", hopBlock.includes("soloTuneCmd") && !hopBlock.includes("hostTxWave"));
+  check("StartGate CSS читает store через cssUiParams, не дефолт каталога",
+    gateSrc.includes("cssUiParams(signalKind, signalParams)")
+    && gateSrc.includes('cssUiParams("css", { sf: cssSf, bwKhz: cssBw })')
+    && !gateSrc.includes("defaultParams(\"css\")"));
   check("cinema: шаг walk после solo", gateSrc.includes('setStep("walk")') && gateSrc.includes("Окно, МГц"));
   check("cinema: air проходит шаг walk (канал/выдержка/порядок)",
     gateSrc.includes("Канал, МГц") && gateSrc.includes("airHopBlockedReason") && gateSrc.includes("airWalkReason"));

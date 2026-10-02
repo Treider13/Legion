@@ -273,6 +273,15 @@ export function clampParams(kind: WaveKind, pr: Record<string, number>): Record<
   return out;
 }
 
+/** SF/полоса CSS с одной поверхности: store, если тип уже CSS, иначе дефолт 2.4 250. */
+export function cssUiParams(
+  kind: WaveKind | string | null | undefined,
+  params: Record<string, number>,
+): { sf: number; bwKhz: number } {
+  const p = clampParams("css", kind === "css" ? params : {});
+  return { sf: p.sf, bwKhz: p.bwKhz };
+}
+
 // ---------------------------------------------------------------------------
 // БПФ (radix-2, итеративное) — для спектра превью и циклической свёртки RRC.
 // ---------------------------------------------------------------------------
