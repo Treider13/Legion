@@ -21,7 +21,7 @@ import { airTractParams, FPGA_SURVEY_GONE_MS, fpgaAirSupported, fpgaObserveLine,
 import type { ScanPattern } from "../sense/scan";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
-import { WAVE_CATALOG, waveMeta, type WaveKind } from "../sdr/waveforms";
+import { WAVE_CATALOG, clampParams, waveMeta, type WaveKind } from "../sdr/waveforms";
 import { waveFillsSoloWindow } from "../sense/fpgaSoloWalk";
 import { ATTACK_SILENT_HINT, atlasForTracks } from "../sense/attackAtlas";
 import type { AttackRow } from "../sense/attackScene";
@@ -67,6 +67,7 @@ export function ScanPanel() {
   const fpgaSpan = parkSpanMhz(fpgaBands);
   const tract = airTractParams(parseLocaleNumber(s.fpgaAirBwMhz), analogBw, s.fpgaDetShift);
   const fpgaWindowUs = tract.windowUs;
+  const cssParams = s.txWaveKind === "css" ? clampParams("css", s.signalParams) : null;
   const shelfByGlance = fpgaAir && !taskLive;
   const shelfField = (
     <label
@@ -415,7 +416,7 @@ export function ScanPanel() {
                   min={p.min}
                   max={p.max}
                   step={p.step}
-                  value={s.signalParams[p.key] ?? p.def}
+                  value={cssParams?.[p.key] ?? p.def}
                   onChange={(e) => s.setSignalParam(p.key, parseFloat(e.target.value))}
                   disabled={s.transmitArmed}
                 />
