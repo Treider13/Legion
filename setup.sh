@@ -195,6 +195,11 @@ if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1 2
 else
   warn "webkit2gtk-4.1 не найден — нужен только для desktop: sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev"
 fi
+if [ -x /usr/bin/legion ]; then
+  ok "/usr/bin/legion установлен $(stat -c '%y' /usr/bin/legion 2>/dev/null) — после git pull: ./tools/install_desktop.sh (не tauri dev)"
+else
+  warn "ярлыка меню нет — ./tools/install_desktop.sh ставит .deb в /usr/bin/legion; npm run tauri dev иконку не обновляет"
+fi
 
 echo "== Шлюз FPGA (systemd-автозапуск; опционально — можно вручную по INSTALL.md §4) =="
 if [ -f /etc/systemd/system/legion-gateway.service ]; then
