@@ -120,9 +120,14 @@ SF/BW, синтез) попадает в установленную програ
 ```
 
 Скрипт гоняет `cd app && npm run tauri build -- --bundles deb` и ставит
-`.deb` через `apt-get install --reinstall`. Без `--reinstall` apt на той же
-версии (`0.1.0` в `app/src-tauri/tauri.conf.json`) скажет «already newest»
-и **не заменит** `/usr/bin/legion`.
+`.deb` через `dpkg -i` — та же версия (`0.1.0` в `tauri.conf.json`) всё равно
+перезаписывает `/usr/bin/legion`. `apt-get install` без `--reinstall` на
+already-newest **не заменяет** файлы; `apt` ещё может упасть из-за чужих
+битых пакетов в базе, даже когда `legion` уже распакован. Если не хватает
+Depends (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) — скрипт делает `apt-get -f`.
+
+Если сборка падает на `feature edition2024 is required` — `rustup update stable`
+(нужен Rust ≥ 1.85; транзитивные крейты Tauri 2.11 это требуют).
 
 Куда кладёт пакет (Tauri 2 bundler, не выдумка):
 
@@ -151,8 +156,7 @@ SF/BW, синтез) попадает в установленную програ
 cd app
 npm ci
 npm run tauri build -- --bundles deb
-sudo apt-get install -y --reinstall \
-  "$(pwd)/src-tauri/target/release/bundle/deb/legion_0.1.0_amd64.deb"
+sudo dpkg -i "$(pwd)/src-tauri/target/release/bundle/deb/legion_0.1.0_amd64.deb"
 ```
 
 (имя `.deb` подставьте своё, если версия или архитектура другие).

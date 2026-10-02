@@ -10,6 +10,7 @@
 #   → src-tauri/target/release/bundle/deb/{product}_{version}_{arch}.deb
 #   пакет: /usr/bin/{binary}  /usr/lib/{product}/
 #          /usr/share/applications/{product}.desktop
+#   установка: sudo dpkg -i (та же версия перезаписывает файлы)
 #
 # Использование (из корня репозитория, на ПК):
 #   ./tools/install_desktop.sh
@@ -31,7 +32,7 @@ for arg in "$@"; do
     --install-only) BUILD=0 ;;
     --replace-user-launchers) REPLACE_USER=1 ;;
     -h|--help)
-      sed -n '2,18p' "$0"
+      sed -n '2,19p' "$0"
       exit 0
       ;;
     *)
@@ -196,11 +197,18 @@ if [ "$INSTALL" = "1" ]; then
   if pgrep -x "$PRODUCT" >/dev/null 2>&1; then
     echo "ВНИМАНИЕ: процесс $PRODUCT ещё запущен. Закройте окно, иначе по иконке можете увидеть старую сессию."
   fi
-  echo "== apt --reinstall (та же версия ${VERSION} иначе apt скажет newest и не заменит файлы) =="
-  if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall "$DEB_ABS"; then
-    echo "FAIL: не удалось установить $DEB_ABS" >&2
-    echo "      вручную: sudo apt-get install -y --reinstall \"$DEB_ABS\"" >&2
-    exit 1
+  # dpkg -i перезаписывает ту же версию (0.1.0 over 0.1.0). apt-get install
+  # без --reinstall на already-newest не трогает файлы; apt ещё и валится,
+  # если в базе висят чужие unconfigured пакеты (fuse3 и т.п.).
+  echo "== dpkg -i (замена файлов той же версии ${VERSION}) =="
+  if ! sudo dpkg -i "$DEB_ABS"; then
+    echo "  dpkg не доставил Depends — apt-get -f, затем повтор"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y || true
+    if ! sudo dpkg -i "$DEB_ABS"; then
+      echo "FAIL: не удалось установить $DEB_ABS" >&2
+      echo "      вручную: sudo dpkg -i \"$DEB_ABS\"" >&2
+      exit 1
+    fi
   fi
   if command -v update-desktop-database >/dev/null; then
     sudo update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
@@ -221,6 +229,11 @@ if [ "$REPLACE_USER" = "1" ]; then
 fi
 
 echo
-echo "Дальше: закройте старое окно LEGION и запустите из меню / иконки"
-echo "  (ярлык системы: /usr/share/applications/${PRODUCT}.desktop → /usr/bin/${PRODUCT})."
-echo "  Не запускайте npm run tauri dev — это другая, не установленная сборка."
+if [ "$INSTALL" = "1" ]; then
+  echo "Дальше: закройте старое окно LEGION и запустите из меню / иконки"
+  echo "  (ярлык системы: /usr/share/applications/${PRODUCT}.desktop → /usr/bin/${PRODUCT})."
+  echo "  Не запускайте npm run tauri dev — это другая, не установленная сборка."
+else
+  echo "Собран $DEB_ABS"
+  echo "Установка на этом ПК: ./tools/install_desktop.sh --install-only"
+fi
