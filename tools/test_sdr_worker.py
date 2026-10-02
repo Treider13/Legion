@@ -247,12 +247,12 @@ def main() -> int:
         total = float(np.sum(spec)) or 1.0
         in_band = float(np.sum(spec[np.abs(freqs) <= 300e3])) / total
         far = float(np.sum(spec[np.abs(freqs) >= 700e3])) / total
-        check("CSS SF7/500 кГц: энергия в ±300 кГц", in_band > 0.7, f"in={in_band:.3f}")
-        check("CSS SF7/500 кГц: мало энергии за ±700 кГц", far < 0.15, f"far={far:.3f}")
+        check("CSS SF7/500 кГц: энергия в ±300 кГц", in_band > 0.7)
+        check("CSS SF7/500 кГц: мало энергии за ±700 кГц", far < 0.15)
         css6 = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 6, "bwKhz": 500, "seed": 2})
         spec6 = np.abs(np.fft.fftshift(np.fft.fft(css6 * win))) ** 2
         in6 = float(np.sum(spec6[np.abs(freqs) <= 300e3])) / (float(np.sum(spec6)) or 1.0)
-        check("CSS SF6/500 кГц: энергия в ±300 кГц", in6 > 0.7, f"in={in6:.3f}")
+        check("CSS SF6/500 кГц: энергия в ±300 кГц", in6 > 0.7)
 
     check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
     check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")

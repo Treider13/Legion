@@ -1066,21 +1066,15 @@ def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, A
         bw = min(max(bw, 1.0), 0.95 * fs)
         samp_sym = max(m, int(round(fs * m / bw)))
         k = np.arange(samp_sym, dtype=np.float64) * (m / samp_sym)
+        base = np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) - 0.5 * k))
         rs = np.random.RandomState(_seed(pr))
         n_sym = n // samp_sym
-        out = [
-            np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) + (float(s) / m) * k - 0.5 * k))
-            for s in rs.randint(0, m, max(n_sym, 0))
-        ]
+        out = [np.roll(base, -int(round(float(s) * samp_sym / m))) for s in rs.randint(0, m, max(n_sym, 0))]
         y = np.concatenate(out) if out else np.zeros(0, dtype=complex)
         if y.size < n:
             s = int(rs.randint(0, m))
             rem = n - int(y.size)
-            kk = k[:rem]
-            tail = np.exp(
-                1j * 2.0 * np.pi * ((kk * kk) / (2.0 * m) + (float(s) / m) * kk - 0.5 * kk)
-            )
-            y = np.concatenate([y, tail]) if y.size else tail
+            y = np.concatenate([y, np.roll(base, -int(round(float(s) * samp_sym / m)))[:rem]]) if y.size else np.roll(base, -int(round(float(s) * samp_sym / m)))[:rem]
         return (amp * y[:n]).astype(np.complex64)
 
     if kind == "ofdm":

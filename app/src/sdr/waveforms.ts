@@ -810,14 +810,21 @@ export function previewWaveform(
       const bw = Math.min(Math.max((p.bwKhz ?? 500) * 1e3, 1), 0.95 * WAVE_FS);
       const sampSym = Math.max(m, Math.round((WAVE_FS * m) / bw));
       const scale = m / sampSym;
+      const baseRe = new Float64Array(sampSym);
+      const baseIm = new Float64Array(sampSym);
+      for (let i = 0; i < sampSym; i++) {
+        const k = i * scale;
+        const ph = 2 * Math.PI * ((k * k) / (2 * m) - 0.5 * k);
+        baseRe[i] = Math.cos(ph);
+        baseIm[i] = Math.sin(ph);
+      }
       const rand = mulberry32(p.seed ?? 1337);
       for (let s = 0; s * sampSym < n; s++) {
-        const sym = Math.floor(rand() * m);
+        const shift = Math.round((Math.floor(rand() * m) * sampSym) / m);
         for (let i = 0; i < sampSym && s * sampSym + i < n; i++) {
-          const k = i * scale;
-          const ph = 2 * Math.PI * ((k * k) / (2 * m) + (sym / m) * k - 0.5 * k);
-          re[s * sampSym + i] = amp * Math.cos(ph);
-          im[s * sampSym + i] = amp * Math.sin(ph);
+          const src = (i + shift) % sampSym;
+          re[s * sampSym + i] = amp * baseRe[src];
+          im[s * sampSym + i] = amp * baseIm[src];
         }
       }
       break;
