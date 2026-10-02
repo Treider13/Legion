@@ -180,7 +180,7 @@ jobs:
       - name: shellcheck -S warning
         run: >-
           shellcheck -S warning
-          setup.sh tools/build_lite_ui.sh
+          setup.sh tools/build_lite_ui.sh tools/install_desktop.sh
           fpga/check_toolchain.sh fpga/tb/run_ghdl.sh
           fpga/test/*.sh
 
