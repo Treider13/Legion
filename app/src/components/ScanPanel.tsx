@@ -404,8 +404,8 @@ export function ScanPanel() {
                 key={p.key}
                 title={
                   p.key === "sf"
-                    ? "Spreading factor. SF7 — ELRS 250 Гц, SF6 — ELRS 500 Гц"
-                    : "Полоса LoRa. 500 кГц — ELRS 250/500 Гц"
+                    ? "Spreading factor. ELRS 2.4 LoRa 250 Гц — SF6; 500 Гц LoRa — SF5 (common.cpp)"
+                    : "Полоса LoRa. ELRS 2.4 — 812.5 кГц (SX1280 BW_0800). 500 кГц — SX127x 900"
                 }
               >
                 {p.label}

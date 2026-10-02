@@ -1301,10 +1301,10 @@ async function main(): Promise<void> {
   const cssMeta = WAVE_CATALOG.find((w) => w.id === "css");
   const cssSf = cssMeta?.params.find((p) => p.key === "sf");
   const cssBw = cssMeta?.params.find((p) => p.key === "bwKhz");
-  check("CSS: поле SF", cssSf != null && cssSf.min === 5 && cssSf.max === 10 && cssSf.def === 7);
-  check("CSS: поле полосы 500 кГц", cssBw != null && cssBw.def === 500 && cssBw.unit === "кГц");
+  check("CSS: поле SF", cssSf != null && cssSf.min === 5 && cssSf.max === 10 && cssSf.def === 6);
+  check("CSS: поле полосы SX1280 BW_0800", cssBw != null && cssBw.def === 812.5 && cssBw.unit === "кГц");
   const cssDef = defaultParams("css");
-  check("CSS дефолт ELRS 250 Гц", cssDef.sf === 7 && cssDef.bwKhz === 500);
+  check("CSS дефолт ELRS 2.4 LoRa 250 Гц", cssDef.sf === 6 && cssDef.bwKhz === 812.5);
   check("CSS не заливает окно FPGA", waveFillsSoloWindow("css") === false);
   const mockWave = new MockSdrBackend();
   mockWave.open("bladerf-micro-xa4");
@@ -2048,12 +2048,12 @@ async function main(): Promise<void> {
   await runSmartStart({
     f1: "2400", f2: "2500", wave: "css", loadOk: true, path: "solo",
     windowMhz: "2", dwellMs: "400", pattern: "sweep",
-    waveParams: { sf: 6, bwKhz: 500 },
+    waveParams: { sf: 5, bwKhz: 812.5 },
   });
   const cssAfter = useLegion.getState();
   check(
-    "cinema CSS: SF6 / 500 кГц после arm",
-    cssAfter.signalKind === "css" && cssAfter.signalParams.sf === 6 && cssAfter.signalParams.bwKhz === 500,
+    "cinema CSS: SF5 / 812.5 кГц после arm (ELRS 2.4 LoRa 500 Гц)",
+    cssAfter.signalKind === "css" && cssAfter.signalParams.sf === 5 && cssAfter.signalParams.bwKhz === 812.5,
   );
 
   after.clearSdrBands();

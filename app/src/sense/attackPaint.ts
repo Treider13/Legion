@@ -5,7 +5,7 @@
 // ============================================================================
 import { rangeInAllowlist, type AllowBand } from "../policy/allowlist";
 import type { WaveKind } from "../sdr/waveforms";
-import { defaultParams, waveMeta } from "../sdr/waveforms";
+import { CSS_SX1280_BW_KHZ, defaultParams, waveMeta } from "../sdr/waveforms";
 
 export const ATTACK_TX_MIN_MHZ = 0.2;
 export const ATTACK_TX_MAX_MHZ = 40;
@@ -93,7 +93,7 @@ export function waveOccupiesPaintMhz(kind: WaveKind | null, paint: AttackPaint, 
     return Math.min(span, Math.max(ATTACK_TX_MIN_MHZ, want));
   }
   if (kind === "css") {
-    const want = (params.bwKhz ?? 500) / 1000;
+    const want = (params.bwKhz ?? CSS_SX1280_BW_KHZ) / 1000;
     return Math.min(span, Math.max(0.125, want));
   }
   return Math.min(span, Math.max(0.2, span * 0.35));

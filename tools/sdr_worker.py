@@ -1059,10 +1059,12 @@ def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, A
 
     if kind == "css":
         # Chirp spread spectrum (LoRa-подобный): символ = циклический сдвиг чирпа.
-        # SF7 / 500 кГц — ELRS 250 Гц; SF6 / 500 кГц — ELRS 500 Гц.
-        sf = int(_pfloat(pr, "sf", 7, 5, 10))
+        # Дефолт SF6 / 812.5 кГц = ExpressLRS common.cpp RATE_LORA_2G4_250HZ
+        # (SX1280_LORA_SF6 + SX1280_LORA_BW_0800). Semtech GetLoRaBandwidth = 812500 Гц.
+        # 2.4 500 Гц LoRa — SF5 / 812.5 кГц. 500 кГц — SX127x 900, не SX1280.
+        sf = int(_pfloat(pr, "sf", 6, 5, 10))
         m = 1 << sf
-        bw = _pfloat(pr, "bwKhz", 500.0, 125.0, 1000.0) * 1e3
+        bw = _pfloat(pr, "bwKhz", 812.5, 125.0, 1625.0) * 1e3
         bw = min(max(bw, 1.0), 0.95 * fs)
         samp_sym = max(m, int(round(fs * m / bw)))
         k = np.arange(samp_sym, dtype=np.float64) * (m / samp_sym)

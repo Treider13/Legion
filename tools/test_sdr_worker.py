@@ -240,19 +240,23 @@ def main() -> int:
         bad_params = w.make_waveform("qpsk", pr={"amp": 99, "alpha": -1})
         check("параметры клампятся (amp ≤ 0.9)", float(np.max(np.abs(bad_params))) <= 0.9 + 1e-6)
 
-        css = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 7, "bwKhz": 500, "seed": 1})
+        css = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 6, "bwKhz": 812.5, "seed": 1})
         win = np.hanning(len(css))
         spec = np.abs(np.fft.fftshift(np.fft.fft(css * win))) ** 2
         freqs = np.fft.fftshift(np.fft.fftfreq(len(css), 1.0 / 2e6))
         total = float(np.sum(spec)) or 1.0
-        in_band = float(np.sum(spec[np.abs(freqs) <= 300e3])) / total
-        far = float(np.sum(spec[np.abs(freqs) >= 700e3])) / total
-        check("CSS SF7/500 кГц: энергия в ±300 кГц", in_band > 0.7)
-        check("CSS SF7/500 кГц: мало энергии за ±700 кГц", far < 0.15)
-        css6 = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 6, "bwKhz": 500, "seed": 2})
-        spec6 = np.abs(np.fft.fftshift(np.fft.fft(css6 * win))) ** 2
-        in6 = float(np.sum(spec6[np.abs(freqs) <= 300e3])) / (float(np.sum(spec6)) or 1.0)
-        check("CSS SF6/500 кГц: энергия в ±300 кГц", in6 > 0.7)
+        in_band = float(np.sum(spec[np.abs(freqs) <= 500e3])) / total
+        far = float(np.sum(spec[np.abs(freqs) >= 1000e3])) / total
+        check("CSS SF6/812.5 кГц: энергия в ±500 кГц", in_band > 0.7)
+        check("CSS SF6/812.5 кГц: мало энергии за ±1 МГц", far < 0.15)
+        css5 = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 5, "bwKhz": 812.5, "seed": 2})
+        spec5 = np.abs(np.fft.fftshift(np.fft.fft(css5 * win))) ** 2
+        in5 = float(np.sum(spec5[np.abs(freqs) <= 500e3])) / (float(np.sum(spec5)) or 1.0)
+        check("CSS SF5/812.5 кГц: энергия в ±500 кГц", in5 > 0.7)
+        css900 = w.make_waveform("css", fs=2e6, n=65536, pr={"sf": 7, "bwKhz": 500, "seed": 3})
+        spec900 = np.abs(np.fft.fftshift(np.fft.fft(css900 * win))) ** 2
+        in900 = float(np.sum(spec900[np.abs(freqs) <= 300e3])) / (float(np.sum(spec900)) or 1.0)
+        check("CSS SX127x 500 кГц: энергия в ±300 кГц", in900 > 0.7)
 
     check("hw bladerf1 → lms", w.classify_bladerf_hw("bladerf1") == "lms")
     check("hw bladerf2 → ad9361", w.classify_bladerf_hw("bladerf2") == "ad9361")
