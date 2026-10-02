@@ -126,8 +126,13 @@ export const WAVE_CATALOG: WaveMeta[] = [
   {
     id: "css",
     title: "CSS (LoRa-подобный)",
-    desc: "Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов на символ.",
-    params: [AMP, { key: "sf", label: "SF", min: 5, max: 10, step: 1, def: 6 }, SEED],
+    desc: "Chirp spread spectrum: символ = циклический сдвиг чирпа, 2^SF чипов. SF7 / 500 кГц — ELRS 250 Гц; SF6 / 500 кГц — ELRS 500 Гц.",
+    params: [
+      AMP,
+      { key: "sf", label: "SF", min: 5, max: 10, step: 1, def: 7 },
+      { key: "bwKhz", label: "ПОЛОСА", unit: "кГц", min: 125, max: 1000, step: 25, def: 500 },
+      SEED,
+    ],
   },
   {
     id: "ofdm",
@@ -800,15 +805,19 @@ export function previewWaveform(
       break;
     }
     case "css": {
-      const sf = Math.round(p.sf ?? 6);
+      const sf = Math.round(p.sf ?? 7);
       const m = 1 << sf;
+      const bw = Math.min(Math.max((p.bwKhz ?? 500) * 1e3, 1), 0.95 * WAVE_FS);
+      const sampSym = Math.max(m, Math.round((WAVE_FS * m) / bw));
+      const scale = m / sampSym;
       const rand = mulberry32(p.seed ?? 1337);
-      for (let s = 0; s * m < n; s++) {
+      for (let s = 0; s * sampSym < n; s++) {
         const sym = Math.floor(rand() * m);
-        for (let k = 0; k < m && s * m + k < n; k++) {
-          const ph = 2 * Math.PI * ((k * k) / (2 * m) + (sym / m) * k);
-          re[s * m + k] = amp * Math.cos(ph);
-          im[s * m + k] = amp * Math.sin(ph);
+        for (let i = 0; i < sampSym && s * sampSym + i < n; i++) {
+          const k = i * scale;
+          const ph = 2 * Math.PI * ((k * k) / (2 * m) + (sym / m) * k - 0.5 * k);
+          re[s * sampSym + i] = amp * Math.cos(ph);
+          im[s * sampSym + i] = amp * Math.sin(ph);
         }
       }
       break;

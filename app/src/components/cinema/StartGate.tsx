@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { WAVE_CATALOG, type WaveKind } from "../../sdr/waveforms";
+import { WAVE_CATALOG, defaultParams, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
 import { FPGA_US_DET_SHIFT, FPGA_SURVEY_GONE_MS, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
@@ -47,6 +47,9 @@ export function StartGate({ mode, onClose }: Props) {
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
   const [wave, setWave] = useState<WaveKind>(signalKind);
+  const cssDefaults = defaultParams("css");
+  const [cssSf, setCssSf] = useState(cssDefaults.sf);
+  const [cssBw, setCssBw] = useState(cssDefaults.bwKhz);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("auto");
   const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
@@ -141,6 +144,7 @@ export function StartGate({ mode, onClose }: Props) {
         dispatch,
         detThr,
         stepMhz: path === "solo" ? soloStepMhz : undefined,
+        waveParams: wave === "css" ? { sf: cssSf, bwKhz: cssBw } : undefined,
       });
       if (!ok) {
         setErr(useLegion.getState().log.at(-1)?.text || "FPGA не стартовала.");
@@ -513,6 +517,34 @@ export function StartGate({ mode, onClose }: Props) {
                   ))}
                 </div>
                 <p className="cinema-wave-desc">{selected.desc}</p>
+                {wave === "css" && (
+                  <div className="cinema-gate-row">
+                    <label title="Spreading factor. SF7 — ELRS 250 Гц, SF6 — ELRS 500 Гц">
+                      SF
+                      <input
+                        aria-label="CSS SF"
+                        type="number"
+                        min={5}
+                        max={10}
+                        step={1}
+                        value={cssSf}
+                        onChange={(e) => setCssSf(parseFloat(e.target.value))}
+                      />
+                    </label>
+                    <label title="Полоса LoRa. 500 кГц — ELRS 250/500 Гц">
+                      Полоса, кГц
+                      <input
+                        aria-label="CSS полоса"
+                        type="number"
+                        min={125}
+                        max={1000}
+                        step={25}
+                        value={cssBw}
+                        onChange={(e) => setCssBw(parseFloat(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 

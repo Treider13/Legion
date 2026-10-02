@@ -395,6 +395,32 @@ export function ScanPanel() {
             </label>
           </>
         )}
+        {s.txWaveKind === "css" &&
+          waveMeta("css")
+            .params.filter((p) => p.key === "sf" || p.key === "bwKhz")
+            .map((p) => (
+              <label
+                key={p.key}
+                title={
+                  p.key === "sf"
+                    ? "Spreading factor. SF7 — ELRS 250 Гц, SF6 — ELRS 500 Гц"
+                    : "Полоса LoRa. 500 кГц — ELRS 250/500 Гц"
+                }
+              >
+                {p.label}
+                {p.unit ? ` (${p.unit})` : ""}
+                <input
+                  aria-label={`CSS ${p.label}`}
+                  type="number"
+                  min={p.min}
+                  max={p.max}
+                  step={p.step}
+                  value={s.signalParams[p.key] ?? p.def}
+                  onChange={(e) => s.setSignalParam(p.key, parseFloat(e.target.value))}
+                  disabled={s.transmitArmed}
+                />
+              </label>
+            ))}
       </div>
       <p className="sens-hint">
         {taskLive

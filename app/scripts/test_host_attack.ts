@@ -2318,6 +2318,14 @@ async function main(): Promise<void> {
   check("синус не заливает 20 МГц", waveOccupiesPaintMhz("sine", p, {}) < 1);
   check("шум заливает рамку", Math.abs(waveOccupiesPaintMhz("awgn", p, {}) - 20) < 1e-9);
   check("SC-FDMA не заливка", Math.abs(waveOccupiesPaintMhz("scfdma", p, {}) - 5) < 1e-9);
+  check(
+    "CSS занимает полосу 500 кГц, не треть рамки",
+    Math.abs(waveOccupiesPaintMhz("css", p, { bwKhz: 500, sf: 7 }) - 0.5) < 1e-9,
+  );
+  check(
+    "CSS SF6 тоже 500 кГц",
+    Math.abs(waveOccupiesPaintMhz("css", p, { bwKhz: 500, sf: 6 }) - 0.5) < 1e-9,
+  );
   check("SC-FDMA класс часть", waveClassOf("scfdma") === "part");
   check("текст заливки без SC-FDMA", waveClassRu("fill").includes("OFDM") && !waveClassRu("fill").includes("SC-FDMA"));
   const chirp = attackWaveParams("chirp", p, {});

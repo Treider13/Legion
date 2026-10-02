@@ -92,6 +92,10 @@ export function waveOccupiesPaintMhz(kind: WaveKind | null, paint: AttackPaint, 
     const want = (params.spanKhz ?? span * 1000) / 1000;
     return Math.min(span, Math.max(ATTACK_TX_MIN_MHZ, want));
   }
+  if (kind === "css") {
+    const want = (params.bwKhz ?? 500) / 1000;
+    return Math.min(span, Math.max(0.125, want));
+  }
   return Math.min(span, Math.max(0.2, span * 0.35));
 }
 

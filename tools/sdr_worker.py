@@ -1059,16 +1059,29 @@ def make_waveform(kind: str, fs: float = TX_FS, n: int = WAVE_N, pr: dict[str, A
 
     if kind == "css":
         # Chirp spread spectrum (LoRa-подобный): символ = циклический сдвиг чирпа.
-        sf = int(_pfloat(pr, "sf", 6, 5, 10))
+        # SF7 / 500 кГц — ELRS 250 Гц; SF6 / 500 кГц — ELRS 500 Гц.
+        sf = int(_pfloat(pr, "sf", 7, 5, 10))
         m = 1 << sf
+        bw = _pfloat(pr, "bwKhz", 500.0, 125.0, 1000.0) * 1e3
+        bw = min(max(bw, 1.0), 0.95 * fs)
+        samp_sym = max(m, int(round(fs * m / bw)))
+        k = np.arange(samp_sym, dtype=np.float64) * (m / samp_sym)
         rs = np.random.RandomState(_seed(pr))
-        k = np.arange(m, dtype=np.float64)
+        n_sym = n // samp_sym
         out = [
-            np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) + (float(s) / m) * k))
-            for s in rs.randint(0, m, n // m)
+            np.exp(1j * 2.0 * np.pi * ((k * k) / (2.0 * m) + (float(s) / m) * k - 0.5 * k))
+            for s in rs.randint(0, m, max(n_sym, 0))
         ]
-        y = np.concatenate(out) if out else np.zeros(n, dtype=complex)
-        return (amp * y).astype(np.complex64)
+        y = np.concatenate(out) if out else np.zeros(0, dtype=complex)
+        if y.size < n:
+            s = int(rs.randint(0, m))
+            rem = n - int(y.size)
+            kk = k[:rem]
+            tail = np.exp(
+                1j * 2.0 * np.pi * ((kk * kk) / (2.0 * m) + (float(s) / m) * kk - 0.5 * kk)
+            )
+            y = np.concatenate([y, tail]) if y.size else tail
+        return (amp * y[:n]).astype(np.complex64)
 
     if kind == "ofdm":
         # 802.11a-подобный: NFFT=64, CP=16, 52 поднесущие QPSK (π/4, Gray-порядок).

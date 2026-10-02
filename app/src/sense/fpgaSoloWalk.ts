@@ -55,7 +55,6 @@ export function waveFillsSoloWindow(kind: string): boolean {
     kind === "otfs" ||
     kind === "afdm" ||
     kind === "ocdm" ||
-    kind === "css" ||
     kind === "dsss" ||
     kind === "zadoffchu" ||
     kind === "p4"

@@ -1298,6 +1298,14 @@ async function main(): Promise<void> {
   const phases = new Set((qp ?? []).map((p) => Math.atan2(p.q, p.i).toFixed(3)));
   check("QPSK созвездие: 4 точки", qp !== null && phases.size === 4);
   check("у синуса нет созвездия", constellationPoints("sine", defaultParams("sine")) === null);
+  const cssMeta = WAVE_CATALOG.find((w) => w.id === "css");
+  const cssSf = cssMeta?.params.find((p) => p.key === "sf");
+  const cssBw = cssMeta?.params.find((p) => p.key === "bwKhz");
+  check("CSS: поле SF", cssSf != null && cssSf.min === 5 && cssSf.max === 10 && cssSf.def === 7);
+  check("CSS: поле полосы 500 кГц", cssBw != null && cssBw.def === 500 && cssBw.unit === "кГц");
+  const cssDef = defaultParams("css");
+  check("CSS дефолт ELRS 250 Гц", cssDef.sf === 7 && cssDef.bwKhz === 500);
+  check("CSS не заливает окно FPGA", waveFillsSoloWindow("css") === false);
   const mockWave = new MockSdrBackend();
   mockWave.open("bladerf-micro-xa4");
   const mw = mockWave.txWave(2442, "qpsk");
@@ -2037,6 +2045,16 @@ async function main(): Promise<void> {
   check("cinema записал окно/задержку/ход до ARM",
     after.fpgaSoloWindowMhz === "20" && after.fpgaSoloDwellMs === "400" && after.fpgaSoloPattern === "sweep");
   check("без шлюза solo не ARM (как air)", started === false && after.fpgaArmed === false);
+  await runSmartStart({
+    f1: "2400", f2: "2500", wave: "css", loadOk: true, path: "solo",
+    windowMhz: "2", dwellMs: "400", pattern: "sweep",
+    waveParams: { sf: 6, bwKhz: 500 },
+  });
+  const cssAfter = useLegion.getState();
+  check(
+    "cinema CSS: SF6 / 500 кГц после arm",
+    cssAfter.signalKind === "css" && cssAfter.signalParams.sf === 6 && cssAfter.signalParams.bwKhz === 500,
+  );
 
   after.clearSdrBands();
   after.setSdrAllowField("sdrF1", "20");
