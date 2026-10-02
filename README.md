@@ -101,6 +101,8 @@ ESP32 принимает её и физически настраивает чи�
    ```bash
    cd app && npm install && npm run tauri dev
    ```
+   Это debug-сессия из исходников. Чтобы **иконка в меню** запускала обновлённую
+   сборку (а не старый `.deb`): `./tools/install_desktop.sh` — см. [INSTALL.md](INSTALL.md) §3.
    Выбрать порт (напр. `/dev/ttyUSB0` или `COM5`) → CONNECT → ввести частоту.
 4. **CLI (опционально, в том же venv):**
    ```bash
