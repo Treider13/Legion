@@ -1307,7 +1307,7 @@ async function main(): Promise<void> {
   const cssDef = defaultParams("css");
   check("CSS дефолт ELRS 2.4 LoRa 250 Гц", cssDef.sf === 6 && cssDef.bwKhz === 812.5);
   const cssFromStore = cssUiParams("css", { sf: 5, bwKhz: 500 });
-  check("CSS UI с store: SX127x 900 100 Гц SF7 не подставляется вместо заданных", cssFromStore.sf === 5 && cssFromStore.bwKhz === 500);
+  check("CSS UI с store: заданные SF/полоса не сбрасываются в дефолт", cssFromStore.sf === 5 && cssFromStore.bwKhz === 500);
   check("CSS UI не-CSS: дефолт 2.4 250, чужой sf не течёт", cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).sf === 6 && cssUiParams("qpsk", { sf: 5, bwKhz: 500 }).bwKhz === 812.5);
   check("CSS UI пустое — дефолт ELRS 2.4 250", cssUiParams("css", {}).sf === 6 && cssUiParams("css", {}).bwKhz === 812.5);
   check("CSS UI clamp SF 99 → 10", cssUiParams("css", { sf: 99, bwKhz: 812.5 }).sf === 10);
