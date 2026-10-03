@@ -112,12 +112,22 @@ import {
 } from "../sense/fpgaFastpath";
 import {
   bandTouchesC58,
+  gridFromMeasuredFhss,
   matchSmartGrid,
   SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
   type SmartGridCard,
 } from "../sense/smartGrid";
+import {
+  SMART_ARM_NEED_FHSS_RU,
+  SMART_ARM_PEAK_CLOSED_RU,
+  fhssArmGate,
+  pickFhssLook,
+} from "../sense/fhssArmGate";
+import { evalFhssConfirm, fhssCorridorBand } from "../sense/fhssCorridor";
+import { maskOwnTxOccupancy, occupancyHopCount } from "../sense/chHitsMask";
+import { fhssPersistOf, listenPersistHops } from "../sense/fhssPersist";
 import { openLoopShelfTxPlan } from "../sense/txShelf";
 import {
   FPGA_SOLO_DWELL_DEFAULT_MS,
@@ -326,8 +336,14 @@ interface LegionStore {
   smartGridAccepted: boolean;
   /** Живая или принятая карточка сетки (UI). */
   smartGridCard: SmartGridCard | null;
-  /** Явный пик без сетки. Аналог / x40+C58 не покрывает. */
+  /** Явный пик без сетки. Закрыт: ARM только по FHSS. */
   smartPeakOverride: boolean;
+  /** Слух нашёл FHSS + карточку + коридор — можно Подтвердить. */
+  fhssCorridorReady: boolean;
+  fhssPersistOcc: number;
+  fhssPersistListen: number;
+  fhssPersistPenalty: number;
+  fhssPersistLine: string;
   /** Атака: приоритет = сильнейшая живая (сильнее перехватывает); обычный = очередь. */
   autoDispatch: AutoDispatch;
   scanWindowMhz: string;
@@ -887,9 +903,45 @@ let gTxGen = 0;
 /** Хост-Атака: трекер и выдержка рамки. Не трогает FPGA / ESP32 / sweep. */
 const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
-/** Слух умной атаки: живые hop/look до Принять, затем заморозка. */
+/** Слух умной атаки: живые hop/look до Подтвердить коридор, затем заморозка. */
 let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
 let gSmartAccepted: SmartGridCard | null = null;
+let gSmartSurvey: { bands: AllowBand[]; f1: string; f2: string; airBw: string } | null = null;
+
+function captureSmartSurvey(s: { sdrBands: AllowBand[]; sdrF1: string; sdrF2: string; fpgaAirBwMhz: string }): void {
+  if (gSmartSurvey) return;
+  gSmartSurvey = {
+    bands: s.sdrBands.map((b) => ({ ...b })),
+    f1: s.sdrF1,
+    f2: s.sdrF2,
+    airBw: s.fpgaAirBwMhz,
+  };
+}
+
+function consumeSmartSurvey(): {
+  sdrBands: AllowBand[];
+  sdrF1: string;
+  sdrF2: string;
+  fpgaAirBwMhz: string;
+} | null {
+  if (!gSmartSurvey) return null;
+  const patch = {
+    sdrBands: gSmartSurvey.bands,
+    sdrF1: gSmartSurvey.f1,
+    sdrF2: gSmartSurvey.f2,
+    fpgaAirBwMhz: gSmartSurvey.airBw,
+  };
+  gSmartSurvey = null;
+  return patch;
+}
+
+const EMPTY_FHSS_PERSIST = {
+  fhssCorridorReady: false,
+  fhssPersistOcc: 0,
+  fhssPersistListen: 0,
+  fhssPersistPenalty: 0,
+  fhssPersistLine: "",
+};
 
 function publishSmartListen(
   sdrId: string,
@@ -900,13 +952,37 @@ function publishSmartListen(
     hopsMhz: gAttackMemory.hops.map((h) => h.mhz),
     looks: [...gAttackMemory.looks.values()],
   };
+  const look = pickFhssLook(gSmartListen.looks);
   return matchSmartGrid({
     sdrId,
     bands,
     hopsMhz: gSmartListen.hopsMhz,
     looks: gSmartListen.looks,
+    fhss: look?.fhss ?? null,
     acceptO4: extra?.acceptO4,
   });
+}
+
+function smartConfirmPatch(
+  sdrId: string,
+  bands: readonly AllowBand[],
+  analogMhz: number,
+  persistPenalty = 0,
+  extra?: { acceptO4?: boolean },
+): {
+  smartGridCard: SmartGridCard;
+  fhssCorridorReady: boolean;
+} {
+  const card = publishSmartListen(sdrId, bands, extra);
+  const look = pickFhssLook(gSmartListen.looks);
+  const ev = evalFhssConfirm({
+    look,
+    hopsMhz: gSmartListen.hopsMhz,
+    card,
+    analogMhz,
+    persistPenalty,
+  });
+  return { smartGridCard: card, fhssCorridorReady: ev.ready };
 }
 
 export function peekSmartListen(): { hopsMhz: number[]; looks: AttackLook[] } {
@@ -915,6 +991,15 @@ export function peekSmartListen(): { hopsMhz: number[]; looks: AttackLook[] } {
 
 export function peekSmartAccepted(): SmartGridCard | null {
   return gSmartAccepted;
+}
+
+/** Тест: подложить FHSS look в слух умной атаки. */
+export function seedSmartListenForTest(look: AttackLook, hopsMhz: readonly number[]): void {
+  gAttackMemory.reset();
+  gAttackMemory.noteLook(1, look);
+  const ts = Date.now();
+  gAttackMemory.hops = hopsMhz.map((mhz) => ({ mhz, ts }));
+  gSmartListen = { hopsMhz: [...hopsMhz], looks: [look] };
 }
 let gAttackThinkAt = 0;
 let gAttackThinkBusy = false;
@@ -982,6 +1067,7 @@ function attackBrainPatch(
   attackMemoryLine: string;
   attackSuggestPaint: AttackPaint | null;
   smartGridCard?: SmartGridCard;
+  fhssCorridorReady?: boolean;
 } {
   const smartListen = s.scanPattern === "fpga" && !!s.smartListenLive;
   if (!detectorListens(s.scanPattern as SdrWalkPattern) && !smartListen) {
@@ -1005,7 +1091,8 @@ function attackBrainPatch(
   }
   gAttackMemory.noteHops(tracks, Date.now());
   gAttackMemory.noteScene(Date.now(), tracks);
-  const card = publishSmartListen(s.sdrId ?? "", s.sdrBands);
+  const analog = catalogCaps(s.sdrId ?? "").analogBwMhz;
+  const smart = smartConfirmPatch(s.sdrId ?? "", s.sdrBands, analog);
   if (s.scanPattern !== "auto") {
     return {
       attackTracks: tracks.map((t) => ({ ...t })),
@@ -1013,7 +1100,8 @@ function attackBrainPatch(
       attackAdvice: EMPTY_ATTACK_ADVICE,
       attackMemoryLine: view.memoryLine,
       attackSuggestPaint: null,
-      smartGridCard: card,
+      smartGridCard: smart.smartGridCard,
+      fhssCorridorReady: smart.fhssCorridorReady,
     };
   }
   return {
@@ -1022,7 +1110,8 @@ function attackBrainPatch(
     attackAdvice: view.advice,
     attackMemoryLine: view.memoryLine,
     attackSuggestPaint: view.advice.suggestPaint,
-    smartGridCard: card,
+    smartGridCard: smart.smartGridCard,
+    fhssCorridorReady: smart.fhssCorridorReady,
   };
 }
 let gAttackHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2126,7 +2215,7 @@ export const useLegion = create<LegionStore>((set, get) => {
   /** Старт онбордового перехвата: один хозяин — SDR. Ноутбук рубильник.
    *  USB не в круге «увидел → усилитель». x40: один park Soapy (Si5338 fs/BW
    *  хост ставит, NIOS LMS не трогает). micro: AIR_PREP без Soapy.
-   *  ARM только после Принять (замороженная карточка). */
+   *  ARM только после Подтвердить коридор (замороженный hop-set). */
   const localGatewayHost = (raw: string): boolean => {
     const h = raw.trim().toLowerCase();
     return h === "" || h === "127.0.0.1" || h === "localhost" || h === "::1";
@@ -2209,7 +2298,21 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте выдержку числом (0,4 и 0.4 — 400 мкс)`);
       return;
     }
-    const grid: SmartGridCard = acceptedCard;
+    const look = pickFhssLook(gSmartListen.looks);
+    const measured = gridFromMeasuredFhss(look?.fhss ?? null, gSmartListen.hopsMhz);
+    const grid: SmartGridCard | null = measured;
+    const gate = fhssArmGate({
+      look,
+      fhss: look?.fhss ?? null,
+      card: grid,
+      persistPenalty: get().fhssPersistPenalty,
+    });
+    if (!gate.ok || !grid) {
+      gSmartAccepted = null;
+      set({ smartGridAccepted: false, fhssCorridorReady: false, smartPeakOverride: false });
+      pushLog("sys", `${FPGA_AIR_MODE_RU}: ${gate.reason}`);
+      return;
+    }
     const lbOpts = lbDelayArmOpts(get());
     const plan = planOnboardIntercept({
       sdrId: s.sdrId,
@@ -2224,7 +2327,6 @@ export const useLegion = create<LegionStore>((set, get) => {
       dwellMs: dwellRaw,
       fftEnable: true,
       grid,
-      peakOverride: get().smartPeakOverride,
       ...lbOpts,
     });
     if (!plan.ok) {
@@ -2500,6 +2602,11 @@ export const useLegion = create<LegionStore>((set, get) => {
     smartGridAccepted: false,
     smartGridCard: null,
     smartPeakOverride: false,
+    fhssCorridorReady: false,
+    fhssPersistOcc: 0,
+    fhssPersistListen: 0,
+    fhssPersistPenalty: 0,
+    fhssPersistLine: "",
     autoDispatch: "park",
     scanWindowMhz: "20",
     txShelfMhz: "2",
@@ -2732,17 +2839,22 @@ export const useLegion = create<LegionStore>((set, get) => {
     setScanPattern: (p) => {
       if (p === "auto") {
         gSmartAccepted = null;
+        const survey = consumeSmartSurvey();
         set({
           scanPattern: p,
           fpgaClass: null,
           smartListenLive: false,
           smartGridAccepted: false,
+          ...EMPTY_FHSS_PERSIST,
+          ...(survey ?? {}),
         });
         return;
       }
       if (p === "fpga") {
         gSmartAccepted = null;
-        const card = publishSmartListen(get().sdrId, get().sdrBands);
+        const st = get();
+        const analog = catalogCaps(st.sdrId).analogBwMhz;
+        const smart = smartConfirmPatch(st.sdrId, st.sdrBands, analog);
         clearAttackHoldTimer();
         gAttackTracker.reset();
         bumpAttackThinkGen();
@@ -2750,7 +2862,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanPattern: p,
           smartListenLive: false,
           smartGridAccepted: false,
-          smartGridCard: card,
+          smartGridCard: smart.smartGridCard,
+          fhssCorridorReady: smart.fhssCorridorReady,
           attackTracks: [],
           attackPaint: null,
           attackPaintDraft: null,
@@ -2765,6 +2878,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       }
       gSmartListen = { hopsMhz: [], looks: [] };
       gSmartAccepted = null;
+      const surveyLeave = consumeSmartSurvey();
       clearAttackHoldTimer();
       gAttackTracker.reset();
       bumpAttackThinkGen();
@@ -2774,6 +2888,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         smartGridAccepted: false,
         smartGridCard: null,
         smartPeakOverride: false,
+        ...EMPTY_FHSS_PERSIST,
+        ...(surveyLeave ?? {}),
         attackTracks: [],
         attackPaint: null,
         attackPaintDraft: null,
@@ -2798,38 +2914,64 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ARM уже идёт или плата занята`);
         return false;
       }
-      const peak = !!(opts?.peak ?? s.smartPeakOverride);
+      if (opts?.peak || s.smartPeakOverride) {
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_PEAK_CLOSED_RU}`);
+      }
       const bands = get().sdrBands;
+      const analog = catalogCaps(s.sdrId).analogBwMhz;
       const card = publishSmartListen(s.sdrId, bands, { acceptO4: opts?.acceptO4 });
       if (card.analog) {
         gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: peak });
+        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false, fhssCorridorReady: false });
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_GRID_ANALOG_RU}`);
         return false;
       }
       if (s.sdrId === "bladerf-x40" && (bandTouchesC58(bands) || card.reason === SMART_X40_C58_RU)) {
         gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: peak });
+        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false, fhssCorridorReady: false });
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_X40_C58_RU}`);
         return false;
       }
-      if (card.empty && !peak) {
+      const look = pickFhssLook(gSmartListen.looks);
+      const ev = evalFhssConfirm({
+        look,
+        hopsMhz: gSmartListen.hopsMhz,
+        analogMhz: analog,
+        persistPenalty: s.fhssPersistPenalty,
+      });
+      const armCard = ev.card;
+      if (!ev.ready || !ev.corridor || !armCard) {
         gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false });
-        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_GRID_EMPTY_RU}`);
+        set({
+          smartGridCard: card,
+          smartGridAccepted: false,
+          smartPeakOverride: false,
+          fhssCorridorReady: false,
+        });
+        pushLog(
+          "sys",
+          `${FPGA_AIR_MODE_RU}: ${ev.gate.reason || (card.empty ? card.reason || SMART_GRID_EMPTY_RU : SMART_ARM_NEED_FHSS_RU)}`,
+        );
         return false;
       }
-      gSmartAccepted = card.empty && peak ? { ...card, reason: `${card.reason || SMART_GRID_EMPTY_RU} · пик без сетки` } : card;
+      captureSmartSurvey(s);
+      const corridorBand = fhssCorridorBand(ev.corridor);
+      gSmartAccepted = armCard;
       set({
-        smartGridCard: gSmartAccepted,
+        smartGridCard: armCard,
         smartGridAccepted: true,
-        smartPeakOverride: peak,
+        smartPeakOverride: false,
         smartListenLive: false,
+        fhssCorridorReady: true,
+        sdrBands: [corridorBand],
+        sdrF1: String(Math.round(ev.corridor.f1Mhz * 1000) / 1000),
+        sdrF2: String(Math.round(ev.corridor.f2Mhz * 1000) / 1000),
+        fpgaAirBwMhz: String(ev.corridor.lookMhz),
       });
       get().stopScan();
       pushLog(
         "sys",
-        `${FPGA_AIR_MODE_RU}: карточка принята · ${gSmartAccepted.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
+        `${FPGA_AIR_MODE_RU}: коридор подтверждён ${ev.corridor.f1Mhz.toFixed(1)}…${ev.corridor.f2Mhz.toFixed(1)} · взгляд ${ev.corridor.lookMhz} МГц · ${armCard.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
       );
       await startOnboardIntercept();
       return get().fpgaArmed || get().sdrEmulation;
@@ -4623,7 +4765,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       // Авто-рестарта скана нет — решение оператора, не таймаут.
       gFpgaAirGen += 1; // handoff в полёте увидит смену поколения и откачет ARM
       gSmartAccepted = null;
-      set({ smartGridAccepted: false, smartListenLive: false });
+      const surveyStop = consumeSmartSurvey();
+      set({ smartGridAccepted: false, smartListenLive: false, fhssCorridorReady: false, ...(surveyStop ?? {}) });
       get().stopScan();
       // Только ARM-фаза: disarm/release/reopen. Handoff в полёте (fpgaBusy
       // без armed) дожимать не надо — уборка за его abortIfRevoked, а reopen
@@ -4650,6 +4793,30 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (r.legion !== undefined) set({ fpgaLegion: r.legion });
       if (r.ok && r.freq_mhz && r.freq_mhz > 0 && get().fpgaArmed) {
         set({ lastForwardMhz: r.freq_mhz });
+      }
+      if (r.ok && get().fpgaArmed && (r.ch_hits || r.ch_active)) {
+        const txMhz = get().lastForwardMhz ?? (r.freq_mhz && r.freq_mhz > 0 ? r.freq_mhz : null);
+        const masked = maskOwnTxOccupancy(
+          { chHits: r.ch_hits ?? [], chActive: r.ch_active ?? [] },
+          {
+            txMhz,
+            occupyMhz: gAttackOccupyMhz,
+            waveArmed: get().txWaveKind !== null,
+          },
+        );
+        const look = pickFhssLook(gSmartListen.looks);
+        const listen = listenPersistHops(get().attackTracks, gSmartListen.hopsMhz, look);
+        const persist = fhssPersistOf({
+          occHops: occupancyHopCount(masked),
+          listenHops: listen.n,
+          listenFamily: listen.family,
+        });
+        set({
+          fhssPersistOcc: persist.occHops,
+          fhssPersistListen: persist.listenHops,
+          fhssPersistPenalty: persist.penalty,
+          fhssPersistLine: persist.line,
+        });
       }
       if (
         r.ok &&
@@ -5207,7 +5374,8 @@ export const useLegion = create<LegionStore>((set, get) => {
             return;
           }
           gSmartAccepted = null;
-          set({ smartGridAccepted: false });
+          const survey = consumeSmartSurvey();
+          set({ smartGridAccepted: false, fhssCorridorReady: false, ...(survey ?? {}) });
         }
         const blocked = modeConflict("sdr", s.corridorRunning, false);
         if (blocked) {
@@ -5529,7 +5697,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (isFpgaAirPattern(s.scanPattern)) {
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: Старт — слух Soapy, ARM после Принять; ноутбук только Стоп`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: Старт — слух Soapy, ARM после Подтвердить коридор; ноутбук только Стоп`,
         );
         return;
       }

@@ -96,4 +96,20 @@ mid900 = match_smart_grid({"hops_mhz": [903.55, 904.15, 904.75]})
 check("середина 900 — F0UNC",
       mid900["smart"] and (mid900["flags"] & GRID_FLAG_F0UNC) != 0)
 
+look = match_smart_grid({
+    "hops_mhz": [2400.4, 2401.4, 2410.4, 2450.4],
+    "fhss": {
+        "hit": True,
+        "unique": 4,
+        "hopSetMhz": [2400.4, 2401.4, 2410.4, 2450.4],
+        "spacingMhz": 1.0,
+        "f0AbsMhz": 2400.4,
+        "f0ResidualMhz": 0.4,
+    },
+})
+check("look-first: решётка n=51 F0=2400.4, слышал 4, не каталог 80",
+      look["smart"] and look["n"] == 51 and ((look["meta"] >> 8) & 0xFF) == 4
+      and look["f0_hz"] == 2_400_400_000
+      and look["kind"] == GRID_KIND_FHSS and look["preset"] != CH_PRESET_ELRS)
+
 print("smart_grid: ALL PASS")

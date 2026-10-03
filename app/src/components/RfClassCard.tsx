@@ -110,6 +110,9 @@ export function RfClassCard(props: {
   pattern: SdrWalkPattern;
   fpga?: FpgaObserveClass | null;
   silent?: string;
+  persistOcc?: number;
+  persistListen?: number;
+  persistLine?: string;
 }) {
   const listening = detectorListens(props.pattern) || !!props.fpga;
   const live = props.rows
@@ -147,8 +150,20 @@ export function RfClassCard(props: {
           </p>
           <p className="rfclass-hint">{props.fpga.atlas.hint}</p>
           <p className="sens-hint">{props.fpga.note}</p>
+          {props.persistLine ? (
+            <p className="sens-hint">
+              persist occupancy {props.persistOcc ?? 0} · слух {props.persistListen ?? 0}
+              {` · ${props.persistLine}`}
+            </p>
+          ) : null}
         </article>
       )}
+      {!props.fpga && props.persistLine ? (
+        <p className="sens-hint">
+          persist occupancy {props.persistOcc ?? 0} · слух {props.persistListen ?? 0}
+          {` · ${props.persistLine}`}
+        </p>
+      ) : null}
       {!listening && live.length === 0 ? null : live.length === 0 ? (
         <p className="rfclass-empty">{props.silent || ATTACK_SILENT_HINT}</p>
       ) : (

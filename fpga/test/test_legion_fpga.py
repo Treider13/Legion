@@ -405,6 +405,9 @@ r = rpc({"op": "arm", "mode": "nco"})
 check("arm для таймера длительной работы", r.get("ok") is True)
 r = rpc({"op": "status"})
 check("status несёт armed_s", isinstance(r.get("armed_s"), int) and r.get("armed_s") >= 0)
+check("status armed несёт ch_hits×8 и ch_active×4",
+      isinstance(r.get("ch_hits"), list) and len(r["ch_hits"]) == 8
+      and isinstance(r.get("ch_active"), list) and len(r["ch_active"]) == 4)
 check("свежий ARM без warn", "warn" not in r)
 lg.ARM_WARN_S = 0.05
 import time as _time

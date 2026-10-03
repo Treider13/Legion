@@ -1161,6 +1161,17 @@ class LegionGateway:
                 okw, wcur = self.fpga.read_reg(lf.REG_WALK_CUR)
                 if okw:
                     st["walk_delay"] = wcur
+                if self._armed:
+                    hits = []
+                    for i in range(8):
+                        okh, hv = self.fpga.read_reg(lf.REG_CH_HITS_0 + i)
+                        hits.append(int(hv) if okh else 0)
+                    st["ch_hits"] = hits
+                    active = []
+                    for i in range(4):
+                        oka, av = self.fpga.read_reg(lf.REG_CH_ACTIVE_0 + i)
+                        active.append(int(av) if oka else 0)
+                    st["ch_active"] = active
             if st.get("ok") and self.board == "bladerf2":
                 # Readback эфира из NIOS (не из HDL-статуса): air_up/freq_set.
                 ok2, air = self.fpga.read_reg(lf.REG_AIR_PREP)

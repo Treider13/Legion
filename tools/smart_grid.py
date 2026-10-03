@@ -127,10 +127,25 @@ def _finish(card: dict[str, Any]) -> dict[str, Any]:
     card["empty"] = empty
     card["smart"] = (not empty) and (not analog)
     card["packed_f0"] = pack_grid_f0(int(card["f0_hz"]))
+    n_used = int(card.pop("n_used", card["n"]))
     card["meta"] = pack_grid_meta(
-        int(card["n"]), int(card["n"]), 180 if not analog else 0,
+        int(card["n"]), n_used, 180 if not analog else 0,
         int(card["source"]), int(card["kind"]))
     return card
+
+
+def _lattice_n(f0_mhz: float, spacing: float, hops: list[float], unique: int,
+               f_high: float = 0.0) -> tuple[int, int]:
+    """NIOS AIM: F0+ch·STEP, ch∈[0,n). n — решётка до последнего hop, не unique/80."""
+    heard = max(0, int(unique))
+    last = hops[-1] if hops else f0_mhz
+    high = max(last, f_high) if f_high > 0 else last
+    span_n = heard
+    if spacing > 0 and high >= f0_mhz:
+        span_n = int(round((high - f0_mhz) / spacing)) + 1
+    if span_n < 1:
+        span_n = heard
+    return min(80, max(3, heard, span_n)), min(80, heard)
 
 
 def _hop_match(hops: list[float], domain: dict[str, Any]) -> dict[str, int] | None:
@@ -167,6 +182,56 @@ def _nearest_analog(mhz: float, max_df: float = 2.0) -> bool:
         if d < best:
             best = d
     return best <= max_df
+
+
+def _grid_from_measured_fhss(fhss: dict[str, Any] | None, hops: list[float],
+                             window_limited: bool) -> dict[str, Any] | None:
+    """GRID из look: F0=f0Abs, n=решётка до последнего hop. Не каталог 80 и не n=unique."""
+    if not fhss or not fhss.get("hit"):
+        return None
+    hop_set = [float(h) for h in (
+        fhss.get("hop_set_mhz") or fhss.get("hopSetMhz") or hops or []
+    ) if h]
+    hops_all = sorted(set(round(h, 3) for h in [*hop_set, *hops] if h > 0))
+    unique = int(fhss.get("unique") or fhss.get("n_slots") or fhss.get("nSlots") or len(hops_all) or 0)
+    if unique < 3 or len(hops_all) < 3:
+        return None
+    spacing = float(fhss.get("spacing_mhz") or fhss.get("spacingMhz") or 0.0)
+    if spacing <= 0 and len(hops_all) >= 2:
+        diffs = sorted(b - a for a, b in zip(hops_all, hops_all[1:]))
+        spacing = diffs[len(diffs) // 2] if diffs else 0.0
+    if spacing < 0.15:
+        return None
+    f0_abs = fhss.get("f0_abs_mhz")
+    if f0_abs is None:
+        f0_abs = fhss.get("f0AbsMhz")
+    if f0_abs is None or float(f0_abs) < 50:
+        residual, f_ref = fhss_residual_f0(hops_all, spacing)
+        res = fhss.get("f0_residual_mhz", fhss.get("f0ResidualMhz", residual))
+        f0_abs = f_ref + float(res if res is not None else residual)
+    if float(f0_abs) < 50:
+        return None
+    f_high = float(fhss.get("f_high_mhz") or fhss.get("fHighMhz") or 0.0)
+    n, n_used = _lattice_n(float(f0_abs), spacing, hops_all, unique, f_high)
+    win = window_limited or bool(fhss.get("window_limited") or fhss.get("windowLimited"))
+    return _finish({
+        "analog": False,
+        "reason": f"FHSS look · n={n} · слышал {n_used} · F0 {float(f0_abs):.3f}",
+        "f0_hz": int(round(float(f0_abs) * 1e6)),
+        "step_hz": int(round(spacing * 1e6)),
+        "n": n,
+        "n_used": n_used,
+        "kind": GRID_KIND_FHSS,
+        "source": GRID_SRC_MATCHER,
+        "shift_hz": 0,
+        "pri_us": 0,
+        "flags": pack_grid_flags(window_limited=win),
+        "preset": CH_PRESET_MANUAL,
+        "ch_pwr_thr": CH_PWR_THR_DEFAULT,
+        "ch_thr": 0,
+        "ch_hyst": CH_HYST_DEFAULT,
+        "ch_mode": 1 if abs(spacing - 1.0) <= 0.05 else 0,
+    })
 
 
 def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
@@ -267,6 +332,18 @@ def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
         })
 
     win_lim = bool(inp.get("window_limited"))
+
+    fhss = inp.get("fhss") if isinstance(inp.get("fhss"), dict) else None
+    if not fhss:
+        for l in looks:
+            cand = l.get("fhss") if isinstance(l, dict) else None
+            if isinstance(cand, dict) and cand.get("hit"):
+                fhss = cand
+                break
+    measured = _grid_from_measured_fhss(fhss, hops, win_lim)
+    if measured and not measured.get("empty"):
+        return measured
+
     if len(hops) >= 2:
         scored: list[dict[str, Any]] = []
         for d in FHSS_DOMAINS:

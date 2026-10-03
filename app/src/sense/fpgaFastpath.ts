@@ -345,7 +345,7 @@ export interface OnboardInterceptInput {
   fireBwMhz?: number;
   /** Слух/оператор → карточка 0x51–0x59. Нет — пустая сетка, не ELRS. */
   grid?: SmartGridInput | SmartGridCard;
-  /** Явный пик без сетки. Пустая карточка иначе режет ARM. Аналог / x40+C58 — нет. */
+  /** Закрыт: пустая сетка всегда отказ. Поле оставлено, чтобы старые вызовы не падали. */
   peakOverride?: boolean;
   /** Панель DRFM: 0 / пусто = таблица. */
   lbDelay?: number;
@@ -468,7 +468,7 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   if (fftEnable && grid.analog) {
     return fail(`${FPGA_AIR_MODE_RU}: ${grid.reason || SMART_GRID_ANALOG_RU}`);
   }
-  if (fftEnable && grid.empty && !i.peakOverride) {
+  if (fftEnable && grid.empty) {
     return fail(`${FPGA_AIR_MODE_RU}: ${grid.reason || SMART_GRID_EMPTY_RU}`);
   }
   const hops = Math.max(0, centers.length - 1);
