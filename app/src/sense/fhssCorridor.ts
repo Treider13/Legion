@@ -7,7 +7,7 @@ import type { AttackLook } from "./attackLook";
 import { fhssArmGate, type FhssArmGate } from "./fhssArmGate";
 import { FPGA_AIR_BW_MIN_MHZ, clampAirBwMhz } from "./fpgaFastpath";
 import type { FhssLook } from "./protocolDb";
-import type { SmartGridCard } from "./smartGrid";
+import { gridFromMeasuredFhss, type SmartGridCard } from "./smartGrid";
 
 export interface FhssCorridor {
   f1Mhz: number;
@@ -56,17 +56,24 @@ export function fhssCorridorBand(c: FhssCorridor): AllowBand {
 export function evalFhssConfirm(i: {
   look?: AttackLook | null;
   hopsMhz: readonly number[];
-  card: SmartGridCard | null;
+  card?: SmartGridCard | null;
   analogMhz: number;
   persistPenalty?: number;
-}): { ready: boolean; gate: FhssArmGate; corridor: FhssCorridor | null } {
+}): {
+  ready: boolean;
+  gate: FhssArmGate;
+  corridor: FhssCorridor | null;
+  card: SmartGridCard | null;
+} {
   const fhss = i.look?.fhss?.hit ? i.look.fhss : null;
+  const corridor = fhssCorridorFromLook(fhss, i.hopsMhz, i.analogMhz);
+  /* ARM только из look. Каталог hopMatch (n=80 / F0=2400.4) — для UI, не в GRID. */
+  const measured = gridFromMeasuredFhss(fhss, i.hopsMhz, corridor?.windowLimited === true);
   const gate = fhssArmGate({
     look: i.look,
     fhss,
-    card: i.card,
+    card: measured,
     persistPenalty: i.persistPenalty,
   });
-  const corridor = fhssCorridorFromLook(fhss, i.hopsMhz, i.analogMhz);
-  return { ready: gate.ok && corridor != null, gate, corridor };
+  return { ready: gate.ok && corridor != null && measured != null, gate, corridor, card: measured };
 }

@@ -117,6 +117,7 @@ import type { FhssLook } from "../src/sense/protocolDb";
 import {
   FHSS_ARM_CONF_MIN,
   FHSS_ARM_UNIQUE_MIN,
+  SMART_ARM_NEED_CARD_RU,
   SMART_ARM_NEED_FHSS_RU,
   SMART_ARM_NEED_UNIQUE_RU,
   fhssArmGate,
@@ -1701,9 +1702,28 @@ async function main(): Promise<void> {
   check("коридор+сетка: confirm ready", evalFhssConfirm({
     look: sampleFhssAttackLook(),
     hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4],
-    card: synthFhssGrid(),
     analogMhz: 56,
-  }).ready);
+  }).ready && evalFhssConfirm({
+    look: sampleFhssAttackLook(),
+    hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4],
+    analogMhz: 56,
+  }).card?.n === 4);
+  check("confirm: каталог n=80 при шаге look <0.15 — ARM нет", (() => {
+    const hops = [2400.4, 2401.4, 2410.4, 2450.4];
+    const cat = matchSmartGrid({ hopsMhz: hops });
+    const ev = evalFhssConfirm({
+      look: sampleFhssAttackLook({ fhss: sampleFhssLook({ spacingMhz: 0.1 }) }),
+      hopsMhz: hops,
+      card: cat,
+      analogMhz: 56,
+    });
+    return cat.n === 80 && !ev.ready && ev.card == null && ev.gate.reason === SMART_ARM_NEED_CARD_RU;
+  })());
+  check("confirm: hops без look — каталог не ARM", (() => {
+    const hops = [2400.4, 2401.4, 2410.4, 2450.4];
+    const ev = evalFhssConfirm({ hopsMhz: hops, analogMhz: 56 });
+    return !ev.ready && ev.gate.reason === SMART_ARM_NEED_FHSS_RU;
+  })());
   check("маска своего TX на CH_HITS слот 2440", (() => {
     const raw = { chHits: [1, 1, 1, 1, 1, 1, 1, 1], chActive: [0xff, 0xffffffff, 0xffffffff, 0xffff] };
     const m = maskOwnTxOccupancy(raw, { txMhz: 2445, occupyMhz: 2, waveArmed: true });
@@ -2712,8 +2732,8 @@ async function main(): Promise<void> {
     storeSrc.includes("SMART_ARM_NEED_ACCEPT_RU") &&
     storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"), storeSrc.indexOf("const fpgaReturnToScan"))
       .includes("smartGridAccepted"));
-  check("acceptSmartGridAndArm замораживает карточку",
-    storeSrc.includes("acceptSmartGridAndArm") && storeSrc.includes("gSmartAccepted = card"));
+  check("acceptSmartGridAndArm замораживает карточку look",
+    storeSrc.includes("acceptSmartGridAndArm") && storeSrc.includes("gSmartAccepted = armCard"));
   {
     const acceptFn = storeSrc.slice(storeSrc.indexOf("acceptSmartGridAndArm:"), storeSrc.indexOf("setAttackPaint:"));
     check("Подтвердить: analog / x40+C58 / нет FHSS отказ; peak закрыт",
@@ -2732,6 +2752,7 @@ async function main(): Promise<void> {
       onboard.includes("if (!acq.ok)"));
     check("онбордовый ARM: затвор FHSS до MODE, всегда lb_gated",
       onboard.indexOf("fhssArmGate") < onboard.indexOf('set({ fpgaMode: "lb_gated"')
+      && onboard.includes("gridFromMeasuredFhss")
       && onboard.includes('fpgaArmCmd("lb_gated"')
       && !onboard.includes('fpgaArmCmd("nco"')
       && !onboard.includes('fpgaArmCmd("player"'));

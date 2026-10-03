@@ -112,6 +112,7 @@ import {
 } from "../sense/fpgaFastpath";
 import {
   bandTouchesC58,
+  gridFromMeasuredFhss,
   matchSmartGrid,
   SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
@@ -119,7 +120,6 @@ import {
   type SmartGridCard,
 } from "../sense/smartGrid";
 import {
-  SMART_ARM_NEED_CARD_RU,
   SMART_ARM_NEED_FHSS_RU,
   SMART_ARM_PEAK_CLOSED_RU,
   fhssArmGate,
@@ -2298,15 +2298,16 @@ export const useLegion = create<LegionStore>((set, get) => {
       pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте выдержку числом (0,4 и 0.4 — 400 мкс)`);
       return;
     }
-    const grid: SmartGridCard = acceptedCard;
     const look = pickFhssLook(gSmartListen.looks);
+    const measured = gridFromMeasuredFhss(look?.fhss ?? null, gSmartListen.hopsMhz);
+    const grid: SmartGridCard | null = measured;
     const gate = fhssArmGate({
       look,
       fhss: look?.fhss ?? null,
       card: grid,
       persistPenalty: get().fhssPersistPenalty,
     });
-    if (!gate.ok) {
+    if (!gate.ok || !grid) {
       gSmartAccepted = null;
       set({ smartGridAccepted: false, fhssCorridorReady: false, smartPeakOverride: false });
       pushLog("sys", `${FPGA_AIR_MODE_RU}: ${gate.reason}`);
@@ -2935,11 +2936,11 @@ export const useLegion = create<LegionStore>((set, get) => {
       const ev = evalFhssConfirm({
         look,
         hopsMhz: gSmartListen.hopsMhz,
-        card,
         analogMhz: analog,
         persistPenalty: s.fhssPersistPenalty,
       });
-      if (!ev.ready || !ev.corridor) {
+      const armCard = ev.card;
+      if (!ev.ready || !ev.corridor || !armCard) {
         gSmartAccepted = null;
         set({
           smartGridCard: card,
@@ -2953,17 +2954,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         );
         return false;
       }
-      if (card.empty) {
-        gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false, fhssCorridorReady: false });
-        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_ARM_NEED_CARD_RU}`);
-        return false;
-      }
       captureSmartSurvey(s);
       const corridorBand = fhssCorridorBand(ev.corridor);
-      gSmartAccepted = card;
+      gSmartAccepted = armCard;
       set({
-        smartGridCard: card,
+        smartGridCard: armCard,
         smartGridAccepted: true,
         smartPeakOverride: false,
         smartListenLive: false,
@@ -2976,7 +2971,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       get().stopScan();
       pushLog(
         "sys",
-        `${FPGA_AIR_MODE_RU}: коридор подтверждён ${ev.corridor.f1Mhz.toFixed(1)}…${ev.corridor.f2Mhz.toFixed(1)} · взгляд ${ev.corridor.lookMhz} МГц · ${card.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
+        `${FPGA_AIR_MODE_RU}: коридор подтверждён ${ev.corridor.f1Mhz.toFixed(1)}…${ev.corridor.f2Mhz.toFixed(1)} · взгляд ${ev.corridor.lookMhz} МГц · ${armCard.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
       );
       await startOnboardIntercept();
       return get().fpgaArmed || get().sdrEmulation;
