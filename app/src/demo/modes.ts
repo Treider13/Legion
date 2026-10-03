@@ -68,7 +68,7 @@ export const DEMO_MODES: readonly DemoMode[] = [
     group: "SDR",
     scanner: false,
     hostHints: false,
-    summary: "Старт — слух Soapy, Принять — ARM. Сканер хоста в круге TX не участвует.",
+    summary: "Старт — слух Soapy, Подтвердить коридор — ARM. Сканер хоста в круге TX не участвует.",
   },
   {
     id: "air",

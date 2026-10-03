@@ -251,10 +251,10 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · {FPGA_AIR_MODE_RU}</p>
             <h2 id={titleId}>Канал и стратегия</h2>
             <p className="cinema-gate-lead">
-              Старт — слух Soapy, карточка живая, TX выкл. Принять замораживает
-              карточку и отдаёт ARM плате. Пустая сетка / аналог 5.8 / x40+C58 —
+              Старт — слух Soapy по F1…F2, TX выкл. Подтвердить коридор сжимает
+              hop-set и отдаёт один взгляд плате. Класс ≠ FHSS / аналог 5.8 / x40+C58 —
               ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
-              Ноутбук задаёт коридор, выдержку на сигнал, Старт, Принять и Стоп.
+              Ноутбук задаёт коридор, выдержку, Старт, Подтвердить коридор и Стоп.
               Живой канал last_live {FPGA_SURVEY_GONE_MS} мс, не таймер периода прохода.
               USB не в круге «увидел → усилитель».
             </p>
@@ -411,7 +411,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              {FPGA_AIR_MODE_RU}: Старт — слух Soapy, Принять — ARM плате (USB не в круге увидел→TX).
+              {FPGA_AIR_MODE_RU}: Старт — слух Soapy, Подтвердить коридор — ARM плате (USB не в круге увидел→TX).
               Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
               либо Soapy ставит LO, либо агент держит FPGA.
             </p>
@@ -422,12 +422,12 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={path === "auto"}
                 className={path === "auto" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPath("auto")}
-                title="Старт — слух Soapy. Принять — ARM. Ноутбук — рубильник."
+                title="Старт — слух Soapy. Подтвердить коридор — ARM. Ноутбук — рубильник."
               >
                 <strong>{FPGA_AIR_MODE_RU}</strong>
                 <span>
                   Антенна на RX SMA. Старт слушает Soapy и собирает карточку.
-                  Принять отдаёт ARM плате. USB не в круге «увидел → усилитель».{" "}
+                  Подтвердить коридор сжимает hop-set и отдаёт ARM плате. USB не в круге «увидел → усилитель».{" "}
                   {fpgaAirSupported(sdrId)
                     ? "Эта плата в ревизии legion."
                     : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}

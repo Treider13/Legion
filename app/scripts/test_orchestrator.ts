@@ -36,7 +36,7 @@ import {
   waveAmpQ15,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, peekSmartAccepted, peekSmartListen, pokeLastKickOkMs, useLegion, walkoffArmOpts } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, peekSmartAccepted, peekSmartListen, pokeLastKickOkMs, seedSmartListenForTest, useLegion, walkoffArmOpts } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -103,11 +103,27 @@ import {
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
   emptySmartGrid,
+  gridFromMeasuredFhss,
   matchSmartGrid,
   packGridF0,
   xlatWindowMhz,
+  GRID_KIND_FHSS,
+  GRID_FLAG_WINLIM,
   type SmartGridCard,
 } from "../src/sense/smartGrid";
+import { ANALOG_COMB_NONE } from "../src/sense/analogComb";
+import type { AttackLook } from "../src/sense/attackLook";
+import type { FhssLook } from "../src/sense/protocolDb";
+import {
+  FHSS_ARM_CONF_MIN,
+  FHSS_ARM_UNIQUE_MIN,
+  SMART_ARM_NEED_FHSS_RU,
+  SMART_ARM_NEED_UNIQUE_RU,
+  fhssArmGate,
+} from "../src/sense/fhssArmGate";
+import { evalFhssConfirm, fhssCorridorFromLook } from "../src/sense/fhssCorridor";
+import { maskOwnTxOccupancy, occupancyHopCount } from "../src/sense/chHitsMask";
+import { FHSS_PERSIST_DIV_PENALTY, fhssPersistOf } from "../src/sense/fhssPersist";
 import {
   FPGA_SOLO_FS_MIN_HZ,
   FPGA_SOLO_MICRO_ANALOG_MHZ,
@@ -211,6 +227,58 @@ function check(name: string, cond: boolean, detail = ""): void {
     console.log(`  FAIL  ${name} ${detail}`);
     failures++;
   }
+}
+
+function sampleFhssLook(over: Partial<FhssLook> = {}): FhssLook {
+  return {
+    hit: true,
+    hops: 4,
+    unique: 4,
+    hopSetMhz: [2400.4, 2401.4, 2410.4, 2450.4],
+    spacingMhz: 1,
+    dwellMs: 2,
+    intervalMs: 2,
+    rateHz: 500,
+    hopBwMhz: 1,
+    spanMhz: 50,
+    fLowMhz: 2400.4,
+    fHighMhz: 2450.4,
+    windowLimited: false,
+    ibwMhz: 56,
+    hint: "",
+    f0AbsMhz: 2400.4,
+    f0ResidualMhz: 0.4,
+    nSlots: 4,
+    ...over,
+  };
+}
+
+function sampleFhssAttackLook(over: Partial<AttackLook> = {}): AttackLook {
+  return {
+    freqMhz: 2440,
+    kind: "unknown",
+    label: "FHSS",
+    conf: 0.3,
+    flatness: 0,
+    cepstrum: 0,
+    famCoh: 0,
+    famAlphaHz: 0,
+    c20: 0,
+    kurt: 0,
+    clip: false,
+    leftover: null,
+    source: "bins",
+    analog: ANALOG_COMB_NONE,
+    fhss: sampleFhssLook(),
+    ...over,
+  };
+}
+
+function synthFhssGrid(): SmartGridCard {
+  return matchSmartGrid({
+    fhss: sampleFhssLook(),
+    hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4],
+  });
 }
 
 async function main(): Promise<void> {
@@ -622,11 +690,11 @@ async function main(): Promise<void> {
   check("planSdrWork FPGA: плата смотрит эфир, хост-сканер не в круге",
     fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
-  check("planSdrWork FPGA: две фазы Старт/Принять", fpgaWork.reason.includes("Принять") && fpgaWork.reason.includes("last_live"));
+  check("planSdrWork FPGA: две фазы Старт/Подтвердить коридор", fpgaWork.reason.includes("Подтвердить коридор") && fpgaWork.reason.includes("last_live"));
   check("hostListenActive: fpga только в фазе слуха",
     !hostListenActive("fpga") && hostListenActive("fpga", true) && hostListenActive("auto"));
-  check("ПРИНЯТЬ подпись", FPGA_AIR_MODE_ACCEPT_RU === "ПРИНЯТЬ");
-  check("ARM без Принять — строка", SMART_ARM_NEED_ACCEPT_RU.includes("Принять"));
+  check("Подтвердить коридор подпись", FPGA_AIR_MODE_ACCEPT_RU === "Подтвердить коридор");
+  check("ARM без Подтвердить коридор — строка", SMART_ARM_NEED_ACCEPT_RU.includes("Подтвердить коридор"));
   check("occupancy last_live 1.5 с, не SCAN_SURVEY", FPGA_SURVEY_GONE_MS === 1500);
   check("СКАНИРОВАТЬ в качании — слух классов", scanRefusedReason("sweep") === null);
   check("TX-сканер по-прежнему только Атака", scannerParticipates("sweep") === false);
@@ -1470,13 +1538,13 @@ async function main(): Promise<void> {
   check("онбордовый xA4: коридор 5000-5800 (выше ADF 4400)", planOnboardIntercept({
     sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 5000, f2Mhz: 5800 }],
     loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-    fftEnable: true, peakOverride: true,
+    fftEnable: true, grid: synthFhssGrid(),
   }).ok === true);
   check("онбордовый xA4: 70-6000 @ 56 МГц — 106 взглядов", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 70, f2Mhz: 6000 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.centers.length === 106 && p.centers[0] === 98 && p.centers[p.centers.length - 1] === 5972;
   })());
@@ -1489,7 +1557,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2600 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.fftEnable && p.survey && p.park && p.fireBwMhz === 2 && p.settleN === fpgaSettleN(56e6)
       && p.reason.includes("ИИ") && p.reason.includes("last_live") && !p.reason.includes("не шагает")
@@ -1499,7 +1567,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2487 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.survey && p.park && p.centers.length === 2 && p.firstMhz === 2428
       && p.centers[1] === 2459 && p.reason.includes("last_live");
@@ -1508,7 +1576,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2440, f2Mhz: 2480 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 0.4,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.park && p.survey && p.centers.length === 1 && p.firstMhz === 2460
       && p.reason.includes("ИИ");
@@ -1517,7 +1585,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2000, f2Mhz: 3000 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, park: true, dwellMs: 3000,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.survey && p.park && p.centers.length === 18 && p.firstMhz === 2028
       && p.centers[17] === 2972;
@@ -1526,7 +1594,7 @@ async function main(): Promise<void> {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2500 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: true, dwellMs: 0.4,
-      fftEnable: true, peakOverride: true,
+      fftEnable: true, grid: synthFhssGrid(),
     });
     return p.ok && p.fftEnable && p.turn && p.survey && p.park && p.dwellMs === 0.4
       && p.centers.length === 2 && p.firstMhz === 2428 && p.centers[1] === 2472
@@ -1604,6 +1672,58 @@ async function main(): Promise<void> {
       && Array.isArray(on.scan_bands) && (on.scan_bands as { f1_mhz: number }[])[0].f1_mhz === 2400
       && off.fft_enable === undefined;
   })());
+  check("матчер: look-first не каталог n=80", (() => {
+    const g = matchSmartGrid({ fhss: sampleFhssLook(), hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    const cat = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    return g.smart && g.kind === GRID_KIND_FHSS && g.n === 4 && g.f0Hz === 2_400_400_000
+      && g.stepHz === 1_000_000 && cat.n === 80 && cat.f0Hz === 2_400_400_000;
+  })());
+  check("gridFromMeasuredFhss: F0=f0Abs, не residual 0.4", (() => {
+    const g = gridFromMeasuredFhss(sampleFhssLook({ f0AbsMhz: 2400.4, f0ResidualMhz: 0.4 }), [2400.4, 2401.4, 2410.4]);
+    return !!g && g.f0Hz === 2_400_400_000 && g.n === 4 && (g.flags & GRID_FLAG_WINLIM) === 0;
+  })());
+  check("затвор: тон без FHSS — отказ", !fhssArmGate({ look: { ...sampleFhssAttackLook(), fhss: null } }).ok
+    && fhssArmGate({ look: { ...sampleFhssAttackLook(), fhss: null } }).reason === SMART_ARM_NEED_FHSS_RU);
+  check("затвор: unique<3 — отказ", !fhssArmGate({
+    look: sampleFhssAttackLook({ fhss: sampleFhssLook({ unique: 2, hopSetMhz: [2400.4, 2401.4], nSlots: 2 }) }),
+    card: synthFhssGrid(),
+  }).ok && fhssArmGate({
+    look: sampleFhssAttackLook({ fhss: sampleFhssLook({ unique: 2, hopSetMhz: [2400.4, 2401.4], nSlots: 2 }) }),
+    card: synthFhssGrid(),
+  }).reason === SMART_ARM_NEED_UNIQUE_RU);
+  check("затвор: FHSS+карточка — ок", fhssArmGate({ look: sampleFhssAttackLook(), card: synthFhssGrid() }).ok
+    && fhssArmGate({ look: sampleFhssAttackLook(), card: synthFhssGrid() }).conf >= FHSS_ARM_CONF_MIN
+    && FHSS_ARM_UNIQUE_MIN === 3);
+  check("коридор: 2000–3000 look → один взгляд ≤ analog", (() => {
+    const c = fhssCorridorFromLook(sampleFhssLook(), [2400.4, 2401.4, 2410.4, 2450.4], 56);
+    return !!c && c.f2Mhz - c.f1Mhz <= 56.5 && c.lookMhz <= 56;
+  })());
+  check("коридор+сетка: confirm ready", evalFhssConfirm({
+    look: sampleFhssAttackLook(),
+    hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4],
+    card: synthFhssGrid(),
+    analogMhz: 56,
+  }).ready);
+  check("маска своего TX на CH_HITS слот 2440", (() => {
+    const raw = { chHits: [1, 1, 1, 1, 1, 1, 1, 1], chActive: [0xff, 0xffffffff, 0xffffffff, 0xffff] };
+    const m = maskOwnTxOccupancy(raw, { txMhz: 2445, occupyMhz: 2, waveArmed: true });
+    return m.maskedSlots.includes(4) && m.chHits[4] === 0 && occupancyHopCount(m) < occupancyHopCount({
+      chHits: raw.chHits, chActive: raw.chActive, maskedSlots: [], maskedElrs: [],
+    });
+  })());
+  check("persist расхождение снижает conf", fhssPersistOf({ occHops: 2, listenHops: 40 }).diverge
+    && fhssPersistOf({ occHops: 2, listenHops: 40 }).penalty === FHSS_PERSIST_DIV_PENALTY
+    && fhssPersistOf({ occHops: 0, listenHops: 40 }).penalty === 0);
+  check("план hop-коридора: один взгляд, не 18 плиток", (() => {
+    const c = fhssCorridorFromLook(sampleFhssLook(), [2400.4, 2401.4, 2410.4, 2450.4], 56)!;
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56,
+      bands: [{ f1Mhz: c.f1Mhz, f2Mhz: c.f2Mhz }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: c.lookMhz, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: synthFhssGrid(),
+    });
+    return p.ok && p.centers.length === 1;
+  })());
   check("матчер: пустой эфир не ELRS", matchSmartGrid({}).empty && matchSmartGrid({}).reason === SMART_GRID_EMPTY_RU);
   check("матчер: ELRS hop-set → 2400.4/1/80", (() => {
     const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
@@ -1655,13 +1775,13 @@ async function main(): Promise<void> {
     });
     return !p.ok && p.grid.empty && p.reason.includes(SMART_GRID_EMPTY_RU);
   })());
-  check("план пустой + пик-override: не умная, но ok", (() => {
+  check("план пустой + пик-override: ARM нет", (() => {
     const p = planOnboardIntercept({
       sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
       loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
       fftEnable: true, peakOverride: true,
     });
-    return p.ok && p.grid.empty && !p.grid.smart && p.reason.includes("last_live");
+    return !p.ok && p.grid.empty && !p.grid.smart && p.reason.includes(SMART_GRID_EMPTY_RU);
   })());
   check("план аналог 5.8: отказ даже с пик-override", (() => {
     const analog = {
@@ -2122,12 +2242,25 @@ async function main(): Promise<void> {
   check("кино перехват: scanPattern=fpga, карточка не принята",
     autoSt.scanPattern === "fpga" && autoSt.smartGridAccepted === false && autoSt.fpgaArmed === false);
   const denyEmpty = await runSmartAccept();
-  check("кино Принять пустую сетку — отказ, ARM нет",
+  check("кино Подтвердить пустую сетку — отказ, ARM нет",
     denyEmpty === false && useLegion.getState().fpgaArmed === false && peekSmartAccepted() === null);
   const peakAcc = await runSmartAccept({ peak: true });
-  check("кино Принять пик: карточка принята, эмуляция ARM нет",
-    peakAcc === true && useLegion.getState().smartGridAccepted === true && useLegion.getState().fpgaArmed === false
-    && peekSmartAccepted() != null);
+  check("кино пик без сетки закрыт — ARM нет",
+    peakAcc === false && useLegion.getState().smartGridAccepted === false && useLegion.getState().fpgaArmed === false
+    && peekSmartAccepted() === null);
+  useLegion.getState().setSdrAllowField("sdrF1", "2000");
+  useLegion.getState().setSdrAllowField("sdrF2", "3000");
+  useLegion.getState().clearSdrBands();
+  useLegion.getState().addSdrBand();
+  seedSmartListenForTest(sampleFhssAttackLook(), [2400.4, 2401.4, 2410.4, 2450.4]);
+  const fhssAcc = await runSmartAccept();
+  const afterFhss = useLegion.getState();
+  check("кино Подтвердить FHSS: коридор сжат, один взгляд, эмуляция ARM нет",
+    fhssAcc === true && afterFhss.smartGridAccepted === true && afterFhss.fpgaArmed === false
+    && peekSmartAccepted() != null && peekSmartAccepted()!.n === 4
+    && afterFhss.sdrBands.length === 1
+    && afterFhss.sdrBands[0]!.f2Mhz - afterFhss.sdrBands[0]!.f1Mhz <= 56.5
+    && Number(afterFhss.fpgaAirBwMhz) <= 56);
   await useLegion.getState().stopFpgaAir();
   useLegion.setState({ sdrId: "bladerf-x40", sdrBands: [{ f1Mhz: 5725, f2Mhz: 5850 }] });
   useLegion.getState().setScanPattern("fpga");
@@ -2459,7 +2592,7 @@ async function main(): Promise<void> {
     muxSrc.includes("lb_amp_q15(nco_i)") &&
     muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
     !muxSrc.includes("lb_always остаётся 1:1"));
-  check("cinema auto: ждёт слух, ARM без Принять — отказ",
+  check("cinema auto: ждёт слух, ARM без Подтвердить коридор — отказ",
     autoBlock.includes("smartListenLive") && autoBlock.includes("st.fpgaArmed") && autoBlock.includes("return false"));
   check("cinema auto: канал и выдержка пишутся в стор",
     runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)") && runSrc.includes("setFpgaTurnDwellMs(opts.dwellMs)"));
@@ -2575,7 +2708,7 @@ async function main(): Promise<void> {
     check("startScan fpga — слух Soapy, не ARM",
       startScanFn.includes("smartListenLive: true") && !startScanFn.includes("startOnboardIntercept"));
   }
-  check("ARM без Принять запрещён в startOnboardIntercept",
+  check("ARM без Подтвердить коридор запрещён в startOnboardIntercept",
     storeSrc.includes("SMART_ARM_NEED_ACCEPT_RU") &&
     storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"), storeSrc.indexOf("const fpgaReturnToScan"))
       .includes("smartGridAccepted"));
@@ -2583,9 +2716,10 @@ async function main(): Promise<void> {
     storeSrc.includes("acceptSmartGridAndArm") && storeSrc.includes("gSmartAccepted = card"));
   {
     const acceptFn = storeSrc.slice(storeSrc.indexOf("acceptSmartGridAndArm:"), storeSrc.indexOf("setAttackPaint:"));
-    check("Принять: analog / x40+C58 отказ даже с пиком; empty — только peak",
+    check("Подтвердить: analog / x40+C58 / нет FHSS отказ; peak закрыт",
       acceptFn.includes("card.analog") && acceptFn.includes("SMART_X40_C58_RU")
-      && acceptFn.includes("card.empty && !peak") && acceptFn.includes("acceptO4"));
+      && acceptFn.includes("evalFhssConfirm") && acceptFn.includes("SMART_ARM_PEAK_CLOSED_RU")
+      && acceptFn.includes("fhssCorridorBand") && acceptFn.includes("acceptO4"));
   }
   {
     const onboard = storeSrc.slice(
@@ -2596,6 +2730,11 @@ async function main(): Promise<void> {
       onboard.includes("get().stopScan()") &&
       onboard.includes("releaseSoapyForFpga") &&
       onboard.includes("if (!acq.ok)"));
+    check("онбордовый ARM: затвор FHSS до MODE, всегда lb_gated",
+      onboard.indexOf("fhssArmGate") < onboard.indexOf('set({ fpgaMode: "lb_gated"')
+      && onboard.includes('fpgaArmCmd("lb_gated"')
+      && !onboard.includes('fpgaArmCmd("nco"')
+      && !onboard.includes('fpgaArmCmd("player"'));
   }
   {
     const tickFn = storeSrc.slice(

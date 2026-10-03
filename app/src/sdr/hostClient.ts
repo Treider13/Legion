@@ -428,6 +428,10 @@ export interface FpgaStatus {
   scan_event?: number;
   scan_event_code?: number;
   scan_event_seq?: number;
+  /** Occupancy NIOS: CH_HITS_0..7 (8×10 МГц @ 2400). Только при ARM. */
+  ch_hits?: number[];
+  /** Occupancy NIOS: CH_ACTIVE_0..3 (слоты + 80 бит ELRS). Только при ARM. */
+  ch_active?: number[];
 }
 
 /** Команда FPGA-ревизии legion (x40): релей через воркер → шлюз → NIOS.

@@ -12,11 +12,13 @@ import {
   fhssBandOf,
   fhssFilterResidual,
   fhssFreqcorrMaxHz,
+  fhssHopSpacingMhz,
   fhssResidualF0,
   nearestAnalogChannel,
   type FhssDomain,
   type FhssLook,
 } from "./protocolDb";
+import { FHSS_ARM_UNIQUE_MIN } from "./fhssArmGate";
 import type { AttackLook } from "./attackLook";
 import type { AllowBand } from "../policy/allowlist";
 
@@ -242,6 +244,77 @@ function looksOfdm24(i: SmartGridInput): boolean {
   );
 }
 
+function pickInputFhss(i: SmartGridInput): FhssLook | null {
+  if (i.fhss?.hit) return i.fhss;
+  let best: FhssLook | null = null;
+  for (const look of i.looks ?? []) {
+    const fhss = look.fhss;
+    if (!fhss?.hit) continue;
+    const n = fhss.unique || fhss.hopSetMhz.length;
+    const bestN = best ? best.unique || best.hopSetMhz.length : -1;
+    if (!best || n > bestN) best = fhss;
+  }
+  return best;
+}
+
+function measuredF0Mhz(fhss: FhssLook, hops: readonly number[], spacingMhz: number): number | null {
+  if (fhss.f0AbsMhz != null && Number.isFinite(fhss.f0AbsMhz) && fhss.f0AbsMhz >= 50) {
+    return fhss.f0AbsMhz;
+  }
+  const { residualMhz, fRefMhz } = fhssResidualF0(hops, spacingMhz);
+  const res = fhss.f0ResidualMhz != null && Number.isFinite(fhss.f0ResidualMhz) ? fhss.f0ResidualMhz : residualMhz;
+  const abs = fRefMhz + res;
+  return abs >= 50 ? abs : null;
+}
+
+/** GRID_* из FhssLook. n = unique/hopSet, F0 = f0Abs (f_ref+residual). Не каталог 80 / 2400.4. */
+export function gridFromMeasuredFhss(
+  fhss: FhssLook | null | undefined,
+  hopsMhz: readonly number[] = [],
+  windowLimited = false,
+): SmartGridCard | null {
+  if (!fhss?.hit) return null;
+  const hops = [
+    ...new Set(
+      [...(fhss.hopSetMhz ?? []), ...hopsMhz]
+        .filter((h) => Number.isFinite(h) && h > 0)
+        .map((h) => Math.round(h * 1000) / 1000),
+    ),
+  ].sort((a, b) => a - b);
+  const unique = fhss.unique || fhss.nSlots || hops.length;
+  if (unique < FHSS_ARM_UNIQUE_MIN || hops.length < FHSS_ARM_UNIQUE_MIN) return null;
+  const spacing = fhss.spacingMhz > 0 ? fhss.spacingMhz : fhssHopSpacingMhz(hops);
+  if (!(spacing >= 0.15)) return null;
+  const f0Mhz = measuredF0Mhz(fhss, hops, spacing);
+  if (f0Mhz == null) return null;
+  const n = Math.min(80, Math.max(FHSS_ARM_UNIQUE_MIN, Math.round(unique)));
+  const winLim = windowLimited || fhss.windowLimited === true;
+  const mid = hops[Math.floor(hops.length / 2)] ?? f0Mhz;
+  const s24 = fhssBandOf(mid) === "s24";
+  const elrsLike = s24 && Math.abs(spacing - 1) <= 0.05;
+  const label = fhss.domain?.label ? `FHSS ${fhss.domain.label}` : "FHSS look";
+  return finish({
+    analog: false,
+    reason: `${label} · n=${n} · F0 ${f0Mhz.toFixed(3)}`,
+    f0Hz: Math.round(f0Mhz * 1e6),
+    stepHz: Math.round(spacing * 1e6),
+    n,
+    kind: GRID_KIND_FHSS,
+    source: GRID_SRC_MATCHER,
+    shiftHz: 0,
+    priUs: 0,
+    flags: packGridFlags({
+      windowLimited: winLim,
+      windowBins: LEGION_XLAT_NULL_BINS,
+    }),
+    preset: CH_PRESET_MANUAL,
+    chPwrThr: LEGION_CH_PWR_THR_DEFAULT,
+    chThr: 0,
+    chHyst: LEGION_CH_HYST_DEFAULT,
+    chMode: elrsLike ? 1 : 0,
+  });
+}
+
 export function matchSmartGrid(i: SmartGridInput): SmartGridCard {
   if (i.sdrId === "bladerf-x40" && (bandTouchesC58(i.bands) || collectHops(i).some((h) => h >= LEGION_C58_MHZ))) {
     return emptySmartGrid(SMART_X40_C58_RU);
@@ -338,6 +411,9 @@ export function matchSmartGrid(i: SmartGridInput): SmartGridCard {
   const ibw = i.ibwMhz ?? i.fhss?.ibwMhz ?? XA4_IBW_MHZ;
   const hopSpan = hops.length >= 2 ? Math.max(...hops) - Math.min(...hops) : 0;
   const cropped = winLim || hopSpan > ibw + 0.5;
+
+  const measured = gridFromMeasuredFhss(pickInputFhss(i), hops, cropped);
+  if (measured && measured.smart && !measured.empty) return measured;
 
   if (hops.length >= 2) {
     let scored: Array<{ d: FhssDomain; shiftHz: number; hits: number }> = [];

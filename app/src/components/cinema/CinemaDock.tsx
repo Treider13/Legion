@@ -14,7 +14,7 @@ interface Props {
 export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const scanPattern = useLegion((s) => s.scanPattern);
   const smartListenLive = useLegion((s) => s.smartListenLive);
-  const smartPeakOverride = useLegion((s) => s.smartPeakOverride);
+  const fhssCorridorReady = useLegion((s) => s.fhssCorridorReady);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
@@ -93,9 +93,11 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
           <button
             type="button"
             className="cinema-go"
-            disabled={fpgaStopPending}
-            onClick={() => void runSmartAccept({ peak: smartPeakOverride })}
-            title={smartListenLive || scanRunning ? "Заморозить карточку и ARM" : "Принять текущую карточку"}
+            disabled={fpgaStopPending || !fhssCorridorReady}
+            onClick={() => void runSmartAccept()}
+            title={fhssCorridorReady
+              ? "Сжать коридор в hop-set и ARM"
+              : "Ждём класс FHSS (unique ≥ 3)"}
           >
             {FPGA_AIR_MODE_ACCEPT_RU}
           </button>
@@ -124,7 +126,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-          {message || "Запустить → слух Soapy → Принять карточку → умная атака ARM. Эфир+FPGA или только FPGA — сразу."}
+            {message || "Запустить → слух Soapy → Подтвердить коридор → умная атака ARM. Эфир+FPGA или только FPGA — сразу."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки
