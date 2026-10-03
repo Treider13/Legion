@@ -163,17 +163,43 @@ export function emptySmartGrid(reason = SMART_GRID_EMPTY_RU): SmartGridCard {
   };
 }
 
-function finish(card: Omit<SmartGridCard, "packedF0" | "meta" | "empty" | "smart">): SmartGridCard {
+function finish(
+  card: Omit<SmartGridCard, "packedF0" | "meta" | "empty" | "smart"> & { nUsed?: number },
+): SmartGridCard {
   const cardLive = card.n > 0 && card.f0Hz > 0 && card.stepHz > 0;
   /* O4VID3 без карточки — fallback LUT, не тихая подстановка ELRS 2400.4. */
   const presetOnly = card.preset === CH_PRESET_O4VID3 && !card.analog;
   const empty = card.analog || (!cardLive && !presetOnly);
+  const nUsed = Math.min(80, Math.max(0, Math.round(card.nUsed ?? card.n)));
+  const { nUsed: _nUsed, ...fields } = card;
   return {
-    ...card,
+    ...fields,
     empty,
     smart: !empty && !card.analog,
     packedF0: packGridF0(card.f0Hz),
-    meta: packGridMeta(card.n, card.n, Math.round(0xff * (card.analog ? 0 : 0.7)), card.source, card.kind),
+    meta: packGridMeta(card.n, nUsed, Math.round(0xff * (card.analog ? 0 : 0.7)), card.source, card.kind),
+  };
+}
+
+/** NIOS AIM: F0 + ch·STEP, ch ∈ [0, n). n — длина решётки до последнего hop, не unique и не каталог 80. */
+export function gridLatticeN(
+  f0Mhz: number,
+  spacingMhz: number,
+  hopsMhz: readonly number[],
+  unique: number,
+  fHighMhz = 0,
+): { n: number; nUsed: number } {
+  const heard = Math.max(0, Math.round(unique));
+  const lastHop = hopsMhz.length ? hopsMhz[hopsMhz.length - 1]! : f0Mhz;
+  const high = fHighMhz > 0 ? Math.max(lastHop, fHighMhz) : lastHop;
+  let spanN = heard;
+  if (spacingMhz > 0 && Number.isFinite(high) && high >= f0Mhz) {
+    spanN = Math.round((high - f0Mhz) / spacingMhz) + 1;
+  }
+  if (!Number.isFinite(spanN) || spanN < 1) spanN = heard;
+  return {
+    n: Math.min(80, Math.max(FHSS_ARM_UNIQUE_MIN, heard, spanN)),
+    nUsed: Math.min(80, heard),
   };
 }
 
@@ -267,7 +293,8 @@ function measuredF0Mhz(fhss: FhssLook, hops: readonly number[], spacingMhz: numb
   return abs >= 50 ? abs : null;
 }
 
-/** GRID_* из FhssLook. n = unique/hopSet, F0 = f0Abs (f_ref+residual). Не каталог 80 / 2400.4. */
+/** GRID_* из FhssLook. F0 = f0Abs (f_ref+residual). n = решётка F0…последний hop.
+ *  unique — n_used в META. Не каталог 80 и не n=unique (AIM тогда режет хвост hop-set). */
 export function gridFromMeasuredFhss(
   fhss: FhssLook | null | undefined,
   hopsMhz: readonly number[] = [],
@@ -287,7 +314,7 @@ export function gridFromMeasuredFhss(
   if (!(spacing >= 0.15)) return null;
   const f0Mhz = measuredF0Mhz(fhss, hops, spacing);
   if (f0Mhz == null) return null;
-  const n = Math.min(80, Math.max(FHSS_ARM_UNIQUE_MIN, Math.round(unique)));
+  const { n, nUsed } = gridLatticeN(f0Mhz, spacing, hops, unique, fhss.fHighMhz);
   const winLim = windowLimited || fhss.windowLimited === true;
   const mid = hops[Math.floor(hops.length / 2)] ?? f0Mhz;
   const s24 = fhssBandOf(mid) === "s24";
@@ -295,10 +322,11 @@ export function gridFromMeasuredFhss(
   const label = fhss.domain?.label ? `FHSS ${fhss.domain.label}` : "FHSS look";
   return finish({
     analog: false,
-    reason: `${label} · n=${n} · F0 ${f0Mhz.toFixed(3)}`,
+    reason: `${label} · n=${n} · слышал ${nUsed} · F0 ${f0Mhz.toFixed(3)}`,
     f0Hz: Math.round(f0Mhz * 1e6),
     stepHz: Math.round(spacing * 1e6),
     n,
+    nUsed,
     kind: GRID_KIND_FHSS,
     source: GRID_SRC_MATCHER,
     shiftHz: 0,

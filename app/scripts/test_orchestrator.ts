@@ -104,6 +104,7 @@ import {
   SMART_X40_C58_RU,
   emptySmartGrid,
   gridFromMeasuredFhss,
+  gridLatticeN,
   matchSmartGrid,
   packGridF0,
   xlatWindowMhz,
@@ -1673,15 +1674,34 @@ async function main(): Promise<void> {
       && Array.isArray(on.scan_bands) && (on.scan_bands as { f1_mhz: number }[])[0].f1_mhz === 2400
       && off.fft_enable === undefined;
   })());
-  check("матчер: look-first не каталог n=80", (() => {
-    const g = matchSmartGrid({ fhss: sampleFhssLook(), hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
-    const cat = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
-    return g.smart && g.kind === GRID_KIND_FHSS && g.n === 4 && g.f0Hz === 2_400_400_000
-      && g.stepHz === 1_000_000 && cat.n === 80 && cat.f0Hz === 2_400_400_000;
+  check("матчер: look-first решётка не каталог n=80", (() => {
+    const hops = [2400.4, 2401.4, 2410.4, 2450.4];
+    const g = matchSmartGrid({ fhss: sampleFhssLook(), hopsMhz: hops });
+    const cat = matchSmartGrid({ hopsMhz: hops });
+    const lat = gridLatticeN(2400.4, 1, hops, 4);
+    return g.smart && g.kind === GRID_KIND_FHSS && g.n === lat.n && lat.n === 51 && lat.nUsed === 4
+      && g.f0Hz === 2_400_400_000 && g.stepHz === 1_000_000
+      && ((g.meta >> 8) & 0xff) === 4 && g.n !== 80
+      && cat.n === 80 && cat.f0Hz === 2_400_400_000;
   })());
   check("gridFromMeasuredFhss: F0=f0Abs, не residual 0.4", (() => {
     const g = gridFromMeasuredFhss(sampleFhssLook({ f0AbsMhz: 2400.4, f0ResidualMhz: 0.4 }), [2400.4, 2401.4, 2410.4]);
-    return !!g && g.f0Hz === 2_400_400_000 && g.n === 4 && (g.flags & GRID_FLAG_WINLIM) === 0;
+    return !!g && g.f0Hz === 2_400_400_000 && g.n === 51 && (g.flags & GRID_FLAG_WINLIM) === 0;
+  })());
+  check("GRID n=решётка: F0=2400.4 + hop у 2450 не n=unique", (() => {
+    const hops = [2450.4, 2451.4, 2452.4];
+    const g = gridFromMeasuredFhss(sampleFhssLook({
+      unique: 3, nSlots: 3, hopSetMhz: hops, fLowMhz: 2450.4, fHighMhz: 2452.4, f0AbsMhz: 2400.4,
+    }), hops);
+    return !!g && g.n === 53 && g.n !== 3 && ((g.meta >> 8) & 0xff) === 3
+      && g.f0Hz === 2_400_400_000;
+  })());
+  check("GRID подряд unique=4 → n=4", (() => {
+    const hops = [2400.4, 2401.4, 2402.4, 2403.4];
+    const g = gridFromMeasuredFhss(sampleFhssLook({
+      unique: 4, nSlots: 4, hopSetMhz: hops, fLowMhz: 2400.4, fHighMhz: 2403.4, f0AbsMhz: 2400.4,
+    }), hops);
+    return !!g && g.n === 4 && ((g.meta >> 8) & 0xff) === 4;
   })());
   check("затвор: тон без FHSS — отказ", !fhssArmGate({ look: { ...sampleFhssAttackLook(), fhss: null } }).ok
     && fhssArmGate({ look: { ...sampleFhssAttackLook(), fhss: null } }).reason === SMART_ARM_NEED_FHSS_RU);
@@ -1707,7 +1727,7 @@ async function main(): Promise<void> {
     look: sampleFhssAttackLook(),
     hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4],
     analogMhz: 56,
-  }).card?.n === 4);
+  }).card?.n === 51);
   check("confirm: каталог n=80 при шаге look <0.15 — ARM нет", (() => {
     const hops = [2400.4, 2401.4, 2410.4, 2450.4];
     const cat = matchSmartGrid({ hopsMhz: hops });
@@ -2277,7 +2297,7 @@ async function main(): Promise<void> {
   const afterFhss = useLegion.getState();
   check("кино Подтвердить FHSS: коридор сжат, один взгляд, эмуляция ARM нет",
     fhssAcc === true && afterFhss.smartGridAccepted === true && afterFhss.fpgaArmed === false
-    && peekSmartAccepted() != null && peekSmartAccepted()!.n === 4
+    && peekSmartAccepted() != null && peekSmartAccepted()!.n === 51
     && afterFhss.sdrBands.length === 1
     && afterFhss.sdrBands[0]!.f2Mhz - afterFhss.sdrBands[0]!.f1Mhz <= 56.5
     && Number(afterFhss.fpgaAirBwMhz) <= 56);

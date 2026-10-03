@@ -107,8 +107,9 @@ look = match_smart_grid({
         "f0ResidualMhz": 0.4,
     },
 })
-check("look-first: n=4 F0=2400.4, не каталог 80",
-      look["smart"] and look["n"] == 4 and look["f0_hz"] == 2_400_400_000
+check("look-first: решётка n=51 F0=2400.4, слышал 4, не каталог 80",
+      look["smart"] and look["n"] == 51 and ((look["meta"] >> 8) & 0xFF) == 4
+      and look["f0_hz"] == 2_400_400_000
       and look["kind"] == GRID_KIND_FHSS and look["preset"] != CH_PRESET_ELRS)
 
 print("smart_grid: ALL PASS")
