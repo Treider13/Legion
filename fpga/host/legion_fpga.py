@@ -117,6 +117,10 @@ REG_GRID_FLAGS = 0x56
 REG_GRID_RSV = 0x57
 REG_CH_PWR_THR = 0x58
 REG_AIM_CH = 0x59
+REG_LT_CTRL = 0x5A
+REG_LT_PERIOD = 0x5B
+REG_LT_WIDTH = 0x5C
+REG_LT_STATUS = 0x5D
 CH_MODE_OCUSYNC = 0
 CH_MODE_ELRS = 1
 AIM_NONE = 0xFF
@@ -143,6 +147,20 @@ C58_MHZ = 5100.0
 LB_AMP_Q15_UNITY = 0x7FFF
 LB_AMP_Q15_HALF = 16384
 LB_DELAY1_DEFAULT = 64
+TWORY_FS_HZ = 56e6
+
+
+def twory_delay1(fs_hz: float) -> int:
+    """64 @ 56e6. Другой fs — round(64·fs/56e6), не константа."""
+    fs = float(fs_hz) if fs_hz and float(fs_hz) > 0 else TWORY_FS_HZ
+    n = int(round(LB_DELAY1_DEFAULT * fs / TWORY_FS_HZ))
+    if n < 1:
+        n = 1
+    if n > 4095:
+        n = 4095
+    return n
+
+
 WALK_PERIOD_DEFAULT = 4096
 WALK_STEP_LIVE_DEFAULT = 1
 WALK_MAX_LIVE_DEFAULT = 4095
@@ -456,6 +474,18 @@ class LegionFpga:
                 self.write_reg(REG_GRID_FLAGS, int(flags) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_RSV, 0) and
                 self.write_reg(REG_CH_PWR_THR, int(pwr_thr) & 0xFFFF))
+
+    def set_look_through(self, enable: bool = True, period: int = 0,
+                         width: int = 0, ratio: int = 2) -> bool:
+        """HDL look-through 0x5A–0x5C. Сначала данные, потом EN (Cummings)."""
+        ctrl = (1 if enable else 0) | ((int(ratio) & 0xF) << 4)
+        if not enable:
+            return (self.write_reg(REG_LT_CTRL, ctrl) and
+                    self.write_reg(REG_LT_PERIOD, 0) and
+                    self.write_reg(REG_LT_WIDTH, 0))
+        return (self.write_reg(REG_LT_PERIOD, int(period) & 0xFFFFFFFF) and
+                self.write_reg(REG_LT_WIDTH, int(width) & 0xFFFFFFFF) and
+                self.write_reg(REG_LT_CTRL, ctrl))
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

@@ -10,16 +10,20 @@
 import type { AllowBand } from "../policy/allowlist";
 import { catalogById } from "../sdr/catalog";
 import {
+  drfmTworyDelay1,
   planDrfmStrategy,
   type DrfmStrategy,
 } from "./drfmStrategy";
 import { FPGA_AIR_MODE_RU } from "./modes";
 import { planCenters, planParkCenters } from "./scan";
 import {
+  armClassOk,
   bandTouchesC58,
   emptySmartGrid,
   LEGION_AIM_NONE,
   matchSmartGrid,
+  SMART_ARM_CLASS_RU,
+  SMART_ARM_OVERRIDE_RU,
   SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
@@ -63,11 +67,9 @@ export const FPGA_DET_WINDOWS = 512;
 export const FPGA_DET_THR_K = 4;
 /** Стагнация det_count → «энергия пропала». Раньше: 3 опроса × 400 мс = 1.2 с.
  *  Интервал наблюдения (80 мс для водопада) не должен ускорять возврат в скан.
- *  Слепое пятно: сильная утечка собственного TX обратно в RX (одночастотный
- *  ретранслятор — литература: SI на 60–120 дБ выше принимаемого) держит гейт
- *  открытым после смерти цели — стагнации нет, автовозврат не сработает.
- *  Это физика тракта, не код: ответ — изоляция антенн/выдержка усиления,
- *  операторский СТОП и watchdog работают всегда. */
+ *  Слепое пятно без look-through: утечка своего TX в RX держит гейт.
+ *  HDL 0x5A–0x5D глушит ЦАП на WIDTH сэмплов на той же стоянке: TX-офф
+ *  тише TX-он → echo_hold закрывает гейт. СТОП и watchdog — как раньше. */
 export const FPGA_AIR_GONE_MS = 1200;
 
 /** Счётчик опросов без роста det_count: время, не «3 тика». Тик 80 мс × 3 = 240 мс. */
@@ -347,6 +349,8 @@ export interface OnboardInterceptInput {
   grid?: SmartGridInput | SmartGridCard;
   /** Закрыт: пустая сетка всегда отказ. Поле оставлено, чтобы старые вызовы не падали. */
   peakOverride?: boolean;
+  /** Лаборатория: обойти затвор класса. Не кнопка кино. Пустая сетка всё равно отказ. */
+  classOverride?: boolean;
   /** Панель DRFM: 0 / пусто = таблица. */
   lbDelay?: number;
   lbDelay1?: number;
@@ -381,16 +385,36 @@ export interface OnboardInterceptPlan {
   drfm: DrfmStrategy;
 }
 
+/** Look-through: WIDTH ≥ 3 окна детектора, PERIOD = 16 окон TX-он. */
+export function lookThroughTiming(detShift: number): { period: number; width: number } {
+  const win = 1 << clampDetShift(detShift);
+  return { width: Math.max(win * 3, 64), period: Math.max(win * 16, 256) };
+}
+
 export function planOnboardIntercept(i: OnboardInterceptInput): OnboardInterceptPlan {
   const analog = i.analogBwMhz > 0 ? i.analogBwMhz : FPGA_AIR_BW_DEFAULT_MHZ;
-  const lookMhz = clampAirBwMhz(i.lookMhz ?? FPGA_AIR_BW_DEFAULT_MHZ, analog);
+  const fftEnable = !!i.fftEnable;
+  const gridIn = i.grid;
+  const grid: SmartGridCard =
+    gridIn && "packedF0" in gridIn && "meta" in gridIn && "smart" in gridIn
+      ? gridIn
+      : matchSmartGrid({
+          ...(gridIn && !("packedF0" in gridIn) ? gridIn : {}),
+          sdrId: i.sdrId,
+          bands: i.bands,
+        });
+  /* FHSS/ZC: дефолт 2 МГц — не «оператор выбрал 2», а ICE9 analog платы. */
+  const lookWant = i.lookMhz ?? FPGA_AIR_BW_DEFAULT_MHZ;
+  const lookMhz = clampAirBwMhz(
+    fftEnable && armClassOk(grid) && lookWant === FPGA_AIR_BW_DEFAULT_MHZ ? analog : lookWant,
+    analog,
+  );
   const fsHz = airFsHz(lookMhz);
   const detShift = clampDetShift(i.detShift);
   const windowUs = detectorWindowUs(detShift, fsHz);
   const spanMhz = parkSpanMhz(i.bands);
   const wantPark = !!i.park;
   const tile = planCenters(i.bands, lookMhz);
-  const fftEnable = !!i.fftEnable;
   /* Умная атака: ИИ всегда (PARK+SURVEY). Без FFT — старый walker / ICE9 park. */
   const survey = fftEnable;
   const park = fftEnable ? true : wantPark;
@@ -401,15 +425,6 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     : FPGA_AIR_BW_DEFAULT_MHZ;
   const settleN = fftEnable ? fpgaSettleN(fsHz) : 0;
   const xlatMhz = xlatWindowMhz(fsHz);
-  const gridIn = i.grid;
-  const grid: SmartGridCard =
-    gridIn && "packedF0" in gridIn && "meta" in gridIn && "smart" in gridIn
-      ? gridIn
-      : matchSmartGrid({
-          ...(gridIn && !("packedF0" in gridIn) ? gridIn : {}),
-          sdrId: i.sdrId,
-          bands: i.bands,
-        });
   const drfm = planDrfmStrategy(grid, fsHz, {
     delay0: i.lbDelay,
     delay1: i.lbDelay1,
@@ -471,6 +486,9 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
   if (fftEnable && grid.empty) {
     return fail(`${FPGA_AIR_MODE_RU}: ${grid.reason || SMART_GRID_EMPTY_RU}`);
   }
+  if (fftEnable && !armClassOk(grid) && !i.classOverride) {
+    return fail(`${FPGA_AIR_MODE_RU}: ${SMART_ARM_CLASS_RU}`);
+  }
   const hops = Math.max(0, centers.length - 1);
   const inner = i.turn ? "обычный" : "приоритет";
   const how = survey
@@ -480,10 +498,11 @@ export function planOnboardIntercept(i: OnboardInterceptInput): OnboardIntercept
     : hops === 0
       ? `коридор ${spanMhz.toFixed(1)} МГц влезает в взгляд ${lookMhz} МГц — LO не шагает, гейт ${windowUs.toFixed(1)} µs`
       : `коридор ${spanMhz.toFixed(1)} МГц · ${centers.length} взглядов по ${lookMhz} МГц (фильтр платы ≤${analog} МГц) · шаг LO на плате (PLL), не USB`;
+  const ovRu = fftEnable && i.classOverride && !armClassOk(grid) ? ` · ${SMART_ARM_OVERRIDE_RU}` : "";
   const gridRu = fftEnable
     ? grid.smart
-      ? ` · ${grid.reason} · ${xlatAimRu(fsHz, LEGION_AIM_NONE)} · ${drfm.reason}`
-      : ` · ${grid.reason || SMART_GRID_EMPTY_RU} · ${drfm.reason}`
+      ? ` · ${grid.reason} · ${xlatAimRu(fsHz, LEGION_AIM_NONE)} · ${drfm.reason}${ovRu}`
+      : ` · ${grid.reason || SMART_GRID_EMPTY_RU} · ${drfm.reason}${ovRu}`
     : "";
   return {
     ok: true,
@@ -621,6 +640,10 @@ export function fpgaArmCmd(
     /** Частотный сдвиг DRFM, Гц. 0 = обход. Если задан lbFtw — не пишем. */
     lbShiftHz?: number;
     grid?: SmartGridCard;
+    classOverride?: boolean;
+    ltEnable?: boolean;
+    ltPeriod?: number;
+    ltWidth?: number;
     chPreset?: number;
     chThr?: number;
     chHyst?: number;
@@ -715,9 +738,16 @@ export function fpgaArmCmd(
       cmd.grid_flags = g.flags;
     }
   }
+  if (opts.classOverride) cmd.class_override = true;
+  if (mode === "lb_gated" && opts.ltEnable !== false) {
+    const lt = lookThroughTiming(opts.detShift);
+    cmd.lt_enable = true;
+    cmd.lt_period = opts.ltPeriod ?? lt.period;
+    cmd.lt_width = opts.ltWidth ?? lt.width;
+  }
   if (mode === "lb_gated") {
     cmd.lb_delay = opts.lbDelay ?? XA4_LB_DELAY0;
-    cmd.lb_delay1 = opts.lbDelay1 ?? XA4_LB_DELAY1;
+    cmd.lb_delay1 = opts.lbDelay1 ?? drfmTworyDelay1(opts.fsHz ?? 56e6);
     if (opts.lbFtw !== undefined && Number.isFinite(opts.lbFtw)) {
       cmd.lb_ftw = Math.round(opts.lbFtw) >>> 0;
     } else if (opts.lbShiftHz !== undefined && Number.isFinite(opts.lbShiftHz)) {

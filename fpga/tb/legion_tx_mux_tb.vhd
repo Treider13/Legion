@@ -40,6 +40,7 @@ begin
         port map (
             clock => clock, reset => reset,
             arm => arm, mode => mode, wd_ok => wd_ok, det_active => det_active,
+            blank => '0',
             lb_shift => lb_shift,
             host_i => host_i, host_q => host_q, host_valid => host_valid,
             play_i => play_i, play_q => play_q, play_valid => play_valid,

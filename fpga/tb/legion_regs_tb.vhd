@@ -111,6 +111,8 @@ begin
             tx_proto_period => tx_proto_period, tx_proto_pulse => tx_proto_pulse,
             tx_drfm_step_src => tx_step_src, tx_ch_target => tx_ch_target,
             tx_aim_en => tx_aim_en,
+            tx_lt_en => open, tx_lt_period => open, tx_lt_width => open,
+            tx_lt_ratio => open, tx_lt_status => (others => '0'),
             rx_clock => rx_clock, rx_reset => rx_reset,
             rx_det_thr => open, rx_det_shift => open,
             rx_fft_en => rx_fft_en, rx_fft_dc_notch => rx_fft_notch,

@@ -17,6 +17,9 @@ from smart_grid import (
     GRID_KIND_ANALOG,
     GRID_KIND_FHSS,
     X40_C58_RU,
+    arm_class_ok,
+    hop_map_next_mhz,
+    look_covers_hopset,
     match_smart_grid,
     pack_grid_f0,
 )
@@ -111,5 +114,11 @@ check("look-first: решётка n=51 F0=2400.4, слышал 4, не ката�
       look["smart"] and look["n"] == 51 and ((look["meta"] >> 8) & 0xFF) == 4
       and look["f0_hz"] == 2_400_400_000
       and look["kind"] == GRID_KIND_FHSS and look["preset"] != CH_PRESET_ELRS)
+
+check("затвор: ELRS ок", arm_class_ok(elrs))
+check("затвор: пустой отказ", not arm_class_ok(match_smart_grid({})))
+check("карта hop: 56 не кроет ELRS, next 2441.4",
+      look_covers_hopset(elrs, 56) is False and hop_map_next_mhz(elrs, 2440.4, 56) == 2441.4)
+check("карта hop: 80 кроет — null", hop_map_next_mhz(elrs, 2440.4, 80) is None)
 
 print("smart_grid: ALL PASS")

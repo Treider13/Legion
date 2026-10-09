@@ -15,12 +15,23 @@ GRID_FLAG_ZC = 1 << 2
 
 DRFM_TAP0 = 0
 DRFM_TAP1_TWORY = 64
+DRFM_TWORY_FS_HZ = 56e6
 DRFM_AMP_HALF = 16384
 DRFM_ZC_SHIFT_HZ = 15_000
 DRFM_ZC_SHIFT_ALT_HZ = 20_000
 
 DRFM_TWORY_RU = "drfm · two-ray 0/64"
 DRFM_ZC_RU = "drfm · ZC CFO 15 кГц"
+
+
+def drfm_twory_delay1(fs_hz: float) -> int:
+    fs = float(fs_hz) if fs_hz and fs_hz > 0 else DRFM_TWORY_FS_HZ
+    n = int(round(DRFM_TAP1_TWORY * fs / DRFM_TWORY_FS_HZ))
+    return max(1, min(4095, n))
+
+
+def drfm_twory_ru(delay1: int) -> str:
+    return f"drfm · two-ray 0/{delay1}"
 
 
 def drfm_ftw_from_hz(hz: float, fs_hz: float) -> int:
@@ -48,7 +59,7 @@ def plan_drfm_strategy(
     fs_hz: float,
     override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    fs = float(fs_hz) if fs_hz and fs_hz > 0 else 56e6
+    fs = float(fs_hz) if fs_hz and fs_hz > 0 else DRFM_TWORY_FS_HZ
     if wants_zc_drfm(card):
         s: dict[str, Any] = {
             "id": "zc-cfo",
@@ -64,10 +75,11 @@ def plan_drfm_strategy(
             "reason": DRFM_ZC_RU,
         }
     else:
+        d1 = drfm_twory_delay1(fs)
         s = {
             "id": "tworay",
             "delay0": DRFM_TAP0,
-            "delay1": DRFM_TAP1_TWORY,
+            "delay1": d1,
             "amp0": DRFM_AMP_HALF,
             "amp1": DRFM_AMP_HALF,
             "shift_hz": 0,
@@ -75,7 +87,7 @@ def plan_drfm_strategy(
             "walk_step": 0,
             "walk_en": True,
             "wire": "none",
-            "reason": DRFM_TWORY_RU,
+            "reason": drfm_twory_ru(d1),
         }
     o = override or {}
     if o.get("delay0") is not None and float(o["delay0"]) > 0:

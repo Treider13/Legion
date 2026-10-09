@@ -116,6 +116,10 @@
 #define LEGION_REG_GRID_RSV       0x57  /* reserved, 0 */
 #define LEGION_REG_CH_PWR_THR     0x58  /* [15:0] порог канала CH_PWR */
 #define LEGION_REG_AIM_CH         0x59  /* [7:0] канал или 0xFF, [31] armed */
+#define LEGION_REG_LT_CTRL        0x5A  /* bit0 EN, [7:4] ratio_shift */
+#define LEGION_REG_LT_PERIOD      0x5B  /* сэмплы TX-он */
+#define LEGION_REG_LT_WIDTH       0x5C  /* сэмплы blank */
+#define LEGION_REG_LT_STATUS      0x5D  /* [0] echo_hold [1] blank */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -154,7 +158,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_AIM_CH
+#define LEGION_REG_MAX            LEGION_REG_LT_STATUS
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u

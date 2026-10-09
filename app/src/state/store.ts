@@ -111,9 +111,11 @@ import {
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
 import {
+  armClassOk,
   bandTouchesC58,
   gridFromMeasuredFhss,
   matchSmartGrid,
+  SMART_ARM_CLASS_RU,
   SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
@@ -2426,6 +2428,8 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanBands: bands,
           grid: plan.grid,
           ...lbOpts,
+          lbDelay1: plan.drfm.delay1,
+          walkStep: plan.drfm.walkStep,
         }), get().txGainDb),
       );
       if (gFpgaAirGen !== airGen) {
@@ -2952,6 +2956,17 @@ export const useLegion = create<LegionStore>((set, get) => {
           "sys",
           `${FPGA_AIR_MODE_RU}: ${ev.gate.reason || (card.empty ? card.reason || SMART_GRID_EMPTY_RU : SMART_ARM_NEED_FHSS_RU)}`,
         );
+        return false;
+      }
+      if (!armClassOk(armCard)) {
+        gSmartAccepted = null;
+        set({
+          smartGridCard: card,
+          smartGridAccepted: false,
+          smartPeakOverride: false,
+          fhssCorridorReady: false,
+        });
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_CLASS_RU}`);
         return false;
       }
       captureSmartSurvey(s);
