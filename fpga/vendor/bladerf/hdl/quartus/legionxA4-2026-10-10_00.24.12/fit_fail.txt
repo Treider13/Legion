@@ -1,0 +1,9 @@
+Fitter Status: Failed 2026-10-10 00:24:12
+Error (11802): Can't fit design in device.
+Error (170143): Final fitting attempt was unsuccessful
+seed=1
+attempt1 unrouted: U_legion_lb_walk|Add1~33, U_legion_lb_walk|LessThan4~12, U_legion_regs|wfs_meta[18]
+attempt2 unrouted: U_legion_regs|lo_rx[24]
+Critical Warning (188026): change seed or Aggressive Routability Optimizations
+ALM 14943/18480 (81%)  M10K 285/308 (93%)  DSP 40/66 (61%)
+look-through map: 437 ALUT, 143 FF, 0 RAM bits, 1 DSP
