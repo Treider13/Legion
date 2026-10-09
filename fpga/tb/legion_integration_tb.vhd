@@ -46,7 +46,7 @@ begin
         port map (
             clock => tx_clock, reset => tx_reset,
             arm => '1', mode => LEGION_MODE_LB_ALWAYS, wd_ok => '1',
-            det_active => '0', lb_shift => "0000",
+            det_active => '0', blank => '0', lb_shift => "0000",
             host_i => (others => '0'), host_q => (others => '0'), host_valid => '0',
             play_i => (others => '0'), play_q => (others => '0'), play_valid => '0',
             play_en => '0',

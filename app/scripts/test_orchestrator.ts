@@ -71,6 +71,7 @@ import {
   parkSpanMhz,
   planFpgaAir,
   planOnboardIntercept,
+  lookThroughTiming,
   fpgaSettleN,
   XA4_LB_DELAY0,
   XA4_LB_DELAY1,
@@ -86,6 +87,7 @@ import {
   DRFM_ZC_RU,
   DRFM_ZC_SHIFT_HZ,
   drfmFtwFromHz,
+  drfmTworyDelay1,
   planDrfmStrategy,
 } from "../src/sense/drfmStrategy";
 import {
@@ -99,10 +101,14 @@ import {
   GRID_KIND_ZC,
   LEGION_AIM_NONE,
   GRID_KIND_ANALOG,
+  SMART_ARM_CLASS_RU,
   SMART_GRID_ANALOG_RU,
   SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
+  armClassOk,
   emptySmartGrid,
+  hopMapNextMhz,
+  lookCoversHopset,
   gridFromMeasuredFhss,
   gridLatticeN,
   matchSmartGrid,
@@ -1887,6 +1893,46 @@ async function main(): Promise<void> {
     return g.kind === GRID_KIND_ZC && (g.flags & GRID_FLAG_ZC) === 0
       && s.id === "tworay" && s.shiftHz === 0;
   })());
+  check("затвор: FHSS ок, windowLimited не режет", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4], windowLimited: true });
+    return armClassOk(g) && g.kind === GRID_KIND_FHSS;
+  })());
+  check("затвор: ISM8 / OFDM отказ", !armClassOk(matchSmartGrid({
+    operator: { f0Hz: 2_400_000_000, stepHz: 10_000_000, n: 8, kind: GRID_KIND_OFDM },
+  })));
+  check("затвор: O4VID3 без zc_hit отказ", !armClassOk(matchSmartGrid({ acceptO4: true })));
+  check("затвор: ZC с флагом ок", armClassOk(zcCard()));
+  check("план FFT ISM8 без override — отказ", (() => {
+    const g = matchSmartGrid({
+      operator: { f0Hz: 2_400_000_000, stepHz: 10_000_000, n: 8, kind: GRID_KIND_OFDM },
+    });
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, lookMhz: 56, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: g,
+    });
+    return !p.ok && p.reason.includes(SMART_ARM_CLASS_RU);
+  })());
+  check("FHSS дефолт 2 МГц → analog 56 (ICE9)", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    const p = planOnboardIntercept({
+      sdrId: "bladerf-micro-xa4", analogBwMhz: 56, bands: [{ f1Mhz: 2400, f2Mhz: 2480 }],
+      loadOk: true, detThr: 5000, detShift: 4, turn: false, dwellMs: 3000,
+      fftEnable: true, grid: g,
+    });
+    return p.ok && p.lookMhz === 56 && p.fsHz === 56e6 && p.drfm.delay1 === 64;
+  })());
+  check("DRFM τ: 2 MSPS → delay1=2, 56e6 → 64",
+    drfmTworyDelay1(2e6) === 2 && drfmTworyDelay1(56e6) === 64);
+  check("карта hop: 56 МГц не кроет ELRS — next 2441.4", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
+    return lookCoversHopset(g, 56) === false && lookCoversHopset(g, 80) === true
+      && hopMapNextMhz(g, 2440.4, 56) === 2441.4 && hopMapNextMhz(g, 2440.4, 80) === null;
+  })());
+  check("карта hop: F0UNC — не индекс", (() => {
+    const g = matchSmartGrid({ hopsMhz: [2440.2, 2441.2, 2442.2] });
+    return (g.flags & GRID_FLAG_F0UNC) !== 0 && hopMapNextMhz(g, 2440.2, 2) === null;
+  })());
   check("план FFT: ELRS несёт застывший two-ray в reason", (() => {
     const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
     const p = planOnboardIntercept({
@@ -1977,6 +2023,11 @@ async function main(): Promise<void> {
     gatedCmd.walk_period === XA4_WALK_PERIOD && gatedCmd.walk_step === XA4_WALK_STEP &&
     gatedCmd.walk_max === XA4_WALK_MAX && gatedCmd.walk_en === true &&
     gatedCmd.walk_hold === true && gatedCmd.lb_ftw === 0 && gatedCmd.walk_ftw_step === 0);
+  check("ARM lb_gated несёт look-through",
+    gatedCmd.lt_enable === true && gatedCmd.lt_period === lookThroughTiming(4).period
+    && gatedCmd.lt_width === lookThroughTiming(4).width);
+  check("ARM lb_gated @ 2e6 → delay1=2",
+    fpgaArmCmd("lb_gated", { detThr: 5000, detShift: 4, token: "t", fsHz: 2e6 }).lb_delay1 === 2);
   const gatedOverride = fpgaArmCmd("lb_gated", {
     detThr: 5000, detShift: 4, token: "t", lbDelay1: 32, walkPeriod: 128, walkHold: false, walkEn: false,
   });

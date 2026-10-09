@@ -186,6 +186,10 @@ py_map = {
     "LEGION_REG_GRID_RSV": lf.REG_GRID_RSV,
     "LEGION_REG_CH_PWR_THR": lf.REG_CH_PWR_THR,
     "LEGION_REG_AIM_CH": lf.REG_AIM_CH,
+    "LEGION_REG_LT_CTRL": lf.REG_LT_CTRL,
+    "LEGION_REG_LT_PERIOD": lf.REG_LT_PERIOD,
+    "LEGION_REG_LT_WIDTH": lf.REG_LT_WIDTH,
+    "LEGION_REG_LT_STATUS": lf.REG_LT_STATUS,
 }
 
 v, n = vhdl_consts(), nios_consts()
@@ -446,6 +450,15 @@ check("set det_thr=0 → отказ (floor), det_thr_set не взведён",
       r.get("ok") is False and gw.det_thr_set is False)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4})
 check("lb_gated с det_thr → ok", r.get("ok") is True)
+check("lb_gated look-through EN", (gw.fpga._t.regs.get(lf.REG_LT_CTRL, 0) & 1) == 1)
+rpc({"op": "disarm"})
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+         "fs_hz": 2_000_000})
+check("lb_gated @ 2e6 → delay1=2",
+      r.get("ok") is True and gw.fpga._t.regs.get(lf.REG_LB_DELAY1) == 2)
+rpc({"op": "disarm"})
+r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+         "fs_hz": 56_000_000})
 check("lb_gated live DRFM: 2 отвода 0+64, A=0.5+0.5, period 4096",
       gw.fpga._t.regs.get(lf.REG_LB_DELAY) == 0 and
       gw.fpga._t.regs.get(lf.REG_LB_DELAY1) == lf.LB_DELAY1_DEFAULT and
@@ -480,7 +493,7 @@ check("lb_gated без ch_target → 0xFF не DC",
       gw.fpga._t.regs.get(lf.REG_CH_TARGET) == lf.AIM_NONE)
 r = rpc({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
          "scan_enable": True, "scan_f1_mhz": 5725, "scan_f2_mhz": 5850,
-         "fft_enable": True})
+         "fft_enable": True, "class_override": True})
 check("x40+5.8 ARM отказ",
       r.get("ok") is False and "5.8" in str(r.get("reason") or ""))
 r = rpc({"op": "arm", "mode": "aim", "nco_ftw": 0x10000000})
@@ -1341,7 +1354,7 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2500.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2600,
           "scan_turn": False, "scan_dwell_us": 400,
-          "fft_enable": True, "fire_bw_mhz": 2,
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2,
           "scan_bands": [{"f1_mhz": 2400, "f2_mhz": 2600}]})
 check("micro: ARM fft_enable ok", r.get("ok") is True)
 check("micro: FFT_CTRL enable|notch",
@@ -1366,7 +1379,7 @@ check("micro: CH_LUT packed",
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2500.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2600,
-          "scan_dwell_us": 400, "fft_enable": True, "fire_bw_mhz": 2,
+          "scan_dwell_us": 400, "fft_enable": True, "class_override": True, "fire_bw_mhz": 2,
           "ch_preset": 1, "xlat_bypass": True})
 check("micro: ARM ch_preset+bypass ok", r.get("ok") is True)
 check("micro: FFT_CTRL enable|notch|bypass",
@@ -1379,7 +1392,7 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2428.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2500,
           "scan_turn": True, "scan_dwell_us": 400,
-          "fft_enable": True, "fire_bw_mhz": 2})
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2})
 check("micro: ARM FFT+TURN 2400-2500 ok", r.get("ok") is True)
 check("micro: FFT+TURN SCAN_CTRL enable|turn",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_TURN))
@@ -1394,7 +1407,7 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2443.5, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2487,
           "scan_park": True, "scan_dwell_us": 400,
-          "fft_enable": True, "fire_bw_mhz": 2})
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2})
 check("micro: ARM FFT+PARK 2400-2487 ok", r.get("ok") is True)
 check("micro: FFT+PARK SCAN_CTRL enable|park",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_PARK))
@@ -1405,7 +1418,7 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2028.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2000, "scan_f2_mhz": 3000,
           "scan_survey": True, "scan_dwell_us": 3_000_000,
-          "fft_enable": True, "fire_bw_mhz": 2})
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2})
 check("micro: ARM FFT+SURVEY 2000-3000 ok", r.get("ok") is True)
 check("micro: FFT+SURVEY SCAN_CTRL enable|survey",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (lf.SCAN_CTRL_EN | lf.SCAN_CTRL_SURVEY))
@@ -1417,7 +1430,7 @@ r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "scan_enable": True, "scan_f1_mhz": 2000, "scan_f2_mhz": 3000,
           "scan_park": True, "scan_survey": True, "scan_turn": True,
           "scan_dwell_us": 400,
-          "fft_enable": True, "fire_bw_mhz": 2})
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2})
 check("micro: ARM ИИ park+survey+turn ok", r.get("ok") is True)
 check("micro: ИИ SCAN_CTRL en|turn|park|survey",
       gw_m.fpga._t.regs.get(lf.REG_SCAN_CTRL) == (
@@ -1426,7 +1439,7 @@ rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 5400.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 5000, "scan_f2_mhz": 5800,
-          "fft_enable": True, "fire_bw_mhz": 2,
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2,
           "scan_bands": [{"f1_mhz": 5000, "f2_mhz": 5800}]})
 check("micro: ARM коридор 5000-5800 (выше ADF 4400)", r.get("ok") is True)
 check("micro: SCAN_F1 = 5e6 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F1_KHZ) == 5_000_000)
@@ -1435,7 +1448,7 @@ rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 2440.4, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2480,
-          "fft_enable": True, "fire_bw_mhz": 2,
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2,
           "ch_preset": 1, "ch_pwr_thr": 0x40, "ch_thr": 0, "ch_hyst": 1,
           "grid_meta": 80 | (lf.GRID_KIND_FHSS << 28) | (lf.GRID_SRC_MATCHER << 24),
           "grid_f0_hz": 2400400000, "grid_step_hz": 1000000,
@@ -1452,9 +1465,23 @@ check("micro: CH_TARGET 0xFF до first-valid",
 check("micro: DRFM_STEP_SRC=0 (не PRI)",
       gw_m.fpga._t.regs.get(lf.REG_DRFM_STEP_SRC, 0) == 0)
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2440.4, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2480,
+          "fft_enable": True, "fire_bw_mhz": 2,
+          "grid_meta": 80 | (lf.GRID_KIND_ANALOG << 28) | (lf.GRID_SRC_MATCHER << 24)})
+check("затвор: analog+fft отказ без class_override", r.get("ok") is False)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
+          "freq_mhz": 2440.4, "fs_hz": 56_000_000, "bw_mhz": 56,
+          "scan_enable": True, "scan_f1_mhz": 2400, "scan_f2_mhz": 2480,
+          "fft_enable": True, "fire_bw_mhz": 2,
+          "grid_meta": 80 | (lf.GRID_KIND_FHSS << 28) | (lf.GRID_SRC_MATCHER << 24),
+          "grid_f0_hz": 2400400000, "grid_step_hz": 1000000,
+          "grid_flags": lf.GRID_FLAG_WINLIM})
+check("затвор: FHSS+fft без override ok", r.get("ok") is True)
+r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 5789.5, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 5725, "scan_f2_mhz": 5850,
-          "fft_enable": True, "ch_preset": 3,
+          "fft_enable": True, "class_override": True, "ch_preset": 3,
           "grid_f0_hz": 5768500, "grid_step_hz": 21000000,
           "grid_meta": 3 | (lf.GRID_KIND_ZC << 28)})
 check("micro: карточка 5.8 кГц бьёт O4",
@@ -1465,7 +1492,7 @@ rpcm({"op": "disarm"})
 r = rpcm({"op": "arm", "mode": "lb_gated", "det_thr": 5000, "det_shift": 4,
           "freq_mhz": 98.0, "fs_hz": 56_000_000, "bw_mhz": 56,
           "scan_enable": True, "scan_f1_mhz": 70, "scan_f2_mhz": 6000,
-          "fft_enable": True, "fire_bw_mhz": 2})
+          "fft_enable": True, "class_override": True, "fire_bw_mhz": 2})
 check("micro: ARM 70-6000", r.get("ok") is True)
 check("micro: SCAN_F1 = 70e3 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F1_KHZ) == 70_000)
 check("micro: SCAN_F2 = 6e6 кГц", gw_m.fpga._t.regs.get(lf.REG_SCAN_F2_KHZ) == 6_000_000)

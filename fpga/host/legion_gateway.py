@@ -96,6 +96,8 @@ USB_IF_RF_LINK = 1
 # Дефолт 1 — отказ только при явном 0 (задокументировано: «порог 0 = гейт
 # на шум»); приложение считает свой floor из полки (fpgaFastpath.ts).
 DET_THR_FLOOR = int(os.environ.get("LEGION_DET_THR_FLOOR", "1"))
+CLASS_OVERRIDE_ENV = os.environ.get("LEGION_ARM_CLASS_OVERRIDE", "").strip() in (
+    "1", "true", "yes")
 
 # Артефакт ревизии legion из build_bladerf.sh (BUILD_NAME="$rev"x"$size"):
 # legionx40.rbf / legionxA4.rbf / legionxA9.rbf (+ алиас с подчёркиванием
@@ -759,6 +761,47 @@ class LegionGateway:
             return False, grid_why
         return True, ""
 
+    def _arm_class_gate(self, mode: int, msg: dict) -> tuple[bool, str]:
+        """Умный ARM (fft_enable): только FHSS или ZC с флагом. kind — прицел."""
+        if mode != lf.MODE_LB_GATED or not bool(msg.get("fft_enable")):
+            return True, ""
+        ov = bool(msg.get("class_override")) or CLASS_OVERRIDE_ENV
+        if ov:
+            print("legion-gateway: class_override — затвор класса обойдён", flush=True)
+            return True, ""
+        try:
+            meta = int(msg["grid_meta"]) if "grid_meta" in msg else 0
+            flags = int(msg["grid_flags"]) if "grid_flags" in msg else 0
+        except (TypeError, ValueError):
+            return False, "grid_meta/grid_flags: не число"
+        kind = (meta >> 28) & 0xF
+        if kind == lf.GRID_KIND_FHSS:
+            return True, ""
+        if kind == lf.GRID_KIND_ZC and (flags & lf.GRID_FLAG_ZC):
+            return True, ""
+        return False, "класс не FHSS и не подтверждённый ZC — ARM отказан"
+
+    def _program_look_through(self, msg: dict) -> tuple[bool, str]:
+        """HDL blank на той же стоянке. period/width=0 — блок не глушит."""
+        if msg.get("lt_enable") is False:
+            ok = self.fpga.set_look_through(False, 0, 0)
+            return (True, "") if ok else (False, "запись LT_* не удалась")
+        try:
+            shift = int(msg.get("det_shift", 8))
+            if shift < 4:
+                shift = 4
+            if shift > 12:
+                shift = 12
+            win = 1 << shift
+            period = int(msg["lt_period"]) if "lt_period" in msg else max(win * 16, 256)
+            width = int(msg["lt_width"]) if "lt_width" in msg else max(win * 3, 64)
+            ratio = int(msg["lt_ratio"]) if "lt_ratio" in msg else 2
+        except (TypeError, ValueError):
+            return False, "lt_period/lt_width: не число"
+        if not self.fpga.set_look_through(True, period, width, ratio):
+            return False, "запись LT_* не удалась"
+        return True, ""
+
     def _program_grid(self, msg: dict) -> tuple[bool, str]:
         """0x51–0x58. Нет ключей — нули (не leftover прошлой сетки)."""
         try:
@@ -987,7 +1030,12 @@ class LegionGateway:
                     if "walk_max" not in msg:
                         walk_max = lf.WALK_MAX_LIVE_DEFAULT
                     lb_delay = int(msg["lb_delay"]) if "lb_delay" in msg else 0
-                    lb_delay1 = int(msg["lb_delay1"]) if "lb_delay1" in msg else lf.LB_DELAY1_DEFAULT
+                    if "lb_delay1" in msg:
+                        lb_delay1 = int(msg["lb_delay1"])
+                    elif msg.get("fs_hz") is not None:
+                        lb_delay1 = lf.twory_delay1(msg["fs_hz"])
+                    else:
+                        lb_delay1 = lf.LB_DELAY1_DEFAULT
                     lb_ftw = int(msg["lb_ftw"]) if "lb_ftw" in msg else 0
                     lb_ftw1 = int(msg["lb_ftw1"]) if "lb_ftw1" in msg else 0
                     lb_amp0 = int(msg["lb_amp0"]) if "lb_amp0" in msg else lf.LB_AMP_Q15_HALF
@@ -1037,6 +1085,10 @@ class LegionGateway:
                 amp0=lb_amp0, amp1=lb_amp1, period=walk_period, ftw_step=walk_ftw_step,
             ):
                 return {"ok": False, "reason": "запись LB_DELAY/FTW/AMP не удалась"}
+            if mode == lf.MODE_LB_GATED:
+                lt_ok, lt_why = self._program_look_through(msg)
+                if not lt_ok:
+                    return {"ok": False, "reason": lt_why}
             try:
                 proto_period = int(msg["proto_period"]) if "proto_period" in msg else 0
                 proto_pulse = int(msg["proto_pulse"]) if "proto_pulse" in msg else 0
@@ -1068,6 +1120,9 @@ class LegionGateway:
             scan_ok, scan_why = self._validate_scan(msg)
             if not scan_ok:
                 return {"ok": False, "reason": scan_why}
+            class_ok, class_why = self._arm_class_gate(mode, msg)
+            if not class_ok:
+                return {"ok": False, "reason": class_why}
             air_ok, air_why = self._air_enable(mode, msg)
             if not air_ok:
                 return {"ok": False, "reason": air_why}
@@ -1118,6 +1173,7 @@ class LegionGateway:
             }
         if op == "disarm":
             ok = self.fpga.disarm()
+            self.fpga.set_look_through(False, 0, 0)
             if ok:
                 self._armed = False
                 self._armed_at = 0.0

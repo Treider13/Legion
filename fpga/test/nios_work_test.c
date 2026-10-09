@@ -2463,6 +2463,75 @@ int main(void)
     legion_reg_write(LEGION_REG_GRID_STEP_HZ, 0);
     legion_reg_write(LEGION_REG_CH_CTRL, 0);
 
+    /* Уникальный FHSS, взгляд 2 МГц < hop-set 79 МГц → следующий канал, не LSTM. */
+    legion_reg_write(LEGION_REG_CTRL, 0);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_FFT_CTRL, 0);
+    memset(t_ch_pwr, 0, sizeof(t_ch_pwr));
+    t_ch_word = 0;
+    t_ch_pwr_valid = 1;
+    t_ch_pwr_fr = 3;
+    legion_reg_write(LEGION_REG_AIR_FREQ_KHZ, 2440400);
+    legion_reg_write(LEGION_REG_AIR_FS_HZ, 2000000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SEARCH_BW_HZ, 2000000);
+    legion_reg_write(LEGION_REG_SETTLE_N, 8);
+    legion_reg_write(LEGION_REG_BAND_COUNT, 0);
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2440400);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2440400);
+    legion_reg_write(LEGION_REG_GRID_F0_HZ, 2400400000u);
+    legion_reg_write(LEGION_REG_GRID_STEP_HZ, 1000000u);
+    legion_reg_write(LEGION_REG_GRID_META,
+                     80u | (LEGION_GRID_KIND_FHSS << 28) |
+                     (LEGION_GRID_SRC_MATCHER << 24));
+    legion_reg_write(LEGION_REG_GRID_FLAGS, 0);
+    legion_reg_write(LEGION_REG_CH_PWR_THR, 0x40);
+    legion_reg_write(LEGION_REG_CH_THR, 0);
+    legion_reg_write(LEGION_REG_CH_CTRL, LEGION_CH_PRESET_ELRS << 16);
+    legion_reg_write(LEGION_REG_FFT_CTRL, LEGION_FFT_CTRL_EN);
+    legion_reg_write(LEGION_REG_SCAN_CTRL,
+                     LEGION_SCAN_CTRL_EN | LEGION_SCAN_CTRL_SURVEY);
+    CHECK("hop map: AIR", legion_reg_write(LEGION_REG_AIR_PREP, 0x7));
+    CHECK("hop map: ARM", legion_reg_write(LEGION_REG_CTRL, CTRL_ARM_WD_LBG));
+    t_status = 0;
+    t_tamer = 1000;
+    t_peak_word = 0;
+    legion_work(); /* PASS: hop на 2440.4, SETTLE */
+    t_tamer += 8;
+    t_ch_pwr_fr = 5;
+    t_ch_pwr[40] = 0x200;
+    legion_work(); /* SETTLE → FRAME, latch drop_fr */
+    t_ch_pwr_fr = 6;
+    t_status = LEGION_STATUS_DET_ACTIVE;
+    t_peak_word = mk_peak(1, 1, 0x2000, 2);
+    legion_work(); /* occupancy → survey_count */
+    t_tamer += (uint64_t)2000000 * 5 / 1000;
+    legion_work(); /* pick → STARE */
+    t_tamer += 8;
+    legion_work(); /* unmute, stare_on */
+    t_status = 0;
+    t_peak_word = 0;
+    memset(t_ch_pwr, 0, sizeof(t_ch_pwr));
+    t_tamer += (uint64_t)2000000 * LEGION_SURVEY_GONE_MS / 1000 + 1;
+    pio_n = 0;
+    legion_work();
+    {
+        uint32_t khz = 0;
+        uint32_t ev = 0;
+        legion_reg_read(LEGION_REG_AIR_FREQ_KHZ, &khz);
+        legion_reg_read(LEGION_REG_SCAN_EVENT, &ev);
+        CHECK("hop map: unique FHSS next 2441.4, не RESURVEY",
+              khz == 2441400 && (ev & 0xffu) == LEGION_EVT_SWITCH);
+        CHECK("hop map: не enter_search коридора 2400",
+              khz != 2400000 && khz != 2440400);
+    }
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
+    legion_reg_write(LEGION_REG_FFT_CTRL, 0);
+    legion_reg_write(LEGION_REG_GRID_META, 0);
+    legion_reg_write(LEGION_REG_GRID_F0_HZ, 0);
+    legion_reg_write(LEGION_REG_GRID_STEP_HZ, 0);
+    legion_reg_write(LEGION_REG_CTRL, 0);
+
     printf(fails ? "NIOS WORK: %d FAILURES\n" : "NIOS WORK: ALL PASS\n", fails);
     return fails ? 1 : 0;
 }

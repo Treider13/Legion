@@ -58,6 +58,10 @@ export const CH_PRESET_O4VID3 = 3;
 export const SMART_GRID_EMPTY_RU = "сетка не собрана — не умная";
 export const SMART_GRID_ANALOG_RU = "аналог 5.8 — сетка умной атаки не собирается";
 export const SMART_X40_C58_RU = "x40 / LMS6002D не видит 5.8 ГГц — умная атака на C58 только на xA4";
+/** Умный ARM: только FHSS или подтверждённый ZC (флаг, не LUT O4). */
+export const SMART_ARM_CLASS_RU =
+  "класс не FHSS и не подтверждённый ZC — ARM отказан";
+export const SMART_ARM_OVERRIDE_RU = "class_override: затвор класса обойдён";
 
 export interface SmartGridCard {
   empty: boolean;
@@ -526,4 +530,37 @@ export function xlatAimRu(fsHz: number, ch: number): string {
   const w = xlatWindowMhz(fsHz);
   if (ch === LEGION_AIM_NONE) return `окно ${w} МГц · канал не выбран`;
   return `окно ${w} МГц вокруг канала ${ch}`;
+}
+
+/** Затвор класса до ARM. kind в meta — прицел/слот, не этот затвор.
+ *  windowLimited не режет: hop-set обрезан IBW, но класс FHSS жив. */
+export function armClassOk(card: SmartGridCard | null | undefined): boolean {
+  if (!card || card.analog || card.empty) return false;
+  if (card.kind === GRID_KIND_FHSS) return true;
+  if (card.kind === GRID_KIND_ZC && (card.flags & GRID_FLAG_ZC) !== 0) return true;
+  return false;
+}
+
+/** ICE9: hop-set целиком в analog/взгляде — следующий канал не угадывать. */
+export function lookCoversHopset(card: SmartGridCard, lookMhz: number): boolean {
+  if (!(card.n > 1) || !(card.stepHz > 0) || !(lookMhz > 0)) return true;
+  const spanMhz = ((card.n - 1) * card.stepHz) / 1e6;
+  return spanMhz <= lookMhz + 1e-9;
+}
+
+/** Следующий центр из f0/step/n. Два семейства (F0UNC) или широкий взгляд — null. */
+export function hopMapNextMhz(
+  card: SmartGridCard,
+  currentMhz: number,
+  lookMhz: number,
+): number | null {
+  if (card.kind !== GRID_KIND_FHSS || (card.flags & GRID_FLAG_F0UNC) !== 0) return null;
+  if (lookCoversHopset(card, lookMhz)) return null;
+  const f0Mhz = (card.f0Hz + card.shiftHz) / 1e6;
+  const stepMhz = card.stepHz / 1e6;
+  if (!(stepMhz > 0) || !(card.n > 1) || !Number.isFinite(currentMhz)) return null;
+  let ch = Math.round((currentMhz - f0Mhz) / stepMhz);
+  if (ch < 0) ch = 0;
+  ch = (ch + 1) % card.n;
+  return Math.round((f0Mhz + ch * stepMhz) * 1000) / 1000;
 }

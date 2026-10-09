@@ -55,6 +55,8 @@ CH_PRESET_O4VID3 = 3
 EMPTY_RU = "сетка не собрана — не умная"
 ANALOG_RU = "аналог 5.8 — сетка умной атаки не собирается"
 X40_C58_RU = "x40 / LMS6002D не видит 5.8 ГГц — умная атака на C58 только на xA4"
+ARM_CLASS_RU = "класс не FHSS и не подтверждённый ZC — ARM отказан"
+ARM_OVERRIDE_RU = "class_override: затвор класса обойдён"
 
 
 def pack_grid_f0(f0_hz: int) -> int:
@@ -418,6 +420,46 @@ def match_smart_grid(inp: dict[str, Any]) -> dict[str, Any]:
         })
 
     return empty_card(EMPTY_RU)
+
+
+def arm_class_ok(card: dict[str, Any] | None) -> bool:
+    if not card or card.get("analog") or card.get("empty"):
+        return False
+    kind = int(card.get("kind") or 0)
+    flags = int(card.get("flags") or 0)
+    if kind == GRID_KIND_FHSS:
+        return True
+    if kind == GRID_KIND_ZC and (flags & GRID_FLAG_ZC) != 0:
+        return True
+    return False
+
+
+def look_covers_hopset(card: dict[str, Any], look_mhz: float) -> bool:
+    n = int(card.get("n") or 0)
+    step = float(card.get("step_hz") or 0)
+    if n <= 1 or step <= 0 or look_mhz <= 0:
+        return True
+    span_mhz = (n - 1) * step / 1e6
+    return span_mhz <= look_mhz + 1e-9
+
+
+def hop_map_next_mhz(card: dict[str, Any], current_mhz: float, look_mhz: float) -> float | None:
+    if int(card.get("kind") or 0) != GRID_KIND_FHSS:
+        return None
+    if int(card.get("flags") or 0) & GRID_FLAG_F0UNC:
+        return None
+    if look_covers_hopset(card, look_mhz):
+        return None
+    f0 = (float(card.get("f0_hz") or 0) + float(card.get("shift_hz") or 0)) / 1e6
+    step = float(card.get("step_hz") or 0) / 1e6
+    n = int(card.get("n") or 0)
+    if step <= 0 or n <= 1:
+        return None
+    ch = int(round((current_mhz - f0) / step))
+    if ch < 0:
+        ch = 0
+    ch = (ch + 1) % n
+    return round(f0 + ch * step, 3)
 
 
 if __name__ == "__main__":

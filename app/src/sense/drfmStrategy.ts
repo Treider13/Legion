@@ -18,9 +18,11 @@ import {
   type SmartGridCard,
 } from "./smartGrid";
 
-/** Застывший two-ray: 64 / 56e6 ≈ 1.14 мкс ≈ 1/B ELRS LoRa BW_0800. */
+/** Застывший two-ray: 64 @ 56 MSPS ≈ 1.14 мкс ≈ 1/B ELRS LoRa BW_0800.
+ *  На другом fs — round(64·fs/56e6), не «всегда 64». 2 MSPS → 2. */
 export const DRFM_TAP0 = 0;
 export const DRFM_TAP1_TWORY = 64;
+export const DRFM_TWORY_FS_HZ = 56e6;
 /** Q15 0.5. Mux потом ещё ×0.9 — не ставить 29491 на отвод. */
 export const DRFM_AMP_HALF = 16384;
 /** 1 SCS DroneID / OcuSync PHY (Schiller 2023, proto17). */
@@ -30,6 +32,15 @@ export const DRFM_ZC_SHIFT_ALT_HZ = 20_000;
 
 export const DRFM_TWORY_RU = "drfm · two-ray 0/64";
 export const DRFM_ZC_RU = "drfm · ZC CFO 15 кГц";
+
+export function drfmTworyDelay1(fsHz: number): number {
+  const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : DRFM_TWORY_FS_HZ;
+  return Math.max(1, Math.min(4095, Math.round((DRFM_TAP1_TWORY * fs) / DRFM_TWORY_FS_HZ)));
+}
+
+export function drfmTworyRu(delay1: number): string {
+  return `drfm · two-ray 0/${delay1}`;
+}
 
 export type DrfmWire = "none" | "shift" | "ftw";
 
@@ -74,11 +85,12 @@ export function wantsZcDrfm(card: SmartGridCard | null | undefined): boolean {
   return (card.flags & GRID_FLAG_ZC) !== 0;
 }
 
-function twoRay(): DrfmStrategy {
+function twoRay(fsHz: number): DrfmStrategy {
+  const delay1 = drfmTworyDelay1(fsHz);
   return {
     id: "tworay",
     delay0: DRFM_TAP0,
-    delay1: DRFM_TAP1_TWORY,
+    delay1,
     amp0: DRFM_AMP_HALF,
     amp1: DRFM_AMP_HALF,
     shiftHz: 0,
@@ -86,7 +98,7 @@ function twoRay(): DrfmStrategy {
     walkStep: 0,
     walkEn: true,
     wire: "none",
-    reason: DRFM_TWORY_RU,
+    reason: drfmTworyRu(delay1),
   };
 }
 
@@ -122,8 +134,8 @@ export function planDrfmStrategy(
   fsHz: number,
   override?: DrfmOverride | null,
 ): DrfmStrategy {
-  const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : 56e6;
-  const s = wantsZcDrfm(card) ? zcCfo(fs) : twoRay();
+  const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : DRFM_TWORY_FS_HZ;
+  const s = wantsZcDrfm(card) ? zcCfo(fs) : twoRay(fs);
   const o = override ?? {};
 
   if (o.delay0 !== undefined && Number.isFinite(o.delay0) && o.delay0 > 0) {

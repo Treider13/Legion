@@ -284,6 +284,14 @@ architecture legion of bladerf is
 
     signal lg_det_active_rx : std_logic;
     signal lg_det_active_tx : std_logic;
+    signal lg_det_gated_tx  : std_logic;
+    signal lg_lt_blank      : std_logic;
+    signal lg_echo_hold     : std_logic;
+    signal lg_lt_status     : std_logic_vector(31 downto 0);
+    signal lg_tx_lt_en      : std_logic;
+    signal lg_tx_lt_period  : unsigned(31 downto 0);
+    signal lg_tx_lt_width   : unsigned(31 downto 0);
+    signal lg_tx_lt_ratio   : unsigned(3 downto 0);
     signal lg_det_count     : unsigned(15 downto 0);
     signal lg_det_thr_rx    : std_logic_vector(31 downto 0);
     signal lg_det_shift_rx  : unsigned(3 downto 0);
@@ -1226,6 +1234,11 @@ begin
         tx_drfm_step_src => lg_tx_step_src,
         tx_ch_target    => lg_tx_ch_target,
         tx_aim_en       => lg_tx_aim_en,
+        tx_lt_en        => lg_tx_lt_en,
+        tx_lt_period    => lg_tx_lt_period,
+        tx_lt_width     => lg_tx_lt_width,
+        tx_lt_ratio     => lg_tx_lt_ratio,
+        tx_lt_status    => lg_lt_status,
         tx_playing    => lg_playing,
         tx_cap_done   => lg_cap_done,
         tx_wd_fired   => lg_wd_fired,
@@ -1274,6 +1287,27 @@ begin
         det_active  => lg_det_active_rx,
         det_count   => lg_det_count
       );
+
+    U_legion_look_through : entity work.legion_look_through
+      port map (
+        tx_clock    => tx_clock,
+        tx_reset    => tx_reset,
+        rx_clock    => rx_clock,
+        rx_reset    => rx_reset,
+        enable      => lg_tx_lt_en,
+        period      => lg_tx_lt_period,
+        width       => lg_tx_lt_width,
+        ratio_shift => lg_tx_lt_ratio,
+        det_thr     => unsigned(lg_det_thr_rx),
+        win_shift   => lg_det_shift_rx,
+        rx_i        => adc_streams(0).data_i,
+        rx_q        => adc_streams(0).data_q,
+        rx_valid    => adc_streams(0).data_v,
+        blank       => lg_lt_blank,
+        echo_hold   => lg_echo_hold,
+        status      => lg_lt_status
+      );
+    lg_det_gated_tx <= lg_det_active_tx and not lg_echo_hold;
 
     -- FFT-пик + 8-slot энергия + Top-N / occupancy
     U_legion_fft_peak : entity work.legion_fft_peak
@@ -1595,7 +1629,8 @@ begin
         arm        => lg_tx_arm,
         mode       => lg_tx_mode,
         wd_ok      => lg_wd_ok,
-        det_active => lg_det_active_tx,
+        det_active => lg_det_gated_tx,
+        blank      => lg_lt_blank,
         lb_shift   => lg_tx_lb_shift,
         host_i     => dac_streams_host(0).data_i,
         host_q     => dac_streams_host(0).data_q,

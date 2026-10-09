@@ -162,6 +162,13 @@ package legion_pkg is
     constant LEGION_REG_GRID_RSV       : natural := 16#57#;
     constant LEGION_REG_CH_PWR_THR     : natural := 16#58#; -- [15:0] канал
     constant LEGION_REG_AIM_CH         : natural := 16#59#; -- [7:0] или 0xFF
+    -- Look-through: HDL, не GRID_RSV 0x57 (NIOS-only). pio_addr 7 бит.
+    -- CTRL bit0 EN; [7:4] ratio_shift (E_off < E_on >> n → эхо).
+    -- PERIOD/WIDTH — сэмплы каденса TX (каждый 2-й tx_clock), не такты.
+    constant LEGION_REG_LT_CTRL        : natural := 16#5A#;
+    constant LEGION_REG_LT_PERIOD      : natural := 16#5B#;
+    constant LEGION_REG_LT_WIDTH       : natural := 16#5C#;
+    constant LEGION_REG_LT_STATUS      : natural := 16#5D#; -- STATUS mux
 
     constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
     constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;

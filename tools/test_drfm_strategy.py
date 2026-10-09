@@ -14,6 +14,7 @@ from drfm_strategy import (
     DRFM_ZC_RU,
     DRFM_ZC_SHIFT_HZ,
     drfm_ftw_from_hz,
+    drfm_twory_delay1,
     plan_drfm_strategy,
 )
 from smart_grid import (
@@ -32,10 +33,12 @@ def check(name: str, cond: bool) -> None:
 
 elrs = match_smart_grid({"hops_mhz": [2400.4, 2401.4, 2410.4, 2450.4]})
 s = plan_drfm_strategy(elrs, 56e6)
-check("ELRS → two-ray 0/64, walk_step=0, без сдвига",
+check("ELRS → two-ray 0/64 @ 56e6, walk_step=0, без сдвига",
       s["id"] == "tworay" and s["delay0"] == 0 and s["delay1"] == DRFM_TAP1_TWORY
       and s["amp0"] == DRFM_AMP_HALF and s["amp1"] == DRFM_AMP_HALF
       and s["shift_hz"] == 0 and s["walk_step"] == 0 and s["reason"] == DRFM_TWORY_RU)
+check("two-ray @ 2e6 → delay1=2",
+      plan_drfm_strategy(elrs, 2e6)["delay1"] == 2 and drfm_twory_delay1(2e6) == 2)
 
 zc = match_smart_grid({"looks": [{"zc_hit": True, "freq_mhz": 5789.5}]})
 z = plan_drfm_strategy(zc, 56e6)

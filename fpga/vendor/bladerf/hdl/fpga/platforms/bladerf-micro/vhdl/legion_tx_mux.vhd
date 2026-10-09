@@ -28,6 +28,7 @@ entity legion_tx_mux is
         mode         : in  std_logic_vector(2 downto 0);
         wd_ok        : in  std_logic;  -- '1' = watchdog жив / выключен
         det_active   : in  std_logic;  -- синхронизирован к tx_clock
+        blank        : in  std_logic;  -- look-through: нули, каденс жив
         lb_shift     : in  unsigned(3 downto 0);
         -- Источник 0: поток хоста (fifo_reader)
         host_i       : in  signed(15 downto 0);
@@ -190,7 +191,10 @@ begin
                         out_valid <= phase;
                         gi := lb_amp_q15(lb_i);
                         gq := lb_amp_q15(lb_q);
-                        if lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
+                        if blank = '1' then
+                            out_i <= (others => '0');
+                            out_q <= (others => '0');
+                        elsif lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
                             out_i <= gi;
                             out_q <= gq;
                         elsif lb_valid = '1' and ramping = '1' then
