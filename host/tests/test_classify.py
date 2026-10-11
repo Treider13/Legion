@@ -11,8 +11,19 @@ torch = pytest.importorskip("torch")
 
 from legion_rx.classify.datasets import load_dronerf, scan_segments
 from legion_rx.classify.infer import Classifier
-from legion_rx.classify.model import SpectroCNN
+from legion_rx.classify.model import CLASSES3, SpectroCNN
+from legion_rx.classify.train import apply_group3, group3_label
 from legion_rx.synth.dataset import build_synth_dataset, spec_from_iq
+
+
+def test_classes3_group():
+    assert CLASSES3 == ("drone", "wifi", "noise")
+    assert group3_label("elrs_24") == "drone"
+    assert group3_label("wifi_bt") == "wifi"
+    assert group3_label("noise") == "noise"
+    y3, c3 = apply_group3(np.array([0, 1, 2]), ["elrs_24", "wifi_bt", "noise"])
+    assert list(c3) == ["drone", "wifi", "noise"]
+    assert list(y3) == [0, 1, 2]
 
 
 def test_model_forward_shape():
@@ -102,7 +113,8 @@ def test_classifier_torch_backend(tmp_path):
 def test_train_smoke_one_epoch(tmp_path):
     """train.py end-to-end: 1 эпоха, 2 образца/класс — пайплайн живой,
     report.json/labels.json/best.pt/model.onnx на месте. acc за 1 эпоху
-    не требуем (критерий 0.95 — отдельный этап обучения, шаг 5.6)."""
+    не требуем (критерий 0.95 — отдельный этап обучения, шаг 5.6).
+    Шаг 11: нейросеть — 3 класса (дрон/Wi-Fi/шум) по умолчанию."""
     env = dict(os.environ)
     host = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     env["PYTHONPATH"] = host + os.pathsep + env.get("PYTHONPATH", "")
@@ -117,5 +129,5 @@ def test_train_smoke_one_epoch(tmp_path):
     assert (out / "model.onnx").is_file()
     rep = json.loads((out / "report.json").read_text())
     assert 0.0 <= rep["val_acc"] <= 1.0
-    assert len(rep["classes"]) == 12
+    assert list(rep["classes"]) == ["drone", "wifi", "noise"]
     assert rep["ok"] == (rep["val_acc"] > 0.95)

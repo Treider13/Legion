@@ -106,3 +106,10 @@ def _has_channelize_poly(xp) -> bool:
         return True
     except Exception:
         return False
+
+
+def chans_for_corridor(width_hz: float, per_hz: float = 200.0e3) -> int:
+    """Адаптивная канализация (ТЗ п.12): n_chans = ширина коридора / 200 кГц.
+    Клэмп 8..512 (PFB осмысленен в этих пределах)."""
+    n = int(round(float(width_hz) / float(per_hz)))
+    return max(8, min(512, n))

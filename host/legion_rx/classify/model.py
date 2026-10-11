@@ -1,6 +1,7 @@
 """SpectroCNN — компактный CNN для спектрограмм (шаг 5.4).
 
 Вход: (B, 1, 256, 128) float32 [0,1] (5 мс окна при 20 MSPS).
+Шаг 5: 3 класса — дрон / Wi-Fi / шум (`CLASSES3`, train.py --group3).
 ~280k параметров: инференс на RTX 5050 << 1 мс, бюджет петли 10 мс
 съедают транспорт и PFB, не сеть. GAP вместо FC по картам — устойчиво
 к сдвигу числа классов между DroneRFa и синтетикой (меняется только head).
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+
+CLASSES3 = ("drone", "wifi", "noise")
 
 
 def _block(cin: int, cout: int) -> nn.Sequential:

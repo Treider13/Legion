@@ -60,6 +60,18 @@ def main() -> int:
     lut = pg.colormap.get("viridis").getLookupTable(0.0, 1.0, 256)
     wf_img.setLookupTable(lut)
     p_wf.addItem(wf_img)
+    # Когнитивный контур (ТЗ п.9): parent — тонкая рамка, sub — яркая;
+    # маркер предсказанного скачка; строка state/pattern.
+    reg_parent = pg.LinearRegionItem(values=(0, 0), movable=False,
+                                     pen=pg.mkPen((150, 150, 150), width=1))
+    reg_sub = pg.LinearRegionItem(values=(0, 0), movable=False,
+                                  pen=pg.mkPen((255, 220, 0), width=3))
+    for r in (reg_parent, reg_sub):
+        r.setVisible(False)
+        p_spec.addItem(r)
+    pred_mark = pg.ScatterPlotItem(symbol="v", size=14,
+                                   brush=pg.mkBrush(255, 80, 80))
+    p_spec.addItem(pred_mark)
     label = QtWidgets.QLabel("ожидание данных…")
     label.setStyleSheet("font-family: monospace; font-size: 14px; padding: 4px")
     cw.addItem(label, row=2, col=0, colspan=2)
@@ -67,6 +79,7 @@ def main() -> int:
     state = {
         "wf": np.full((WF_ROWS, 1024), -120.0, dtype=np.float32),
         "cls": "—", "conf": 0.0, "hop": {}, "stat": {},
+        "corridor": {}, "fsm": {},
     }
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -106,8 +119,31 @@ def main() -> int:
                 state["hop"] = msg
             elif kind == "stat":
                 state["stat"] = msg
+            elif kind == "corridor":
+                parent, sub = msg.get("parent"), msg.get("sub")
+                if parent and parent[0] is not None:
+                    reg_parent.setRegion(tuple(parent))
+                    reg_parent.setVisible(True)
+                if sub and sub[0] is not None:
+                    reg_sub.setRegion(tuple(sub))
+                    reg_sub.setVisible(True)
+            elif kind == "pred":
+                ch = msg.get("channel")
+                if ch is not None:
+                    pred_mark.setData([ch], [-20.0])
+            elif kind == "fsm":
+                state["fsm"] = msg
         h, s = state["hop"], state["stat"]
+        fsm = state.get("fsm", {})
+        fsm_txt = ""
+        if fsm:
+            fsm_txt = (f"state: {fsm.get('state', '—')}   "
+                       f"pattern: {fsm.get('pattern_id') or '—'}   "
+                       f"type: {fsm.get('sequence_type') or '—'}   "
+                       f"jams: {fsm.get('jams_sent', '—')}   "
+                       f"PDR: {fsm.get('pdr_target', '—')}   ")
         label.setText(
+            fsm_txt +
             f"класс: {state['cls']} ({state['conf']:.2f})   "
             f"hop: {h.get('rate_hz', '—')} Гц → {h.get('match') or '—'}   "
             f"next: ch{h.get('next_channel', '—')}   "

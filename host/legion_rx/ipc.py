@@ -66,5 +66,25 @@ class UdpPublisher:
     def send_stat(self, stat: dict) -> None:
         self.send("stat", stat)
 
+    # ---- когнитивный контур (ТЗ п.9) ----
+
+    def send_corridor(self, parent: dict, sub: dict) -> None:
+        self.send("corridor", {
+            "parent": [parent.get("f_start"), parent.get("f_end")],
+            "sub": [sub.get("f_start"), sub.get("f_end")]})
+
+    def send_pred(self, channel, t_s: float, pattern_id: "str | None") -> None:
+        self.send("pred", {"channel": channel, "t": round(float(t_s), 4),
+                           "pattern_id": pattern_id})
+
+    def send_fsm(self, state: str, rec: dict) -> None:
+        self.send("fsm", {"state": state,
+                          "pattern_id": rec.get("pattern_id"),
+                          "position": rec.get("position"),
+                          "confidence": rec.get("confidence"),
+                          "sequence_type": rec.get("sequence_type"),
+                          "jams_sent": rec.get("jams_sent"),
+                          "pdr_target": rec.get("pdr_target")})
+
     def close(self) -> None:
         self._sock.close()

@@ -79,7 +79,16 @@ python3 -m legion_rx.pipeline bench --protocol elrs_24 --duration-s 0.5 --cpu
 ## Тесты (без железа)
 
 ```bash
-pytest host/tests -q   # 53 passed
+pytest host/tests -q   # регрессия + RBF/FHSS
+
+# RBF 72 МГц / 36 MSPS (лаборатория, нужен bladeRF):
+#   flash legionxA4-2026-10-11_23.08.28/legionxA4.rbf
+#   md5 bd0316396c32bb6e615061f3bdf413fe
+#   bladeRF-cli -e "set samplerate rx 36M"
+#   bladeRF-cli -e "print samplerate rx"   # 36000000
+#   rx start 60с; rx status → rx_overruns=0
+#   DATA_CLK=144 МГц. overruns>0 → AD9361 0x006.
+# FSM (без железа): python3 -m legion_rx.pipeline cognitive --cpu
 ```
 
 Покрыто: C-читатель (байты/метки/EOF), парсер rx status, Q15-таблица ТЗ,
@@ -122,6 +131,23 @@ wildcard-пропуски) → предсказание table/period/Markov-1, �
 - acc>0.95 (отдельный этап обучения на DroneRFa + синтетике);
 - TRT `--bench` сборка движка на Blackwell; 60 FPS вьювера;
 - FPGA timing/M10K — шаги 2.5–2.7, отдельная задача Quartus.
+
+## Когнитивный контур FHSS-памяти (п.1–12 ТЗ, 11.10.2026)
+
+```bash
+cd host && export PYTHONPATH=$PWD
+# bench когнитивного контура (FSM end-to-end, FakeTransport):
+python3 -m legion_rx.pipeline cognitive --duration-s 1.0 --publish
+```
+
+Модули: `corridor.py` ([G1] burst-детектор + [G2] байес P(hopping)),
+`hop_recorder.py` ([G6] FHSDT/FHSDC), `pattern_store.py` ([G5] ID,
+find_match, sequence_type), `cognitive.py` (FSM), `effectiveness_monitor.py`
+(PDR-прокси), `drift_detector.py` (LP<0.7×3), `fpga_control.apply_predictive_jam`
+(confirmed+sub-only, [G4]), `fpga_preload.py` (LUT+GRID через legion_fpga.py).
+Нейросеть — 3 класса (drone/wifi/noise, `--no-group3` откат). Сетка PFB —
+адаптивная (коридор/200 кГц). DDPG [G3] — отдельный этап RL (не заглушка:
+fallback — Markov-1 из HopTracker).
 
 ## Примечания после аудита (11.10.2026)
 

@@ -28,6 +28,25 @@ from ..synth.dataset import build_synth_dataset
 from .datasets import load_dronerf
 from .model import SpectroCNN
 
+# Шаг 11 ТЗ: нейросеть сокращена до 3 классов (дрон / Wi-Fi / шум).
+GROUP3 = {"wifi_bt": "wifi", "noise": "noise"}
+
+
+def group3_label(class_name: str) -> str:
+    """всё RC/дрон → 'drone'; wifi_bt → 'wifi'; noise → 'noise'."""
+    return GROUP3.get(class_name, "drone")
+
+
+def apply_group3(y, classes) -> tuple:
+    """Переразметка в 3 класса; возвращает (y3, classes3)."""
+    classes3 = ["drone", "wifi", "noise"]
+    idx = {name: i for i, name in enumerate(classes3)}
+    import numpy as np
+
+    y3 = np.asarray([idx[group3_label(classes[int(c)])] for c in y],
+                    dtype=np.int64)
+    return y3, classes3
+
 
 def _augment(x: torch.Tensor, rng: torch.Generator) -> torch.Tensor:
     b = x.size(0)
@@ -94,6 +113,8 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--no-group3", action="store_true",
+                    help="полный набор классов (по умолчанию — 3: дрон/Wi-Fi/шум, шаг 11)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -111,6 +132,8 @@ def main() -> int:
         y = np.concatenate([y, ds["y"] + off])
         classes += [c for c in ds["classes"] if c not in classes]
         off = len(classes)
+    if not args.no_group3:
+        y, classes = apply_group3(y, classes)  # шаг 11: 3 класса
     tr, va = _split(y, args.val_frac, args.seed)
     print(f"классов: {len(classes)}, образцов: {len(y)} "
           f"(train {len(tr)} / val {len(va)}), device={device}")

@@ -351,3 +351,49 @@ class HopTracker:
         if n == 0:
             return (0.0, 0)
         return (float(np.mean(self._pred_log)), n)
+
+
+# ---------------------------------------------------------------------------
+# Интеграция с PatternStore (когнитивный контур, ТЗ п.4)
+# ---------------------------------------------------------------------------
+
+def match_and_predict(store, live_hops, sub_corridor_id: str):
+    """PatternStore-driven предсказание БЕЗ жёстких PARAMS:
+    find_match → (pattern_id, next_channel_predicted, lp_score).
+    next = цикл[(position+1) % cycle]. Нет матча — (None, None, 0.0):
+    fallback — FallbackPredictor (Markov-1 HopTracker; DDPG [G3] —
+    отдельный этап RL-обучения, см. RESOURCES.md)."""
+    m = store.find_match(live_hops, sub_corridor_id, min_match=8)
+    if m is None:
+        return (None, None, 0.0)
+    pid, pos, conf = m
+    rec = store.get(pid)
+    cyc = rec["cycle"]
+    nxt = cyc[(pos + 1) % len(cyc)] if cyc else None
+    return (pid, nxt, conf)
+
+
+def check_pattern_drift(store, pattern_id: str, live_hops,
+                        threshold: float = 0.7) -> bool:
+    """LP score живого окна против паттерна < threshold → True (сбой)."""
+    rec = store.get(pattern_id)
+    if not live_hops:
+        return True
+    sub_id = rec["sub_corridor_id"]
+    m = store.find_match(live_hops, sub_id, min_match=1)
+    if m is None or m[0] != pattern_id:
+        return True
+    return float(m[2]) < float(threshold)
+
+
+class FallbackPredictor:
+    """Fallback при отсутствии паттерна в store: Markov-1/period из
+    HopTracker (реальный, покрыт тестами). DDPG [G3] требует RL-обучения
+    на размеченных эпизодах — отдельный этап, не заглушка."""
+
+    def __init__(self, n_chans: int, frame_dt_s: float):
+        self._tr = HopTracker(n_chans, frame_dt_s)
+
+    def update(self, ch_pwr, t_s: float) -> dict:
+        self._tr.update(ch_pwr, t_s)
+        return self._tr.predict_next()

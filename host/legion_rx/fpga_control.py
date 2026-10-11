@@ -17,6 +17,7 @@ USB в контрольных окнах (см. pipeline integrate).
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -36,7 +37,38 @@ AMP_MIN, AMP_MAX = 0.80, 1.00  # рабочий диапазон СУММЫ от
 AMP_SUM_MAX = 1.00
 IMD3_LIMIT_DBC = -30.0
 
-PLL_SETTLE_S = 0.006  # ≥100 мкс по ТЗ; 6 мс — как LO_SETTLE_S в legion_fpga.py
+PLL_SETTLE_S = 0.006  # AD9361 LO settle 6 мс (lock 20–50 мкс, запас 100×)
+# RBF 72 МГц: PIO не чаще 1 раза в 4 клока = 55.556 нс; USB bulk >> этого.
+MCP_PIO_MIN_S = lf.mcp_pio_min_s()
+PIPELINE_EXTRA_SAMPLES = lf.PIPELINE_EXTRA_SAMPLES
+AIR_FS_HZ = lf.AIR_FS_FOR_PLL_SCLK_HZ  # 36e6 — эфир AD9361, не USB RX
+
+_log = logging.getLogger(__name__)
+_last_pio_t: float | None = None
+
+
+def reset_pio_write_clock() -> None:
+    """Сброс интервала PIO (тесты)."""
+    global _last_pio_t
+    _last_pio_t = None
+
+
+def note_pio_write(now: float | None = None) -> str | None:
+    """WARN если PIO write чаще MCP_PIO_MIN_S. Не блокирует запись."""
+    global _last_pio_t
+    t = time.perf_counter() if now is None else float(now)
+    msg = None
+    if _last_pio_t is not None:
+        dt = t - _last_pio_t
+        if dt < MCP_PIO_MIN_S:
+            msg = (
+                f"PIO write interval {dt * 1e9:.1f} ns < "
+                f"MCP_PIO_MIN_S {MCP_PIO_MIN_S * 1e9:.3f} ns "
+                f"(не чаще 1 раза в 4 клока @ 72 МГц)"
+            )
+            _log.warning(msg)
+    _last_pio_t = t
+    return msg
 
 
 def q15(amp: float) -> int:
@@ -199,21 +231,27 @@ def apply_profile(fpga: "lf.LegionFpga", p: ClassProfile, fs_hz: float,
         # +1 LSB сверх unity — жёстко подрезаем второй отвод (Δ < 0.01%).
         q1 = Q15_UNITY - q0
     d1 = lf.twory_delay1(fs_hz) if p.two_ray else 0
+    note_pio_write()
     ok = fpga.set_detector(p.det_thr, 8)
+    note_pio_write()
     ok = fpga.set_live_drfm(
         delay0=0, delay1=d1,
         ftw0=ftw_from_hz(p.lb_shift0_hz, fs_hz),
         ftw1=ftw_from_hz(p.lb_shift1_hz, fs_hz),
         amp0=q0, amp1=q1,
         period=0, ftw_step=0) and ok
+    note_pio_write()
     ok = fpga.set_proto_timing(
         int(round(p.proto_period_s * fs_hz)),
         int(round(p.proto_pulse_s * fs_hz)), 0) and ok
+    note_pio_write()
     ok = fpga.arm(mode, True) and ok
+    # MCP 55.556 нс: USB PIO уже реже; note_pio_write — WARN, не блок.
     return ok
 
 
 def disarm(fpga: "lf.LegionFpga") -> bool:
+    note_pio_write()
     return fpga.disarm()
 
 
@@ -296,7 +334,102 @@ class LoManager:
         return time.perf_counter() - t0
 
 
+# ---- упреждающая помеха по confirmed-паттерну (фаза 3 ТЗ) ----
+
+@dataclass
+class JamEntry:
+    """Один удар плана: [t_jam_start, f_jam, dwell, amp] — ТЗ п.7."""
+    t_jam_start: float
+    f_jam_hz: float
+    dwell_s: float
+    amp0: float
+    amp1: float = 0.0
+
+
+def apply_predictive_jam(fpga: "lf.LegionFpga", sub_corridor: dict,
+                         pattern: dict, position: int, lo_hz: float,
+                         fs_hz: float, horizon: int = 1,
+                         amp0: float = 0.90, amp1: float = 0.0) -> dict:
+    """Предсказать next_channel и бить УПРЕЖДАЮЩЕ [G4]. Жёсткие правила:
+      - pattern.confirmed обязателен (помеха без confirmed ЗАПРЕЩЕНА);
+      - каждый f_jam ∈ [sub.f_start, sub.f_end] — иначе ValueError
+        (работать в parent коридоре ЗАПРЕЩЕНО);
+      - amp0+amp1 ≤ 1.0 [F16], одиночный отвод amp0 ∈ [0.8, 1.0] (ТЗ);
+      - регистры — только через legion_fpga API.
+    Возвращает {plan, writes, per_write_ms}."""
+    from .corridor import in_subcorridor
+
+    if not pattern.get("confirmed"):
+        raise ValueError("apply_predictive_jam: паттерн не confirmed — "
+                         "помеха запрещена (ТЗ)")
+    if amp0 + amp1 > AMP_SUM_MAX + 1e-9:
+        raise ValueError(f"amp0+amp1={amp0 + amp1:.2f} > 1.0 [F16]")
+    if amp1 == 0.0 and not (AMP_MIN - 1e-9 <= amp0 <= AMP_MAX + 1e-9):
+        raise ValueError(f"amp0={amp0} вне 0.8…1.0")
+    cyc = pattern.get("cycle") or pattern["hop_sequence"]
+    freqs_mhz = (pattern.get("freqs_mhz") or [])[: len(cyc)]
+    if not cyc:
+        raise ValueError("apply_predictive_jam: пустой цикл паттерна")
+    sub = sub_corridor
+    plan: list[JamEntry] = []
+    t0 = time.perf_counter()
+    lat: list[float] = []
+    n = max(1, int(horizon))
+    for i in range(n):
+        idx = (int(position) + 1 + i) % len(cyc)
+        f_hz = (freqs_mhz[idx] * 1e6 if idx < len(freqs_mhz)
+                else None)
+        if f_hz is None:
+            raise ValueError("apply_predictive_jam: нет freqs_mhz у паттерна")
+        if not in_subcorridor(f_hz, sub):
+            raise ValueError(
+                f"f_jam {f_hz / 1e6:.3f} МГц вне sub-corridor "
+                f"[{sub['f_start'] / 1e6:.3f}…{sub['f_end'] / 1e6:.3f}] — "
+                f"parent ЗАПРЕЩЁН")
+        plan.append(JamEntry(t_jam_start=t0, f_jam_hz=f_hz,
+                             dwell_s=pattern.get("dwell_s", 1e-3),
+                             amp0=amp0, amp1=amp1))
+    # Первый удар плана — в регистры; горизонт >1 уезжает через preload.
+    e = plan[0]
+    shift_hz = e.f_jam_hz - float(lo_hz)
+    dwell = max(1e-6, float(e.dwell_s))
+    w0 = time.perf_counter()
+    note_pio_write()
+    ok = fpga.set_live_drfm(
+        delay0=0, delay1=0,
+        ftw0=ftw_from_hz(shift_hz, fs_hz), ftw1=0,
+        amp0=q15(e.amp0), amp1=q15(e.amp1),
+        period=0, ftw_step=0)
+    note_pio_write()
+    ok = fpga.set_proto_timing(int(round(dwell * fs_hz)),
+                               int(round(dwell * fs_hz)), 0) and ok
+    note_pio_write()
+    ok = fpga.arm(lf.MODE_LB_ALWAYS, True) and ok  # упреждающе, не по детекту
+    lat.append((time.perf_counter() - w0) * 1000.0)
+    if not ok:
+        raise RuntimeError("apply_predictive_jam: запись регистров не удалась")
+    return {"plan": plan, "writes": 3, "per_write_ms": lat,
+            "f_jam_hz": e.f_jam_hz, "shift_hz": shift_hz,
+            "pipeline_extra_s": lf.pipeline_extra_s(fs_hz),
+            "mcp_pio_min_s": MCP_PIO_MIN_S}
+
+
+def stop_jam(fpga: "lf.LegionFpga") -> bool:
+    """Пауза помехи (drift / target silent): disarm + обнулить смеситель
+    и амплитуды (0 = обход, не рабочая точка amp)."""
+    note_pio_write()
+    ok = fpga.disarm()
+    note_pio_write()
+    ok = fpga.set_live_drfm(delay0=0, delay1=0, ftw0=0, ftw1=0,
+                            amp0=0, amp1=0, period=0, ftw_step=0) and ok
+    note_pio_write()
+    ok = fpga.set_proto_timing(0, 0, 0) and ok
+    return ok
+
+
 __all__ = ["lf", "q15", "ftw_from_hz", "ClassProfile", "PROFILES",
            "FpgaBridge", "apply_profile", "disarm", "calibrate_amp",
            "measure_imd3_db", "LoManager", "AMP_SUM_MAX", "IMD3_LIMIT_DBC",
-           "PLL_SETTLE_S"]
+           "PLL_SETTLE_S", "MCP_PIO_MIN_S", "PIPELINE_EXTRA_SAMPLES",
+           "AIR_FS_HZ", "JamEntry", "apply_predictive_jam", "stop_jam",
+           "note_pio_write", "reset_pio_write_clock"]

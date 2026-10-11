@@ -45,7 +45,8 @@ from .synth.dataset import spec_from_iq
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 FIFO_PATH = "/tmp/iq"
-FS_LAB = 20.0e6  # шаг 3.3
+FS_LAB = 20.0e6  # USB I/Q на ПК (Nuand [F1], не эфир RBF)
+FS_RBF = 36.0e6  # AD9361 / pll_sclk=72 МГц. +2 sample = 55.556 нс
 FRAME_SAMPLES = 20_000  # 1 мс при 20 MSPS
 
 
@@ -407,10 +408,13 @@ def run_integrate(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         # --- фаза управления (USB у legion_fpga.py через FpgaBridge) ---
         t_h0 = time.perf_counter()
         ok = False
+        air_fs = fc.AIR_FS_HZ  # 36e6 — эфир RBF, не USB args.fs
         try:
             with fc.FpgaBridge() as br:
-                ok = fc.apply_profile(br.fpga, p, args.fs)
+                ok = br.fpga.set_air_fs_hz(int(air_fs))
+                ok = fc.apply_profile(br.fpga, p, air_fs) and ok
                 ok = br.fpga.heartbeat() and ok
+                # +2 sample @ 36e6 = 55.6 нс; MCP PIO 55.6 нс. USB >> обоих.
         except Exception as e:
             log.write({"kind": "fpga_error", "cycle": cycle, "error": str(e)})
             print(f"integrate: FPGA недоступна (цикл {cycle}): {e}",
@@ -518,6 +522,91 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     return 0 if verdict["ok"] else 2
 
 
+# ---------------------------------------------------------------- когнитив
+
+def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
+    """Когнитивный контур (ТЗ п.8): LISTENING→…→JAMMING→MONITORING→…
+    bench: синтез FHSS + скрипт молчания/возврата цели; FPGA — FakeTransport
+    (реальный путь legion_fpga.py, регистры проверяемы). --live: FIFO+USB."""
+    from .cognitive import CognitiveFSM
+    from .cognitive import LISTENING, MONITORING, JAMMING, TARGET_SILENT
+    from .pattern_store import PatternStore
+    from .pfb import Channelizer, chans_for_corridor
+    from .synth.protocols import _fhss_modulated, FS_DEFAULT
+    from .synth import CLASS_LO_HZ
+
+    fs = FS_DEFAULT
+    lo = CLASS_LO_HZ.get(args.protocol, args.freq)
+    p = dict(hop_rate=args.hop_rate, band=(lo - 8e6, lo + 8e6),
+             n_hops=args.n_hops, mod="flrc", baud=1.3e6, dev=325e3,
+             airtime=400e-6)
+    seg1 = _fhss_modulated(args.protocol, p, fs, args.silent_at_s, lo,
+                           args.seed, 25.0)["iq"]
+    seg2 = _fhss_modulated(args.protocol, p, fs, args.reappear_at_s - args.silent_at_s,
+                           lo, args.seed, 25.0)["iq"]  # тот же seed → тот же паттерн
+    rng = np.random.default_rng(args.seed)
+    sil = ((rng.standard_normal(int(fs * (args.reappear_at_s - args.silent_at_s))) +
+            1j * rng.standard_normal(int(fs * (args.reappear_at_s - args.silent_at_s))))
+           * 1e-3).astype(np.complex64)
+    seg3 = _fhss_modulated(args.protocol, p, fs,
+                           args.duration_s - args.reappear_at_s, lo,
+                           args.seed, 25.0)["iq"]
+    iq = np.concatenate([seg1, sil, seg3])
+
+    store = PatternStore()
+    from . import fpga_control as fc  # вставляет fpga/host в sys.path
+    from legion_gateway import FakeTransport
+
+    fpga = fc.lf.LegionFpga(FakeTransport(board="bladerf2"))
+    ch = Channelizer(args.n_chans, args.taps, xp=np)
+    freqs = np.asarray([ch.channel_freq(k, fs) + lo for k in range(args.n_chans)])
+    fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
+                       frame_dt_s=args.frame_samples / fs)
+    FRAME = args.frame_samples
+    rebuilt = {"done": False}
+    n_fr = len(iq) // FRAME
+    for i in range(n_fr):
+        seg = iq[i * FRAME: (i + 1) * FRAME]
+        y = ch.channelize(seg)
+        rec = fsm.tick(ch.ch_power(y), freqs, (i + 1) * FRAME / fs)
+        # адаптивная канализация (ТЗ п.12): n_chans = ширина sub / 200 кГц
+        if (not rebuilt["done"]) and fsm.sub is not None:
+            width = fsm.sub["f_end"] - fsm.sub["f_start"]
+            m = chans_for_corridor(width)
+            if m != args.n_chans:
+                ch = Channelizer(m, args.taps, xp=np)
+                freqs = np.asarray([ch.channel_freq(k, fs) + lo
+                                    for k in range(m)])
+                fsm.n_chans = m
+                log.write({"kind": "adaptive_grid", "n_chans": m,
+                           "width_hz": width, "tick": i})
+            rebuilt["done"] = True
+        if pub and i % 20 == 0:
+            pub.send_ch_pwr(xputil.to_host(ch.ch_power(y)))
+        log.write({"kind": "tick", "i": i, "state": rec["state"],
+                   "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
+    verdict = {
+        "protocol": args.protocol,
+        "frames": n_fr,
+        "transitions": fsm.transitions,
+        "states_path": [t["to"] for t in fsm.transitions],
+        "jams_sent": fsm.jams_sent,
+        "patterns": {pid: {"confirmed": r["confirmed"],
+                           "sequence_type": r["sequence_type"],
+                           "cycle_length": r["cycle_length"],
+                           "jammed_count": r["jammed_count"]}
+                     for pid, r in store.patterns.items()},
+        "final_state": fsm.state,
+        "pdr_target": fsm.eff.pdr,
+    }
+    hit_states = {LISTENING} | set(verdict["states_path"]) | {fsm.state}
+    verdict["ok"] = bool({LISTENING, MONITORING, TARGET_SILENT} <= hit_states
+                         and fsm.jams_sent >= 1)
+    log.write({"kind": "verdict", **verdict})
+    print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
+    return 0 if verdict["ok"] else 2
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
@@ -575,13 +664,29 @@ def main() -> int:
     p5.add_argument("--publish", action="store_true")
     p5.add_argument("--udp-port", type=int, default=5590)
     cl(p5)
+    p6 = sub.add_parser("cognitive",
+                        help="когнитивный контур FHSS-памяти (bench, FakeTransport)")
+    p6.add_argument("--protocol", default="elrs_24")
+    p6.add_argument("--freq", type=float, default=2400e6)
+    p6.add_argument("--hop-rate", type=float, default=1000.0)
+    p6.add_argument("--n-hops", type=int, default=12)
+    p6.add_argument("--duration-s", type=float, default=1.0)
+    p6.add_argument("--silent-at-s", type=float, default=0.45)
+    p6.add_argument("--reappear-at-s", type=float, default=0.70)
+    p6.add_argument("--seed", type=int, default=11)
+    p6.add_argument("--frame-samples", type=int, default=FRAME_SAMPLES)
+    p6.add_argument("--n-chans", type=int, default=64)
+    p6.add_argument("--taps", type=int, default=8)
+    p6.add_argument("--publish", action="store_true")
+    p6.add_argument("--udp-port", type=int, default=5590)
 
     args = ap.parse_args()
     log = JsonLog(args.mode)
     pub = UdpPublisher(port=args.udp_port) if getattr(args, "publish", False) else None
     try:
         fn = {"rx-cli": run_rx_cli, "gpu": run_gpu, "classify": run_classify,
-              "integrate": run_integrate, "bench": run_bench}[args.mode]
+              "integrate": run_integrate, "bench": run_bench,
+              "cognitive": run_cognitive}[args.mode]
         return fn(args, log, pub)
     finally:
         log.close()

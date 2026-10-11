@@ -122,9 +122,49 @@ fs → DATA_CLK=4×fs → pll_sclk=2×fs. Хост: `set_air_fs_hz` → NIOS RFI
 | 125 (было) | 250 | 61.44e6 | 10981 59% | −5.476 | 8.000 | 13.229 | lbd_tx→lb_aim |
 | 100 | 200 | 50e6 | 11004 60% | **−3.872** | 10.000 | 13.644 | lbd_tx→lb_aim |
 | 76.8 | 153.6 | 38.4e6 | 10981 59% | **−0.793** | 13.020 | 13.575 | lbd_tx→lb_aim |
+| 76.8 + AIM pipe | 153.6 | 38.4e6 | 10985 59% | **−0.251** | 13.020 | 13.071 | fft_peak best_bin→top |
+| **72** | **144** | **36e6** | 11002 60% | **+0.789** | 13.888 | 10.784 | fft_peak ram WE→best_mag |
 
-Timing: **не CLOSED**. Нужен период ≥ 13.75 ns (≲ 72.7 МГц) при том же data, либо резать конус `lbd_tx`/`dcfifo` → `lb_aim|q` (dly=0).
-M10K 284. Seeds 2–3 / RBF не собирал: setup < 0.
+pre-MCP @ 76.8 worst: lbd_tx −0.793 (path #1), dcfifo −0.773 (path #2)
+в `pll768/seed1_pll_setup.txt`. MCP-only fit не сохранён.
+
+## Timing CLOSED (thin margin) — 72 МГц (11.10.2026 23:08)
+
+pll_sclk = **72 МГц**. fs = **36 MSPS**, pll_sclk = **2×fs**. DATA_CLK = 144 МГц.
+altlvds: data_rate 288.0 Mbps, inclock_period 6944 ps, refclk 144.000000 MHz.
+STA: **72.0 MHz**, period **13.888 нс** (`legionxA4.sta.rpt` clocks).
+Host: `PLL_SCLK_HZ = 72_000_000`, `AIR_FS_FOR_PLL_SCLK_HZ = 36_000_000`.
+`bladerf_set_pll_refclk` не используется.
+
+Timing status: **CLOSED (thin margin at Slow 0°C: seed3 +0.011 нс, Fmax 72.06 МГц)**.
+Все 3 seed: pll_sclk setup/hold ≥ 0, TNS 0. Порога slack кроме ≥0 нет.
+
+MCP (PIO; не чаще 1 раза в 4 клока = 55.556 нс @ 72 МГц):
+- `ctrl_tx → legion_lb_aim*q*` setup 4 / hold 3
+- `ctrl_tx → mixer1*q*` setup 4 / hold 3
+- `lbd_tx → lb_aim*q*` setup 4 / hold 3
+  (`lbd_tx` = 2FF `r_lb_delay`, PIO **0x24** `LEGION_REG_LB_DELAY`; не 0x2A)
+
+Pipeline: `legion_mixer` S1/S2; `legion_lb_aim` S1/S2 (`preserve`).
+Host: mix/bypass +1 sample; AIM mix +1 sample. **Итого +2 сэмпла.**
+@ 36 MSPS: 2/36e6 = **55.556 нс** (не мкс). Two-ray delay1 @ 36e6 = **41**
+(1/B; +2 в tap не входят).
+
+RBF seed=3: `fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_23.08.28/legionxA4.rbf`
+md5 `bd0316396c32bb6e615061f3bdf413fe`. Копия: `timing_close_2026-10-11/pll72/`.
+Tag: `v1.0-rbf-72mhz`. HDL не менять.
+
+| seed | fit | ALM | M10K | DSP | pll su 85C | pll ho | Slow 0C su | worst |
+|---|---|---|---|---|---|---|---|---|
+| 1 | OK 22:55:28 | 11 002 (**60 %**) | 284 | 35 | **+0.789** | +0.279 | +0.402 | fft_peak ram WE→best_mag[22] data 10.784 |
+| 2 | OK 23:01:24 | 10 969 (**59 %**) | 284 | 35 | **+0.147** | +0.260 | +0.100 | lb_xlat Mux5→pre_q[13] data **13.894** |
+| 3 | OK 23:07:11 | 10 979 (**59 %**, frozen RBF) | 284 | 35 | **+0.725** | +0.290 | **+0.011** | iqcor→detector det_cnt_r data 12.544 |
+
+ALM: seed1 60%, seed2 59%, seed3 59% (frozen RBF). M10K 284, DSP 35.
+seed2 data delay **13.894 > period 13.888**; slack +0.147 из-за skew +0.223
+(`pll72/seed2/pll_setup.txt`). Это не «все пути < period».
+
+system_pll setup: +1.987 / +2.132 / +2.582. STA: `timing_close_2026-10-11/pll72/seed{1,2,3}/`.
 
 ## Host pipeline (PR #113, шаги 3–9 ТЗ) — подтверждённые факты, 11.10.2026
 
@@ -144,6 +184,100 @@ M10K 284. Seeds 2–3 / RBF не собирал: setup < 0.
 | Viewer | pyqtgraph `useOpenGL=True, antialias=False`; 60 FPS — лабораторный замер (AetherSDR читает тот же UDP JSON при недостатке) | [F2-аудит] |
 | GPIO PA | в схеме стенда не используется (в legion_fpga.py нет GPIO/expansion API; TX — AD9361 напрямую). Изменится схема — добавить UART GPIO путь | аудит 7.2 |
 
-Тесты: 61 passed (host/tests). Критерии, требующие железа (overruns=0/60 с,
-GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS) — процедуры в
-host/README.md, выполняются в лаборатории.
+Тесты: 84 функции на аудит + `test_rbf_timing` 9 (чтение `timing.rpt`
+seeds 1–3, Slow 0°C, MCP WARN). Прогон 66 (torch/synth/bench — lab).
+Позже 94 passed кроме `train_smoke`. Критерии железа (overruns=0/60 с,
+GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) —
+процедуры ниже, выполняются в лаборатории.
+
+## Host +2 сэмпла / 72 МГц (11.10.2026)
+
+| Константа | Значение |
+|---|---|
+| `PLL_SCLK_HZ` | 72_000_000 |
+| `AIR_FS_FOR_PLL_SCLK_HZ` | 36_000_000 |
+| `PIPELINE_EXTRA_SAMPLES` | 2 |
+| `pipeline_extra_s(36e6)` | 55.556 нс |
+| `mcp_pio_min_s()` | 55.556 нс (setup 4 @ 72 МГц) |
+| `twory_delay1(36e6)` | 41 |
+| USB I/Q lab `FS_LAB` | 20e6 (не эфир) |
+| FPGA air writes | `AIR_FS_HZ` = 36e6 |
+| LO settle | 6 мс |
+
+`drfmTworyDelay1(36e6) = 41`. MCP PIO: USB обычно >> 55.556 нс; sleep нет.
+`fpga_control.note_pio_write` — runtime WARN (не блок), если интервал < MCP.
+
+## FHSS-паттерны (host, не 77777)
+
+| Модуль | Роль |
+|---|---|
+| `corridor.py` | 2+ коридора, sub = [fmin−400 кГц, fmax+400 кГц] |
+| `hop_recorder.py` | скачки только в sub |
+| `pattern_store.py` | add/find_match в том же sub |
+| `hopmap.py` | PatternStore + Markov fallback |
+| `effectiveness_monitor.py` | PDR low → effective |
+| `drift_detector.py` | LP < 0.7 × 3 → DRIFT |
+| `fpga_control.py` | `apply_predictive_jam` только confirmed |
+| `fpga_preload.py` | 20 прыжков LUT |
+| `cognitive.py` | LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→DRIFT/SILENT/RE_ACQUIRE |
+| `pipeline.py` | FSM + `chans_for_corridor` (ширина/200 кГц) |
+| `classify` | 3 класса: drone / wifi / noise |
+
+Предсказание без confirmed — запрещено. Parent corridor — запрещён.
+
+## Лаборатория (нет bladeRF на этой машине)
+
+### AD9361 36 MSPS
+1. Прошить `legionxA4-2026-10-11_23.08.28/legionxA4.rbf` (md5 `bd0316396c32bb6e615061f3bdf413fe`).
+2. `bladeRF-cli -e "set samplerate rx 36M"`
+3. `bladeRF-cli -e "print samplerate rx"` → 36000000.
+4. `bladeRF-cli -e "rx start"`; 60 с; `rx status` → `rx_overruns=0`.
+5. overruns>0 → AD9361 0x006 CLK/DATA delay (~0.3 нс/LSB).
+6. DATA_CLK = 144 МГц (осциллограф / AD9361 API). Записать сюда.
+
+### RBF flash
+`md5sum legionxA4.rbf` = `bd0316396c32bb6e615061f3bdf413fe`. Tag `v1.0-rbf-72mhz`.
+
+### FSM
+`python3 -m legion_rx.pipeline cognitive --duration-s 1 --cpu` (FakeTransport).
+Железо: `integrate` после rx stop → `set_air_fs_hz(36e6)`.
+
+## Known limitations (12.10.2026, аудит HDL 1–4)
+
+- Slow 0°C thin margin: seed3 setup **+0.011 нс**, Fmax **72.06 МГц** vs 72.0
+  (`pll72/seed3/timing.rpt`, `sta.rpt:296,309`). STA ≥ 0, запас тонкий.
+- seed2 data delay **13.894 нс > period 13.888 нс**; slack **+0.147** из-за
+  skew +0.223 (`pll72/seed2/pll_setup.txt:6`).
+- MCP-only fit не сохранён. pre-MCP `pll768`: lbd_tx −0.793 (#1),
+  dcfifo −0.773 (#2).
+- AD9361 36 MSPS на железе не проверен (нет bladeRF на этой машине).
+- `test_rbf_timing` читает `pll72/seed{1,2,3}/timing.rpt`, не гоняет Quartus.
+- Порога slack кроме setup/hold ≥ 0 в проекте нет.
+
+## Когнитивный контур FHSS-памяти (шаги 3–9+, 11.10.2026)
+
+«Услышал → понял паттерн → запомнил → немедленно отработал → контролирует →
+адаптируется». FSM: LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→
+(DRIFT_DETECTED|TARGET_SILENT|RE_ACQUIRE|RE_LEARNING).
+
+| Компонент | Реализация | Источник |
+|---|---|---|
+| CorridorDetector | динамический EMA-пол на бин, теги start/end/freq; коридор = аккумуляция активности + дилатация ±1 бин (краевое расщепление PFB) | [G1] |
+| P(hopping\|data) | байесовские лог-шансы (CV интервалов, duty, всплески); rate mean ± 95% CI | [G2] |
+| Sub-corridor | f_min−400 кГц … f_max+400 кГц, id parent+sub; работа ТОЛЬКО внутри | ТЗ |
+| HopRecorder | [seq, ch, freq, dwell_us, t, conf]; FHSDT ±20%, FHSDC; ≥16 → store | [G6] |
+| PatternStore | уникальные ID, pending/confirmed/legacy (не удаляются); find_match min 8 скачков, ±1 бин; период _find_period (усечённый хвост) | [G5] |
+| sequence_type | table_based / pseudo_random / adaptive_afh (эвристика по периоду/охвату) | [G2] |
+| Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub (ValueError), amp0+amp1≤1.0 [F16], horizon=1 | [G4] |
+| fpga_preload | LUT×20 (write_ch_lut) + set_grid(FHSS, OPERATOR) через legion_fpga.py; замер per-write | ТЗ |
+| EffectivenessMonitor | PDR-прокси = выживаемость всплесков (без декода — честно); effective<0.5 / ineffective>0.8 | ТЗ |
+| DriftDetector | LP<0.7 × 3 цикла → DRIFT_DETECTED → stop_jam → RE_LEARNING (legacy) | ТЗ |
+| TARGET_SILENT | >100 мс тишины → stop_jam → фаза 5; find_match по 8 → удар по памяти | ТЗ |
+| Классификатор | 3 класса (drone/wifi/noise), --no-group3 для полного набора | ТЗ п.11 |
+| Адаптивная сетка | n_chans = ширина коридора / 200 кГц (chans_for_corridor) | ТЗ п.12 |
+| Fallback | Markov-1/period (HopTracker); DDPG [G3] — отдельный этап RL-обучения | [G3] |
+
+Замеры (bench, FakeTransport, 1 с): подтверждение 3 цикла → помеха в том же
+тике (immediate); preload LUT — 2 события (первый удар + ре-захват); FPGA —
+автономная карта. Тесты: 98 passed (host/tests, +18 когнитивных).
+Железо: per-hop удары и preload на USB — замер в лаборатории.
