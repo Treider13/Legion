@@ -18,6 +18,20 @@ def _run_bench(extra):
         capture_output=True, text=True, env=env, timeout=600, cwd=HOST)
 
 
+def test_integrate_rejects_unknown_profile_before_hardware():
+    """--profiles валидируются ДО открытия CLI/USB: неизвестное имя —
+    понятная ошибка и rc=2 даже без железа."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = HOST + os.pathsep + env.get("PYTHONPATH", "")
+    cp = subprocess.run(
+        [sys.executable, "-m", "legion_rx.pipeline", "integrate",
+         "--profiles", "no_such_profile", "--cycles", "1"],
+        capture_output=True, text=True, env=env, timeout=60, cwd=HOST)
+    assert cp.returncode == 2
+    assert "no_such_profile" in cp.stderr
+    assert "elrs_24" in cp.stderr  # список доступных в сообщении
+
+
 def test_bench_elrs24_verdict():
     cp = _run_bench(["--protocol", "elrs_24", "--duration-s", "0.4",
                      "--seed", "7", "--cpu"])

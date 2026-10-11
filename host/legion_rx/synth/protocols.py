@@ -27,6 +27,9 @@ CLASSES = [
 PARAMS = {
     "elrs_24": dict(hop_rate=1000.0, band=(2400e6, 2483e6), n_hops=256,
                     mod="flrc", baud=1.3e6, dev=325e3, airtime=70e-6),
+    # ELRS 900 МГц — зависит от радиочипа цели [F4] (Wikipedia ExpressLRS):
+    #   SX127x — 200 Гц LoRa (модель по умолчанию, исходное ТЗ);
+    #   LR1121 — до 1000 Гц FSK (см. ELRS900_LR1121 ниже).
     "elrs_900": dict(hop_rate=200.0, band=(868e6, 915e6), n_hops=40,
                      mod="lora", sf=6, bw=500e3, airtime=3.0e-3),
     "crossfire_fsk": dict(hop_rate=150.0, band=(868e6, 915e6), n_hops=50,
@@ -262,11 +265,24 @@ def synth_elrs_24(fs: float = FS_DEFAULT, dur: float = 0.25,
                            seed, snr_db)
 
 
+# [F4] LR1121-вариант ELRS 900: 1000 Гц FSK. НЕ подменяет SX127x-модель —
+# выбор за целевой аппаратурой стенда (подтверждение — лаборатория).
+ELRS900_LR1121 = dict(hop_rate=1000.0, band=(868e6, 915e6), n_hops=40,
+                      mod="gfsk", baud=1.3e6, dev=325e3, airtime=70e-6)
+
+
 def synth_elrs_900(fs: float = FS_DEFAULT, dur: float = 0.25,
-                   lo_hz: float = 868e6, seed=None, snr_db: float = 20.0) -> dict:
-    """ELRS 900 МГц: 200 Гц FHSS, LoRa SF6/BW500."""
-    return _fhss_modulated("elrs_900", PARAMS["elrs_900"], fs, dur, lo_hz,
-                           seed, snr_db)
+                   lo_hz: float = 868e6, seed=None, snr_db: float = 20.0,
+                   hardware: str = "sx127x") -> dict:
+    """ELRS 900 МГц. hardware="sx127x" (200 Гц LoRa, по умолчанию) |
+    "lr1121" (1000 Гц FSK, [F4])."""
+    if hardware == "sx127x":
+        p = PARAMS["elrs_900"]
+    elif hardware == "lr1121":
+        p = ELRS900_LR1121
+    else:
+        raise ValueError(f"hardware {hardware!r}: sx127x | lr1121")
+    return _fhss_modulated("elrs_900", p, fs, dur, lo_hz, seed, snr_db)
 
 
 def synth_crossfire_fsk(fs: float = FS_DEFAULT, dur: float = 0.25,

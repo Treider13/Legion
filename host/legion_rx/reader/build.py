@@ -21,17 +21,15 @@ OUT = os.path.join(HERE, "legion_creader" + EXT_SUFFIX)
 
 def build() -> str:
     cc = os.environ.get("CC", "gcc")
-    cflags = (sysconfig.get_config_var("CFLAGS") or "").split()
     cmd = [
         cc, "-O2", "-shared", "-fPIC", "-Wall", "-Wextra",
         "-I" + sysconfig.get_paths()["include"],
         "-I" + sysconfig.get_paths().get("platinclude", sysconfig.get_paths()["include"]),
         SRC, "-o", OUT,
     ]
-    # CFLAGS несут флаги для полной линковки python — для .so читателя
-    # достаточно -shared -fPIC; LDFLAGS не тянем: undefined Python-символы
-    # резолвятся при импорте в интерпретатор (linux-конвенция python-ext).
-    del cflags
+    # CFLAGS/LDFLAGS не тянем: для .so читателя достаточно -shared -fPIC;
+    # undefined Python-символы резолвятся при импорте в интерпретатор
+    # (linux-конвенция python-ext).
     cp = subprocess.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0:
         raise RuntimeError(f"сборка legion_creader не удалась:\n{cp.stderr}")

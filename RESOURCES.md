@@ -92,3 +92,58 @@ pll_sclk setup −6.651 (`acc_i_q → acc[*]`, data 14.427 ns). system_pll +2.05
 
 xA4 не тянет 125 MHz с fft_channelize при 83% ALM.
 Требуется архитектурное изменение внутри xA4.
+
+## pll_sclk / no channelize + M10K (11.10.2026)
+
+Fit seed1 20:58:46. ALM 10 898 / 18 480 (59 %). M10K 284 / 308 (92 %). DSP 35 / 66.
+`U_legion_fft_channelize` снят. `lg_ch_word=0`.
+pll_sclk setup −6.353 (`ctrl_tx[1]→mixer1|q[22]`).
+
+MCP `ctrl_tx→mixer1*q*` setup 4 / hold 3: preview seed3 −5.775
+(`dcfifo/walk→mixer1|q`, relationship 8 ns). `ctrl_tx→mixer1` ушёл.
+
+`U_legion_fft_peak`: 2 M10K, 12 288 bit (256×32 + 256×16). Нужно −4 блока.
+delayline 3×16 M10K (131 072) — запрещено трогать. nios 1 062 848 bit.
+M10K 284 = достижимый минимум без delayline/NIOS.
+
+Mixer S1/S2 seed1 21:57:58. ALM 10 981 (59 %). M10K 284. pll_sclk −5.476
+(`lbd_tx[0]→lb_aim|q[12]`, PIO delay 2FF). mixer|q снят с top. Host: mix/bypass +1 sample.
+
+## pll_sclk частота (11.10.2026)
+
+pll_sclk ≠ system_pll (38.4→80 NIOS). pll_sclk = altlvds_rx generic_pll:
+DATA_CLK `adi_rx_clock` / 2. ALTERA_PLL_RECONFIG не применим.
+`bladerf_set_pll_refclk` = ADF4002 REF (VCTCXO), не DATA_CLK.
+
+fs → DATA_CLK=4×fs → pll_sclk=2×fs. Хост: `set_air_fs_hz` → NIOS RFIC SAMPLERATE.
+
+| f pll_sclk | DATA_CLK | fs | seed1 ALM | pll_sclk su | period | data | worst |
+|---|---|---|---|---|---|---|---|
+| 125 (было) | 250 | 61.44e6 | 10981 59% | −5.476 | 8.000 | 13.229 | lbd_tx→lb_aim |
+| 100 | 200 | 50e6 | 11004 60% | **−3.872** | 10.000 | 13.644 | lbd_tx→lb_aim |
+| 76.8 | 153.6 | 38.4e6 | 10981 59% | **−0.793** | 13.020 | 13.575 | lbd_tx→lb_aim |
+
+Timing: **не CLOSED**. Нужен период ≥ 13.75 ns (≲ 72.7 МГц) при том же data, либо резать конус `lbd_tx`/`dcfifo` → `lb_aim|q` (dly=0).
+M10K 284. Seeds 2–3 / RBF не собирал: setup < 0.
+
+## Host pipeline (PR #113, шаги 3–9 ТЗ) — подтверждённые факты, 11.10.2026
+
+| Факт | Значение | Источник |
+|---|---|---|
+| bladeRF rx config | buffers=32, num_transfers=**16** (не 8: overrun на 20 MSPS) | Nuand, форумы [F1] |
+| Формат I/Q | SC16_Q11: 12 бит в int16 left-justified, /2048 | libbladeRF [F2-аудит] |
+| Overrun reaction | эскалация 20→10 MSPS (rx stop → set samplerate → rx start), порог 10 | практика SDR [F3] |
+| USB pre-flight | `bladeRF-cli -e info` → «USB speed: SuperSpeed» + `rx config format=bin` verify | [F8] |
+| PFB rejection | 62.4 dB к худшему соседу, 159 dB к медиане (M=64, taps=8, тон) | замер этой машины |
+| PFB скорость | 0.221 мс/кадр numpy CPU (20000 сэмплов) — GPU быстрее | замер этой машины |
+| Decision+запись | p50=3.185 мс, p99=3.455 мс (torch CPU + legion_fpga.py/FakeTransport) | замер этой машины |
+| ELRS 900 | SX127x: 200 Гц LoRa (модель по умолчанию); LR1121: 1000 Гц FSK (`ELRS900_LR1121`) — выбор за железом стенда | Wikipedia ExpressLRS [F4] |
+| Q15 | база **32768**: 0.85×32768=27852.8→27853 (база 32767 даёт 27852); 1.0 clamp→32767 | [F5] |
+| TRT/Blackwell | граф cuDNN-free (Conv2d/BN/ReLU/GAP/Linear); сборка движка — лаборатория | [F6] |
+| DroneRF loader | верифицирован на DroneRF-семействе (Goorm-AI-04/DroneRF, HF): `<class>/RF Data_*/\*.csv`, пары I,Q (N,2) без заголовка; лейаут DroneRFa (IEEE Dataport) — в лаборатории | HF API, 11.10.2026 |
+| Viewer | pyqtgraph `useOpenGL=True, antialias=False`; 60 FPS — лабораторный замер (AetherSDR читает тот же UDP JSON при недостатке) | [F2-аудит] |
+| GPIO PA | в схеме стенда не используется (в legion_fpga.py нет GPIO/expansion API; TX — AD9361 напрямую). Изменится схема — добавить UART GPIO путь | аудит 7.2 |
+
+Тесты: 61 passed (host/tests). Критерии, требующие железа (overruns=0/60 с,
+GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS) — процедуры в
+host/README.md, выполняются в лаборатории.

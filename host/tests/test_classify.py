@@ -53,6 +53,24 @@ def test_dronerf_loader_npy(tmp_path):
     assert sorted(set(ds["y"].tolist())) == [0, 1]
 
 
+def test_dronerf_loader_csv_iq_pairs(tmp_path):
+    """Лейаут DroneRF-семейства (Goorm-AI-04/DroneRF): <class>/RF Data_*/\*.csv,
+    пары I,Q построчно (N, 2) без заголовка."""
+    rng = np.random.default_rng(2)
+    d = tmp_path / "AR drone" / "RF Data_10100_H"
+    d.mkdir(parents=True)
+    iq = rng.standard_normal((150_000, 2)).astype(np.float32)
+    np.savetxt(d / "10100H_0.csv", iq, delimiter=",", fmt="%.6e")
+    # и файл С заголовком
+    with open(d / "10100H_1.csv", "w") as f:
+        f.write("I,Q\n")
+        np.savetxt(f, iq, delimiter=",", fmt="%.6e")
+    ds = load_dronerf(str(tmp_path), fs=20.0e6)
+    assert ds["classes"] == ["AR drone"]
+    assert ds["X"].shape[0] == 2  # 150 000 / 100 000 = 1 полное окно на файл
+    assert ds["X"].shape[1:] == (1, 256, 128)
+
+
 def test_dronerf_loader_rejects_short_segments(tmp_path):
     from legion_rx.classify.datasets import DatasetLayoutError
 

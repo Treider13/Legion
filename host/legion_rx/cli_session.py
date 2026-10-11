@@ -39,6 +39,9 @@ class BladerfCliSession:
         self._buf = bytearray()
         self._cv = threading.Condition()
         self._closed = False
+        # cmd() сериализуем: монитор overruns и эскалация (rx stop/start)
+        # ходят из разных потоков по одной сессии.
+        self._cmd_lock = threading.Lock()
         # Фоновые строки (асинхронные RX-события: overruns/ discontinuity)
         # копим отдельно — OverrunMonitor их забирает (шаг 3.9).
         self._async_lock = threading.Lock()
@@ -100,7 +103,12 @@ class BladerfCliSession:
                 self._cv.wait(timeout=left)
 
     def cmd(self, line: str, timeout: "float | None" = None) -> str:
-        """Команда → ответ до следующего приглашения (без самого приглашения)."""
+        """Команда → ответ до следующего приглашения (без самого приглашения).
+        Потокобезопасно: одна команда за раз на всю сессию."""
+        with self._cmd_lock:
+            return self._cmd_locked(line, timeout)
+
+    def _cmd_locked(self, line: str, timeout: "float | None" = None) -> str:
         if self._closed or self._proc.poll() is not None:
             raise _SessionDead("bladeRF-cli процесс мёртв")
         with self._cv:
@@ -135,11 +143,12 @@ class BladerfCliSession:
         self.cmd(f"set bandwidth rx {_fmt_hz(hz)}")
 
     def rx_config(self, file: str, fmt: str = "bin", n: int = 0,
-                  buffers: int = 32, xfers: int = 8, timeout_ms: int = 10000) -> None:
+                  buffers: int = 32, xfers: int = 16, timeout_ms: int = 10000) -> None:
         """rx config file=… format=bin n=0 (шаг 3.5). Формат bin = SC16_Q11
-        на проводе (проверка 3.7: rx config format=bin без file печатает конфиг)."""
-        self.cmd(f"rx config file={file} format={fmt} n={n} "
-                 f"buffers={buffers} num_transfers={xfers} timeout={timeout_ms}")
+        на проводе (проверка 3.7: rx config format=bin без file печатает конфиг).
+        buffers=32, num_transfers=16 — рекомендация Nuand для высоких
+        samplerates [F1]; transfers=8 на 20 MSPS давал overrun."""
+        self.cmd(_rx_config_line(file, fmt, n, buffers, xfers, timeout_ms))
 
     def rx_start(self) -> None:
         self.cmd("rx start")
@@ -177,6 +186,52 @@ class BladerfCliSession:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+def _rx_config_line(file: str, fmt: str, n: int, buffers: int,
+                    xfers: int, timeout_ms: int) -> str:
+    """Строка rx config (bladeRF-cli cmd_rxtx.c: параметр — num_transfers)."""
+    return (f"rx config file={file} format={fmt} n={n} "
+            f"buffers={buffers} num_transfers={xfers} timeout={timeout_ms}")
+
+
+def parse_usb_speed(info_text: str) -> "bool | None":
+    """USB SuperSpeed из `bladeRF-cli -e info` («USB speed: SuperSpeed»).
+    None — поле не найдено (формат версии иной) — не блокируем."""
+    m = re.search(r"usb\s+speed\s*:\s*(\S+)", info_text, re.I)
+    if m:
+        return m.group(1).lower().startswith("super")
+    if re.search(r"superspeed|usb\s*3", info_text, re.I):
+        return True
+    return None
+
+
+def preflight(device: "str | None" = None, timeout_s: float = 20.0) -> dict:
+    """Pre-flight [F8]: USB SuperSpeed (`info`) + verify format=bin
+    (`rx config format=bin` — конфиг без старта стрима, шаг 3.7).
+    Вызывать ДО открытия сессии (устройство свободно)."""
+    out: dict = {"device": device, "usb_superspeed": None,
+                 "info_ok": False, "format_bin_ok": False, "errors": []}
+    dev = ["-d", device] if device else []
+    try:
+        cp = subprocess.run(["bladeRF-cli", "-e", "info"] + dev,
+                            capture_output=True, text=True, timeout=timeout_s)
+        out["info_ok"] = cp.returncode == 0
+        out["usb_superspeed"] = parse_usb_speed((cp.stdout or "") + (cp.stderr or ""))
+        if cp.returncode != 0:
+            out["errors"].append(f"info rc={cp.returncode}: {(cp.stderr or cp.stdout).strip()[:200]}")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        out["errors"].append(f"info: {e}")
+    try:
+        cp = subprocess.run(["bladeRF-cli", "-e", "rx config format=bin"] + dev,
+                            capture_output=True, text=True, timeout=timeout_s)
+        out["format_bin_ok"] = cp.returncode == 0
+        if cp.returncode != 0:
+            out["errors"].append(
+                f"rx config format=bin rc={cp.returncode}: {(cp.stderr or cp.stdout).strip()[:200]}")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        out["errors"].append(f"rx config format=bin: {e}")
+    return out
 
 
 def _fmt_hz(hz: float) -> str:

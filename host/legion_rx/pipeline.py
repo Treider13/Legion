@@ -72,11 +72,56 @@ def _percentiles(v: list, ps=(50, 95, 99)) -> dict:
 
 # ---------------------------------------------------------------- шаг 3
 
+def _preflight(args, log: JsonLog) -> bool:
+    """Pre-flight [F8]: USB SuperSpeed + rx config format=bin (шаг 3.7).
+    SuperSpeed отсутствует — предупреждение (не фатал: может быть стенд
+    на USB 2.0 с пониженным fs); format=bin не принят — отказ старта."""
+    from .cli_session import preflight
+
+    pf = preflight(device=args.device)
+    log.write({"kind": "preflight", **pf})
+    if pf["usb_superspeed"] is False:
+        print("preflight: USB НЕ SuperSpeed — 20 MSPS недостижимо, "
+              "ожидайте overruns (критерий 3.10 под угрозой)", file=sys.stderr)
+    if pf["usb_superspeed"] is None:
+        print("preflight: USB speed не распознан в `info` — продолжаем "
+              "(формат версии иной)", file=sys.stderr)
+    for e in pf["errors"]:
+        print(f"preflight: {e}", file=sys.stderr)
+    return bool(pf["format_bin_ok"])
+
+
 def run_rx_cli(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
+    if not _preflight(args, log):
+        print("preflight: rx config format=bin не принят — старт отменён",
+              file=sys.stderr)
+        return 2
     ensure_fifo(args.fifo)
     src = FifoSource(args.fifo, args.frame_samples, args.fs)
     sess = BladerfCliSession(device=args.device)
-    mon = OverrunMonitor(sess, log_path=None)
+    state = {"fs": args.fs}
+
+    def escalate(total: int) -> None:
+        """[F3] Реакция на overrun: рестарт стрима с понижением 20→10 MSPS.
+        На 10 MSPS overrun'ов быть не должно — иначе проблема не в линке."""
+        if state["fs"] <= 10.0e6:
+            log.write({"kind": "escalate_giveup", "total": total,
+                       "reason": "уже на 10 MSPS — проблема не samplerate"})
+            print(f"overrun×{total}: уже 10 MSPS, эскалация исчерпана",
+                  file=sys.stderr)
+            return
+        state["fs"] = 10.0e6
+        src.fs_hz = state["fs"]
+        log.write({"kind": "escalation", "total": total,
+                   "action": "rx_stop → set samplerate 10M → rx_start"})
+        print(f"overrun×{total}: эскалация — рестарт стрима на 10 MSPS",
+              file=sys.stderr)
+        sess.rx_stop()
+        sess.set_samplerate_rx(state["fs"])
+        sess.rx_start()
+
+    mon = OverrunMonitor(sess, log_path=None, on_escalate=escalate,
+                         escalate_threshold=10)
     verdict = {}
     try:
         sess.set_frequency_rx(args.freq)          # 3.2
@@ -109,7 +154,7 @@ def run_rx_cli(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         el = time.perf_counter() - t0
         st = src.stats(el)
         ov = mon.verdict()
-        expected_mb = args.fs * 4 * el / 1e6
+        expected_mb = state["fs"] * 4 * el / 1e6  # fs мог снизиться эскалацией
         verdict = {
             **st, **ov, "frames": frames,
             "expected_mbytes": round(expected_mb, 2),
@@ -156,6 +201,8 @@ class GpuChain:
 
 
 def run_gpu(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
+    if not _preflight(args, log):
+        return 2
     xp = xputil.backend("cpu" if args.cpu else "gpu")
     ensure_fifo(args.fifo)
     src = FifoSource(args.fifo, args.frame_samples, args.fs)
@@ -226,6 +273,8 @@ def run_classify(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     if clf is None:
         print("classify: нужен --engine или --torch", file=sys.stderr)
         return 2
+    if not _preflight(args, log):
+        return 2
     ensure_fifo(args.fifo)
     src = FifoSource(args.fifo, args.frame_samples * 5, args.fs)  # 5 мс окно
     sess = BladerfCliSession(device=args.device)
@@ -294,13 +343,20 @@ def run_integrate(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     → профиль → release → следующий burst. LO — по карте классов (9.3)."""
     from . import fpga_control as fc
 
+    profiles = args.profiles.split(",") if args.profiles else ["elrs_24"]
+    unknown = [p for p in profiles if p not in fc.PROFILES]
+    if unknown:
+        print(f"integrate: неизвестные профили {unknown}; "
+              f"доступные: {sorted(fc.PROFILES)}", file=sys.stderr)
+        return 2
+    if not _preflight(args, log):
+        return 2
     xp = xputil.backend("cpu" if args.cpu else "gpu")
     clf = _make_classifier(args)
     chain = GpuChain(args.n_chans, args.taps, xp)
     decision_ms: list[float] = []
     handoff_ms: list[float] = []
     applied: list[str] = []
-    profiles = args.profiles.split(",") if args.profiles else ["elrs_24"]
     for cycle in range(args.cycles):
         proto = profiles[cycle % len(profiles)]
         lo = float(CLASS_LO_HZ.get(proto, args.freq))

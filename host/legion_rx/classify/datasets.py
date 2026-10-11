@@ -6,8 +6,12 @@
     <root>/<class_name>/**/*.{npy,csv,mat}
 
 Форматы сегментов:
-  .npy — complex64/Complex128 I/Q ИЛИ float/int (2, N) I,Q ИЛИ (N*2,) interleaved;
-  .csv — колонки I,Q (с заголовком или без);
+  .npy — complex64/Complex128 I/Q ИЛИ float/int (2, N) I/Q ИЛИ (N*2,) interleaved;
+  .csv — колонки I,Q построчно (N, 2), с заголовком или без (заголовок
+         определяется разбором первой строки). Лейаут DroneRF-семейства
+         верифицирован на Goorm-AI-04/DroneRF (HF): <class>/RF Data_*/\*.csv.
+         Лейаут именно DroneRFa (24 класса, IEEE Dataport) — верификация
+         в лаборатории: на HF поиск «DroneRFa» датасет не находит.
   .mat — первая complex-переменная (scipy.io).
 Сегменты режутся окном классификатора (5 мс) и превращаются в спектрограммы
 той же spec_from_iq, что и синтетика — иначе домены не совпадут.
@@ -33,10 +37,17 @@ def _load_segment(path: str) -> np.ndarray:
         a = np.load(path, allow_pickle=False)
         return _as_complex(a, path)
     if ext == ".csv":
+        # DroneRF-семейство (проверено на Goorm-AI-04/DroneRF, HF):
+        # <class>/RF Data_*/<id>_<n>.csv — пары I,Q БЕЗ заголовка.
+        # Заголовок определяем по первой строке, а не угадываем.
+        with open(path, "r", errors="replace") as f:
+            first = f.readline()
         try:
-            a = np.loadtxt(path, delimiter=",", skiprows=1)
+            [float(x) for x in first.strip().split(",")]
+            skip = 0
         except ValueError:
-            a = np.loadtxt(path, delimiter=",")
+            skip = 1
+        a = np.loadtxt(path, delimiter=",", skiprows=skip)
         return _as_complex(np.asarray(a), path)
     if ext == ".mat":
         from scipy.io import loadmat
@@ -56,6 +67,9 @@ def _as_complex(a: np.ndarray, path: str) -> np.ndarray:
     if np.iscomplexobj(a):
         return a.astype(np.complex64).ravel()
     a = np.asarray(a)
+    if a.ndim == 2 and a.shape[1] == 2:  # (N, 2) — пары I,Q построчно (CSV DroneRF)
+        return (a[:, 0].astype(np.float32) +
+                1j * a[:, 1].astype(np.float32)).astype(np.complex64)
     if a.ndim == 2 and a.shape[0] == 2:  # (2, N) I,Q
         return (a[0].astype(np.float32) + 1j * a[1].astype(np.float32)).astype(np.complex64)
     if a.ndim == 1 and a.size % 2 == 0:  # interleaved
@@ -95,7 +109,6 @@ def load_dronerf(root: str, fs: float, win_s: float = 0.005,
             f"{root}: сегментов не найдено — ожидается <root>/<class>/*.{SEG_EXT}")
     xs, ys, metas = [], [], []
     names = sorted(found)
-    n_win = int(round(fs * win_s))
     g = math.gcd(int(round(fs)), 20_000_000)
     up, down = 20_000_000 // g, int(round(fs)) // g
     for ci, cls in enumerate(names):

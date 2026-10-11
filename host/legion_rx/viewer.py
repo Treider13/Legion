@@ -17,7 +17,6 @@ import argparse
 import json
 import socket
 import sys
-from collections import deque
 
 import numpy as np
 
@@ -37,6 +36,12 @@ def main() -> int:
         print(f"viewer: {e} — установите PyQt6 pyqtgraph "
               f"(host/requirements-lab.txt); пайплайн без вьювера работает")
         return 2
+
+    # [F2] GPU-рендер кривых через QOpenGLWidget (по умолчанию pyqtgraph —
+    # CPU raster). antialias=False: CPU не жечь на сглаживание. 60 FPS —
+    # критерий лабораторного замера (AetherSDR/Qt6 QRhi читает тот же UDP
+    # JSON, если pyqtgraph не вытянет — интерфейс уже разнесён по процессам).
+    pg.setConfigOptions(useOpenGL=True, antialias=False)
 
     app = QtWidgets.QApplication(sys.argv)
     win = QtWidgets.QMainWindow()
@@ -63,7 +68,6 @@ def main() -> int:
         "wf": np.full((WF_ROWS, 1024), -120.0, dtype=np.float32),
         "cls": "—", "conf": 0.0, "hop": {}, "stat": {},
     }
-    spec_q: deque = deque(maxlen=8)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -71,7 +75,6 @@ def main() -> int:
     sock.setblocking(False)
 
     def poll() -> None:
-        nonlocal spec_q
         for _ in range(256):  # дренируем очередь датаграмм за тик
             try:
                 data, _ = sock.recvfrom(1 << 20)
@@ -84,7 +87,6 @@ def main() -> int:
             kind = msg.get("kind")
             v = np.asarray(msg.get("v", []), dtype=np.float32)
             if kind == "spec" and v.size:
-                spec_q.append(v)
                 spec_curve.setData(v)
             elif kind == "wf" and v.size:
                 wf = state["wf"]

@@ -10,7 +10,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-SC16_Q11_SCALE = 2048.0  # Q1.11: полная шкала int16 >> 4? Нет: 2^11
+SC16_Q11_SCALE = 2048.0  # SC16_Q11: 12-битные данные в int16, left-justified;
+                         # полная шкала = 2^11 = 2048 → нормировка /2048.
 BYTES_PER_SAMPLE = 4  # int16 I + int16 Q
 
 
