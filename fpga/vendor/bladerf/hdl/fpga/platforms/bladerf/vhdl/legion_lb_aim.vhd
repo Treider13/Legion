@@ -9,6 +9,7 @@
 -- реакция — следующий sample_en (каденс mux), не обёртка фазы и не
 -- период обзора. Фаза непрерывна при смене bin; arm=0 сбрасывает фазу
 -- и пропускает din без регистра (delay=0 → mux в том же такте).
+-- arm=1: S1 захват din, S2 смесь→q. Host: AIM mix +1 sample.
 -- Упаковка: I[31:16] Q[15:0]. Масштаб LUT >>11, как up-mix xlat.
 -- ============================================================================
 library ieee;
@@ -65,7 +66,15 @@ architecture rtl of legion_lb_aim is
     );
 
     signal phase_acc : unsigned(31 downto 0) := (others => '0');
+    signal din_r     : std_logic_vector(31 downto 0) := (others => '0');
+    signal tgt_r     : std_logic_vector(7 downto 0) := (others => '0');
+    signal se_d      : std_logic := '0';
     signal q         : std_logic_vector(31 downto 0) := (others => '0');
+
+    attribute preserve : boolean;
+    attribute preserve of din_r : signal is true;
+    attribute preserve of tgt_r : signal is true;
+    attribute preserve of se_d  : signal is true;
 
     function sine_lookup(phase10 : unsigned(9 downto 0)) return signed is
         variable quad : unsigned(1 downto 0);
@@ -102,6 +111,27 @@ begin
     -- arm=0: провод. Иначе регистр, готовый к захвату mux на такте после sample_en.
     dout <= din when ch_target(31) = '0' else q;
 
+    -- S1: захват din/bin. arm=0 гасит se_d.
+    process(clock, reset)
+    begin
+        if reset = '1' then
+            din_r <= (others => '0');
+            tgt_r <= (others => '0');
+            se_d  <= '0';
+        elsif rising_edge(clock) then
+            if ch_target(31) = '0' then
+                se_d <= '0';
+            else
+                se_d <= sample_en;
+                if sample_en = '1' then
+                    din_r <= din;
+                    tgt_r <= ch_target(7 downto 0);
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- S2: смесь → q
     process(clock, reset)
         variable ftw : unsigned(31 downto 0);
         variable c_i : signed(15 downto 0);
@@ -121,14 +151,14 @@ begin
                 -- база на bin 0, до первого произведения.
                 phase_acc <= (others => '0');
                 q         <= (others => '0');
-            elsif sample_en = '1' then
-                -- FTW живой: новый bin входит в шаг этого valid, cis
+            elsif se_d = '1' then
+                -- FTW с S1: новый bin входит в шаг этого valid, cis
                 -- следующего. Обёртку аккумулятора не ждём (rotator hop).
-                ftw := legion_bin_ftw(ch_target(7 downto 0));
+                ftw := legion_bin_ftw(tgt_r);
                 c_i := sine_lookup(phase_acc(31 downto 22) + 256);
                 s_q := sine_lookup(phase_acc(31 downto 22));
-                xi  := signed(din(31 downto 16));
-                xq  := signed(din(15 downto 0));
+                xi  := signed(din_r(31 downto 16));
+                xq  := signed(din_r(15 downto 0));
                 -- (I+jQ)·(cos+j sin), как host bb·exp(+jωt)
                 yi := mix_sum(xi, xq, c_i, s_q, true);
                 yq := mix_sum(xi, xq, s_q, c_i, false);

@@ -1715,23 +1715,8 @@ begin
         ch_active  => lg_ch_active
       );
 
-    U_legion_fft_channelize : entity work.legion_fft_channelize
-      port map (
-        clock     => rx_clock,
-        reset     => rx_reset,
-        enable    => lg_fft_en,
-        ch_ctrl   => lg_ch_ctrl,
-        ch_idx    => lg_ch_idx,
-        lut_we    => lg_lut_we,
-        lut_addr  => lg_lut_addr,
-        lut_data  => lg_lut_data,
-        mag_valid => lg_mag_valid,
-        mag_last  => lg_mag_last,
-        mag_bin   => lg_mag_bin,
-        mag_pow   => lg_mag_pow,
-        mag_frame => lg_mag_frame,
-        ch_word   => lg_ch_word
-      );
+    -- 80-ch occupancy снята с FPGA (timing). CH_PWR=0. Detector/peak без изменений.
+    lg_ch_word <= (others => '0');
 
     -- Gemini / два тона ≥ fs/16: MA-16 режет вторую; bypass = in→out.
     lg_xlat_en <= lg_fft_en and not lg_fft_xlat_bypass;

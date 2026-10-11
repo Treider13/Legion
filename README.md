@@ -106,7 +106,7 @@ ESP32 принимает её и физически настраивает чи�
    Выбрать порт (напр. `/dev/ttyUSB0` или `COM5`) → CONNECT → ввести частоту.
 4. **CLI (опционально, в том же venv):**
    ```bash
-   pip install -r tools/requirements.txt
+   pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt
    python3 tools/legion_cli.py --port /dev/ttyUSB0 --cmd "SET FREQ 2475.000"
    python3 tools/legion_cli.py --port /dev/ttyUSB0 --cmd "SWEEP START 2400 2500 STEP 1000 DWELL 10"
    ```

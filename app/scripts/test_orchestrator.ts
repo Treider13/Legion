@@ -87,6 +87,7 @@ import {
   DRFM_ZC_RU,
   DRFM_ZC_SHIFT_HZ,
   drfmFtwFromHz,
+  drfmPipelineExtraS,
   drfmTworyDelay1,
   planDrfmStrategy,
 } from "../src/sense/drfmStrategy";
@@ -1922,8 +1923,12 @@ async function main(): Promise<void> {
     });
     return p.ok && p.lookMhz === 56 && p.fsHz === 56e6 && p.drfm.delay1 === 64;
   })());
-  check("DRFM τ: 2 MSPS → delay1=2, 56e6 → 64",
-    drfmTworyDelay1(2e6) === 2 && drfmTworyDelay1(56e6) === 64);
+  check("DRFM τ: 2 MSPS → delay1=2, 56e6 → 64, 36e6 → 41",
+    drfmTworyDelay1(2e6) === 2 && drfmTworyDelay1(56e6) === 64
+    && drfmTworyDelay1(36e6) === 41);
+  check("DRFM pipeline +2 @ 36e6 = 55.556 нс, не в delay1",
+    Math.abs(drfmPipelineExtraS(36e6) - 2 / 36e6) < 1e-18
+    && drfmTworyDelay1(36e6) === 41);
   check("карта hop: 56 МГц не кроет ELRS — next 2441.4", (() => {
     const g = matchSmartGrid({ hopsMhz: [2400.4, 2401.4, 2410.4, 2450.4] });
     return lookCoversHopset(g, 56) === false && lookCoversHopset(g, 80) === true

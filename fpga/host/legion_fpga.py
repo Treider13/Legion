@@ -151,7 +151,7 @@ TWORY_FS_HZ = 56e6
 
 
 def twory_delay1(fs_hz: float) -> int:
-    """64 @ 56e6. Другой fs — round(64·fs/56e6), не константа."""
+    """64 @ 56e6 ≈ 1/B. 36e6 → 41. +2 pipeline — общий путь, не в tap."""
     fs = float(fs_hz) if fs_hz and float(fs_hz) > 0 else TWORY_FS_HZ
     n = int(round(LB_DELAY1_DEFAULT * fs / TWORY_FS_HZ))
     if n < 1:
@@ -196,7 +196,8 @@ MODE_PLAYER = 0x1
 MODE_NCO = 0x2
 MODE_LB_GATED = 0x3
 MODE_LB_ALWAYS = 0x4
-MODE_AIM = 0x5  # NCO по CH_TARGET
+MODE_AIM = 0x5  # NCO по CH_TARGET; AIM mix +1 sample (S1/S2)
+# legion_mixer S1/S2: mix/bypass +1 sample (mixer0 и mixer1).
 
 CTRL_ARM = 1 << 0
 CTRL_WD_EN = 1 << 4
@@ -209,13 +210,39 @@ CTRL_WD_EN = 1 << 4
 #   x40 — c4_tx_clock, valid каждый 2-й такт (legion_nco.vhd).
 #   micro — ad9361.clock = axi_ad9361 l_clk = rx_outclock SERDES.
 #   Интерфейс LVDS 2R2T (ad936x_params.c, pins.tcl IO_STANDARD LVDS).
-#   DATA_CLK = 4×fs (UG-570: 61.44 MSPS → 245.76 МГц; SDC стережёт
-#   adi_rx_clock как 250 МГц). altlvds_rx: deserialization_factor=4, DDR,
-#   rx_outclock = DATA_CLK/2. Nuand мерил DATA_CLK, не l_clk
-#   (блог 2023.02: частота DATA_CLK подтвердила разгон выборки).
+#   DATA_CLK = 4×fs (UG-570). altlvds_rx: deserialization_factor=4, DDR,
+#   pll_sclk = rx_outclock = DATA_CLK/2 = 2×fs.
+#   RBF 72 МГц: DATA_CLK 144 МГц, fs = 36e6.
+#   set_air_fs_hz(AIR_FS_FOR_PLL_SCLK_HZ) → NIOS rfic SAMPLERATE.
+#   bladerf_set_pll_refclk() — вход ADF4002 (VCTCXO), не DATA_CLK. Не вызывать.
 WD_TICK = 65536
 WD_LIMIT_DEFAULT = 61
 WD_TIMEOUT_S = 2.0
+
+# pll_sclk = 2×fs. RBF altlvds: DATA_CLK 144 МГц → pll_sclk 72 МГц.
+PLL_SCLK_HZ = 72_000_000
+AIR_FS_FOR_PLL_SCLK_HZ = PLL_SCLK_HZ // 2  # 36e6
+
+# HDL pipeline (RBF 72 МГц): mixer S1/S2 + lb_aim S1/S2. Общий путь +2.
+# 2/36e6 = 55.555… нс (не мкс). Two-ray delay1 — 1/B, +2 не прибавлять.
+PIPELINE_MIXER_SAMPLES = 1
+PIPELINE_LB_AIM_SAMPLES = 1
+PIPELINE_EXTRA_SAMPLES = PIPELINE_MIXER_SAMPLES + PIPELINE_LB_AIM_SAMPLES
+# MCP setup 4 / hold 3: PIO ctrl_tx/lbd_tx не чаще 1 раза в 4 клока (55.556 нс @ 72 МГц).
+MCP_SETUP = 4
+MCP_HOLD = 3
+
+
+def mcp_pio_min_s(pll_sclk_hz: float | None = None) -> float:
+    """Мин. интервал смены PIO под MCP. @ 72 МГц = 55.556 нс."""
+    f = float(pll_sclk_hz) if pll_sclk_hz and pll_sclk_hz > 0 else float(PLL_SCLK_HZ)
+    return MCP_SETUP / f
+
+
+def pipeline_extra_s(fs_hz: float | None = None) -> float:
+    """Виртуальная задержка mixer+aim. @ 36 MSPS = 55.556 нс."""
+    fs = float(fs_hz) if fs_hz and fs_hz > 0 else float(AIR_FS_FOR_PLL_SCLK_HZ)
+    return PIPELINE_EXTRA_SAMPLES / fs
 
 
 def pack_grid_f0(f0_hz: int) -> int:
@@ -477,7 +504,8 @@ class LegionFpga:
 
     def set_look_through(self, enable: bool = True, period: int = 0,
                          width: int = 0, ratio: int = 2) -> bool:
-        """HDL look-through 0x5A–0x5C. Сначала данные, потом EN (Cummings)."""
+        """HDL look-through 0x5A–0x5C. Сначала данные, потом EN (Cummings).
+        blank сдвинут на 1–2 tx_clock vs PERIOD/WIDTH (pipeline count/period→cmp)."""
         ctrl = (1 if enable else 0) | ((int(ratio) & 0xF) << 4)
         if not enable:
             return (self.write_reg(REG_LT_CTRL, ctrl) and
@@ -537,7 +565,11 @@ class LegionFpga:
         return self.write_reg(REG_AIR_TX_GAIN_DB, (int(gain_db) + 1000) & 0xFFFFFFFF)
 
     def set_air_fs_hz(self, fs_hz: int) -> bool:
-        """Sample rate AD9361, Гц. 0 = дефолт NIOS 2 МГц (эфир lb_gated)."""
+        """Sample rate AD9361, Гц. 0 = дефолт NIOS 2 МГц (эфир lb_gated).
+
+        Для RBF pll_sclk=72 МГц: fs_hz=AIR_FS_FOR_PLL_SCLK_HZ (36e6).
+        NIOS пишет RFIC SAMPLERATE. Не bladerf_set_pll_refclk.
+        """
         return self.write_reg(REG_AIR_FS_HZ, int(fs_hz) & 0xFFFFFFFF)
 
     def set_air_bw_hz(self, bw_hz: int) -> bool:

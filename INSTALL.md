@@ -71,10 +71,13 @@ ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
 
 ```bash
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
-pip install -r tools/requirements.txt -r fpga/requirements.txt
+pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt
+# лаборатория GPU (CUDA ≥ 12.8): pip install -r host/requirements-lab.txt
 ```
 
-`numpy` обязателен для сканера эфира; `pyusb` — для агента шлюза FPGA.
+`numpy` обязателен для сканера эфира; `pyusb` — для агента шлюза FPGA;
+`scipy`/`pytest` — host PFB и `host/tests` (в т.ч. `test_rbf_timing`).
+GPU (CuPy/torch/TensorRT/PyQt6) — только `host/requirements-lab.txt`.
 
 ## 3. Приложение LEGION Control
 

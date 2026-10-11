@@ -49,7 +49,8 @@ SoapySDR #225: стрим и регистровый агент одноврем�
 ## Запуск (лаборатория)
 
 ```bash
-pip install -r host/requirements-lab.txt
+pip install -r host/requirements.txt          # CPU / тесты
+pip install -r host/requirements-lab.txt      # + CUDA CuPy/torch/TRT/PyQt6
 python3 -m legion_rx.reader.build           # C-читатель (gcc)
 cd host && export PYTHONPATH=$PWD
 

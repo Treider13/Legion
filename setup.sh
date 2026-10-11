@@ -50,10 +50,15 @@ if [ -f .venv/bin/activate ]; then
   PY=python
   ok "venv .venv активирован"
 else
-  warn "venv не создан — python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt"
+  warn "venv не создан — python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt"
   if [ "$INSTALL" = "1" ]; then
     python3 -m venv --system-site-packages .venv && . .venv/bin/activate && PY=python && ok "venv .venv создан"
   fi
+fi
+
+if [ "$INSTALL" = "1" ]; then
+  echo "  … pip: tools + fpga + host (CPU/тесты)"
+  $PY -m pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt || true
 fi
 
 $PY -c "import numpy" 2>/dev/null && ok "numpy (сканер эфира)" \
@@ -62,6 +67,14 @@ $PY -c "import serial" 2>/dev/null && ok "pyserial (CLI/эмулятор ESP32)"
   || { miss "pyserial — pip install -r tools/requirements.txt"; maybe "pyserial" $PY -m pip install -r tools/requirements.txt; }
 $PY -c "import usb" 2>/dev/null && ok "pyusb (агент шлюза FPGA)" \
   || { miss "pyusb — pip install -r fpga/requirements.txt"; maybe "pyusb" $PY -m pip install -r fpga/requirements.txt; }
+$PY -c "import scipy" 2>/dev/null && ok "scipy (PFB/host)" \
+  || { miss "scipy — pip install -r host/requirements.txt"; maybe "scipy" $PY -m pip install -r host/requirements.txt; }
+$PY -c "import pytest" 2>/dev/null && ok "pytest (host/tests)" \
+  || { miss "pytest — pip install -r host/requirements.txt"; maybe "pytest" $PY -m pip install -r host/requirements.txt; }
+$PY -c "import cupy" 2>/dev/null && ok "cupy (lab GPU)" \
+  || warn "cupy нет — lab GPU: pip install -r host/requirements-lab.txt"
+$PY -c "import torch" 2>/dev/null && ok "torch (lab CNN)" \
+  || warn "torch нет — lab CNN: pip install -r host/requirements-lab.txt"
 # systemd-юнит ExecStart=/usr/bin/python3 — venv его не кормит.
 if /usr/bin/python3 -c "import usb" 2>/dev/null; then
   ok "python3-usb в /usr/bin/python3 (systemd шлюз)"

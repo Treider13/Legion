@@ -21,6 +21,11 @@ __pycache__/
 *.pyc
 .venv/
 
+# --- Quartus incremental work (RBF freeze — отдельные каталоги legionxA4-*) ---
+fpga/vendor/bladerf/hdl/quartus/work/
+fpga/vendor/bladerf/hdl/quartus/db/
+fpga/vendor/bladerf/hdl/quartus/incremental_db/
+
 # --- Misc ---
 .DS_Store
 *.log

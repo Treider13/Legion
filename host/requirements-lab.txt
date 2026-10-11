@@ -1,19 +1,14 @@
 # LEGION lab host (шаги 3–9) — зависимости лабораторного ПК
 # База: CUDA >= 12.8 (Blackwell CC 12.0, RTX 5050), Python >= 3.10.
 #
+# Сначала CPU/тесты, потом GPU.
+-r requirements.txt
 # CuPy >= 13.3 (CUDA 12.x) — GPU-канализация (шаг 4). scikit-cuda ЗАПРЕЩЁН.
 cupy-cuda12x>=13.3
 # PyTorch >= 2.6 сборки cu128 — обучение/инференс CNN (шаг 5).
 torch>=2.6
 # TensorRT >= 10.8 (Blackwell + FP16) — целевой инференс (шаг 5.4).
 tensorrt>=10.8
-# Научпак (PFB-прототипы, ресемплинг датасетов).
-numpy>=1.26
-scipy>=1.11
-# Управление FPGA через legion_fpga.py → UsbTransport (шаг 7).
-pyusb>=1.2
 # Визуализация отдельным процессом (шаг 8).
 PyQt6>=6.6
 pyqtgraph>=0.13
-# Тесты.
-pytest>=8.0
