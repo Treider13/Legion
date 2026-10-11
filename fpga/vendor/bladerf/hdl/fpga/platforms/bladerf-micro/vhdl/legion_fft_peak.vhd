@@ -71,7 +71,8 @@ architecture rtl of legion_fft_peak is
     type state_t is (ST_COLLECT,
                     ST_FFT_RD_A, ST_FFT_RD_B, ST_FFT_CAP, ST_FFT_MATH,
                     ST_FFT_WR_B, ST_FFT_GAP,
-                    ST_PEAK_RD, ST_PEAK_WAIT, ST_PEAK_CMP, ST_LM_WRAP,
+                    ST_PEAK_RD, ST_PEAK_MUL, ST_PEAK_ADD, ST_PEAK_ABS, ST_PEAK_DIV,
+                    ST_PEAK_DADD, ST_PEAK_CMP, ST_PEAK_ACC, ST_LM_WRAP,
                     ST_TOP_RD, ST_TOP_WAIT, ST_TOP_CMP, ST_PUBLISH);
     signal state : state_t := ST_COLLECT;
 
@@ -120,6 +121,36 @@ architecture rtl of legion_fft_peak is
     type mag8_t is array (0 to 7) of unsigned(31 downto 0);
     type bin8_t is array (0 to 7) of unsigned(7 downto 0);
     signal g_acc  : mag8_t := (others => (others => '0'));
+    signal acc_nz : std_logic_vector(7 downto 0) := (others => '0');
+    -- peak_i → g_acc: RD считает t, WAIT — quot, CMP — gi+acc
+    signal pipe_oct   : std_logic := '0';
+    signal pipe_gi_a  : integer range 0 to 7 := 0;
+    signal pipe_t     : signed(31 downto 0) := (others => '0');
+    signal pipe_off   : signed(31 downto 0) := (others => '0');
+    signal sbin_s     : signed(15 downto 0) := (others => '0');
+    signal fs_lo_s    : signed(15 downto 0) := (others => '0');
+    signal fs_hi_s    : signed(15 downto 0) := (others => '0');
+    signal p_lo       : signed(31 downto 0) := (others => '0');
+    signal p_hi       : signed(31 downto 0) := (others => '0');
+    signal t_neg      : std_logic := '0';
+    signal mag_u_r    : unsigned(31 downto 0) := (others => '0');
+    signal w_lo       : unsigned(42 downto 0) := (others => '0');
+    signal w_hi       : unsigned(42 downto 0) := (others => '0');
+    signal slot_ok    : std_logic := '0';
+    signal slot_oh    : std_logic_vector(7 downto 0) := (others => '0');
+    signal slot_mag   : unsigned(31 downto 0) := (others => '0');
+    attribute preserve : boolean;
+    attribute preserve of pipe_t   : signal is true;
+    attribute preserve of pipe_off : signal is true;
+    attribute preserve of sbin_s   : signal is true;
+    attribute preserve of p_lo     : signal is true;
+    attribute preserve of p_hi     : signal is true;
+    attribute preserve of mag_u_r  : signal is true;
+    attribute preserve of w_lo     : signal is true;
+    attribute preserve of w_hi     : signal is true;
+    attribute preserve of slot_mag : signal is true;
+    attribute preserve of slot_oh  : signal is true;
+    attribute preserve of slot_ok  : signal is true;
     signal g_pk   : mag8_t := (others => (others => '0'));
     signal g_bin  : bin8_t := (others => (others => '0'));
     signal e_r    : legion_ch_energy_t := (others => (others => '0'));
@@ -241,8 +272,19 @@ begin
         variable ex      : integer;
         variable bi      : integer;
         variable fr      : unsigned(6 downto 0);
+        constant DIV125_MAG : unsigned(26 downto 0) := to_unsigned(68719477, 27);
         variable gi      : integer;
         variable sum     : unsigned(32 downto 0);
+        variable sbin    : integer;
+        variable prod    : signed(47 downto 0);
+        variable num     : signed(47 downto 0);
+        variable shifted : signed(47 downto 0);
+        variable t       : signed(31 downto 0);
+        variable mag_u   : unsigned(31 downto 0);
+        variable wide    : unsigned(58 downto 0);
+        variable quot    : signed(31 downto 0);
+        variable f_khz   : integer;
+        variable delta   : integer;
     begin
         if reset = '1' then
             state     <= ST_COLLECT;
@@ -262,6 +304,23 @@ begin
             bins_r    <= (others => '0');
             act_r     <= (others => '0');
             g_acc     <= (others => (others => '0'));
+            acc_nz    <= (others => '0');
+            pipe_oct  <= '0';
+            pipe_gi_a <= 0;
+            pipe_t    <= (others => '0');
+            pipe_off  <= (others => '0');
+            sbin_s    <= (others => '0');
+            fs_lo_s   <= (others => '0');
+            fs_hi_s   <= (others => '0');
+            p_lo      <= (others => '0');
+            p_hi      <= (others => '0');
+            t_neg     <= '0';
+            mag_u_r   <= (others => '0');
+            w_lo      <= (others => '0');
+            w_hi      <= (others => '0');
+            slot_ok   <= '0';
+            slot_oh   <= (others => '0');
+            slot_mag  <= (others => '0');
             g_pk      <= (others => (others => '0'));
             g_bin     <= (others => (others => '0'));
             we        <= '0';
@@ -379,6 +438,7 @@ begin
                                 sel_ok2   <= '0';
                                 sel_ok3   <= '0';
                                 g_acc     <= (others => (others => '0'));
+                                acc_nz    <= (others => '0');
                                 g_pk      <= (others => (others => '0'));
                                 g_bin     <= (others => (others => '0'));
                                 state     <= ST_PEAK_RD;
@@ -393,9 +453,67 @@ begin
 
                     when ST_PEAK_RD =>
                         rd_addr <= peak_i(7 downto 0);
-                        state   <= ST_PEAK_WAIT;
+                        if fs_hz = 0 or lo_khz = 0 then
+                            pipe_oct  <= '1';
+                            pipe_gi_a <= to_integer(shift_right(peak_i(7 downto 0), 5));
+                            sbin_s    <= (others => '0');
+                            fs_lo_s   <= (others => '0');
+                            fs_hi_s   <= (others => '0');
+                        else
+                            pipe_oct <= '0';
+                            if peak_i(7 downto 0) < 128 then
+                                sbin := to_integer(peak_i(7 downto 0));
+                            else
+                                sbin := to_integer(peak_i(7 downto 0)) - 256;
+                            end if;
+                            sbin_s  <= to_signed(sbin, 16);
+                            fs_lo_s <= signed(fs_hz(15 downto 0));
+                            fs_hi_s <= signed(fs_hz(31 downto 16));
+                        end if;
+                        state <= ST_PEAK_MUL;
 
-                    when ST_PEAK_WAIT =>
+                    when ST_PEAK_MUL =>
+                        p_lo <= sbin_s * fs_lo_s;
+                        p_hi <= sbin_s * fs_hi_s;
+                        state <= ST_PEAK_ADD;
+
+                    when ST_PEAK_ADD =>
+                        prod := shift_left(resize(p_hi, 48), 16) + resize(p_lo, 48);
+                        if prod >= 0 then
+                            num := prod + to_signed(128000, 48);
+                        else
+                            num := prod - to_signed(128000, 48);
+                        end if;
+                        shifted := shift_right(num, 11);
+                        if num < 0 and num(10 downto 0) /= 0 then
+                            shifted := shifted + 1;
+                        end if;
+                        pipe_t <= resize(shifted, 32);
+                        state <= ST_PEAK_ABS;
+
+                    when ST_PEAK_ABS =>
+                        t := pipe_t;
+                        if t < 0 then
+                            mag_u_r <= unsigned(-t);
+                            t_neg   <= '1';
+                        else
+                            mag_u_r <= unsigned(t);
+                            t_neg   <= '0';
+                        end if;
+                        state <= ST_PEAK_DIV;
+
+                    when ST_PEAK_DIV =>
+                        w_lo <= mag_u_r(15 downto 0) * DIV125_MAG;
+                        w_hi <= mag_u_r(31 downto 16) * DIV125_MAG;
+                        state <= ST_PEAK_DADD;
+
+                    when ST_PEAK_DADD =>
+                        wide := shift_left(resize(w_hi, 59), 16) + resize(w_lo, 59);
+                        quot := signed(resize(shift_right(wide, 33), 32));
+                        if t_neg = '1' then
+                            quot := -quot;
+                        end if;
+                        pipe_off <= quot;
                         state <= ST_PEAK_CMP;
 
                     when ST_PEAK_CMP =>
@@ -433,19 +551,65 @@ begin
                             best_mag <= mag;
                             best_bin <= peak_i(7 downto 0);
                         end if;
-                        gi := legion_ch_slot(to_integer(peak_i(7 downto 0)), fs_hz, lo_khz);
-                        if (not skip_dc) and gi >= 0 and gi <= 7 then
-                            sum := resize(g_acc(gi), 33) + resize(mag, 33);
-                            if sum(32) = '1' then
-                                g_acc(gi) <= (others => '1');
+                        if pipe_oct = '1' then
+                            gi := pipe_gi_a;
+                        else
+                            f_khz := to_integer(signed(resize(lo_khz, 32)) + pipe_off);
+                            if f_khz < LEGION_OCUSYNC_F0_KHZ or
+                               f_khz >= LEGION_OCUSYNC_F0_KHZ + 8 * LEGION_OCUSYNC_BW_KHZ then
+                                gi := -1;
                             else
-                                g_acc(gi) <= sum(31 downto 0);
-                            end if;
-                            if mag > g_pk(gi) then
-                                g_pk(gi)  <= mag;
-                                g_bin(gi) <= peak_i(7 downto 0);
+                                delta := f_khz - LEGION_OCUSYNC_F0_KHZ;
+                                if delta >= 70000 then
+                                    gi := 7;
+                                elsif delta >= 60000 then
+                                    gi := 6;
+                                elsif delta >= 50000 then
+                                    gi := 5;
+                                elsif delta >= 40000 then
+                                    gi := 4;
+                                elsif delta >= 30000 then
+                                    gi := 3;
+                                elsif delta >= 20000 then
+                                    gi := 2;
+                                elsif delta >= 10000 then
+                                    gi := 1;
+                                else
+                                    gi := 0;
+                                end if;
                             end if;
                         end if;
+                        slot_oh <= (others => '0');
+                        if (not skip_dc) and gi >= 0 and gi <= 7 then
+                            slot_ok  <= '1';
+                            slot_oh(gi) <= '1';
+                            slot_mag <= mag;
+                        else
+                            slot_ok <= '0';
+                        end if;
+                        state <= ST_PEAK_ACC;
+
+                    when ST_PEAK_ACC =>
+                        for si in 0 to 7 loop
+                            if slot_oh(si) = '1' then
+                                sum := resize(g_acc(si), 33) + resize(slot_mag, 33);
+                                if sum(32) = '1' then
+                                    g_acc(si) <= (others => '1');
+                                    acc_nz(si) <= '1';
+                                else
+                                    g_acc(si) <= sum(31 downto 0);
+                                    if sum(31 downto 0) /= 0 then
+                                        acc_nz(si) <= '1';
+                                    else
+                                        acc_nz(si) <= '0';
+                                    end if;
+                                end if;
+                                if slot_mag > g_pk(si) then
+                                    g_pk(si)  <= slot_mag;
+                                    g_bin(si) <= peak_i(7 downto 0);
+                                end if;
+                            end if;
+                        end loop;
                         if peak_i = 255 then
                             state <= ST_LM_WRAP;
                         else
@@ -567,13 +731,7 @@ begin
                         bins_r(47 downto 40) <= std_logic_vector(g_bin(5));
                         bins_r(55 downto 48) <= std_logic_vector(g_bin(6));
                         bins_r(63 downto 56) <= std_logic_vector(g_bin(7));
-                        for si in 0 to 7 loop
-                            if g_acc(si) /= 0 then
-                                act_r(si) <= '1';
-                            else
-                                act_r(si) <= '0';
-                            end if;
-                        end loop;
+                        act_r <= acc_nz;
                         collect_n <= (others => '0');
                         state     <= ST_COLLECT;
                 end case;

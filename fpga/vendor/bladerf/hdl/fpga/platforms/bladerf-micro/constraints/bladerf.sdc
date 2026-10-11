@@ -56,6 +56,15 @@ set dac_spi_nsync_trace_delay   0.193
 # First flop synchronizer false path
 set_false_path -from [get_registers {*source_holding[*]}] -to *
 
+# LEGION: ctrl_tx (adi/tx) → wcur_meta (nios). CDC 2FF, relationship 0.001 ns.
+set_false_path -from *ctrl_tx* -to *wcur_meta*
+set_false_path -from *ctrl_tx* -to *st_meta*
+# ctrl_tx = 2FF r_ctrl (PIO). Не walk, не каждый клок.
+set_multicycle_path -setup 4 -from *ctrl_tx* -to *legion_lb_aim*q*
+set_multicycle_path -hold 3 -from *ctrl_tx* -to *legion_lb_aim*q*
+set_false_path -from [get_clocks {U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}] -to [get_clocks {U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk}]
+set_false_path -from [get_clocks {U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk}] -to [get_clocks {U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
+
 # Slow Interfaces
 set_false_path -from *             -to [get_ports ps_sync_1p*]
 set_false_path -from *             -to [get_ports {rx_bias_en tx_bias_en}]

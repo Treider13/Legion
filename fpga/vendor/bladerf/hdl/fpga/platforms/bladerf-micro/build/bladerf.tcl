@@ -76,13 +76,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING    ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT            ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS               "SPARSE AUTO"
-set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT               NORMAL
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT               EXTRA
 set_global_assignment -name SYNTHESIS_EFFORT                        AUTO
 
 
 # Fitting
-set_global_assignment -name FITTER_EFFORT                                "AUTO FIT"
-set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING                "EXTRA EFFORT"
+set_global_assignment -name FITTER_EFFORT                                "STANDARD FIT"
+set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING                "Off"
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION   ALWAYS
 set_global_assignment -name FITTER_AUTO_EFFORT_DESIRED_SLACK_MARGIN      "1 ns"
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP          ON
 set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS            ON

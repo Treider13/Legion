@@ -53,6 +53,12 @@ architecture rtl of legion_fft_channelize is
     signal fr_r  : unsigned(6 downto 0) := (others => '0');
     signal vld_r : std_logic := '0';
     signal word_r : std_logic_vector(31 downto 0) := (others => '0');
+    -- mag_bin → lut/ch → acc: 19 ns / 8 ns. S1 decode, S2 acc.
+    signal acc_v_q : std_logic := '0';
+    signal last_q  : std_logic := '0';
+    signal acc_i_q : integer range 0 to LEGION_CH_N - 1 := 0;
+    signal acc_p_q : unsigned(15 downto 0) := (others => '0');
+    signal frame_q : unsigned(6 downto 0) := (others => '0');
 
     function sat16(x : unsigned(23 downto 0)) return unsigned is
     begin
@@ -94,6 +100,11 @@ begin
             word_r  <= (others => '0');
             copy_i  <= COPY_IDLE;
             pend_fr <= (others => '0');
+            acc_v_q <= '0';
+            last_q  <= '0';
+            acc_i_q <= 0;
+            acc_p_q <= (others => '0');
+            frame_q <= (others => '0');
         elsif rising_edge(clock) then
             if enable = '0' then
                 acc     <= (others => (others => '0'));
@@ -102,6 +113,8 @@ begin
                 vld_r   <= '0';
                 word_r  <= (others => '0');
                 copy_i  <= COPY_IDLE;
+                acc_v_q <= '0';
+                last_q  <= '0';
             else
                 -- 80 тактов копии + 1 такт публикации. Пока идёт копия,
                 -- snap и valid остаются прошлым целым кадром.
@@ -110,12 +123,16 @@ begin
                 if copy_i < LEGION_CH_N then
                     hold(copy_i) <= sat16(acc(copy_i));
                     copy_i <= copy_i + 1;
+                    acc_v_q <= '0';
+                    last_q  <= '0';
                 elsif copy_i = LEGION_CH_N then
                     snap    <= hold;
                     acc     <= (others => (others => '0'));
                     fr_r    <= pend_fr;
                     vld_r   <= '1';
                     copy_i  <= COPY_IDLE;
+                    acc_v_q <= '0';
+                    last_q  <= '0';
                 else
                     map_mode := unsigned(ch_ctrl(1 downto 0));
                     sh := to_integer(unsigned(ch_ctrl(4 downto 2)));
@@ -126,6 +143,21 @@ begin
                     end if;
                     skip_dc := ch_ctrl(LEGION_CH_DC_SKIP) = '1';
 
+                    if acc_v_q = '1' then
+                        idx := acc_i_q;
+                        if acc(idx) > (x"FFFFFF" - resize(acc_p_q, 24)) then
+                            acc(idx) <= x"FFFFFF";
+                        else
+                            acc(idx) <= acc(idx) + resize(acc_p_q, 24);
+                        end if;
+                    end if;
+                    if last_q = '1' then
+                        pend_fr <= frame_q;
+                        copy_i  <= 0;
+                    end if;
+
+                    acc_v_q <= '0';
+                    last_q  <= '0';
                     if mag_valid = '1' then
                         b := mag_bin;
                         if map_mode = to_unsigned(LEGION_CH_MAP_LUT, 2) then
@@ -137,17 +169,12 @@ begin
                             ch := shift_right(b, sh);
                         end if;
                         if (not skip_dc or mag_bin /= 0) and ch < n_ch then
-                            idx := to_integer(ch);
-                            if acc(idx) > (x"FFFFFF" - resize(mag_pow, 24)) then
-                                acc(idx) <= x"FFFFFF";
-                            else
-                                acc(idx) <= acc(idx) + resize(mag_pow, 24);
-                            end if;
+                            acc_v_q <= '1';
+                            acc_i_q <= to_integer(ch);
+                            acc_p_q <= mag_pow;
                         end if;
-                        if mag_last = '1' then
-                            pend_fr <= mag_frame;
-                            copy_i  <= 0;
-                        end if;
+                        last_q  <= mag_last;
+                        frame_q <= mag_frame;
                     end if;
                 end if;
 
