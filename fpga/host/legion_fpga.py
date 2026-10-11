@@ -140,6 +140,7 @@ GRID_FLAG_WINLIM = 1 << 0
 GRID_FLAG_F0UNC = 1 << 1
 GRID_FLAG_ZC = 1 << 2
 GRID_FLAG_FCORR = 1 << 3
+GRID_FLAG_AUTONOMOUS = 1 << 4  # host: LUT+таймер; HDL может игнорировать
 GRID_F0_KHZ_GATE = 10_000_000
 C58_MHZ = 5100.0
 
@@ -257,7 +258,10 @@ def pack_grid_f0(f0_hz: int) -> int:
 
 def pack_grid_meta(n: int, n_used: int = 0, conf: int = 0,
                    source: int = 0, kind: int = 0) -> int:
-    return ((int(n) & 0xFF) | ((int(n_used) & 0xFF) << 8) |
+    """n, n_used — 8 бит. Значение 256 даёт 0; клэмп 0..255."""
+    n = max(0, min(255, int(n)))
+    n_used = max(0, min(255, int(n_used)))
+    return (n | (n_used << 8) |
             ((int(conf) & 0xFF) << 16) | ((int(source) & 0xF) << 24) |
             ((int(kind) & 0xF) << 28)) & 0xFFFFFFFF
 
@@ -490,8 +494,9 @@ class LegionFpga:
 
     def set_grid(self, meta: int = 0, f0_hz: int = 0, step_hz: int = 0,
                  pri_us: int = 0, shift_hz: int = 0, flags: int = 0,
-                 pwr_thr: int = 0) -> bool:
-        """Сетка умной атаки 0x51–0x58. Пусто — нули, не leftover ELRS."""
+                 pwr_thr: int = 0, rsv: int = 0) -> bool:
+        """Сетка умной атаки 0x51–0x58. rsv — фаза LUT (0x57); HDL может
+        не читать (требование: таймер хопа с phase)."""
         sh = int(shift_hz) & 0xFFFFFFFF
         return (self.write_reg(REG_GRID_META, int(meta) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_F0_HZ, int(f0_hz) & 0xFFFFFFFF) and
@@ -499,7 +504,7 @@ class LegionFpga:
                 self.write_reg(REG_GRID_PRI_US, int(pri_us) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_SHIFT_HZ, sh) and
                 self.write_reg(REG_GRID_FLAGS, int(flags) & 0xFFFFFFFF) and
-                self.write_reg(REG_GRID_RSV, 0) and
+                self.write_reg(REG_GRID_RSV, int(rsv) & 0xFFFFFFFF) and
                 self.write_reg(REG_CH_PWR_THR, int(pwr_thr) & 0xFFFF))
 
     def set_look_through(self, enable: bool = True, period: int = 0,

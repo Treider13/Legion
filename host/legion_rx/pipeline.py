@@ -464,7 +464,7 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     if clf is not None:
         clf.warmup()
     # FakeTransport: путь записи регистров legion_fpga.py без железа
-    # (реальный pack/xfer в память — замер честной стоимости решения+записи).
+    # pack/xfer в память — стоимость решения+записи в логе.
     # fpga/host уже на sys.path (fpga_control вставил при импорте).
     from legion_gateway import FakeTransport
 
@@ -559,8 +559,12 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     fpga = fc.lf.LegionFpga(FakeTransport(board="bladerf2"))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     freqs = np.asarray([ch.channel_freq(k, fs) + lo for k in range(args.n_chans)])
+    scan = None
+    if getattr(args, "scan_start", None) and getattr(args, "scan_end", None):
+        scan = (float(args.scan_start), float(args.scan_end))
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
-                       frame_dt_s=args.frame_samples / fs)
+                       frame_dt_s=args.frame_samples / fs,
+                       scan_corridor=scan, frame_samples=args.frame_samples)
     FRAME = args.frame_samples
     rebuilt = {"done": False}
     n_fr = len(iq) // FRAME
@@ -681,6 +685,8 @@ def main() -> int:
     p6.add_argument("--taps", type=int, default=8)
     p6.add_argument("--publish", action="store_true")
     p6.add_argument("--udp-port", type=int, default=5590)
+    p6.add_argument("--scan-start", type=float, default=None)
+    p6.add_argument("--scan-end", type=float, default=None)
 
     args = ap.parse_args()
     log = JsonLog(args.mode)

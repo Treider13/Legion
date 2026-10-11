@@ -70,12 +70,12 @@ class UdpPublisher:
 
     def send_corridor(self, parent: dict, sub: dict,
                       axis: "tuple | None" = None) -> None:
-        """axis = (f0_hz, step_hz) спектра — viewer пересчитает Гц → индекс
-        бина (BUG-5). Без axis рамки НЕ рисуются (честно, не мимо)."""
+        """axis = (f_start_hz, f_end_hz, nfft) спектра fftshift.
+        bin = (f − f_start) / (f_end − f_start) × nfft. Без axis рамки скрыты."""
         msg = {"parent": [parent.get("f_start"), parent.get("f_end")],
                "sub": [sub.get("f_start"), sub.get("f_end")]}
         if axis is not None:
-            msg["axis"] = [float(axis[0]), float(axis[1])]
+            msg["axis"] = [float(x) for x in axis]
         self.send("corridor", msg)
 
     def send_pred(self, channel, t_s: float, pattern_id: "str | None") -> None:

@@ -8,8 +8,8 @@
 
     python3 -m legion_rx.viewer --port 5590
 
-Зависимости: PyQt6, pyqtgraph (requirements-lab.txt). Без них — честное
-сообщение, не traceback.
+Зависимости: PyQt6, pyqtgraph (requirements-lab.txt). Без них — сообщение
+об ошибке, не traceback.
 """
 from __future__ import annotations
 
@@ -120,14 +120,17 @@ def main() -> int:
             elif kind == "stat":
                 state["stat"] = msg
             elif kind == "corridor":
-                # BUG-5: значения приходят в Гц, ось спектра — в индексах.
-                # Пересчёт через axis=(f0_hz, step_hz); без axis — прячем,
-                # а не рисуем мимо.
                 parent, sub = msg.get("parent"), msg.get("sub")
-                axis = msg.get("axis")
+                axis = msg.get("axis") or []
                 if axis and parent and sub and parent[0] is not None:
-                    f0, step = float(axis[0]), float(axis[1]) or 1.0
-                    hz2bin = lambda f: (float(f) - f0) / step
+                    if len(axis) >= 3:
+                        f0, f1, nfft = (float(axis[0]), float(axis[1]),
+                                        float(axis[2]) or 1024.0)
+                        den = (f1 - f0) or 1.0
+                        hz2bin = lambda f: (float(f) - f0) / den * nfft
+                    else:
+                        f0, step = float(axis[0]), float(axis[1]) or 1.0
+                        hz2bin = lambda f: (float(f) - f0) / step
                     reg_parent.setRegion((hz2bin(parent[0]),
                                           hz2bin(parent[1])))
                     reg_parent.setVisible(True)

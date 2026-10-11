@@ -218,8 +218,9 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | `effectiveness_monitor.py` | PDR low → effective |
 | `drift_detector.py` | LP < 0.7 × 3 → DRIFT |
 | `fpga_control.py` | `apply_predictive_jam` только confirmed |
-| `fpga_preload.py` | LUT × max(20, 2×cycle), потолок 256 (аппаратный 8 бит) |
-| `cognitive.py` | LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→DRIFT/SILENT/RE_ACQUIRE |
+| `fpga_preload.py` | LUT ≤ 255 + GRID_PRI/FLAGS/RSV (фаза) |
+| `lo_sweep.py` | окна IBW 56 МГц, overlap 15%, сшивание по sample_count |
+| `cognitive.py` | LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING |
 | `pipeline.py` | FSM + `chans_for_corridor` (ширина/200 кГц) |
 | `classify` | 3 класса: drone / wifi / noise |
 
@@ -256,8 +257,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 
 ## Когнитивный контур FHSS-памяти (шаги 3–9+, 11.10.2026)
 
-«Услышал → понял паттерн → запомнил → немедленно отработал → контролирует →
-адаптируется». FSM: LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→
+FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 (DRIFT_DETECTED|TARGET_SILENT|RE_ACQUIRE|RE_LEARNING).
 
 | Компонент | Реализация | Источник |
@@ -265,32 +265,50 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | CorridorDetector | динамический EMA-пол на бин, теги start/end/freq; коридор = аккумуляция активности + дилатация ±1 бин (краевое расщепление PFB) | [G1] |
 | P(hopping\|data) | байесовские лог-шансы (CV интервалов, duty, всплески); rate mean ± 95% CI | [G2] |
 | Sub-corridor | f_min−400 кГц … f_max+400 кГц, id parent+sub; работа ТОЛЬКО внутри | ТЗ |
-| HopRecorder | [seq, ch, freq, dwell_us, t, conf]; FHSDT ±20%, FHSDC; коммит = период найден И ≥ 2 полных цикла (сетка 2..4096 из сигнала, не порог 16) | [G6] |
-| PatternStore | уникальные ID, pending/confirmed/legacy (не удаляются); find_match ±1 бин, min_match ≤ cycle_length; find_period_tolerant 1..4096 | [G5] |
-| sequence_type | table_based / pseudo_random / adaptive_afh (эвристика по периоду/охвату) | [G2] |
-| Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub (ValueError), amp0+amp1≤1.0 [F16], horizon=1 | [G4] |
-| fpga_preload | LUT × max(20, 2×cycle) ≤ 256 (write_ch_lut) + set_grid(FHSS, OPERATOR); per-hop 1–3 мс, полный preload 4–20 мс на USB | ТЗ |
-| EffectivenessMonitor | PDR-прокси = выживаемость всплесков (без декода — честно); effective<0.5 / ineffective>0.8 | ТЗ |
-| DriftDetector | LP<0.7 × 3 цикла → DRIFT_DETECTED → stop_jam → RE_LEARNING (legacy) | ТЗ |
-| TARGET_SILENT | >100 мс тишины → stop_jam → фаза 5; find_match по 8 → удар по памяти | ТЗ |
-| Классификатор | 3 класса (drone/wifi/noise), --no-group3 для полного набора | ТЗ п.11 |
-| Адаптивная сетка | цикл FHSS — любой 2..4096 из сигнала; n_chans PFB = ширина коридора / 200 кГц | ТЗ п.12 |
-| Fallback | Markov-1/period (HopTracker); DDPG [G3] — отдельный этап RL-обучения | [G3] |
+| HopRecorder | hops + sample_count + energy; коммит = период + ≥2 цикла | [G6] |
+| PatternStore | ID, pending/confirmed/legacy; find_match доля align ±1; match_need; find_cycle_period (автокорр.) | [G5] |
+| sequence_type | table_based / pseudo_random / adaptive_afh | [G2] |
+| Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
+| fpga_preload | LUT ≤ 255; autonomous при cycle≤255; иначе видимый префикс | ТЗ |
+| EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
+| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
+| TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
+| Классификатор | 3 класса (drone/wifi/noise) | ТЗ п.11 |
+| Сетка | поиск периода 2..4096; LUT 2..255 | ТЗ п.12 |
+| Fallback | Markov-1 HopTracker в FSM, если find_match пуст | [G3] |
 
-Замеры (bench, FakeTransport, 1 с): подтверждение 3 цикла → помеха в том же
-тике (immediate); preload LUT — 2 события (первый удар + ре-захват); FPGA —
-автономная карта. Тесты: 98 passed (host/tests, +18 когнитивных).
-Железо: per-hop удары и preload на USB — замер в лаборатории.
+Помеха в том же Python-тике, что confirm; USB-замер — лаборатория.
+
+## lo_sweep
+
+Сканирование коридора шире IBW 56 МГц: окна с перекрытием 15%.
+400 МГц → 9 окон × 4 мс ≈ 36 мс. Сшивание по sample_count.
+Quick-tune кэш LRU 256 (host); аппаратный bladerf_get_quick_tune —
+лаборатория. Очередь retune ≤ 16. fs при частых retune ≤ 20 Msps.
 
 ## Универсальная сетка FHSS (12.10.2026)
 
 | Факт | Значение |
 |---|---|
-| Сетка FHSS | **АБСОЛЮТНО ЛЮБАЯ (2..4096)**, определяется автоматически из сигнала |
-| Диапазон частот | **ЛЮБОЙ**, определяется входным коридором |
-| Коридор | **ЛЮБОЙ**; sub-corridor = [f_min−400 кГц, f_max+400 кГц] из сигнала |
-| Коммит в store | период найден И записано ≥ 2 полных цикла (не порог 16) |
-| Позиция jam | `(position + 1) % cycle_length` (не `% len(hop_sequence)`) |
-| Viewer рамки | Гц → индекс бина через `axis=(f0, step)` (BUG-5) |
-| Задержка | per-hop 1–3 мс; полный preload 4–20 мс на USB (не «<1 мс») |
-| LUT FPGA | max(20, 2×cycle), потолок 256 — аппаратный индекс 8 бит; сетка >256 — rolling window |
+| Сетка (поиск) | 2..4096 из сигнала |
+| LUT / автономия | cycle ≤ 255; иначе видимая часть, per-hop |
+| Частота | через lo_sweep. IBW 56 МГц за раз |
+| Коридор | sub = [f_min−400 кГц, f_max+400 кГц]; шире IBW — окна |
+| Коммит | период найден и ≥ 2 цикла |
+| Позиция jam | +1 только при смене канала, `% cycle_length` |
+| Viewer | axis=(f_start, f_end, nfft) STFT-1024 fftshift |
+| Preload | теоретическая оценка; замер — лаборатория |
+| LP score | доля align ±1 |
+
+## Ограничения
+
+- LUT: 256 слотов, индекс 8 бит, n≤255. Cycle > 255 — видимая часть.
+- IBW: 56 МГц. Коридор шире — lo_sweep.
+- Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
+- Quick tune: ~500 мкс при кэше; полный шаг ~3.8 мс.
+- Look-through: каждые 10 hops, 1 кадр без LUT (~10% времени).
+- PLL AD9361 settle: 20–50 мкс.
+- Два передатчика: не поддерживается.
+- Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
+- Таймер хопа в HDL: REG_GRID_PRI_US / PROTO_PERIOD / FLAGS / RSV записаны;
+  шаг LUT по таймеру в текущем нетлисте не подтверждён — требование к HDL.

@@ -5,10 +5,9 @@
 Работает ТОЛЬКО в границах sub-corridor (каналы вне f_start..f_end не
 рассматриваются — запрещено ТЗ).
 
-Валидация [G6]: FHSDT (dwell в ±20% от скользящей медианы), FHSDC
-(duty cycle). Коммит в PatternStore — АДАПТИВНЫЙ: период найден в записи
-И записано ≥ 2 полных цикла (сетка любая 2..4096, определяется из сигнала,
-BUG-1 закрыт). AFH без периода — фиксируется после 2×4096 скачков.
+Валидация [G6]: FHSDT (dwell в ±20% от скользящей медианы), FHSDC.
+Коммит: период найден и записано ≥ 2 полных цикла (поиск 2..4096).
+AFH без периода — после 2×4096 скачков.
 """
 from __future__ import annotations
 
@@ -27,28 +26,32 @@ _CHECKPOINTS = (8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512,
 
 class HopRecorder:
     def __init__(self, sub_corridor: dict, chan_step_hz: float = 312.5e3,
-                 n_chans: "int | None" = None):
+                 n_chans: "int | None" = None,
+                 samples_per_frame: int = 20_000):
         self.sub = dict(sub_corridor)
         self.chan_step = float(chan_step_hz)
         self.n_chans = n_chans
+        self.spf = int(samples_per_frame)
         self.hops: list[dict] = []
         self.valid_count = 0
         self.duty_cycle = 0.0
         self._seq = 0
-        self._cur: "int | None" = None     # текущий доминантный канал
+        self._cur: "int | None" = None
         self._cur_t0 = 0.0
         self._frames = 0
         self._active = 0
         self._dwells: list[float] = []
-        self._period: "tuple | None" = None  # (period, score) после детекта
-        self._checked = 0                    # valid_count последнего поиска
+        self._energy: list[float] = []
+        self._period: "tuple | None" = None
+        self._checked = 0
 
     def update(self, ch_pwr, freqs_hz, t_s: float) -> "dict | None":
         """Тик. Возвращает запись скачка при смене доминантного канала."""
         p = np.asarray(ch_pwr, dtype=np.float64)
         f = np.asarray(freqs_hz, dtype=np.float64)
         self._frames += 1
-        # маска sub-corridor: вне границ — нули (жёстко, ТЗ)
+        self._energy.append(float(np.max(p)) if p.size else 0.0)
+        # маска sub-corridor: вне границ — нули
         mask = np.array([in_subcorridor(x, self.sub) for x in f])
         if not mask.any():
             return None
@@ -73,6 +76,7 @@ class HopRecorder:
                 "freq_mhz": float(f[self._cur]) / 1e6,
                 "dwell_us": dwell_us,
                 "t_start": self._cur_t0,
+                "sample_count": self._frames * self.spf,
                 "confidence": float(min(1.0, p_sub[k] / (thr + 1e-12) / 3.0)),
             }
             self._seq += 1
@@ -91,10 +95,13 @@ class HopRecorder:
         self._cur_t0 = float(t_s)
         return hop
 
+    def median_dwell_us(self) -> "float | None":
+        if not self._dwells:
+            return None
+        return float(np.median(self._dwells))
+
     def ready(self) -> "tuple | None":
-        """Порог коммита — АДАПТИВНЫЙ (BUG-1): период найден в записи И
-        записано ≥ 2 полных цикла. Сетка определяется из сигнала, любая
-        1..MAX_CYCLE. Возвращает (period, score) или None."""
+        """Период найден и записано ≥ 2 полных цикла."""
         from .pattern_store import find_period_tolerant
 
         if self._period is None:
@@ -126,4 +133,4 @@ class HopRecorder:
 
     def reset(self) -> None:
         """Переобучение (drift): счётчики в ноль, sub-corridor тот же."""
-        self.__init__(self.sub, self.chan_step, self.n_chans)
+        self.__init__(self.sub, self.chan_step, self.n_chans, self.spf)

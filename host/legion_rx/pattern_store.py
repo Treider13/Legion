@@ -4,9 +4,8 @@
 confirmed, confidence, sequence_type, jammed_count}. Паттерны НЕ удаляются —
 только статусы pending/confirmed/legacy (запрещено ТЗ).
 
-find_match — выравнивание живой последовательности по циклу паттерна с
-допуском ±1 канал (краевое расщепление решётки PFB). min_match адаптивен:
-не больше длины канонического цикла (сетка 2 не требует 8 совпадений).
+find_match — выравнивание live hops по циклу, допуск ±1 канал PFB.
+need = min(base, cycle) при cycle≤64; max(8, cycle//8) при cycle>64.
 """
 from __future__ import annotations
 
@@ -31,9 +30,8 @@ class PatternStore:
 
     def add_pattern(self, sub_corridor: dict, hops: list,
                     dedupe_score: float = 0.9) -> str:
-        """Новый паттерн из записи HopRecorder (порог — период + ≥2 цикла,
-        не фиксированные 16). Дубликат в том же sub (match ≥ dedupe_score)
-        — обновляем существующий, ID сохраняем."""
+        """Новый паттерн из записи HopRecorder (период + ≥2 цикла).
+        Дубликат в том же sub (match ≥ dedupe_score) — тот же ID."""
         seq = [int(h["channel_idx"]) for h in hops]
         freqs = [float(h["freq_mhz"]) for h in hops]
         if len(seq) < 2:
@@ -71,6 +69,8 @@ class PatternStore:
             "confirmed": False,
             "confirm_count": 0,
             "confidence": 0.0,
+            "dwell_us": (sorted(dwells)[len(dwells) // 2]
+                         if dwells else 1000.0),
             "sequence_type": classify_sequence_type(seq, m=self.n_chans),
             "jammed_count": 0,
             "status": "pending",     # pending → confirmed; legacy — архив
@@ -78,6 +78,7 @@ class PatternStore:
             "created": time.time(),
             "updated": time.time(),
         }
+        apply_timer_cycle(self.patterns[pid])
         return pid
 
     def get(self, pattern_id: str) -> dict:
@@ -98,9 +99,9 @@ class PatternStore:
             n_cyc = max(1, len(rec["cycle"]))
             n_cmp = min(len(live), 256)
             matched = int(round(score * n_cmp))
-            # Сетка 2..7: нельзя требовать 8 совпадений в цикле короче 8.
-            need = max(1, min(int(min_match), n_cyc))
+            need = match_need(n_cyc, int(min_match))
             if matched >= need and (best is None or score > best[2]):
+                rec["confidence"] = score
                 best = (pid, pos, score)
         return best
 
@@ -136,7 +137,8 @@ class PatternStore:
         rec["sequence_type"] = classify_sequence_type(seq, m=self.n_chans)
         dwells = [float(h["dwell_us"]) for h in new_hops if h.get("dwell_us")]
         if dwells:
-            rec["dwell_s"] = sorted(dwells)[len(dwells) // 2] / 1e6
+            rec["dwell_us"] = sorted(dwells)[len(dwells) // 2]
+            rec["dwell_s"] = rec["dwell_us"] / 1e6
         rec["confirmed"] = False
         rec["confirm_count"] = 0
         rec["status"] = "pending"
@@ -153,6 +155,71 @@ class PatternStore:
 
 
 # ---- анализ ----
+
+def match_need(cycle_len: int, base: int = 8) -> int:
+    """cycle≤64: min(base, cycle); cycle>64: max(8, cycle//8)."""
+    c = max(1, int(cycle_len))
+    b = max(1, int(base))
+    if c > 64:
+        return max(8, c // 8)
+    return max(1, min(b, c))
+
+
+def find_cycle_period(energy_profile, dt_s: float = 1e-3) -> "dict | None":
+    """Автокорреляция energy_profile[t] → первый пик (lag → period_us)."""
+    import numpy as np
+
+    a = np.asarray(energy_profile, dtype=np.float64)
+    if a.size < 8:
+        return None
+    a = a - a.mean()
+    ac = np.correlate(a, a, mode="full")[a.size - 1:]
+    ac = ac / (float(ac[0]) + 1e-12)
+    hi = min(a.size // 2, 4096)
+    peak, best = None, 0.30
+    for lag in range(2, hi):
+        if (ac[lag] >= best and ac[lag] >= ac[lag - 1]
+                and (lag + 1 >= ac.size or ac[lag] >= ac[lag + 1])):
+            peak, best = lag, float(ac[lag])
+            break
+    if peak is None:
+        lag = int(np.argmax(ac[2:hi]) + 2) if hi > 2 else 0
+        if lag < 2 or ac[lag] < 0.30:
+            return None
+        peak, best = lag, float(ac[lag])
+    return {"period_us": float(peak) * float(dt_s) * 1e6,
+            "lag": int(peak), "score": best}
+
+
+def apply_timer_cycle(rec: dict, energy=None, dt_s: float = 1e-3) -> dict:
+    """cycle_length ≈ period_us / dwell_us. LUT-режим: 2..255; иначе visible."""
+    dwell = float(rec.get("dwell_us") or (rec.get("dwell_s") or 1e-3) * 1e6)
+    dwell = max(dwell, 1.0)
+    out = {"dwell_us": dwell, "period_us": None, "cycle_length": rec.get("cycle_length"),
+           "lut_n": None, "visible_only": False}
+    if energy:
+        per = find_cycle_period(energy, dt_s)
+        if per:
+            out["period_us"] = per["period_us"]
+            est = int(round(per["period_us"] / dwell))
+            if 2 <= est <= 4096:
+                rec["cycle_length"] = est
+                rec["cycle"] = rec["hop_sequence"][:est]
+                out["cycle_length"] = est
+    cyc = int(rec.get("cycle_length") or 0)
+    if cyc > 255:
+        rec["lut_n"] = 255
+        rec["visible_only"] = True
+        out["lut_n"] = 255
+        out["visible_only"] = True
+    else:
+        rec["lut_n"] = max(2, cyc) if cyc else 0
+        rec["visible_only"] = False
+        out["lut_n"] = rec["lut_n"]
+    rec["dwell_us"] = dwell
+    rec["period_us"] = out["period_us"]
+    return out
+
 
 def find_period_tolerant(seq: list, tol: int = 1, m: "int | None" = None,
                          min_score: float = 0.85,
@@ -195,8 +262,7 @@ def _align_score(a: list, b_cycle: list, m: "int | None" = None) -> tuple:
     bb = np.asarray(b_cycle, dtype=np.int64)
     mm = int(m) if m else int(max(aa.max(), bb.max())) + 1
     m_len = bb.size
-    # Все живые скачки против ПОВТОРЯЮЩЕГОСЯ цикла (сетка 2: окно 8
-    # даёт 8 сравнений, не 2). Потолок 256 — realtime, не длина сетки.
+    # Live hops против повторяющегося цикла. Потолок 256 сравнений.
     n_cmp = min(aa.size, 256)
     aa = aa[-n_cmp:]
     idx = np.arange(n_cmp)
@@ -212,7 +278,7 @@ def _align_score(a: list, b_cycle: list, m: "int | None" = None) -> tuple:
 
 
 def classify_sequence_type(seq: list, m: "int | None" = None) -> str:
-    """Тип FHSS-последовательности (эвристика [G2], честно задокументирована):
+    """Тип FHSS-последовательности (эвристика по периоду/охвату):
       table_based   — чистый период с уникальными каналами (перестановка);
       pseudo_random — период с повторами ИЛИ нет периода, узкий охват;
       adaptive_afh  — периода нет, широкий равномерный охват (AFH-подобно)."""
