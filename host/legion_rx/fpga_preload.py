@@ -7,8 +7,9 @@
   - set_channelize(map_lut=True): маршрут по LUT.
 
 После предзагрузки FPGA работает АВТОНОМНО по карте (реактивная петля —
-там же), ПК только корректирует при drift. Замер задержки на запись —
-честно в отчёте (на USB bulk 16 Б ≈ суб-мс, на FakeTransport — мкс).
+там же), ПК только корректирует при drift. Задержка записи — замер
+в логе (per_write_ms); на USB полный preload 4–20 мс, per-hop 1–3 мс
+(не «<1 мс» без замера, [W6]). FakeTransport — мкс, не эфир.
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ import time
 
 from . import fpga_control as fc
 
-PRELOAD_N = 20  # ТЗ: next_n=20
+PRELOAD_N = 20  # дефолт ТЗ; FSM считает max(20, 2×cycle) с потолком 256
+LUT_MAX = 256  # write_ch_lut: индекс аппаратно 8 бит (legion_fpga.py)
 
 
 def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,

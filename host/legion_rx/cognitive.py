@@ -65,10 +65,12 @@ class CognitiveFSM:
         self.transitions: list[dict] = []
         self._live: list[int] = []        # последние каналы (find_match)
         self._last_hop_t: "float | None" = None
-        self._silent_since: "float | None" = None
         self._reacquire_hops = 0
         self._confirm_base = 0
         self._tick_i = 0
+        self._last_jam_ch: "int | None" = None  # jam только при смене [W5]
+        if getattr(store, "n_chans", None) is None:
+            store.n_chans = self.n_chans
         self._listen_freqs: list[float] = []
 
     # ---- служебное ----
@@ -106,9 +108,15 @@ class CognitiveFSM:
                                    fs_hz=self.fs_hz, horizon=1)
         pre_n = 0
         if preload:
+            # [W3] карта = max(20, 2×cycle), потолок 256 (LUT аппаратно
+            # 8 бит); сетка > 256 — rolling window, честно в логе.
+            # [W4] шаг канала — от ширины sub, не константа 200 кГц.
+            n_pre = max(20, min(2 * len(pat["cycle"]), 256))
+            step = max(1e3, (self.sub["f_end"] - self.sub["f_start"]) / 256.0)
             pre_n = preload_hop_sequence(self.fpga, pat, self.sub,
                                          position=self.position,
-                                         next_n=20)["written"]
+                                         next_n=n_pre,
+                                         chan_step_hz=step)["written"]
         self.store.mark_jammed(self.pid)
         self.jams_sent += 1
         self.eff.mark_jam_applied()
@@ -151,7 +159,13 @@ class CognitiveFSM:
             hop = self.rec.update(ch_pwr, freqs_hz, t_s) if self.rec else None
             if hop is not None:
                 self._live.append(hop["channel_idx"])
-                self._live = self._live[-24:]
+                # Окно — динамическое: ≥ 3 цикла текущего паттерна (и не
+                # меньше 64). Сетка определяется из сигнала, не хардкод.
+                cyc = 64
+                if self.pid:
+                    cyc = max(64, 3 * int(self.store.get(self.pid)
+                                          ["cycle_length"]))
+                self._live = self._live[-cyc:]
                 self._last_hop_t = float(t_s)
             if st == LEARNING:
                 self._tick_learning(t_s)
@@ -184,14 +198,19 @@ class CognitiveFSM:
             self.parent = parent
             # sub из всех услышанных скачков (±400 кГц), не из одного рана
             self.sub = extract_subcorridor(hops, parent["corridor_id"])
-            self.rec = HopRecorder(self.sub)
+            self.rec = HopRecorder(self.sub, n_chans=self.n_chans)
             self._go(LEARNING, t_s, p_hopping=round(post["p_hopping"], 3),
                      sub=[self.sub["f_start"], self.sub["f_end"]])
             if self.pub:
+                # Ось спектра для пересчёта Гц → бин во viewer (BUG-5).
+                axis = None
+                if len(freqs_hz) >= 2:
+                    axis = (float(freqs_hz[0]),
+                            float(freqs_hz[1] - freqs_hz[0]))
                 self.pub.send_corridor(
                     {"f_start": parent.get("f_start", min(hops)),
                      "f_end": parent.get("f_end", max(hops))},
-                    self.sub)
+                    self.sub, axis=axis)
 
     def _expand_sub(self) -> None:
         """Sub растёт по услышанным скачкам (±400 кГц), не по parent.
@@ -222,8 +241,10 @@ class CognitiveFSM:
         cyc = max(1, int(rec["cycle_length"]))
         if self.rec.valid_count < self._confirm_base + cyc:
             return
-        m = self.store.find_match(self._live[-cyc:],
-                                  self.sub["sub_corridor_id"], min_match=8)
+        # match по КАНОНИЧЕСКОМУ циклу (find_match внутри), окно = 2 цикла
+        m = self.store.find_match(self._live[-2 * cyc:],
+                                  self.sub["sub_corridor_id"],
+                                  min_match=min(8, max(2, cyc)))
         self._confirm_base = self.rec.valid_count
         if m is None or m[2] < MATCH_GO:
             return
@@ -235,12 +256,17 @@ class CognitiveFSM:
 
     def _tick_monitoring(self, ch_pwr, freqs_hz, t_s: float, hop) -> None:
         # прослушка НЕ прекращается (параллельный контроль, фаза 3–4)
-        pid2, nxt, lp = match_and_predict(self.store, self._live[-16:],
+        pid2, nxt, lp = match_and_predict(self.store, self._live,
                                           self.sub["sub_corridor_id"])
         lp_score = lp if pid2 == self.pid else 0.0
         d = self.drift.update(lp_score)
-        # эффективность: expected 1 всплеск/тик при активной помехе
-        self.eff.update(expected=1, observed=1 if hop is not None else 0)
+        # [W2] эффективность: expected = доля всплеска на тик = dt/dwell
+        # (dwell из паттерна, не предполагаем ≤ 1 кадра).
+        dwell_s = max(self.dt, float(self.store.get(self.pid)
+                                     .get("dwell_s", self.dt)))
+        exp_tick = self.dt / dwell_s
+        self.eff.update(expected=exp_tick,
+                        observed=1.0 if hop is not None else 0.0)
         if d["drift"]:
             self._stop_jam(t_s, "drift")
             self._go(DRIFT_DETECTED, t_s, lp_score=round(lp_score, 3))
@@ -256,11 +282,15 @@ class CognitiveFSM:
                                          "to": MONITORING, "t_s": float(t_s),
                                          "action": "adjust_strategy",
                                          "pdr_target": ev["pdr_target"]})
-        # упреждающий удар на следующий цикл по паттерну
+        # упреждающий удар на следующий цикл по паттерну.
+        # BUG-2: позиция — по КАНОНИЧЕСКОМУ циклу, не по полной записи.
+        # [W5] jam — только при СМЕНЕ канала (не каждый тик).
         if nxt is not None and lp_score >= 0.7:
-            self.position = (self.position + 1) % len(
-                self.store.get(self.pid)["hop_sequence"])
-            self._jam_now(t_s)
+            rec = self.store.get(self.pid)
+            self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
+            if nxt != self._last_jam_ch:
+                self._jam_now(t_s)
+                self._last_jam_ch = nxt
             self._go(MONITORING, t_s, keep=True)
         # цель замолчала > 100 мс → «попадание», фаза 5
         if (self._last_hop_t is not None
@@ -291,7 +321,9 @@ class CognitiveFSM:
             self._go(LEARNING, t_s, note="новый паттерн")
 
     def _tick_relearning(self, t_s: float) -> None:
-        if self.rec.valid_count >= 16:
+        # Тот же адаптивный порог, что и первичное обучение (BUG-1):
+        # период найден И ≥ 2 полных цикла записано.
+        if self.rec.ready() is not None:
             self.store.update_pattern(self.pid, self.rec.hops)
             self._confirm_base = self.rec.valid_count
             self.drift.reset()

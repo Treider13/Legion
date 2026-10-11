@@ -68,10 +68,15 @@ class UdpPublisher:
 
     # ---- когнитивный контур (ТЗ п.9) ----
 
-    def send_corridor(self, parent: dict, sub: dict) -> None:
-        self.send("corridor", {
-            "parent": [parent.get("f_start"), parent.get("f_end")],
-            "sub": [sub.get("f_start"), sub.get("f_end")]})
+    def send_corridor(self, parent: dict, sub: dict,
+                      axis: "tuple | None" = None) -> None:
+        """axis = (f0_hz, step_hz) спектра — viewer пересчитает Гц → индекс
+        бина (BUG-5). Без axis рамки НЕ рисуются (честно, не мимо)."""
+        msg = {"parent": [parent.get("f_start"), parent.get("f_end")],
+               "sub": [sub.get("f_start"), sub.get("f_end")]}
+        if axis is not None:
+            msg["axis"] = [float(axis[0]), float(axis[1])]
+        self.send("corridor", msg)
 
     def send_pred(self, channel, t_s: float, pattern_id: "str | None") -> None:
         self.send("pred", {"channel": channel, "t": round(float(t_s), 4),

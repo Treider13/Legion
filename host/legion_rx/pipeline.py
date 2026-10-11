@@ -46,7 +46,6 @@ from .synth.dataset import spec_from_iq
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 FIFO_PATH = "/tmp/iq"
 FS_LAB = 20.0e6  # USB I/Q на ПК (Nuand [F1], не эфир RBF)
-FS_RBF = 36.0e6  # AD9361 / pll_sclk=72 МГц. +2 sample = 55.556 нс
 FRAME_SAMPLES = 20_000  # 1 мс при 20 MSPS
 
 
@@ -578,6 +577,9 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
                 freqs = np.asarray([ch.channel_freq(k, fs) + lo
                                     for k in range(m)])
                 fsm.n_chans = m
+                store.n_chans = m
+                if fsm.rec is not None:
+                    fsm.rec.n_chans = m
                 log.write({"kind": "adaptive_grid", "n_chans": m,
                            "width_hz": width, "tick": i})
             rebuilt["done"] = True

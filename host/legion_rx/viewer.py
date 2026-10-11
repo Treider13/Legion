@@ -120,13 +120,22 @@ def main() -> int:
             elif kind == "stat":
                 state["stat"] = msg
             elif kind == "corridor":
+                # BUG-5: значения приходят в Гц, ось спектра — в индексах.
+                # Пересчёт через axis=(f0_hz, step_hz); без axis — прячем,
+                # а не рисуем мимо.
                 parent, sub = msg.get("parent"), msg.get("sub")
-                if parent and parent[0] is not None:
-                    reg_parent.setRegion(tuple(parent))
+                axis = msg.get("axis")
+                if axis and parent and sub and parent[0] is not None:
+                    f0, step = float(axis[0]), float(axis[1]) or 1.0
+                    hz2bin = lambda f: (float(f) - f0) / step
+                    reg_parent.setRegion((hz2bin(parent[0]),
+                                          hz2bin(parent[1])))
                     reg_parent.setVisible(True)
-                if sub and sub[0] is not None:
-                    reg_sub.setRegion(tuple(sub))
+                    reg_sub.setRegion((hz2bin(sub[0]), hz2bin(sub[1])))
                     reg_sub.setVisible(True)
+                else:
+                    reg_parent.setVisible(False)
+                    reg_sub.setVisible(False)
             elif kind == "pred":
                 ch = msg.get("channel")
                 if ch is not None:
