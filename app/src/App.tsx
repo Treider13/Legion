@@ -11,6 +11,7 @@ import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChro
 import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { catalogById } from "./sdr/catalog";
+import { ScanPanel } from "./components/ScanPanel";
 import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
@@ -75,6 +76,12 @@ function App() {
       : sl22
         ? { value: "HTOOL SL22", note: "подключение" }
         : { value: "USB", note: "ESP32 · подключение USB" };
+
+  useEffect(() => {
+    const s = useLegion.getState();
+    s.setScanPattern("fpga");
+    s.setWorkspace("scan");
+  }, []);
 
   useEffect(() => {
     if (!booted) return;
@@ -207,6 +214,10 @@ function App() {
         spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
         history={<FrequencyField />}
       />
+
+      <section className="console" style={{ padding: "0 18px 18px" }}>
+        <ScanPanel />
+      </section>
 
       {cooling && (
         <div className="cinema-warn" role="alert">
