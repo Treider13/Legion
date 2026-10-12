@@ -149,9 +149,12 @@ def main() -> int:
         fsm = state.get("fsm", {})
         fsm_txt = ""
         if fsm:
+            threat = fsm.get("threat") if isinstance(fsm.get("threat"), dict) else {}
             fsm_txt = (f"state: {fsm.get('state', '—')}   "
                        f"pattern: {fsm.get('pattern_id') or '—'}   "
                        f"type: {fsm.get('sequence_type') or '—'}   "
+                       f"threat: {threat.get('sequence_type') or '—'} "
+                       f"cyc {threat.get('cycle_length', '—')}   "
                        f"jams: {fsm.get('jams_sent', '—')}   "
                        f"PDR: {fsm.get('pdr_target', '—')}   ")
         label.setText(

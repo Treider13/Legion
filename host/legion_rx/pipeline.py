@@ -538,7 +538,7 @@ def _mix_lo_retune(iq: np.ndarray, fs: float, old_lo: float,
 def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     """Когнитивный контур (ТЗ п.8): LISTENING→…→JAMMING→MONITORING→…
     bench: синтез FHSS на CLASS_LO_HZ; смена fsm.lo_hz — mixer-retune IQ.
-    --live: FIFO+USB."""
+    Транспорт — FakeTransport. Живого FIFO+USB в этом режиме нет."""
     from .cognitive import CognitiveFSM
     from .cognitive import LISTENING, MONITORING, TARGET_SILENT
     from .pattern_store import PatternStore
