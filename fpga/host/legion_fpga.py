@@ -533,9 +533,13 @@ class LegionFpga:
                             ratio: int = 2) -> bool:
         """Blank TX через REG_LT_*, без FLAGS bit4.
 
-        HDL: 0x5B — сэмплы TX-он, 0x5C — сэмплы blank. Отдельного
-        REG_LT_LEN нет. Цикл 10 hops с 1 hop слушания: он = 9, blank = 1.
-        hop_samp = dwell_us·1e-6·fs (каденс сэмпла ЦАП, не хост-тик).
+        HDL legion_look_through не имеет входа hop_ch / hop_tick / idx.
+        PERIOD и WIDTH — сэмплы ЦАП, не номер LUT. Цикл 10 hops с 1 hop
+        слушания: он = 9×hop_samp, blank = 1×hop_samp.
+        hop_samp = dwell_us·1e-6·fs. Фаза относительно hop_ch не
+        зафиксирована: счётчик blank и индекс LUT стартуют разными
+        записями. Точная привязка blank к смене hop_ch — требование
+        к HDL, отдельная задача. Host-poke на каждый hop сюда не входит.
         """
         fs = float(fs_hz)
         dwell = float(dwell_us)

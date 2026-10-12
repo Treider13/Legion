@@ -401,6 +401,13 @@ Host на listen-hop не снимает FLAGS bit4: иначе `idx` замир
 `hop_samp = dwell_us × 1e-6 × fs`. Включение один раз после автономного
 preload (`enable_look_through(10, 1)`). Drift: `disable_look_through()`
 и стоп LUT (FLAGS bit4=0 уже не listen-hop) → `RE_LEARNING`.
+
+Blank 10:1 считается в сэмплах. `legion_look_through` не принимает
+`hop_ch`, `hop_tick` и `idx` (порты entity: enable, period, width).
+Счётчик blank и индекс LUT стартуют разными записями, фаза 10:1
+относительно `hop_ch` не зафиксирована. Точная синхронизация со сменой
+`hop_ch` — требование к HDL, отдельная задача. Сброс LT с host на каждый
+hop вернул бы USB в петлю и здесь не делается.
 Blank на плате не измерялся.
 
 ## Live mode
