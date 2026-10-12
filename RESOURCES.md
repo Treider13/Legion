@@ -229,7 +229,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 ## Лаборатория (нет bladeRF на этой машине)
 
 ### AD9361 36 MSPS
-1. Прошить `legionxA4-2026-10-11_23.08.28/legionxA4.rbf` (md5 `bd0316396c32bb6e615061f3bdf413fe`).
+1. Прошить `legionxA4-2026-10-12_09.27.36/legionxA4.rbf` (md5 `6ce02ebc8b23d03e01048674fc26c9f9`, hop LUT).
 2. `bladeRF-cli -e "set samplerate rx 36M"`
 3. `bladeRF-cli -e "print samplerate rx"` → 36000000.
 4. `bladeRF-cli -e "rx start"`; 60 с; `rx status` → `rx_overruns=0`.
@@ -292,7 +292,7 @@ retune ≤ 20 Msps.
 | Факт | Значение |
 |---|---|
 | Сетка (поиск) | 2..4096 из сигнала |
-| LUT / автономия | cycle≤255: после нового RBF FLAGS.AUTONOMOUS → HDL шагает LUT; текущий RBF 23.08.28 hop не содержит; >255 — host |
+| LUT / автономия | cycle≤255: после RBF `v1.1-rbf-hop-72mhz` FLAGS.AUTONOMOUS → HDL шагает HOP_LUT 0x5E; >255 — host |
 | Частота | через lo_sweep. IBW 56 МГц за раз |
 | Коридор | sub = [f_min−400 кГц, f_max+400 кГц]; шире IBW — окна |
 | Коммит | период найден и ≥ 2 цикла |
@@ -306,7 +306,7 @@ retune ≤ 20 Msps.
 `legion_lut_hop.vhd`: период = PRI_US·fs/1e6 сэмплов (запас — PROTO_PERIOD).
 FLAGS bit4 + n_eff≠0 → индекс LUT++, FTW = (f0+ch·step+shift−lo)/fs·2^32 на `tx_lb_ftw`.
 NIOS GRID 0x51–0x57 больше не `return true` до poke — слово уходит в HDL.
-Нетлист/RBF этой правки не собран.
+Нетлист в RBF `v1.1-rbf-hop-72mhz` (seed3, 12.10.2026 09:27). Лаборатория не гонялась.
 
 | Элемент | Статус | Где |
 |---|---|---|
@@ -315,12 +315,10 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 | `LEGION_REG_GRID_SHIFT_HZ` 0x55 | int32 в FTW hop | hop |
 | `LEGION_REG_GRID_RSV` 0x57 | фаза + hop_ch STATUS | hop / NIOS |
 | `LEGION_REG_PROTO_PERIOD` 0x32 | DRFM walk + запас hop | `legion_lb_walk` / hop |
-| Таймер индекса HOP_LUT (0x5E) | исходники есть | `legion_lut_hop.vhd` |
+| Таймер индекса HOP_LUT (0x5E) | в RBF v1.1 | `legion_lut_hop.vhd` |
 | `GRID_FLAG_AUTONOMOUS` | 1<<4, HDL читает | `legion_fpga.py`, pkg |
 
 ## HDL hop-тракт — исправления
-
-Исходники (RBF не пересобран; timing CLOSED по rpt нет):
 
 - Combo-divide → multi-cycle: `legion_divider.vhd` (64 такта, restoring). Период и `rsv mod n_eff` идут через него. FTW — прежний 32-тактный делитель `mag·2^32/fs_ftw`. Операторов `/` и `mod` в hop нет.
 - Combo-mult → multi-cycle: `legion_mult.vhd` (32 такта, shift-add). `pri·fs`, `f0·1000`, `lo·1000`, `ch·step` идут через него. Оператора `*` в hop нет.
@@ -332,18 +330,33 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 - RSV readback: NIOS 0x57 возвращает `legion_grid_rsv` в [7:0]; HDL STATUS mux даёт hop_ch в [15:8].
 - Walk не сдвигает hop при `hop_auto=1`: смеситель tap0 берёт `hop_ftw`, walk продолжает двигать отводы.
 - `n_eff` — эффективная длина (n_used если ≠0, иначе n). `hop_ch` — текущий канал в STATUS 0x57.
+- Timing: CLOSED, seed3. См. секцию ниже. seed1/seed2 Slow 0°C не закрыли.
 
-## Требования к пересборке
+## Timing CLOSED — hop LUT 72 МГц (12.10.2026)
 
-- После этих правок нужна пересборка FPGA (QIP: `legion_divider.vhd` + `legion_mult.vhd` + hop).
-- Проверка timing: Slow 0°C slack ≥ 0 по `sta.summary` (сейчас у текущего RBF +0.011 нс без hop; новый rpt обязателен).
-- Новый RBF → автономный LUT на плате. Текущий `legionxA4-2026-10-11_23.08.28` таймера не содержит.
+pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM, `U_div` 114, `U_mult` 143 (`map.rpt`).
+
+Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0, Fmax **75.12 МГц**).
+Slow 85C setup **+0.772 нс**, hold +0.285. Отрицательных slack в `sta.summary` нет.
+
+RBF seed=3: `fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-12_09.27.36/legionxA4.rbf`
+md5 `6ce02ebc8b23d03e01048674fc26c9f9`. Копия: `timing_close_2026-10-12/hop72/`.
+Tag: `v1.1-rbf-hop-72mhz`. Автономный LUT: в этом RBF (лаборатория не гонялась).
+
+Старый RBF без hop: `legionxA4-2026-10-11_23.08.28`, md5 `bd0316396c32bb6e615061f3bdf413fe`.
+
+| seed | fit | ALM | M10K | DSP | pll su 85C | pll ho | Slow 0C su | worst |
+|---|---|---|---|---|---|---|---|---|
+| 1 | OK 09:14:40 | 13 166 (**71 %**) | 284 | 35 | +0.061 | +0.290 | **−0.463** FAIL | fft_peak `best_bin`→`top_best_ok` data 14.120 |
+| 2 | OK 09:21:49 | 13 164 (**71 %**) | 284 | 35 | **−0.078** FAIL | +0.240 | **−0.214** | lb_xlat `Mux17`→`pre_q[9]` data 14.127 |
+| 3 | OK 09:27:36 | 13 158 (**71 %**, frozen RBF) | 284 | 35 | **+0.772** | +0.285 | **+0.576** | fft_peak `best_bin`→`top_best_bin` data 12.867 |
+
+STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` не писался (quartus_sta CLI); цифры из `report_timing`.
 
 ## Что не сделано
 
-- Quartus/RBF с `legion_lut_hop` — не собран.
+- Лаборатория: USB/preload/hop на плате.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
-- USB/preload замеры — лаборатория.
 - Push не делался — по требованию.
 
 ## Ограничения
@@ -356,5 +369,6 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
   `set_look_through` / REG_LT_* не вызываются.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
-- Автономия LUT: исходники HDL есть; без нового RBF на плате шага нет.
-  Cycle > 255 — удар с host. Look-through: host не бьёт 1 из 10 hops.
+- Автономия LUT: после `v1.1-rbf-hop-72mhz`. Cycle > 255 — удар с host.
+  Look-through: host не бьёт 1 из 10 hops. rolling 256 нет. «<1 мс» не заявлено.
+- f_rf: 40 бит, wrap при \|f0+ch·step\| ≥ 2^40. В ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
