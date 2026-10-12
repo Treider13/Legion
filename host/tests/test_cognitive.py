@@ -170,7 +170,7 @@ def test_drift_detector():
     d = DriftDetector()
     assert d.update(0.5)["drift"] is False
     assert d.update(0.6)["drift"] is False
-    assert d.update(0.4)["drift"] is True  # 3 цикла < 0.7
+    assert d.update(0.4)["drift"] is True  # 3 hops < 0.7
     d.reset()
     assert d.update(0.9)["drift"] is False
 

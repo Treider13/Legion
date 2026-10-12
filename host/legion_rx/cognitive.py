@@ -1,8 +1,9 @@
 """CognitiveFSM — контур FHSS-памяти.
 
 LISTENING → INITIAL_SCAN → LEARNING → CONFIRMING →
-JAMMING (host, каждый hop) → MONITORING → (DRIFT | SILENT | RE_ACQUIRE).
-HDL legion_lut_hop шагает индекс CH_LUT при FLAGS.AUTONOMOUS и cycle≤255.
+JAMMING (preload; host poke только если cycle>255) → MONITORING →
+(DRIFT | SILENT | RE_ACQUIRE | RE_LEARNING).
+HDL legion_lut_hop шагает индекс HOP_LUT 0x5E при FLAGS.AUTONOMOUS и cycle≤255.
 """
 from __future__ import annotations
 
@@ -393,7 +394,8 @@ class CognitiveFSM:
         if nxt is None:
             nxt = self._fb.get("next_channel")
             lp_score = float(self._fb.get("conf") or 0.0)
-        d = self.drift.update(lp_score)
+        d = (self.drift.update(lp_score) if hop is not None
+             else {"drift": False})
         dwell_s = max(self.dt, float(self.store.get(self.pid)
                                      .get("dwell_s", self.dt)))
         self.eff.update(expected=self.dt / dwell_s,
@@ -431,7 +433,8 @@ class CognitiveFSM:
                     self._set_lut_flag(False)
                 if nxt is not None and lp_score >= 0.7:
                     if nxt != self._last_jam_ch:
-                        self._jam_now(t_s)
+                        if not self._autonomous:
+                            self._jam_now(t_s)
                         self._last_jam_ch = nxt
                     self._go(MONITORING, t_s, keep=True)
         if (self._last_hop_t is not None

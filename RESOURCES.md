@@ -216,7 +216,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | `pattern_store.py` | add/find_match в том же sub |
 | `hopmap.py` | PatternStore + Markov fallback |
 | `effectiveness_monitor.py` | PDR low → effective |
-| `drift_detector.py` | LP < 0.7 × 3 → DRIFT |
+| `drift_detector.py` | LP < 0.7 × max(3, 3×cycle) hops → DRIFT |
 | `fpga_control.py` | `apply_predictive_jam` только confirmed |
 | `fpga_preload.py` | LUT ≤ 255 + GRID_PRI/FLAGS/RSV (фаза) |
 | `lo_sweep.py` | окна IBW 56 МГц, overlap 15%, сшивание по sample_count |
@@ -271,7 +271,7 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 | Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
 | fpga_preload | LUT ≤ 255; host пишет GRID+FS/LO; HDL legion_lut_hop шагает индекс | ТЗ |
 | EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
-| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
+| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) hops → DRIFT | ТЗ |
 | TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
 | Классификатор | 3 класса (drone/wifi/noise) | ТЗ п.11 |
 | Сетка | поиск периода 2..4096; LUT 2..255 | ТЗ п.12 |
@@ -334,7 +334,7 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 
 ## Timing CLOSED — hop LUT 72 МГц (12.10.2026)
 
-pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM, `U_div` 114, `U_mult` 143 (`map.rpt`).
+pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM (seed1 `map.rpt`; у frozen seed3 `map.rpt` нет), `U_div` 114, `U_mult` 143.
 
 Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0, Fmax **75.12 МГц**).
 Slow 85C setup **+0.772 нс**, hold +0.285. Отрицательных slack в `sta.summary` нет.
@@ -353,11 +353,18 @@ Tag: `v1.1-rbf-hop-72mhz`. Автономный LUT: в этом RBF (лабор
 
 STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` не писался (quartus_sta CLI); цифры из `report_timing`.
 
+## Требования к пересборке
+
+- Пересборка FPGA с `legion_divider` / `legion_mult` / `legion_lut_hop` (master + vendor x40/micro).
+- QIP: `divider` → `mult` → `hop` (`bladerf-legion.qip` обеих платформ).
+- Timing Slow 0°C setup ≥ 0 (TNS 0). seed1/seed2 hop72 Slow 0°C не закрыли; frozen — seed3.
+- Лаборатория: USB, preload, hop на плате. Без платы «LUT работает на эфире» не заявлять.
+
 ## Что не сделано
 
 - Лаборатория: USB/preload/hop на плате.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
-- Push не делался — по требованию.
+- Ветка на origin. Тег — локальный, не запушен.
 
 ## Ограничения
 
@@ -365,10 +372,11 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 - IBW: 56 МГц. Коридор шире — lo_sweep.
 - Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
 - Quick-tune: LRU на host; ~500 мкс / полный шаг ~3.8 мс — цифры [F13]/[F14], не замер.
-- Look-through: каждые 10 hops host не бьёт 1 hop (~10% hops).
+- Look-through: 1 hop/10, TX не глушится (архитектурное решение).
   `set_look_through` / REG_LT_* не вызываются.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
 - Автономия LUT: после `v1.1-rbf-hop-72mhz`. Cycle > 255 — удар с host.
-  Look-through: host не бьёт 1 из 10 hops. rolling 256 нет. «<1 мс» не заявлено.
+  Look-through: 1 hop/10, TX не глушится (архитектурное решение).
+  rolling 256 нет. «<1 мс» не заявлено. При AUTO host не пишет LB_FTW каждый hop.
 - f_rf: 40 бит, wrap при \|f0+ch·step\| ≥ 2^40. В ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
