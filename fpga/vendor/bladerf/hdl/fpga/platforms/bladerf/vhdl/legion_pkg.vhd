@@ -173,7 +173,16 @@ package legion_pkg is
     constant LEGION_REG_LT_STATUS      : natural := 16#5D#; -- STATUS mux
     -- Hop LUT отдельно от RX 0x31: NIOS rebuild_lut пишет bin→ch в 0x31
     -- и не должен затирать последовательность хопа.
-    constant LEGION_REG_HOP_LUT        : natural := 16#5E#; -- hop idx→ch {idx[15:8], ch[7:0]}
+    -- Hop LUT: кГц в 0x5E. Стробы — переключатели, не уровень.
+    constant LEGION_REG_HOP_LUT_DATA   : natural := 16#5E#;
+    constant LEGION_REG_HOP_LUT        : natural := 16#5E#; -- то же слово, старое имя
+    constant LEGION_REG_HOP_START_IDX  : natural := 16#5F#;
+    constant LEGION_REG_HOP_END_IDX    : natural := 16#60#;
+    constant LEGION_REG_HOP_LUT_ADDR   : natural := 16#61#;
+    constant LEGION_REG_HOP_STROBE_DATA  : natural := 16#62#;
+    constant LEGION_REG_HOP_STROBE_APPLY : natural := 16#63#;
+    constant LEGION_REG_HOP_MUTE_NS    : natural := 16#64#;
+    constant LEGION_REG_MAX            : natural := 16#64#;
 
     constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
     constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;

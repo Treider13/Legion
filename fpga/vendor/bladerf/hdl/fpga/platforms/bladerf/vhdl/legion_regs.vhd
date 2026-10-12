@@ -114,8 +114,13 @@ architecture rtl of legion_regs is
     signal r_lut_data   : std_logic_vector(7 downto 0);
     signal r_lut_tog    : std_logic;
     signal r_hlut_addr  : std_logic_vector(7 downto 0);
-    signal r_hlut_data  : std_logic_vector(7 downto 0);
+    signal r_hlut_data  : std_logic_vector(31 downto 0);
     signal r_hlut_tog   : std_logic;
+    signal r_hstart     : std_logic_vector(7 downto 0);
+    signal r_hend       : std_logic_vector(7 downto 0);
+    signal r_happly_tog : std_logic;
+    signal r_hmute_ns   : std_logic_vector(31 downto 0);
+    signal r_hmute_arm  : std_logic;
     signal r_delay      : std_logic_vector(31 downto 0);
     signal r_walk_step  : std_logic_vector(31 downto 0);
     signal r_walk_max   : std_logic_vector(31 downto 0);
@@ -185,9 +190,10 @@ architecture rtl of legion_regs is
     signal grsv_meta, grsv_tx   : std_logic_vector(7 downto 0);
     signal fs_tmeta, fs_ttx     : std_logic_vector(31 downto 0);
     signal lo_tmeta, lo_ttx     : std_logic_vector(31 downto 0);
-    signal hluta_meta, hluta_tx : std_logic_vector(7 downto 0);
-    signal hlutd_meta, hlutd_tx : std_logic_vector(7 downto 0);
     signal hlutt_meta, hlutt_tx, hlutt_tx_d : std_logic;
+    signal happly_meta, happly_tx, happly_tx_d : std_logic;
+    signal hmarm_meta, hmarm_tx, hmarm_tx_d : std_logic;
+    signal tx_mute_s : std_logic;
     signal hop_auto             : std_logic;
     signal hop_tick_s           : std_logic;
     signal hop_ftw              : unsigned(31 downto 0);
@@ -271,6 +277,11 @@ begin
             r_hlut_addr  <= (others => '0');
             r_hlut_data  <= (others => '0');
             r_hlut_tog   <= '0';
+            r_hstart     <= (others => '0');
+            r_hend       <= (others => '0');
+            r_happly_tog <= '0';
+            r_hmute_ns   <= (others => '0');
+            r_hmute_arm  <= '0';
             r_delay      <= (others => '0');
             r_walk_step  <= (others => '0');
             r_walk_max   <= (others => '0');
@@ -325,10 +336,23 @@ begin
                         r_lut_addr <= pio_wdata(15 downto 8);
                         r_lut_data <= pio_wdata(7 downto 0);
                         r_lut_tog  <= not r_lut_tog;
-                    when LEGION_REG_HOP_LUT    =>
-                        r_hlut_addr <= pio_wdata(15 downto 8);
-                        r_hlut_data <= pio_wdata(7 downto 0);
-                        r_hlut_tog  <= not r_hlut_tog;
+                    when LEGION_REG_HOP_LUT_DATA =>
+                        r_hlut_data <= pio_wdata;
+                    when LEGION_REG_HOP_LUT_ADDR =>
+                        r_hlut_addr <= pio_wdata(7 downto 0);
+                    when LEGION_REG_HOP_STROBE_DATA =>
+                        r_hlut_tog <= not r_hlut_tog;
+                    when LEGION_REG_HOP_START_IDX =>
+                        r_hstart <= pio_wdata(7 downto 0);
+                    when LEGION_REG_HOP_END_IDX =>
+                        r_hend <= pio_wdata(7 downto 0);
+                    when LEGION_REG_HOP_STROBE_APPLY =>
+                        r_happly_tog <= not r_happly_tog;
+                    when LEGION_REG_HOP_MUTE_NS =>
+                        r_hmute_ns <= pio_wdata;
+                    when LEGION_REG_CH_LO_KHZ =>
+                        r_ch_lo <= pio_wdata;
+                        r_hmute_arm <= not r_hmute_arm;
                     when LEGION_REG_DELAY      => r_delay      <= pio_wdata;
                     when LEGION_REG_WALK_STEP  => r_walk_step  <= pio_wdata;
                     when LEGION_REG_WALK_MAX   => r_walk_max   <= pio_wdata;
@@ -345,7 +369,6 @@ begin
                     when LEGION_REG_DRFM_STEP_SRC => r_step_src <= pio_wdata(0);
                     when LEGION_REG_CH_TARGET => r_ch_target <= pio_wdata;
                     when LEGION_REG_CH_FS_HZ  => r_ch_fs     <= pio_wdata;
-                    when LEGION_REG_CH_LO_KHZ => r_ch_lo     <= pio_wdata;
                     when LEGION_REG_LT_CTRL   => r_lt_ctrl   <= pio_wdata;
                     when LEGION_REG_LT_PERIOD => r_lt_period <= pio_wdata;
                     when LEGION_REG_LT_WIDTH  => r_lt_width  <= pio_wdata;
@@ -402,9 +425,9 @@ begin
             grsv_meta  <= (others => '0'); grsv_tx  <= (others => '0');
             fs_tmeta   <= (others => '0'); fs_ttx   <= (others => '0');
             lo_tmeta   <= (others => '0'); lo_ttx   <= (others => '0');
-            hluta_meta <= (others => '0'); hluta_tx <= (others => '0');
-            hlutd_meta <= (others => '0'); hlutd_tx <= (others => '0');
             hlutt_meta <= '0'; hlutt_tx <= '0'; hlutt_tx_d <= '0';
+            happly_meta <= '0'; happly_tx <= '0'; happly_tx_d <= '0';
+            hmarm_meta <= '0'; hmarm_tx <= '0'; hmarm_tx_d <= '0';
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -447,11 +470,17 @@ begin
             grsv_meta  <= r_grid_rsv;   grsv_tx  <= grsv_meta;
             fs_tmeta   <= r_ch_fs;      fs_ttx   <= fs_tmeta;
             lo_tmeta   <= r_ch_lo;      lo_ttx   <= lo_tmeta;
-            hluta_meta <= r_hlut_addr;  hluta_tx <= hluta_meta;
-            hlutd_meta <= r_hlut_data;  hlutd_tx <= hlutd_meta;
+            -- Через границу тактов идёт только переключатель. Данные
+            -- и адрес к фронту уже стабильны, два триггера на шину не ставим.
             hlutt_meta <= r_hlut_tog;
             hlutt_tx   <= hlutt_meta;
             hlutt_tx_d <= hlutt_tx;
+            happly_meta <= r_happly_tog;
+            happly_tx   <= happly_meta;
+            happly_tx_d <= happly_tx;
+            hmarm_meta <= r_hmute_arm;
+            hmarm_tx   <= hmarm_meta;
+            hmarm_tx_d <= hmarm_tx;
         end if;
     end process;
 
@@ -489,17 +518,25 @@ begin
             fs_hz        => unsigned(fs_ttx),
             lo_khz       => unsigned(lo_ttx),
             lut_we       => hlutt_tx xor hlutt_tx_d,
-            lut_addr     => unsigned(hluta_tx),
-            lut_data     => unsigned(hlutd_tx),
+            lut_addr     => unsigned(r_hlut_addr),
+            lut_data     => unsigned(r_hlut_data),
+            start_idx    => unsigned(r_hstart),
+            end_idx      => unsigned(r_hend),
+            apply_we     => happly_tx xor happly_tx_d,
+            mute_ns      => unsigned(r_hmute_ns),
+            mute_arm     => hmarm_tx xor hmarm_tx_d,
             hop_auto     => hop_auto,
+            tx_mute      => tx_mute_s,
             hop_ch       => hop_ch,
             hop_ftw      => hop_ftw,
             hop_tick     => hop_tick_s
         );
     tx_lb_delay1  <= unsigned(lbd1_tx);
     tx_lb_ftw1    <= unsigned(lbf1_tx);
-    tx_lb_amp0    <= unsigned(lba_tx(15 downto 0));
-    tx_lb_amp1    <= unsigned(lba_tx(31 downto 16));
+    tx_lb_amp0    <= (others => '0') when tx_mute_s = '1'
+                     else unsigned(lba_tx(15 downto 0));
+    tx_lb_amp1    <= (others => '0') when tx_mute_s = '1'
+                     else unsigned(lba_tx(31 downto 16));
     tx_walk_period <= unsigned(wper_tx);
     tx_walk_ftw_step(10 downto 0)  <= unsigned(wfs_tx0(10 downto 0));
     tx_walk_ftw_step(21 downto 11) <= unsigned(wfs_tx1(21 downto 11));

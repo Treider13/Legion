@@ -28,6 +28,7 @@
 #include "nios_pkt_retune2.h"    /* Packet format definition */
 #include "devices.h"
 #include "debug.h"
+#include "legion_cmds.h"
 
 #ifdef BLADERF_NIOS_LIBAD936X
 void rfic_invalidate_frequency(bladerf_module module);
@@ -209,8 +210,14 @@ static inline void profile_activate(bladerf_module module, fastlock_profile *p)
     rfic_invalidate_frequency(module);
 #endif  // BLADERF_NIOS_LIBAD936X
 
-    /* Activate the RFFE fast lock profile */
+    /* Молчание до отзыва, затем lo_khz в FPGA на той же метке. */
+    if (module == BLADERF_MODULE_TX) {
+        legion_hop_mute_arm();
+    }
     adi_fastlock_recall(module, p);
+    if (module == BLADERF_MODULE_TX) {
+        legion_hop_commit_lo(p->profile_num);
+    }
 
     /* Adjust the RFFE port */
     adi_rfport_select(p);
