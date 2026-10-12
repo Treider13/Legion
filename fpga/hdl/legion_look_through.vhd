@@ -122,7 +122,8 @@ begin
         end if;
     end process;
 
-    -- Счётчик hop-тиков. После первого импульса blank берётся отсюда.
+    -- PERIOD ≤ 255: blank = hblank (hop_tick).
+    -- PERIOD > 255: fallback на сэмплы.
     hop_fsm : process(tx_clock, tx_reset)
         variable nxt : unsigned(31 downto 0);
     begin

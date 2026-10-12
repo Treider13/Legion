@@ -370,7 +370,7 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 
 - Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет. Образ v1.2 на эфире не гонялся.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
-- Ветка `pr-77777-lab-host-pipeline` на origin. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`. Hop-код до `a71479e`. «LUT работает на эфире» не заявляется.
+- Ветка `pr-77777-lab-host-pipeline` на origin. HEAD `9400e57`, тег `v1.2-rbf-hop-lt-68mhz` актуален. `v1.0`/`v1.1` — архив (72 МГц). «LUT работает на эфире» не заявляется.
 
 ## Ограничения
 
