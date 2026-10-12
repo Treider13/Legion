@@ -34,6 +34,7 @@ begin
             tx_clock => tx_clock, tx_reset => tx_reset,
             rx_clock => rx_clock, rx_reset => rx_reset,
             enable => enable, period => period, width => width,
+            hop_tick => '0',
             ratio_shift => ratio, det_thr => det_thr, win_shift => win_sh,
             rx_i => rx_i, rx_q => rx_q, rx_valid => rx_valid,
             blank => blank, echo_hold => echo_hold, status => status

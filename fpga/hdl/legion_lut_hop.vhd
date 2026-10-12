@@ -7,6 +7,7 @@
 --   META   0x51 — n / n_used (8 бит); n_eff = n_used если ≠0, иначе n
 --   F0/STEP/SHIFT/FS/LO — FTW = (f0 + ch·step + shift − lo) / fs · 2^32
 -- Каденс — сэмпл TX (каждый 2-й tx_clock), как look-through / walk-off.
+-- hop_tick — '1' один tx_clock в такт idx++ (граница dwell). Не reload из RSV.
 -- PROTO_PERIOD — запасной период в сэмплах, если PRI_US=0 или fs=0.
 -- Без AUTONOMOUS или при n_eff=0 индекс не шагает; FTW держит 0.
 --
@@ -42,7 +43,8 @@ entity legion_lut_hop is
         lut_data     : in  unsigned(7 downto 0);
         hop_auto     : out std_logic;
         hop_ch       : out unsigned(7 downto 0);
-        hop_ftw      : out unsigned(31 downto 0)
+        hop_ftw      : out unsigned(31 downto 0);
+        hop_tick     : out std_logic
     );
 end entity;
 
@@ -106,6 +108,7 @@ architecture rtl of legion_lut_hop is
     signal lo_q       : unsigned(31 downto 0);
     signal fs_ftw     : unsigned(31 downto 0);
     signal ch_div     : unsigned(7 downto 0);
+    signal hop_tick_r : std_logic;
 begin
     -- n_eff: n_used (meta[15:8]) если задан, иначе n (meta[7:0]).
     n_eff <= unsigned(meta(15 downto 8)) when unsigned(meta(15 downto 8)) /= 0
@@ -114,6 +117,7 @@ begin
     hop_auto <= auto_r;
     hop_ch   <= ch_r;
     hop_ftw  <= ftw_r;
+    hop_tick <= hop_tick_r;
 
     U_div : entity work.legion_divider
         generic map (
@@ -210,10 +214,12 @@ begin
             lo_q         <= (others => '0');
             fs_ftw       <= (others => '0');
             ch_div       <= (others => '0');
+            hop_tick_r   <= '0';
         elsif rising_edge(clk) then
             samp_ph    <= not samp_ph;
             start_div  <= '0';
             start_mult <= '0';
+            hop_tick_r <= '0';
 
             if lut_we = '1' then
                 lut(to_integer(lut_addr)) <= lut_data;
@@ -255,6 +261,7 @@ begin
                   period /= 0 then
                 if cnt + 1 >= period then
                     cnt <= (others => '0');
+                    hop_tick_r <= '1';
                     nxt := resize(idx, 9) + 1;
                     if nxt >= resize(n_eff, 9) then
                         idx <= (others => '0');

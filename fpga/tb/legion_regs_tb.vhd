@@ -107,6 +107,7 @@ begin
             tx_walk_en => tx_walk_en, tx_walk_auto => tx_walk_auto, tx_walk_hold => tx_walk_hold,
             tx_lb_delay => tx_lb_delay, tx_lb_ftw => tx_lb_ftw,
             tx_hop_auto => tx_hop_auto,
+            tx_hop_tick => open,
             tx_lb_delay1 => tx_lb_delay1, tx_lb_ftw1 => tx_lb_ftw1,
             tx_lb_amp0 => tx_lb_amp0, tx_lb_amp1 => tx_lb_amp1,
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
