@@ -269,7 +269,7 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 | PatternStore | ID, pending/confirmed/legacy; find_match доля align ±1; match_need; find_cycle_period (автокорр.) | [G5] |
 | sequence_type | table_based / pseudo_random / adaptive_afh | [G2] |
 | Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
-| fpga_preload | LUT ≤ 255; autonomous при cycle≤255; иначе видимый префикс | ТЗ |
+| fpga_preload | LUT ≤ 255; host пишет GRID+PROTO; HDL GRID 0x51–0x57 не читает | ТЗ |
 | EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
 | DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
 | TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
@@ -283,15 +283,16 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 
 Сканирование коридора шире IBW 56 МГц: окна с перекрытием 15%.
 400 МГц → 9 окон × 4 мс ≈ 36 мс. Сшивание по sample_count.
-Quick-tune кэш LRU 256 (host); аппаратный bladerf_get_quick_tune —
-лаборатория. Очередь retune ≤ 16. fs при частых retune ≤ 20 Msps.
+Quick-tune: LRU 256 + `set_frequency_rx`. `bladerf_get_quick_tune`
+недоступен через `legion_fpga.py`. Очередь retune ≤ 16. fs при частых
+retune ≤ 20 Msps.
 
 ## Универсальная сетка FHSS (12.10.2026)
 
 | Факт | Значение |
 |---|---|
 | Сетка (поиск) | 2..4096 из сигнала |
-| LUT / автономия | cycle ≤ 255; иначе видимая часть, per-hop |
+| LUT / автономия | cycle ≤ 255: host пишет LUT+флаг. HDL-таймера нет — удар с host |
 | Частота | через lo_sweep. IBW 56 МГц за раз |
 | Коридор | sub = [f_min−400 кГц, f_max+400 кГц]; шире IBW — окна |
 | Коммит | период найден и ≥ 2 цикла |
@@ -300,15 +301,41 @@ Quick-tune кэш LRU 256 (host); аппаратный bladerf_get_quick_tune �
 | Preload | теоретическая оценка; замер — лаборатория |
 | LP score | доля align ±1 |
 
+## Требования к HDL (12.10.2026, чтение `fpga/hdl`)
+
+ТРЕБОВАНИЕ К HDL: регистр period_us (или эквивалент в сэмплах) + таймер,
+который считает до периода и переключает CH_LUT на следующую запись
+без host. Без этого автономный LUT-режим на FPGA не работает.
+Host только пишет регистры.
+
+| Элемент | Статус | Где |
+|---|---|---|
+| `LEGION_REG_GRID_PRI_US` 0x54 | адрес есть; HDL не читает | `legion_pkg.vhd:159`; `legion_regs.vhd` write → `when others => null` |
+| `LEGION_REG_GRID_FLAGS` 0x56 | то же | pkg:161, regs:309 |
+| `LEGION_REG_GRID_RSV` 0x57 | то же (фаза NIOS-only) | pkg:162,165 |
+| `LEGION_REG_PROTO_PERIOD` 0x32 | есть; шагает DRFM walk, не CH_LUT | `legion_lb_walk.vhd` |
+| Регистр `period_us` для LUT | нет | — |
+| Таймер индекса CH_LUT | нет | CH_LUT — запись host → map bin→ch |
+| `GRID_FLAG_AUTONOMOUS` | host-бит 1<<4; HDL игнорирует | `legion_fpga.py` |
+
+Итог: **НЕ ПОДТВЕРЖДЁН** (таймера нет в текущем нетлисте).
+
+## Что не сделано
+
+- HDL таймер переключения LUT (шаги 1–3, не host).
+- `bladerf_get_quick_tune`: нет в `legion_fpga.py`. Host — LRU + `set_frequency_rx`.
+- Bench IQ: синтез на фиксированном LO. Смена `fsm.lo_hz` не двигает waveform.
+- USB/preload замеры — лаборатория.
+- Push не делался — по требованию.
+
 ## Ограничения
 
-- LUT: 256 слотов, индекс 8 бит, n≤255. Cycle > 255 — видимая часть.
+- LUT: 256 слотов, индекс 8 бит, n≤255. Cycle > 255 — видимая часть, удар с host.
 - IBW: 56 МГц. Коридор шире — lo_sweep.
 - Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
-- Quick tune: ~500 мкс при кэше; полный шаг ~3.8 мс.
-- Look-through: каждые 10 hops, 1 кадр без LUT (~10% времени).
-- PLL AD9361 settle: 20–50 мкс.
+- Quick-tune: LRU на host; ~500 мкс / полный шаг ~3.8 мс — цифры [F13]/[F14], не замер.
+- Look-through: каждые 10 hops host снимает флаг на 1 hop (~10% hops без autonomous).
+  `set_look_through` / REG_LT_* не вызываются.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
-- Таймер хопа в HDL: REG_GRID_PRI_US / PROTO_PERIOD / FLAGS / RSV записаны;
-  шаг LUT по таймеру в текущем нетлисте не подтверждён — требование к HDL.
+- FPGA не автономна по FHSS-LUT: GRID 0x51–0x57 HDL не обрабатывает.
