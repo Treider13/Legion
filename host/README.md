@@ -42,7 +42,7 @@ SoapySDR #225: стрим и регистровый агент одноврем�
 | 6 hop map | `hopmap.py` (темп, период+Markov-1, предсказание) | >0.7 на 10 скачков |
 | 7.1–7.2 регистры | `fpga_control.py::PROFILES` (только `legion_fpga.py`) | amp0+amp1≤1.0 жёстко |
 | 7.3 калибровка | `fpga_control.py::calibrate_amp` + `measure_imd3_db` | IMD3≤−30 dBc |
-| 8 визуализация | `ipc.py` (UDP JSON) → `viewer.py` (PyQt6/pyqtgraph, отдельный процесс) | 60 FPS |
+| 8 визуализация | `ipc.py` (`VizBus`) → водопад в `main_app` | живой спектр в том же окне |
 | 9.3 LO | `fpga_control.LoManager` (settle ≥100 мкс, факт 6 мс) | — |
 | 9.4 петля | `pipeline.py integrate/bench` | decision <10 мс |
 
@@ -51,7 +51,7 @@ SoapySDR #225: стрим и регистровый агент одноврем�
 ```bash
 pip install -r host/requirements.txt          # CPU / тесты
 pip install -r host/requirements-torch.txt    # PyTorch с CUDA 13
-pip install -r host/requirements-lab.txt      # CuPy / PyQt6
+pip install -r host/requirements-lab.txt      # CuPy
 pip install -r host/requirements-trt.txt      # TensorRT, индекс NVIDIA
 python3 -m legion_rx.reader.build           # C-читатель (gcc)
 cd host && export PYTHONPATH=$PWD
@@ -73,8 +73,8 @@ python3 -m legion_rx.pipeline integrate \
     --profiles elrs_24,crossfire_fsk,analog_fpv \
     --engine models/run1/model.engine --labels models/run1/labels.json \
     --cycles 6 --publish
-# Шаг 8 (отдельный терминал/процесс):
-python3 -m legion_rx.viewer --port 5590
+# Окно: кнопки, мониторинг и водопад (кадры из пайплайна по шине):
+python3 -m legion_rx.main_app
 # Офлайн-проверка критериев 6.4/9.4 без железа:
 python3 -m legion_rx.pipeline bench --protocol elrs_24 --duration-s 0.5 --cpu
 ```

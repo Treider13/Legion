@@ -11,8 +11,6 @@ const ESP32: Array<{ id: WorkspaceId; title: string; hint: string }> = [
 
 const SDR: Array<{ id: WorkspaceId; title: string; hint: string }> = [
   { id: "sdr", title: "SDR", hint: "Ethernet · офиц. FPGA" },
-  { id: "scan", title: "СКАН + TX SDR", hint: "умная атака или хост атака" },
-  { id: "signal", title: "ТИП СИГНАЛА", hint: "FPGA без сканера · волна" },
   { id: "sdrFlash", title: "ПРОШИВКА SDR", hint: "офиц. FPGA/FX3 · не ESP32" },
   { id: "sdrCustom", title: "КАСТОМ FPGA", hint: "сборка legion · bladeRF-cli" },
   { id: "position", title: "ПОЗИЦИЯ", hint: "трасса до антенны противника" },
@@ -45,7 +43,7 @@ export function WorkspaceNav() {
       </div>
       <div className={`ws-group ${mode === "sdr" ? "ws-group-active" : ""}`}>
         <span className="ws-group-label">РЕЖИМ 1 · SDR (Ethernet, без ESP32)</span>
-        <div className="workspace-nav workspace-nav-6">
+        <div className="workspace-nav workspace-nav-4">
           {SDR.map((t) => (
             <button
               key={t.id}

@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
 import threading
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 
 from .cognitive import CognitiveFSM, LISTENING
 from .ops import acquire_lock, install_shutdown, rbf_warning, validate_config
@@ -172,13 +176,53 @@ class App:
         raise SystemExit(128 + int(signum))
 
 
+WF_ROWS = 180
+WF_FLOOR = -120.0
+WF_CEIL = -20.0
+
+
+def waterfall_rgb(db) -> "object":
+    """dB → RGB uint8. Низко — синий, высоко — жёлтый."""
+    t = np.clip((np.asarray(db, dtype=np.float32) - WF_FLOOR) / (WF_CEIL - WF_FLOOR), 0.0, 1.0)
+    r = np.clip(1.6 * t - 0.15, 0.0, 1.0)
+    g = np.clip(1.4 * t - 0.35, 0.0, 1.0)
+    b = np.clip(0.85 - t, 0.0, 1.0)
+    return (np.stack((r, g, b), axis=-1) * 255.0).astype(np.uint8)
+
+
+def png_bytes(rgb) -> bytes:
+    """PNG без внешних библиотек: tkinter 8.6 читает его как картинку водопада."""
+    h, w = rgb.shape[:2]
+    raw = b"".join(b"\x00" + np.ascontiguousarray(rgb[y]).tobytes() for y in range(h))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+
+
 def run_ui(app: App) -> None:
+    import base64
     import tkinter as tk
 
     root = tk.Tk()
     root.title("Legion")
+    root.geometry("1180x760")
+    root.minsize(980, 640)
     frm = tk.Frame(root, padx=8, pady=8)
     frm.pack(fill="both", expand=True)
+    frm.columnconfigure(1, weight=1)
+    frm.rowconfigure(0, weight=1)
+
+    controls = tk.Frame(frm)
+    controls.grid(row=0, column=0, sticky="nsw", padx=(0, 12))
+    view = tk.Frame(frm)
+    view.grid(row=0, column=1, sticky="nsew")
+    view.columnconfigure(0, weight=1)
+    view.rowconfigure(2, weight=1)
 
     f0 = tk.StringVar(value=str(int(app.cfg["f_start_hz"])))
     f1 = tk.StringVar(value=str(int(app.cfg["f_end_hz"])))
@@ -191,8 +235,8 @@ def run_ui(app: App) -> None:
     status = tk.StringVar(value="")
 
     def row(r, label, var, editable=True):
-        tk.Label(frm, text=label).grid(row=r, column=0, sticky="w")
-        e = tk.Entry(frm, textvariable=var, width=18)
+        tk.Label(controls, text=label).grid(row=r, column=0, sticky="w")
+        e = tk.Entry(controls, textvariable=var, width=18)
         if not editable:
             e.configure(state="readonly")
         e.grid(row=r, column=1, sticky="w")
@@ -221,28 +265,30 @@ def run_ui(app: App) -> None:
             "lna_gain_db": float(lna.get()),
         })
 
-    tk.Button(frm, text="СТАРТ", command=push).grid(row=7, column=0, sticky="w")
-    tk.Button(frm, text="СТОП",
-              command=lambda: app.bus.submit("stop")).grid(row=7, column=1, sticky="w")
-    tk.Button(frm, text="ПАУЗА",
+    tk.Button(controls, text="СТАРТ", command=push).grid(row=7, column=0, sticky="w", pady=(8, 0))
+    tk.Button(controls, text="СТОП",
+              command=lambda: app.bus.submit("stop")).grid(row=7, column=1, sticky="w", pady=(8, 0))
+    tk.Button(controls, text="ПАУЗА",
               command=lambda: app.bus.submit("pause")).grid(row=8, column=0, sticky="w")
-    tk.Button(frm, text="СОХРАНИТЬ",
+    tk.Button(controls, text="СОХРАНИТЬ",
               command=lambda: app.bus.submit("save")).grid(row=8, column=1, sticky="w")
-    tk.Button(frm, text="СБРОС",
+    tk.Button(controls, text="СБРОС",
               command=lambda: app.bus.submit("reset")).grid(row=9, column=0, sticky="w")
 
     def open_log():
         import subprocess
         subprocess.Popen(["xdg-open", str(app.log_path)])
 
-    tk.Button(frm, text="ЖУРНАЛ", command=open_log).grid(row=9, column=1, sticky="w")
-    tk.Label(frm, textvariable=status, justify="left").grid(
-        row=10, column=0, columnspan=2, sticky="w")
+    tk.Button(controls, text="ЖУРНАЛ", command=open_log).grid(row=9, column=1, sticky="w")
+    tk.Label(controls, textvariable=status, justify="left", wraplength=360).grid(
+        row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-    parent = tk.Canvas(frm, width=420, height=80, bg="#111")
-    parent.grid(row=11, column=0, columnspan=2, pady=6)
-    sub = tk.Canvas(frm, width=420, height=40, bg="#222")
-    sub.grid(row=12, column=0, columnspan=2)
+    tk.Label(view, text="Спектр и водопад", anchor="w").grid(row=0, column=0, sticky="w")
+    spec_cv = tk.Canvas(view, height=150, bg="#0b0e14", highlightthickness=0)
+    spec_cv.grid(row=1, column=0, sticky="ew")
+    wf_img = tk.Label(view, bg="#0b0e14")
+    wf_img.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+    hold = {"photo": None}
 
     def paint():
         try:
@@ -254,19 +300,47 @@ def run_ui(app: App) -> None:
         except ValueError:
             pass
         st = app.tick_status(time.time())
+        viz = app.bus.viz.snapshot()
+        spec = viz["spec"]
+        band = ""
+        if viz["f0"] is not None and viz["f1"] is not None:
+            band = f"  {viz['f0']/1e6:.3f}–{viz['f1']/1e6:.3f} МГц"
+        spec_note = "спектр ждёт кадр" if spec is None else f"спектр {spec.size} точек{band}"
         status.set(
             f"{st['state']}  осталось {st['jam_remaining_s']:.1f} с  "
             f"pattern {st['pattern_id']}  цикл {st['cycle_length']}  "
             f"ударов {st['jams_count']}  окно {st['current_lo_window']}  "
-            f"сдвиг {st['freq_shift_hz']} Гц  threat {st['threat']}")
-        parent.delete("all")
-        sub.delete("all")
-        parent.create_rectangle(20, 20, 400, 60, outline="#6cf")
-        parent.create_text(30, 10, anchor="w", fill="#6cf", text="коридор")
-        sub.create_rectangle(80, 8, 260, 32, outline="#fc6")
-        sub.create_text(90, 4, anchor="w", fill="#fc6", text="пятно")
-        sub.create_line(170, 4, 170, 36, fill="#f44")
-        root.after(200, paint)
+            f"сдвиг {st['freq_shift_hz']} Гц  threat {st['threat']}\n"
+            f"{spec_note}")
+        spec_cv.delete("all")
+        w = max(spec_cv.winfo_width(), 640)
+        h = 150
+        if spec is not None and spec.size:
+            ys = np.clip((spec - WF_FLOOR) / (WF_CEIL - WF_FLOOR), 0.0, 1.0)
+            n = ys.size
+            pts = []
+            for i, yv in enumerate(ys):
+                x = 8 + (w - 16) * i / max(n - 1, 1)
+                y = 12 + (h - 24) * (1.0 - float(yv))
+                pts.extend((x, y))
+            if len(pts) >= 4:
+                spec_cv.create_line(*pts, fill="#7fd0ff", width=1)
+            if viz["f0"] is not None:
+                spec_cv.create_text(8, h - 8, anchor="w", fill="#89a",
+                                    text=f"{viz['f0']/1e6:.3f} МГц")
+            if viz["f1"] is not None:
+                spec_cv.create_text(w - 8, h - 8, anchor="e", fill="#89a",
+                                    text=f"{viz['f1']/1e6:.3f} МГц")
+        else:
+            spec_cv.create_text(16, 24, anchor="w", fill="#89a",
+                                text="После СТАРТ здесь живой спектр с платы")
+        wf = viz["wf"]
+        if wf is not None:
+            rgb = waterfall_rgb(wf)
+            photo = tk.PhotoImage(data=base64.b64encode(png_bytes(rgb)))
+            hold["photo"] = photo
+            wf_img.configure(image=photo)
+        root.after(80, paint)
 
     paint()
     root.mainloop()

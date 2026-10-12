@@ -11,15 +11,11 @@ import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChro
 import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { catalogById } from "./sdr/catalog";
-import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
 
 import { BootSequence } from "./components/boot/BootSequence";
-import { CinemaDock } from "./components/cinema/CinemaDock";
-import { FrequencyField } from "./components/cinema/FrequencyField";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
-import { StartGate } from "./components/cinema/StartGate";
 import { coolingWarn, heroStatusLine } from "./components/cinema/status";
 import { modeOf } from "./sense/modes";
 import { useDeviceTier } from "./hooks/useDeviceTier";
@@ -38,7 +34,6 @@ function App() {
   const { rootRef, motion, reduced, toggleMotion } = useGraphiteMotion();
   const [booted, setBooted] = useState(false);
   const [mount3d, setMount3d] = useState(false);
-  const [gate, setGate] = useState(false);
   const [settings, setSettings] = useState(false);
   // Одноразовая заметка про стендовую приёмку: приложение не может знать,
   // прогонял ли оператор E1–E6 на своей плате — честно напоминаем один раз
@@ -204,8 +199,11 @@ function App() {
         sourceNote={connection.note}
         range={formatDisplayRange(range)}
         rangeNote={rangeBandCount ? `границы из списка (${rangeBandCount})` : "границы F1–F2"}
-        spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
-        history={<FrequencyField />}
+        history={
+          <p className="cinema-whisper">
+            Живой спектр и водопад — в окне оператора. Иконка LEGION в меню появляется после сборки образа FPGA.
+          </p>
+        }
       />
 
       {cooling && (
@@ -227,14 +225,6 @@ function App() {
         </div>
       )}
 
-      <CinemaDock
-        mode={mode}
-        onMode={(m) => setWorkspace(m === "sdr" ? "scan" : "corridor")}
-        onStart={() => setGate(true)}
-        onSettings={() => setSettings(true)}
-      />
-
-      {gate && <StartGate mode={mode} onClose={() => setGate(false)} />}
       {settings && <SettingsSheet onClose={() => setSettings(false)} />}
     </div>
   );

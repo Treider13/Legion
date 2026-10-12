@@ -7,8 +7,6 @@
 # CuPy под ту же CUDA 13, что и PyTorch. scikit-cuda ЗАПРЕЩЁН.
 cupy-cuda13x>=13.3
 # PyTorch — файл requirements-torch.txt, его ставят раньше этого.
-# Визуализация отдельным процессом (шаг 8).
-PyQt6>=6.6
-pyqtgraph>=0.13
+# Водопад рисует окно main_app (tkinter), отдельный процесс не нужен.
 # TensorRT — отдельным файлом и последним: колесо библиотек несколько ГБ.
 #   pip install -r requirements-trt.txt

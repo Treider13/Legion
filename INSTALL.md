@@ -80,7 +80,7 @@ cd host && PYTHONPATH=. python -m legion_rx.reader.build && cd ..
 ```
 
 `numpy` — сканер эфира. `pyusb` — агент шлюза FPGA. `scipy` и `pytest` — host и тесты.
-`requirements-torch.txt` — PyTorch с CUDA. `requirements-lab.txt` — CuPy и окно водопада (PyQt6).
+`requirements-torch.txt` — PyTorch с CUDA. `requirements-lab.txt` — CuPy. Водопад рисует `python -m host.legion_rx.main_app`.
 `requirements-trt.txt` — TensorRT с индекса NVIDIA, ставится последним.
 Окно (`python3-tk`), плата (`libbladeRF`) и SoapySDR через pip не ставятся: они в команде apt выше.
 
@@ -220,19 +220,9 @@ systemctl status legion-gateway   # active (running), порт 5531
 NIOS II EDS входит в установку.
 
 ```bash
-# Из корня репозитория. nios2_command_shell.sh нельзя source: он делает
-# exec и закрывает терминал. Ему передаётся файл, а путь внутри — абсолютный.
-fpga/check_toolchain.sh
+# Из корня репозитория. После успешной сборки скрипт ставит иконку LEGION в меню.
 sudo apt install -y cmake patch
-REPO="$(pwd)"
-cat > "$HOME/legion-build.sh" << EOF
-#!/bin/bash
-set -euo pipefail
-cd "$REPO/fpga/vendor/bladerf/hdl/quartus"
-exec ./build_bladerf.sh -b bladeRF-micro -s A4 -r legion
-EOF
-chmod +x "$HOME/legion-build.sh"
-~/intelFPGA_lite/23.1std/nios2eds/nios2_command_shell.sh "$HOME/legion-build.sh"
+./fpga/build_legion.sh
 ```
 
 Первую сборку после обновления исходников выполняйте без `-k`: Qsys, BSP и
