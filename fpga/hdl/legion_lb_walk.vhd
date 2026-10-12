@@ -10,6 +10,8 @@
 -- не сбрасывается на паузе det — PRI/RGPO. PROTO_PERIOD=0 → как SRC=0.
 -- STEP=0: застыть. HOLD: на потолке остаться.
 -- FTW0 += WALK_FTW_STEP на том же шаге; FTW1 не ходит (вторая клетка).
+-- hop_auto=1: ftw0_r держит ftw0_init (hop FTW), step не прибавляется.
+-- Отводы (delay) шагают как раньше. hop_auto=0: прежний FTW walk.
 -- ============================================================================
 library ieee;
 use ieee.std_logic_1164.all;
@@ -33,6 +35,7 @@ entity legion_lb_walk is
         ftw0_init    : in  unsigned(31 downto 0);
         ftw1_init    : in  unsigned(31 downto 0);
         ftw_step     : in  unsigned(31 downto 0);
+        hop_auto     : in  std_logic;
         det_active   : in  std_logic;
         sample_en    : in  std_logic;
         tap          : out unsigned(11 downto 0);
@@ -182,10 +185,14 @@ begin
                     end if;
                 end if;
 
+                if hop_auto = '1' then
+                    ftw0_r <= ftw0_init;
+                elsif do_step then
+                    ftw0_r <= ftw0_r + ftw_step;
+                end if;
                 if do_step then
                     tap0_r <= next_tap(tap0_r, walk_step, delay_init, walk_max, hold_max);
                     tap1_r <= next_tap(tap1_r, walk_step, delay1_init, walk_max, hold_max);
-                    ftw0_r <= ftw0_r + ftw_step;
                 end if;
             end if;
         end if;

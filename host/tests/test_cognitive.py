@@ -223,7 +223,8 @@ def test_preload_hop_sequence_20():
     store, pid, sub = make_store_with_pattern()
     pat = store.get(pid)
     fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
-    out = preload_hop_sequence(fpga, pat, sub, position=0, next_n=20)
+    out = preload_hop_sequence(fpga, pat, sub, position=0, next_n=20,
+                               lo_hz=LO)
     assert out["written"] == 20
     assert out["per_write_ms"]["max"] >= out["per_write_ms"]["min"] >= 0.0
     t = fpga._t

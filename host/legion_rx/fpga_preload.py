@@ -1,10 +1,10 @@
-"""fpga_preload — LUT FHSS в FPGA (write_ch_lut + set_grid).
+"""fpga_preload — LUT FHSS в FPGA (write_hop_lut + set_grid).
 
 Индекс LUT 8 бит: n_pre ≤ 255. Cycle > 255 — видимый префикс, без
-догрузки на ходу. Host пишет REG_GRID_PRI_US / PROTO_PERIOD / FLAGS / RSV.
-GRID 0x51–0x57 в legion_regs.vhd — when others => null (NIOS-only).
-PROTO_PERIOD шагает DRFM walk (delay/FTW), не индекс CH_LUT.
-Автономный LUT-режим FPGA без таймера в HDL не работает.
+догрузки на ходу. Host пишет CH_FS/CH_LO, затем HOP_LUT 0x5E, затем
+GRID; FLAGS bit4 — последним. 0x31 — RX bin→ch, не hop.
+HDL legion_lut_hop шагает индекс LUT по PRI_US (FLAGS bit4).
+PROTO_PERIOD — запасной период в сэмплах и по-прежнему шаг DRFM walk.
 Задержка USB preload — замер в лаборатории.
 """
 from __future__ import annotations
@@ -21,10 +21,15 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
                          chan_step_hz: float = 200.0e3,
                          dwell_us: "int | None" = None,
                          autonomous: bool = False,
-                         fs_hz: float = 36e6) -> dict:
+                         fs_hz: float = 36e6,
+                         lo_hz: float = None) -> dict:
     """next_n позиций (от position) → LUT + GRID. n ≤ 255.
-    autonomous: flags|=GRID_FLAG_AUTONOMOUS, rsv=phase, proto period."""
+    lo_hz обязателен. Порядок: FS/LO → HOP_LUT → GRID → FLAGS bit4."""
     from .corridor import in_subcorridor
+
+    if lo_hz is None:
+        raise ValueError(
+            "preload: lo_hz обязателен — без CH_LO FTW считается от 0")
 
     cyc = pattern.get("cycle") or pattern["hop_sequence"]
     freqs = (pattern.get("freqs_mhz") or [])[: len(cyc)]
@@ -42,6 +47,15 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
     written = 0
     lf = fc.lf
     phase = int(position) % max(1, cyc_n)
+
+    t0 = time.perf_counter()
+    ok = fpga.write_reg(lf.REG_CH_FS_HZ, int(round(float(fs_hz))) & 0xFFFFFFFF)
+    lo_khz = int(round(float(lo_hz) / 1000.0))
+    ok = fpga.write_reg(lf.REG_CH_LO_KHZ, lo_khz & 0xFFFFFFFF) and ok
+    lat.append((time.perf_counter() - t0) * 1000.0)
+    if not ok:
+        raise RuntimeError("preload: запись CH_FS/CH_LO не удалась")
+
     for i in range(n_pre):
         idx = (phase + i) % cyc_n
         f_hz = freqs[idx] * 1e6
@@ -52,10 +66,11 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
         if not (0 <= ch <= 0xFF):
             raise ValueError(f"preload: канал {ch} вне LUT 0..255")
         t0 = time.perf_counter()
-        if not fpga.write_ch_lut(i, ch):
-            raise RuntimeError(f"preload: запись CH_LUT[{i}] не удалась")
+        if not fpga.write_hop_lut(i, ch):
+            raise RuntimeError(f"preload: запись HOP_LUT[{i}] не удалась")
         lat.append((time.perf_counter() - t0) * 1000.0)
         written += 1
+
     dwell = int(dwell_us if dwell_us is not None else
                 pattern.get("dwell_us") or 1000)
     dwell = max(1, dwell)

@@ -269,7 +269,7 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 | PatternStore | ID, pending/confirmed/legacy; find_match доля align ±1; match_need; find_cycle_period (автокорр.) | [G5] |
 | sequence_type | table_based / pseudo_random / adaptive_afh | [G2] |
 | Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
-| fpga_preload | LUT ≤ 255; host пишет GRID+PROTO; HDL GRID 0x51–0x57 не читает | ТЗ |
+| fpga_preload | LUT ≤ 255; host пишет GRID+FS/LO; HDL legion_lut_hop шагает индекс | ТЗ |
 | EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
 | DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
 | TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
@@ -292,7 +292,7 @@ retune ≤ 20 Msps.
 | Факт | Значение |
 |---|---|
 | Сетка (поиск) | 2..4096 из сигнала |
-| LUT / автономия | флаг пишется при cycle≤255; удар всегда с host (HDL-таймера нет) |
+| LUT / автономия | cycle≤255: после нового RBF FLAGS.AUTONOMOUS → HDL шагает LUT; текущий RBF 23.08.28 hop не содержит; >255 — host |
 | Частота | через lo_sweep. IBW 56 МГц за раз |
 | Коридор | sub = [f_min−400 кГц, f_max+400 кГц]; шире IBW — окна |
 | Коммит | период найден и ≥ 2 цикла |
@@ -301,30 +301,48 @@ retune ≤ 20 Msps.
 | Preload | теоретическая оценка; замер — лаборатория |
 | LP score | доля align ±1 |
 
-## Требования к HDL (12.10.2026, чтение `fpga/hdl`)
+## HDL таймер LUT (12.10.2026, `fpga/hdl`)
 
-ТРЕБОВАНИЕ К HDL: регистр period_us (или эквивалент в сэмплах) + таймер,
-который считает до периода и переключает CH_LUT на следующую запись
-без host. Без этого автономный LUT-режим на FPGA не работает.
-Host только пишет регистры.
+`legion_lut_hop.vhd`: период = PRI_US·fs/1e6 сэмплов (запас — PROTO_PERIOD).
+FLAGS bit4 + n_eff≠0 → индекс LUT++, FTW = (f0+ch·step+shift−lo)/fs·2^32 на `tx_lb_ftw`.
+NIOS GRID 0x51–0x57 больше не `return true` до poke — слово уходит в HDL.
+Нетлист/RBF этой правки не собран.
 
 | Элемент | Статус | Где |
 |---|---|---|
-| `LEGION_REG_GRID_PRI_US` 0x54 | адрес есть; HDL не читает | `legion_pkg.vhd:159`; `legion_regs.vhd` write → `when others => null` |
-| `LEGION_REG_GRID_FLAGS` 0x56 | то же | pkg:161, regs:309 |
-| `LEGION_REG_GRID_RSV` 0x57 | то же (фаза NIOS-only) | pkg:162,165 |
-| `LEGION_REG_PROTO_PERIOD` 0x32 | есть; шагает DRFM walk, не CH_LUT | `legion_lb_walk.vhd` |
-| Регистр `period_us` для LUT | нет | — |
-| Таймер индекса CH_LUT | нет | CH_LUT — запись host → map bin→ch |
-| `GRID_FLAG_AUTONOMOUS` | host-бит 1<<4; HDL игнорирует | `legion_fpga.py` |
+| `LEGION_REG_GRID_PRI_US` 0x54 | HDL latch | `legion_regs.vhd` |
+| `LEGION_REG_GRID_FLAGS` 0x56 | HDL latch, bit4 AUTO | pkg + hop |
+| `LEGION_REG_GRID_SHIFT_HZ` 0x55 | int32 в FTW hop | hop |
+| `LEGION_REG_GRID_RSV` 0x57 | фаза + hop_ch STATUS | hop / NIOS |
+| `LEGION_REG_PROTO_PERIOD` 0x32 | DRFM walk + запас hop | `legion_lb_walk` / hop |
+| Таймер индекса CH_LUT | исходники есть | `legion_lut_hop.vhd` |
+| `GRID_FLAG_AUTONOMOUS` | 1<<4, HDL читает | `legion_fpga.py`, pkg |
 
-Итог: **НЕ ПОДТВЕРЖДЁН** (таймера нет в текущем нетлисте).
+## HDL hop-тракт — исправления
+
+Исходники (RBF не пересобран; timing CLOSED по rpt нет):
+
+- Combo-divide → multi-cycle: `legion_divider.vhd` (64 такта, restoring). Период и `rsv mod n_eff` идут через него. FTW — прежний 32-тактный делитель `mag·2^32/fs_ftw`. Операторов `/` и `mod` в hop нет.
+- Combo-mult → multi-cycle: `legion_mult.vhd` (32 такта, shift-add). `pri·fs`, `f0·1000`, `lo·1000`, `ch·step` идут через него. Оператора `*` в hop нет.
+- n=0 → FTW=0. `auto=0` или `n_eff=0` держат `hop_ftw=0` (не `lut(0)`).
+- Порядок preload: CH_FS, CH_LO, HOP_LUT 0x5E, GRID (META/F0/STEP/PRI/SHIFT/RSV), FLAGS bit4 последним, PROTO, CH_CTRL.
+- Hop LUT разведён с RX: 0x31 = bin→ch канализатора; 0x5E = idx→ch hop. NIOS `rebuild_lut` не затирает hop.
+- CH_LO обязателен: `preload_hop_sequence` без `lo_hz` → ValueError.
+- SHIFT 0x55 подключён: `FTW = (f0 + ch·step + shift − lo) / fs · 2^32` (shift — int32).
+- RSV readback: NIOS 0x57 возвращает `legion_grid_rsv` в [7:0]; HDL STATUS mux даёт hop_ch в [15:8].
+- Walk не сдвигает hop при `hop_auto=1`: смеситель tap0 берёт `hop_ftw`, walk продолжает двигать отводы.
+- `n_eff` — эффективная длина (n_used если ≠0, иначе n). `hop_ch` — текущий канал в STATUS 0x57.
+
+## Требования к пересборке
+
+- После этих правок нужна пересборка FPGA (QIP: `legion_divider.vhd` + `legion_mult.vhd` + hop).
+- Проверка timing: Slow 0°C slack ≥ 0 по `sta.summary` (сейчас у текущего RBF +0.011 нс без hop; новый rpt обязателен).
+- Новый RBF → автономный LUT на плате. Текущий `legionxA4-2026-10-11_23.08.28` таймера не содержит.
 
 ## Что не сделано
 
-- HDL таймер переключения LUT (шаги 1–3, не host).
-- `bladerf_get_quick_tune`: нет в `legion_fpga.py`. Host — LRU + `set_frequency_rx`.
-- Bench IQ: синтез на фиксированном LO. Смена `fsm.lo_hz` не двигает waveform.
+- Quartus/RBF с `legion_lut_hop` — не собран.
+- `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
 - USB/preload замеры — лаборатория.
 - Push не делался — по требованию.
 
@@ -338,5 +356,5 @@ Host только пишет регистры.
   `set_look_through` / REG_LT_* не вызываются.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
-- FPGA не автономна по FHSS-LUT: GRID 0x51–0x57 HDL не обрабатывает.
-  Host бьёт каждый hop, кроме look-through.
+- Автономия LUT: исходники HDL есть; без нового RBF на плате шага нет.
+  Cycle > 255 — удар с host. Look-through: host не бьёт 1 из 10 hops.

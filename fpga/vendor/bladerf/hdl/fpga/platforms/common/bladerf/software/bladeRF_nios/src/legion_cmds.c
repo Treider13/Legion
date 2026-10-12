@@ -93,6 +93,7 @@ static uint32_t legion_fft_ctrl;
 static uint32_t legion_ch_ctrl;
 static uint32_t legion_ch_idx;
 static uint32_t legion_ch_lut_last;
+static uint32_t legion_hop_lut_last;
 static bool     legion_xlat_bypass_auto;
 static uint32_t legion_band_idx;
 static uint32_t legion_band_f1[8];
@@ -157,6 +158,7 @@ static uint32_t legion_grid_step_hz;
 static uint32_t legion_grid_pri_us;
 static int32_t  legion_grid_shift_hz;
 static uint32_t legion_grid_flags;
+static uint32_t legion_grid_rsv;
 static uint32_t legion_ch_pwr_thr;
 static uint32_t legion_aim_ch = LEGION_AIM_NONE;
 static uint16_t legion_pwr[LEGION_CH_N];
@@ -3315,6 +3317,10 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             legion_ch_lut_last = data;
             break;
 
+        case LEGION_REG_HOP_LUT:
+            legion_hop_lut_last = data;
+            break;
+
         case LEGION_REG_CH_PWR:
         case LEGION_REG_PEAK1:
         case LEGION_REG_PEAK2:
@@ -3445,7 +3451,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
                 legion_pio_poke(LEGION_REG_CH_CTRL, h);
             }
-            return true;
+            break;
 
         case LEGION_REG_GRID_F0_HZ:
             legion_grid_f0_hz = data;
@@ -3454,7 +3460,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
                 legion_pio_poke(LEGION_REG_CH_CTRL, h);
             }
-            return true;
+            break;
 
         case LEGION_REG_GRID_STEP_HZ:
             legion_grid_step_hz = data;
@@ -3463,23 +3469,24 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 uint32_t h = legion_ch_hdl_word(legion_ch_ctrl);
                 legion_pio_poke(LEGION_REG_CH_CTRL, h);
             }
-            return true;
+            break;
 
         case LEGION_REG_GRID_PRI_US:
             legion_grid_pri_us = data;
-            return true;
+            break;
 
         case LEGION_REG_GRID_SHIFT_HZ:
             legion_grid_shift_hz = (int32_t)data;
             legion_ch_rebuild_lut();
-            return true;
+            break;
 
         case LEGION_REG_GRID_FLAGS:
             legion_grid_flags = data;
-            return true;
+            break;
 
         case LEGION_REG_GRID_RSV:
-            return true;
+            legion_grid_rsv = data;
+            break;
 
         case LEGION_REG_CH_PWR_THR:
             legion_ch_pwr_thr = data & 0xffffu;
@@ -3615,6 +3622,10 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         *data = legion_ch_lut_last;
         return true;
     }
+    if (addr == LEGION_REG_HOP_LUT) {
+        *data = legion_hop_lut_last;
+        return true;
+    }
     if (addr == LEGION_REG_CH_PWR || addr == LEGION_REG_PEAK1 ||
         addr == LEGION_REG_PEAK2 || addr == LEGION_REG_PEAK3) {
         *data = legion_mux_word(addr);
@@ -3747,7 +3758,9 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         return true;
     }
     if (addr == LEGION_REG_GRID_RSV) {
-        *data = 0;
+        /* [7:0] записанная фаза; [15:8] hop_ch из STATUS mux HDL. */
+        *data = (legion_mux_word(addr) & 0x0000ff00u) |
+                (legion_grid_rsv & 0xffu);
         return true;
     }
     if (addr == LEGION_REG_CH_PWR_THR) {

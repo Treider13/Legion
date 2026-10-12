@@ -76,7 +76,7 @@ REG_CH_PWR = 0x2D  # STATUS mux: слово канала
 REG_PEAK1 = 0x2E
 REG_PEAK2 = 0x2F
 REG_PEAK3 = 0x30
-REG_CH_LUT = 0x31  # write {idx[15:8], ch[7:0]}
+REG_CH_LUT = 0x31  # RX bin→ch {idx[15:8], ch[7:0]}
 REG_PROTO_PERIOD = 0x32  # период пакета, сэмплы
 REG_PROTO_PULSE = 0x33  # длительность пакета, сэмплы
 REG_DRFM_STEP_SRC = 0x34  # 0=WALK_PERIOD, 1=PROTO_PERIOD
@@ -121,6 +121,7 @@ REG_LT_CTRL = 0x5A
 REG_LT_PERIOD = 0x5B
 REG_LT_WIDTH = 0x5C
 REG_LT_STATUS = 0x5D
+REG_HOP_LUT = 0x5E  # hop idx→ch {idx[15:8], ch[7:0]}
 CH_MODE_OCUSYNC = 0
 CH_MODE_ELRS = 1
 AIM_NONE = 0xFF
@@ -140,7 +141,7 @@ GRID_FLAG_WINLIM = 1 << 0
 GRID_FLAG_F0UNC = 1 << 1
 GRID_FLAG_ZC = 1 << 2
 GRID_FLAG_FCORR = 1 << 3
-GRID_FLAG_AUTONOMOUS = 1 << 4  # host-бит. HDL GRID 0x51–0x57: when others => null
+GRID_FLAG_AUTONOMOUS = 1 << 4  # FLAGS bit4: HDL legion_lut_hop шагает LUT
 GRID_F0_KHZ_GATE = 10_000_000
 C58_MHZ = 5100.0
 
@@ -408,9 +409,14 @@ class LegionFpga:
                 self.write_reg(REG_CH_IDX, int(idx) & 0x7F))
 
     def write_ch_lut(self, bin_idx: int, ch: int) -> bool:
-        """Один бин FFT → канал. ch=0xFF — не копить."""
+        """Один бин FFT → канал. ch=0xFF — не копить. Не hop LUT."""
         return self.write_reg(REG_CH_LUT,
                               ((int(bin_idx) & 0xFF) << 8) | (int(ch) & 0xFF))
+
+    def write_hop_lut(self, idx: int, ch: int) -> bool:
+        """Слот hop-последовательности. Отдельный адрес от RX 0x31."""
+        return self.write_reg(REG_HOP_LUT,
+                              ((int(idx) & 0xFF) << 8) | (int(ch) & 0xFF))
 
     def set_band_table(self, bands: list[tuple[float, float]]) -> bool:
         """До 8 коридоров. Пусто / BAND_COUNT=0 — сетка от SCAN_F1/F2."""
@@ -495,17 +501,18 @@ class LegionFpga:
     def set_grid(self, meta: int = 0, f0_hz: int = 0, step_hz: int = 0,
                  pri_us: int = 0, shift_hz: int = 0, flags: int = 0,
                  pwr_thr: int = 0, rsv: int = 0) -> bool:
-        """Сетка умной атаки 0x51–0x58. rsv — фаза LUT (0x57); HDL может
-        не читать (требование: таймер хопа с phase)."""
+        """Сетка умной атаки 0x51–0x58. rsv — фаза LUT (0x57). FLAGS
+        пишется последним (после META/F0/STEP/PRI/SHIFT/RSV), чтобы hop
+        не стартовал с нулевыми FS/LO."""
         sh = int(shift_hz) & 0xFFFFFFFF
         return (self.write_reg(REG_GRID_META, int(meta) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_F0_HZ, int(f0_hz) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_STEP_HZ, int(step_hz) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_PRI_US, int(pri_us) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_SHIFT_HZ, sh) and
-                self.write_reg(REG_GRID_FLAGS, int(flags) & 0xFFFFFFFF) and
                 self.write_reg(REG_GRID_RSV, int(rsv) & 0xFFFFFFFF) and
-                self.write_reg(REG_CH_PWR_THR, int(pwr_thr) & 0xFFFF))
+                self.write_reg(REG_CH_PWR_THR, int(pwr_thr) & 0xFFFF) and
+                self.write_reg(REG_GRID_FLAGS, int(flags) & 0xFFFFFFFF))
 
     def set_look_through(self, enable: bool = True, period: int = 0,
                          width: int = 0, ratio: int = 2) -> bool:

@@ -40,6 +40,7 @@ entity legion_regs is
         tx_walk_hold  : out std_logic;
         tx_lb_delay   : out unsigned(11 downto 0);
         tx_lb_ftw     : out unsigned(31 downto 0);
+        tx_hop_auto   : out std_logic;
         tx_lb_delay1  : out unsigned(11 downto 0);
         tx_lb_ftw1    : out unsigned(31 downto 0);
         tx_lb_amp0    : out unsigned(15 downto 0);
@@ -111,6 +112,9 @@ architecture rtl of legion_regs is
     signal r_lut_addr   : std_logic_vector(7 downto 0);
     signal r_lut_data   : std_logic_vector(7 downto 0);
     signal r_lut_tog    : std_logic;
+    signal r_hlut_addr  : std_logic_vector(7 downto 0);
+    signal r_hlut_data  : std_logic_vector(7 downto 0);
+    signal r_hlut_tog   : std_logic;
     signal r_delay      : std_logic_vector(31 downto 0);
     signal r_walk_step  : std_logic_vector(31 downto 0);
     signal r_walk_max   : std_logic_vector(31 downto 0);
@@ -131,6 +135,13 @@ architecture rtl of legion_regs is
     signal r_lt_ctrl      : std_logic_vector(31 downto 0);
     signal r_lt_period    : std_logic_vector(31 downto 0);
     signal r_lt_width     : std_logic_vector(31 downto 0);
+    signal r_grid_meta    : std_logic_vector(31 downto 0);
+    signal r_grid_f0      : std_logic_vector(31 downto 0);
+    signal r_grid_step    : std_logic_vector(31 downto 0);
+    signal r_grid_pri     : std_logic_vector(31 downto 0);
+    signal r_grid_shift   : std_logic_vector(31 downto 0);
+    signal r_grid_flags   : std_logic_vector(31 downto 0);
+    signal r_grid_rsv     : std_logic_vector(7 downto 0);
 
     -- CDC в tx_clock (квазистатичные — двойной триггер, паттерн Nuand)
     signal ctrl_meta, ctrl_tx   : std_logic_vector(31 downto 0);
@@ -164,6 +175,22 @@ architecture rtl of legion_regs is
     signal ltp_meta, ltp_tx     : std_logic_vector(31 downto 0);
     signal ltw_meta, ltw_tx     : std_logic_vector(31 downto 0);
     signal lts_meta, lts_nios   : std_logic_vector(31 downto 0);
+    signal gmeta_meta, gmeta_tx : std_logic_vector(31 downto 0);
+    signal gf0_meta, gf0_tx     : std_logic_vector(31 downto 0);
+    signal gstep_meta, gstep_tx : std_logic_vector(31 downto 0);
+    signal gpri_meta, gpri_tx   : std_logic_vector(31 downto 0);
+    signal gflg_meta, gflg_tx   : std_logic_vector(31 downto 0);
+    signal gsh_meta, gsh_tx     : std_logic_vector(31 downto 0);
+    signal grsv_meta, grsv_tx   : std_logic_vector(7 downto 0);
+    signal fs_tmeta, fs_ttx     : std_logic_vector(31 downto 0);
+    signal lo_tmeta, lo_ttx     : std_logic_vector(31 downto 0);
+    signal hluta_meta, hluta_tx : std_logic_vector(7 downto 0);
+    signal hlutd_meta, hlutd_tx : std_logic_vector(7 downto 0);
+    signal hlutt_meta, hlutt_tx, hlutt_tx_d : std_logic;
+    signal hop_auto             : std_logic;
+    signal hop_ftw              : unsigned(31 downto 0);
+    signal hop_ch               : unsigned(7 downto 0);
+    signal hopch_meta, hopch_nios : unsigned(7 downto 0);
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -239,6 +266,9 @@ begin
             r_lut_addr   <= (others => '0');
             r_lut_data   <= (others => '0');
             r_lut_tog    <= '0';
+            r_hlut_addr  <= (others => '0');
+            r_hlut_data  <= (others => '0');
+            r_hlut_tog   <= '0';
             r_delay      <= (others => '0');
             r_walk_step  <= (others => '0');
             r_walk_max   <= (others => '0');
@@ -259,6 +289,13 @@ begin
             r_lt_ctrl      <= (others => '0');
             r_lt_period    <= (others => '0');
             r_lt_width     <= (others => '0');
+            r_grid_meta    <= (others => '0');
+            r_grid_f0      <= (others => '0');
+            r_grid_step    <= (others => '0');
+            r_grid_pri     <= (others => '0');
+            r_grid_shift   <= (others => '0');
+            r_grid_flags   <= (others => '0');
+            r_grid_rsv     <= (others => '0');
             kick_toggle  <= '0';
         elsif rising_edge(nios_clk) then
             if pio_we = '1' then
@@ -286,6 +323,10 @@ begin
                         r_lut_addr <= pio_wdata(15 downto 8);
                         r_lut_data <= pio_wdata(7 downto 0);
                         r_lut_tog  <= not r_lut_tog;
+                    when LEGION_REG_HOP_LUT    =>
+                        r_hlut_addr <= pio_wdata(15 downto 8);
+                        r_hlut_data <= pio_wdata(7 downto 0);
+                        r_hlut_tog  <= not r_hlut_tog;
                     when LEGION_REG_DELAY      => r_delay      <= pio_wdata;
                     when LEGION_REG_WALK_STEP  => r_walk_step  <= pio_wdata;
                     when LEGION_REG_WALK_MAX   => r_walk_max   <= pio_wdata;
@@ -306,6 +347,13 @@ begin
                     when LEGION_REG_LT_CTRL   => r_lt_ctrl   <= pio_wdata;
                     when LEGION_REG_LT_PERIOD => r_lt_period <= pio_wdata;
                     when LEGION_REG_LT_WIDTH  => r_lt_width  <= pio_wdata;
+                    when LEGION_REG_GRID_META    => r_grid_meta  <= pio_wdata;
+                    when LEGION_REG_GRID_F0_HZ   => r_grid_f0    <= pio_wdata;
+                    when LEGION_REG_GRID_STEP_HZ => r_grid_step  <= pio_wdata;
+                    when LEGION_REG_GRID_PRI_US  => r_grid_pri   <= pio_wdata;
+                    when LEGION_REG_GRID_SHIFT_HZ => r_grid_shift <= pio_wdata;
+                    when LEGION_REG_GRID_FLAGS   => r_grid_flags <= pio_wdata;
+                    when LEGION_REG_GRID_RSV     => r_grid_rsv   <= pio_wdata(7 downto 0);
                     when others => null;
                 end case;
             end if;
@@ -343,6 +391,18 @@ begin
             ltc_meta  <= (others => '0'); ltc_tx <= (others => '0');
             ltp_meta  <= (others => '0'); ltp_tx <= (others => '0');
             ltw_meta  <= (others => '0'); ltw_tx <= (others => '0');
+            gmeta_meta <= (others => '0'); gmeta_tx <= (others => '0');
+            gf0_meta   <= (others => '0'); gf0_tx   <= (others => '0');
+            gstep_meta <= (others => '0'); gstep_tx <= (others => '0');
+            gpri_meta  <= (others => '0'); gpri_tx  <= (others => '0');
+            gflg_meta  <= (others => '0'); gflg_tx  <= (others => '0');
+            gsh_meta   <= (others => '0'); gsh_tx   <= (others => '0');
+            grsv_meta  <= (others => '0'); grsv_tx  <= (others => '0');
+            fs_tmeta   <= (others => '0'); fs_ttx   <= (others => '0');
+            lo_tmeta   <= (others => '0'); lo_ttx   <= (others => '0');
+            hluta_meta <= (others => '0'); hluta_tx <= (others => '0');
+            hlutd_meta <= (others => '0'); hlutd_tx <= (others => '0');
+            hlutt_meta <= '0'; hlutt_tx <= '0'; hlutt_tx_d <= '0';
         elsif rising_edge(tx_clock) then
             ctrl_meta <= r_ctrl;       ctrl_tx <= ctrl_meta;
             ftw_meta  <= r_nco_ftw;    ftw_tx  <= ftw_meta;
@@ -376,6 +436,20 @@ begin
             ltc_meta  <= r_lt_ctrl;      ltc_tx  <= ltc_meta;
             ltp_meta  <= r_lt_period;    ltp_tx  <= ltp_meta;
             ltw_meta  <= r_lt_width;     ltw_tx  <= ltw_meta;
+            gmeta_meta <= r_grid_meta;  gmeta_tx <= gmeta_meta;
+            gf0_meta   <= r_grid_f0;    gf0_tx   <= gf0_meta;
+            gstep_meta <= r_grid_step;  gstep_tx <= gstep_meta;
+            gpri_meta  <= r_grid_pri;   gpri_tx  <= gpri_meta;
+            gflg_meta  <= r_grid_flags; gflg_tx  <= gflg_meta;
+            gsh_meta   <= r_grid_shift; gsh_tx   <= gsh_meta;
+            grsv_meta  <= r_grid_rsv;   grsv_tx  <= grsv_meta;
+            fs_tmeta   <= r_ch_fs;      fs_ttx   <= fs_tmeta;
+            lo_tmeta   <= r_ch_lo;      lo_ttx   <= lo_tmeta;
+            hluta_meta <= r_hlut_addr;  hluta_tx <= hluta_meta;
+            hlutd_meta <= r_hlut_data;  hlutd_tx <= hlutd_meta;
+            hlutt_meta <= r_hlut_tog;
+            hlutt_tx   <= hlutt_meta;
+            hlutt_tx_d <= hlutt_tx;
         end if;
     end process;
 
@@ -395,7 +469,29 @@ begin
     tx_walk_auto  <= wct_tx(1);
     tx_walk_hold  <= wct_tx(2);
     tx_lb_delay   <= unsigned(lbd_tx);
-    tx_lb_ftw     <= unsigned(lbf_tx);
+    tx_lb_ftw     <= hop_ftw when hop_auto = '1' else unsigned(lbf_tx);
+    tx_hop_auto   <= hop_auto;
+    U_lut_hop : entity work.legion_lut_hop
+        port map (
+            clk          => tx_clock,
+            reset        => tx_reset,
+            pri_us       => unsigned(gpri_tx),
+            flags        => gflg_tx,
+            meta         => gmeta_tx,
+            f0           => unsigned(gf0_tx),
+            step_hz      => unsigned(gstep_tx),
+            shift_hz     => signed(gsh_tx),
+            rsv          => unsigned(grsv_tx),
+            proto_period => unsigned(pper_tx),
+            fs_hz        => unsigned(fs_ttx),
+            lo_khz       => unsigned(lo_ttx),
+            lut_we       => hlutt_tx xor hlutt_tx_d,
+            lut_addr     => unsigned(hluta_tx),
+            lut_data     => unsigned(hlutd_tx),
+            hop_auto     => hop_auto,
+            hop_ch       => hop_ch,
+            hop_ftw      => hop_ftw
+        );
     tx_lb_delay1  <= unsigned(lbd1_tx);
     tx_lb_ftw1    <= unsigned(lbf1_tx);
     tx_lb_amp0    <= unsigned(lba_tx(15 downto 0));
@@ -429,11 +525,15 @@ begin
     cdc_status : process(nios_clk, nios_reset)
     begin
         if nios_reset = '1' then
-            st_meta <= (others => '0');
-            st_nios <= (others => '0');
+            st_meta    <= (others => '0');
+            st_nios    <= (others => '0');
+            hopch_meta <= (others => '0');
+            hopch_nios <= (others => '0');
         elsif rising_edge(nios_clk) then
-            st_meta <= status_tx;
-            st_nios <= st_meta;
+            st_meta    <= status_tx;
+            st_nios    <= st_meta;
+            hopch_meta <= hop_ch;
+            hopch_nios <= hopch_meta;
         end if;
     end process;
 
@@ -584,7 +684,8 @@ begin
     -- we=1 или другой addr — прежний STATUS (бит 4 = 0 в HDL).
     status_mux : process(pio_we, pio_addr, pk_nios, pk1_nios, pk2_nios, pk3_nios,
                          ch_nios, wcur_nios, act_nios, e_nios, bins_nios,
-                         det_gray_nios, st_nios, lts_nios)
+                         det_gray_nios, st_nios, lts_nios, hopch_nios,
+                         r_grid_rsv)
         variable a : integer;
     begin
         a := to_integer(unsigned(pio_addr));
@@ -611,6 +712,9 @@ begin
             pio_status <= bins_nios(63 downto 32);
         elsif pio_we = '0' and a = LEGION_REG_LT_STATUS then
             pio_status <= lts_nios;
+        elsif pio_we = '0' and a = LEGION_REG_GRID_RSV then
+            -- [7:0] фаза RSV, [15:8] текущий hop_ch (монитор).
+            pio_status <= x"0000" & std_logic_vector(hopch_nios) & r_grid_rsv;
         else
             pio_status <= gray2bin(det_gray_nios) & st_nios(15 downto 0);
         end if;

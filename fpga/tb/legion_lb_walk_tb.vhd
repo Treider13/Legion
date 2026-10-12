@@ -68,6 +68,7 @@ begin
             walk_period => walk_period, proto_period => proto_period,
             step_src => step_src,
             ftw0_init => ftw0_init, ftw1_init => ftw1_init, ftw_step => ftw_step,
+            hop_auto => '0',
             det_active => det_active, sample_en => sample_en,
             tap => tap, tap1 => tap1, ftw0 => ftw0, ftw1 => ftw1,
             cur_delay => cur_delay

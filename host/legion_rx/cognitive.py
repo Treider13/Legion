@@ -2,7 +2,7 @@
 
 LISTENING → INITIAL_SCAN → LEARNING → CONFIRMING →
 JAMMING (host, каждый hop) → MONITORING → (DRIFT | SILENT | RE_ACQUIRE).
-HDL не шагает CH_LUT — флаг autonomous пишется, удар всегда с host.
+HDL legion_lut_hop шагает индекс CH_LUT при FLAGS.AUTONOMOUS и cycle≤255.
 """
 from __future__ import annotations
 
@@ -158,7 +158,8 @@ class CognitiveFSM:
                 out = preload_hop_sequence(self.fpga, pat, self.sub,
                                            position=self.position, next_n=n_pre,
                                            chan_step_hz=step, dwell_us=dwell,
-                                           autonomous=auto, fs_hz=self.fs_hz)
+                                           autonomous=auto, fs_hz=self.fs_hz,
+                                           lo_hz=self.lo_hz)
                 pre_n = out["written"]
                 self._autonomous = bool(out["autonomous"])
                 pat["lut_n"] = pre_n
