@@ -46,6 +46,7 @@ class PatternStore:
                 per = find_period_tolerant(seq, m=self.n_chans)
                 rec["hop_sequence"] = seq
                 rec["freqs_mhz"] = freqs
+                rec["freq_khz"] = [int(round(x * 1000.0)) for x in freqs]
                 rec["updated"] = time.time()
                 rec["cycle_length"] = per[0] if per else len(seq)
                 rec["cycle"] = seq[: rec["cycle_length"]]
@@ -63,6 +64,7 @@ class PatternStore:
             "sub": dict(sub_corridor),
             "hop_sequence": seq,
             "freqs_mhz": freqs,
+            "freq_khz": [int(round(x * 1000.0)) for x in freqs],
             "cycle_length": cyc_len,
             "cycle": seq[:cyc_len],  # канонический цикл для align/predict
             "dwell_s": (sorted(dwells)[len(dwells) // 2] / 1e6
@@ -232,7 +234,9 @@ def apply_timer_cycle(rec: dict, energy=None, dt_s: float = 1e-3) -> dict:
 def find_period_tolerant(seq: list, tol: int = 1, m: "int | None" = None,
                          min_score: float = 0.85,
                          max_cycle: int = 4096) -> "tuple | None":
-    """Период ЛЮБОЙ длины 2..max_cycle (4096), с допуском ±tol каналов
+    """Период ряда во времени: seq[i] совпадает с seq[i+p].
+    Это не автокорреляция частот.
+    Длина 2..max_cycle (4096), допуск ±tol каналов
     (джиттер/краевое расщепление) и усечённым хвостом. p=1 исключён:
     при tol=1 последовательная таблица 0,1,2,… даёт ложный период 1.
     Критерий: доля совпадений seq[i]≈seq[i+p] ≥ min_score при

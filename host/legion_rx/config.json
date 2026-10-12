@@ -1,0 +1,10 @@
+{
+  "f_start_hz": 2000000000,
+  "f_end_hz": 2500000000,
+  "jam_duration_s": 15,
+  "mute_ns": 0,
+  "retune_time_us": null,
+  "lna_gain_db": 20,
+  "rx_fs_hz": 34000000,
+  "freq_shift_hz": 15000
+}

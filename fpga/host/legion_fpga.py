@@ -121,7 +121,14 @@ REG_LT_CTRL = 0x5A
 REG_LT_PERIOD = 0x5B
 REG_LT_WIDTH = 0x5C
 REG_LT_STATUS = 0x5D
-REG_HOP_LUT = 0x5E  # hop idx→ch {idx[15:8], ch[7:0]}
+REG_HOP_LUT = 0x5E          # кГц, слово целиком
+REG_HOP_LUT_DATA = 0x5E
+REG_HOP_START_IDX = 0x5F
+REG_HOP_END_IDX = 0x60
+REG_HOP_LUT_ADDR = 0x61
+REG_HOP_STROBE_DATA = 0x62
+REG_HOP_STROBE_APPLY = 0x63
+REG_HOP_MUTE_NS = 0x64
 CH_MODE_OCUSYNC = 0
 CH_MODE_ELRS = 1
 AIM_NONE = 0xFF
@@ -414,9 +421,29 @@ class LegionFpga:
                               ((int(bin_idx) & 0xFF) << 8) | (int(ch) & 0xFF))
 
     def write_hop_lut(self, idx: int, ch: int) -> bool:
-        """Слот hop-последовательности. Отдельный адрес от RX 0x31."""
-        return self.write_reg(REG_HOP_LUT,
-                              ((int(idx) & 0xFF) << 8) | (int(ch) & 0xFF))
+        """Устаревшая упаковка канала. Для удара пишите write_hop_khz."""
+        return self.write_hop_khz(idx, int(ch) & 0xFF)
+
+    def write_hop_khz(self, idx: int, khz: int) -> bool:
+        """Одна ячейка: адрес, затем кГц, затем строб. Не в одном слове."""
+        return (self.write_reg(REG_HOP_LUT_ADDR, int(idx) & 0xFF) and
+                self.write_reg(REG_HOP_LUT_DATA, int(khz) & 0xFFFFFFFF) and
+                self.write_reg(REG_HOP_STROBE_DATA, 1))
+
+    def apply_hop_range(self, start: int, end: int) -> bool:
+        """Границы ряда. Строб отдельно от записи ячеек."""
+        return (self.write_reg(REG_HOP_START_IDX, int(start) & 0xFF) and
+                self.write_reg(REG_HOP_END_IDX, int(end) & 0xFF) and
+                self.write_reg(REG_HOP_STROBE_APPLY, 1))
+
+    def set_hop_mute_ns(self, mute_ns: int) -> bool:
+        """Длительность молчания метки, наносекунды. 0 — счётчик не стартует."""
+        return self.write_reg(REG_HOP_MUTE_NS, int(mute_ns) & 0xFFFFFFFF)
+
+    def store_profile_lo_khz(self, slot: int, lo_khz: int) -> bool:
+        """Слот 0..7. Бит 31: NIOS кладёт в таблицу, живую несущую не двигает."""
+        word = 0x80000000 | ((int(slot) & 7) << 28) | (int(lo_khz) & 0x0FFFFFFF)
+        return self.write_reg(REG_CH_LO_KHZ, word)
 
     def set_band_table(self, bands: list[tuple[float, float]]) -> bool:
         """До 8 коридоров. Пусто / BAND_COUNT=0 — сетка от SCAN_F1/F2."""

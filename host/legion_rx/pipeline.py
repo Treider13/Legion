@@ -19,9 +19,11 @@
             замеры задержек и точности предсказания (критерии 6.4, 9.4
             проверяются здесь до выезда в лабораторию).
   cognitive  FHSS-память. Без --live — синтетика и FakeTransport.
-            --live --corridor F1 F2 --fifo /tmp/iq: C-читатель →
-            Burst Detector → FSM → preload. Запись FPGA забирает USB
-            у bladeRF-cli и возвращает стрим (один владелец FX3).
+            --live --corridor F1 F2: консоль задаёт частоту, LNA и полосу
+            и закрывается. Дальше USB держит UsbOwner (SC16_Q11_META):
+            кадры в FIFO, C-читатель → PFB → FSM. Запись регистров на
+            время кадра отпускает libbladeRF и забирает его обратно.
+            Консоль во время удара устройство не открывает.
 
 Журнал каждого прогона: host/logs/<ts>-<mode>.jsonl.
 """
@@ -32,6 +34,7 @@ import json
 import os
 import queue
 import sys
+import threading
 import time
 
 import numpy as np
@@ -689,8 +692,190 @@ class _HandoffFpga:
         return getattr(self._ensure(), name)
 
 
+class _UsbLive:
+    """Консоль только для первичной настройки. Поток — libbladeRF.
+
+    UsbOwner пишет SC16 в FIFO, C-читатель забирает кадры как раньше.
+    """
+
+    def __init__(self, args, fs_hz: float, lo_hz: float):
+        from .libbladerf_owner import UsbOwner
+        self.device = getattr(args, "device", None)
+        self.fifo = args.fifo
+        self.fs = float(fs_hz)
+        self.bw = float(getattr(args, "bw", None) or 20.0e6)
+        self.lna = int(getattr(args, "lna", None) or 20)
+        self.frame_samples = int(args.frame_samples)
+        self.lo = float(lo_hz)
+        self.usb = UsbOwner()
+        self.src = None
+        self._fd = None
+        self._th = None
+        self._stop = threading.Event()
+        self._io = threading.Lock()
+        self._paused = False
+        self.streaming = False
+
+    def tune(self, hz: float) -> None:
+        self.lo = float(hz)
+        if self.usb.open and not self._paused:
+            self.usb.configure(int(self.lo), int(self.fs), int(self.bw), self.lna)
+
+    def _prime_cli(self) -> None:
+        sess = BladerfCliSession(device=self.device)
+        try:
+            sess.set_frequency_rx(self.lo)
+            sess.set_samplerate_rx(self.fs)
+            sess.set_bandwidth_rx(self.bw)
+            sess.cmd(f"set gain rx {self.lna}")
+        finally:
+            sess.close()
+
+    def start(self) -> None:
+        if self.streaming:
+            return
+        self._prime_cli()
+        rc = self.usb.acquire(self.device or "")
+        if rc != 0:
+            raise RuntimeError(f"UsbOwner.acquire: {rc}")
+        rc = self.usb.configure(int(self.lo), int(self.fs), int(self.bw), self.lna)
+        if rc != 0:
+            self.usb.release()
+            raise RuntimeError(f"UsbOwner.configure: {rc}")
+        rc = self.usb.arm_meta_stream()
+        if rc != 0:
+            self.usb.release()
+            raise RuntimeError(f"UsbOwner.arm_meta_stream: {rc}")
+        rc = self.usb.enable_rx(True)
+        if rc != 0:
+            self.usb.release()
+            raise RuntimeError(f"UsbOwner.enable_rx: {rc}")
+        ensure_fifo(self.fifo)
+        self._fd = os.open(self.fifo, os.O_RDWR)
+        self.src = FifoSource(self.fifo, self.frame_samples, self.fs)
+        self._stop.clear()
+        self._paused = False
+        self.src.start()
+        self._th = threading.Thread(target=self._pump, daemon=True,
+                                    name="usb-owner-rx")
+        self._th.start()
+        self.streaming = True
+
+    def _pump(self) -> None:
+        fd = self._fd
+        try:
+            while not self._stop.is_set():
+                with self._io:
+                    if self._paused or not self.usb.open:
+                        raw = b""
+                    else:
+                        _rc, raw, _ts = self.usb.read_frame_bytes(
+                            self.frame_samples)
+                if not raw:
+                    time.sleep(0.002)
+                    continue
+                try:
+                    os.write(fd, raw)
+                except OSError:
+                    break
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    def pause_for_pio(self) -> None:
+        """Отпустить USB под запись регистров. Консоль не открываем."""
+        with self._io:
+            self._paused = True
+            if self.usb.open:
+                self.usb.enable_rx(False)
+                self.usb.release()
+
+    def resume_after_pio(self) -> None:
+        with self._io:
+            if not self.usb.open:
+                rc = self.usb.acquire(self.device or "")
+                if rc != 0:
+                    return
+                self.usb.configure(int(self.lo), int(self.fs), int(self.bw),
+                                   self.lna)
+                self.usb.arm_meta_stream()
+                self.usb.enable_rx(True)
+            self._paused = False
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+        if self._th is not None:
+            self._th.join(timeout=3.0)
+            self._th = None
+        with self._io:
+            if self.usb.open:
+                self.usb.enable_rx(False)
+                self.usb.release()
+        if self.src is not None:
+            self.src.stop()
+            self.src = None
+        self.streaming = False
+
+    def read_frame(self, timeout: float = 0.5):
+        if self.src is None:
+            return None
+        try:
+            return self.src.frames.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+
+class _UsbHandoff:
+    """Регистры FPGA через периферийный USB. Между кадрами владелец снова UsbOwner."""
+
+    def __init__(self, radio: _UsbLive):
+        self._radio = radio
+        self._br = None
+
+    def _ensure(self):
+        if self._br is not None:
+            return self._br.fpga
+        self._radio.pause_for_pio()
+        from . import fpga_control as fc
+        br = fc.FpgaBridge()
+        br.__enter__()
+        self._br = br
+        return br.fpga
+
+    def yield_usb(self) -> None:
+        self.end_tick()
+
+    def end_tick(self) -> None:
+        if self._br is None:
+            return
+        try:
+            self._br.__exit__(None, None, None)
+        finally:
+            self._br = None
+        self._radio.resume_after_pio()
+
+    def close(self) -> None:
+        if self._br is not None:
+            try:
+                self._br.__exit__(None, None, None)
+            finally:
+                self._br = None
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
+
+
 def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
-    """Живой IQ: FIFO → C-читатель → PFB → CorridorDetector внутри FSM."""
+    """Живой IQ: UsbOwner → FIFO → C-читатель → PFB → FSM."""
     from .cognitive import CognitiveFSM
     from .lo_sweep import plan_windows, window_hz
     from .pattern_store import PatternStore
@@ -703,23 +888,26 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
               file=sys.stderr)
         return 2
     f1, f2 = span
-    fs = _hz_arg(getattr(args, "samplerate", None) or "20M")
+    fs = float(fc.AIR_FS_HZ)
     ibw = window_hz(fc.AIR_FS_HZ)
     windows = plan_windows(f1, f2, ibw)
     lo = float(windows[0]["f_center"])
     log.write({"kind": "live", "f_start": f1, "f_end": f2,
                "fs_rx_hz": fs, "fpga_fs_hz": fc.AIR_FS_HZ,
+               "usb_owner": "libbladeRF",
                "lo_hz": lo, "windows": len(windows),
                "lo_sweep": (f2 - f1) > ibw})
     if not _preflight(args, log):
         return 2
-    radio = _LiveRx(args, fs, lo)
-    fpga = _HandoffFpga(radio)
+    radio = _UsbLive(args, fs, lo)
+    radio.start()
+    fpga = _UsbHandoff(radio)
     store = PatternStore()
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
                        radio=_RxProxy(radio), scan_corridor=(f1, f2),
                        frame_dt_s=args.frame_samples / fs,
                        frame_samples=args.frame_samples, ibw_hz=ibw)
+    fsm.usb = radio.usb
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     rebuilt = {"done": False}
@@ -770,7 +958,8 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
             "lo_sweep_windows": len(windows),
             "states_path": [t["to"] for t in fsm.transitions],
             "final_state": fsm.state, "jams_sent": fsm.jams_sent,
-            "overruns": radio.mon.verdict() if radio.mon else None,
+            "overruns": int(radio.usb.overruns),
+            "usb_owner": "libbladeRF",
         }
         log.write({"kind": "verdict", **verdict})
         print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
