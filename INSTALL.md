@@ -20,7 +20,7 @@ legion привязаны к Linux-инструментам (pyusb/systemd/Quart
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip python3-tk \
   python3-dev build-essential nodejs npm \
-  bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxA4 \
+  bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxa4 \
   python3-soapysdr soapysdr-tools soapysdr-module-bladerf python3-numpy \
   python3-usb libusb-1.0-0
 ```
