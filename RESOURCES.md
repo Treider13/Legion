@@ -395,21 +395,17 @@ Host на listen-hop не снимает FLAGS bit4: иначе `idx` замир
 | Регистр | Адрес | Семантика |
 |---|---|---|
 | `REG_LT_CTRL` | `0x5A` | bit0 EN, [7:4] ratio_shift |
-| `REG_LT_PERIOD` | `0x5B` | сэмплы TX-он |
-| `REG_LT_WIDTH` | `0x5C` | сэмплы blank. `REG_LT_LEN` в HDL нет |
+| `REG_LT_PERIOD` | `0x5B` | hop-тики TX-он, если значение ≤ 255 |
+| `REG_LT_WIDTH` | `0x5C` | hop-тики blank. `REG_LT_LEN` в HDL нет |
 | `REG_LT_STATUS` | `0x5D` | [0] echo_hold, [1] blank |
 
-Период 10 hops, слушание 1 hop: PERIOD = 9×hop_samp, WIDTH = 1×hop_samp.
-`hop_samp = dwell_us × 1e-6 × fs`. Включение один раз после автономного
-preload (`enable_look_through(10, 1)`). Drift: `disable_look_through()`
-и стоп LUT (FLAGS bit4=0 уже не listen-hop) → `RE_LEARNING`.
+`legion_lut_hop` выдаёт `hop_tick` на один `tx_clock` при `idx++`.
+`legion_look_through` считает эти импульсы. `enable_look_through(10, 1)`
+пишет PERIOD=9, WIDTH=1: blank, пока счётчик ∈ [9, 10), то есть 1 hop из 10
+по смене `idx`. FLAGS bit4 при этом не снимается.
 
-Blank 10:1 считается в сэмплах. `legion_look_through` не принимает
-`hop_ch`, `hop_tick` и `idx` (порты entity: enable, period, width).
-Счётчик blank и индекс LUT стартуют разными записями, фаза 10:1
-относительно `hop_ch` не зафиксирована. Точная синхронизация со сменой
-`hop_ch` — требование к HDL, отдельная задача. Сброс LT с host на каждый
-hop вернул бы USB в петлю и здесь не делается.
+PERIOD > 255 и ни одного `hop_tick` — прежний счётчик сэмплов.
+Образ `v1.1` (md5 `6ce02ebc…`) входа `hop_tick` не содержит.
 Blank на плате не измерялся.
 
 ## Live mode
