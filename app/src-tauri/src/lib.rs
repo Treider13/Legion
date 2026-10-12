@@ -1,5 +1,6 @@
 mod esp32_flash;
 mod legion_build;
+mod rx_test;
 mod sdr;
 
 /// LEGION: начальный serial-порт из переменной окружения LEGION_PORT.
@@ -29,7 +30,12 @@ pub fn run() {
       legion_build::legion_toolchain_check,
       legion_build::legion_build_start,
       legion_build::legion_build_status,
-      legion_build::legion_build_cancel
+      legion_build::legion_build_cancel,
+      rx_test::legion_rx_test_start,
+      rx_test::legion_rx_test_status,
+      rx_test::legion_rx_test_stop,
+      rx_test::legion_rx_captures,
+      rx_test::legion_rx_load
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

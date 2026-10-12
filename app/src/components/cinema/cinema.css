@@ -656,7 +656,8 @@ button.cinema-wave.on:hover:not(:disabled) {
   letter-spacing: 0.04em;
 }
 
-.smart-attack-strip input {
+.smart-attack-strip input,
+.smart-attack-strip select {
   width: 8.5rem;
   padding: 4px 6px;
   border: 1px solid rgba(167, 183, 192, 0.35);
@@ -664,6 +665,14 @@ button.cinema-wave.on:hover:not(:disabled) {
   background: #07080c;
   color: #e8e4dc;
   font: inherit;
+}
+
+.smart-attack-actions select {
+  width: 16rem;
+}
+
+.smart-attack-actions button {
+  align-self: center;
 }
 
 @media (prefers-reduced-motion: reduce) {
