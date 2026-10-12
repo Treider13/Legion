@@ -464,15 +464,26 @@ python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /
 ## Полка DRFM по времени (12.10.2026)
 
 Quartus Prime Lite 23.1std.1, `bladeRF-micro` A4, revision `legion`.
-Образы после одного такта `ch_r` и `hop_tick`. git_info: `b9aa911` clean. Тег v1.3 не ставился: сид 3, Fast 0°C hold `pll_sclk` −0.013 нс.
+Образы после одного такта `ch_r` и `hop_tick`. git_info: `b9aa911` clean. Тег v1.3 не ставился.
 
-Slow 0°C setup `pll_sclk` на сидах 1–3 положительный, TNS 0. Fast 0°C hold `tck` на этих трёх тоже положительный. Не закрыт только hold `pll_sclk` сида 3.
+Slow 0°C setup `pll_sclk` на сидах 1–3 положительный, TNS 0. Fast 0°C hold `tck` на этих трёх тоже положительный. Hold `pll_sclk` не закрыт только на сиде 3 (−0.013 нс). Это разброс fitter. HDL после разбора пути не менялся, RBF не пересобирался.
 
-| seed | каталог | ALM | M10K | DSP | Slow 0C setup pll_sclk | TNS | Fast 0C hold pll_sclk | Fast 0C hold tck | md5 |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | `legionxA4-2026-10-12_15.22.03` | 11 887 (64 %) | 285 | 35 | +0.977 | 0 | +0.060 | +0.121 | `5e0d3b49f9f7ebdf5aa417b93d148e5f` |
-| 2 | `legionxA4-2026-10-12_15.29.07` | 11 886 (64 %) | 285 | 35 | +1.209 | 0 | +0.080 | +0.112 | `4db61f199a08b8e6f3ed1e67caed5ed5` |
-| 3 | `legionxA4-2026-10-12_15.36.32` | 11 898 (64 %) | 285 | 35 | +0.926 | 0 | −0.013, TNS −0.013 | +0.013 | `252f933954a84c9b9c5df84437571f10` |
+Worst hold path сида 3, Fast 1100mV 0°C, оба такта `pll_sclk~PLL_OUTPUT_COUNTER|divclk`. Timing Analyzer по базе `work/bladerf-micro-A4-legion` (md5 RBF совпал с сидом 3): `report_hold_pll_seed3.txt:39-55`.
+
+- Источник: `legion_lb_xlat:U_legion_lb_xlat|Add2~1_OTERM2229`
+- Назначение: `legion_lb_xlat:U_legion_lb_xlat|pre_s[0]`
+- Data delay 0.511 нс, clock skew 0.524 нс, slack −0.013 нс
+- Путь внутри `legion_lb_xlat` (legacy, сумматор → `pre_s`). Не `lut_hop`, не look-through, не `legion_regs`.
+
+Сводная строка −0.013: `legionxA4-2026-10-12_15.36.32/legionxA4.sta.summary` и `legionxA4.sta.rpt:2200`. В `sta.rpt` регистров нет, только slack часов.
+
+Frozen = seed 2. Каталог `legionxA4-2026-10-12_15.29.07`, md5 `4db61f199a08b8e6f3ed1e67caed5ed5`. Slow setup +1.209, Fast hold pll_sclk +0.080, Fast hold tck +0.112, TNS 0. Сид 1 тоже PASS и в заморозку не выбран: запас hold меньше (+0.060).
+
+| seed | вердикт | каталог | ALM | M10K | DSP | Slow 0C setup pll_sclk | TNS | Fast 0C hold pll_sclk | Fast 0C hold tck | md5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | PASS | `legionxA4-2026-10-12_15.22.03` | 11 887 (64 %) | 285 | 35 | +0.977 | 0 | +0.060 | +0.121 | `5e0d3b49f9f7ebdf5aa417b93d148e5f` |
+| 2 | PASS, frozen | `legionxA4-2026-10-12_15.29.07` | 11 886 (64 %) | 285 | 35 | +1.209 | 0 | +0.080 | +0.112 | `4db61f199a08b8e6f3ed1e67caed5ed5` |
+| 3 | FAIL hold pll_sclk | `legionxA4-2026-10-12_15.36.32` | 11 898 (64 %) | 285 | 35 | +0.926 | 0 | −0.013, TNS −0.013 | +0.013 | `252f933954a84c9b9c5df84437571f10` |
 
 M10K 285: на одну таблицу больше, чем у v1.2 (284). Это 256×32 кГц, если Quartus собрал память. Отдельный отчёт RAM inference здесь не разбирался.
 
