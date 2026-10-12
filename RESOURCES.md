@@ -286,6 +286,10 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 Quick-tune: LRU 256 + `set_frequency_rx`. `bladerf_get_quick_tune`
 недоступен через `legion_fpga.py`. Очередь retune ≤ 16. fs при частых
 retune ≤ 20 Msps.
+`finish().stitched` (дубли overlap сняты, `hole` при разрыве ~4 мс между
+окнами) загружается в `HopRecorder.load_stitched`. Обучающий recorder
+не пустой: прыжки всех окон на одной сетке от `sub.f_start`.
+2400–2483 МГц → 2 окна. На эфире этот ряд не снимался.
 
 ## Универсальная сетка FHSS (12.10.2026)
 

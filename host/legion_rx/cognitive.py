@@ -265,7 +265,8 @@ class CognitiveFSM:
         return {"state": self.state, "hop": hop, "pid": self.pid,
                 "jams_sent": self.jams_sent, "pdr": self.eff.pdr}
 
-    def _start_learning(self, t_s: float, hops, parent: dict) -> None:
+    def _start_learning(self, t_s: float, hops, parent: dict,
+                        seed: "list | None" = None) -> None:
         self.parent = parent
         self._live = []
         self.sub = extract_subcorridor(hops, parent["corridor_id"])
@@ -276,8 +277,16 @@ class CognitiveFSM:
                 "t_s": float(t_s), "action": "ibw_limit", **vis})
         self.rec = HopRecorder(self.sub, n_chans=self.n_chans,
                                samples_per_frame=self.spf)
+        stitched_n = 0
+        holes = 0
+        if seed:
+            stitched_n = self.rec.load_stitched(seed)
+            self._live = [int(h["channel_idx"]) for h in self.rec.hops]
+            self._live = self._live[-self._live_cap():]
+            holes = self.rec.hole_count
         self._go(LEARNING, t_s, sub=[self.sub["f_start"], self.sub["f_end"]],
-                 coverage=round(vis["visible_frac"], 3), note=vis["note"])
+                 coverage=round(vis["visible_frac"], 3), note=vis["note"],
+                 stitched=stitched_n, holes=holes)
         if self.pub:
             self.pub.send_corridor(
                 {"f_start": parent.get("f_start", min(hops)),
@@ -340,6 +349,8 @@ class CognitiveFSM:
                 w = self.sweeper.current()
                 if w:
                     self.lo_hz = w["f_center"]
+                    # Сборщик одного окна. Ряд всех окон — в sweeper.hops,
+                    # в обучающий recorder он попадёт из stitch на finish.
                     self.rec = HopRecorder(
                         extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
                         n_chans=self.n_chans, samples_per_frame=self.spf)
@@ -349,13 +360,20 @@ class CognitiveFSM:
                 work = fin["work"]
                 if work:
                     self.lo_hz = work["f_center"]
-                hops = [h["freq_mhz"] * 1e6 for h in fin["stitched"]] or self._listen_freqs
+                seed = list(fin.get("stitched") or [])
+                hops = [float(h["freq_mhz"]) * 1e6 for h in seed]
                 if not hops:
-                    hops = [self.lo_hz]
-                parent = {"corridor_id": "scan",
-                          "f_start": work["f_start"] if work else min(hops),
-                          "f_end": work["f_end"] if work else max(hops)}
-                self._start_learning(t_s, hops, parent)
+                    hops = list(self._listen_freqs) or [self.lo_hz]
+                if seed:
+                    f1 = min(hops)
+                    f2 = max(hops)
+                elif work:
+                    f1, f2 = work["f_start"], work["f_end"]
+                else:
+                    f1, f2 = min(hops), max(hops)
+                parent = {"corridor_id": "scan", "f_start": f1, "f_end": f2}
+                self._start_learning(t_s, hops, parent,
+                                     seed=seed if seed else None)
                 if self.transitions:
                     self.transitions[-1]["coverage"] = fin["coverage"]
                     self.transitions[-1]["note"] = fin["note"]
