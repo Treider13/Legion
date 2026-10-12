@@ -1,7 +1,8 @@
 """CognitiveFSM — контур FHSS-памяти.
 
 LISTENING → INITIAL_SCAN → LEARNING → CONFIRMING →
-JAMMING (LUT) → MONITORING → (DRIFT | SILENT | RE_ACQUIRE).
+JAMMING (host, каждый hop) → MONITORING → (DRIFT | SILENT | RE_ACQUIRE).
+HDL не шагает CH_LUT — флаг autonomous пишется, удар всегда с host.
 """
 from __future__ import annotations
 
@@ -422,15 +423,16 @@ class CognitiveFSM:
                     self._live = []
                     self._go(RE_LEARNING, t_s)
                     return
-            elif self._autonomous and self._lt_hops >= LOOKTHROUGH_HOPS:
-                self._lt_hops = 0
-                self._lt_listen = True
-                self._set_lut_flag(False)
-            elif not self._autonomous and nxt is not None and lp_score >= 0.7:
-                if nxt != self._last_jam_ch:
-                    self._jam_now(t_s)
-                    self._last_jam_ch = nxt
-                self._go(MONITORING, t_s, keep=True)
+            else:
+                if self._lt_hops >= LOOKTHROUGH_HOPS:
+                    self._lt_hops = 0
+                    self._lt_listen = True
+                    self._set_lut_flag(False)
+                if nxt is not None and lp_score >= 0.7:
+                    if nxt != self._last_jam_ch:
+                        self._jam_now(t_s)
+                        self._last_jam_ch = nxt
+                    self._go(MONITORING, t_s, keep=True)
         if (self._last_hop_t is not None
                 and float(t_s) - self._last_hop_t > SILENT_S):
             self._stop_jam(t_s, "target_silent")
