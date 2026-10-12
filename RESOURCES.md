@@ -365,7 +365,7 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 - Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет, прошивка не выполнялась.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
 - `pipeline cognitive` — bench и `FakeTransport`. Аргумента `--corridor` и живого FIFO+USB нет.
-- Ветка `pr-77777-lab-host-pipeline` на origin: `a71479e`. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`.
+- Ветка `pr-77777-lab-host-pipeline` на origin, ahead 0. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`. Hop-код до `a71479e`.
 
 ## Ограничения
 
