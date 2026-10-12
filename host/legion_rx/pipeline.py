@@ -411,13 +411,13 @@ def run_integrate(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         # --- фаза управления (USB у legion_fpga.py через FpgaBridge) ---
         t_h0 = time.perf_counter()
         ok = False
-        air_fs = fc.AIR_FS_HZ  # 36e6 — эфир RBF, не USB args.fs
+        air_fs = fc.AIR_FS_HZ  # 34e6 — эфир RBF, не USB args.fs
         try:
             with fc.FpgaBridge() as br:
                 ok = br.fpga.set_air_fs_hz(int(air_fs))
                 ok = fc.apply_profile(br.fpga, p, air_fs) and ok
                 ok = br.fpga.heartbeat() and ok
-                # +2 sample @ 36e6 = 55.6 нс; MCP PIO 55.6 нс. USB >> обоих.
+                # +2 sample @ 34e6 = 58.8 нс; MCP PIO 58.8 нс. USB >> обоих.
         except Exception as e:
             log.write({"kind": "fpga_error", "cycle": cycle, "error": str(e)})
             print(f"integrate: FPGA недоступна (цикл {cycle}): {e}",
@@ -692,7 +692,7 @@ class _HandoffFpga:
 def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     """Живой IQ: FIFO → C-читатель → PFB → CorridorDetector внутри FSM."""
     from .cognitive import CognitiveFSM
-    from .lo_sweep import IBW_HZ, plan_windows
+    from .lo_sweep import plan_windows, window_hz
     from .pattern_store import PatternStore
     from .pfb import Channelizer, chans_for_corridor
     from . import fpga_control as fc
@@ -704,12 +704,13 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         return 2
     f1, f2 = span
     fs = _hz_arg(getattr(args, "samplerate", None) or "20M")
-    windows = plan_windows(f1, f2, IBW_HZ)
+    ibw = window_hz(fc.AIR_FS_HZ)
+    windows = plan_windows(f1, f2, ibw)
     lo = float(windows[0]["f_center"])
     log.write({"kind": "live", "f_start": f1, "f_end": f2,
                "fs_rx_hz": fs, "fpga_fs_hz": fc.AIR_FS_HZ,
                "lo_hz": lo, "windows": len(windows),
-               "lo_sweep": (f2 - f1) > IBW_HZ})
+               "lo_sweep": (f2 - f1) > ibw})
     if not _preflight(args, log):
         return 2
     radio = _LiveRx(args, fs, lo)
@@ -718,7 +719,7 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
                        radio=_RxProxy(radio), scan_corridor=(f1, f2),
                        frame_dt_s=args.frame_samples / fs,
-                       frame_samples=args.frame_samples, ibw_hz=IBW_HZ)
+                       frame_samples=args.frame_samples, ibw_hz=ibw)
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     rebuilt = {"done": False}
@@ -785,17 +786,19 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         return _run_cognitive_live(args, log, pub)
     from .cognitive import CognitiveFSM
     from .cognitive import LISTENING, MONITORING, TARGET_SILENT
-    from .lo_sweep import IBW_HZ, plan_windows
+    from .lo_sweep import plan_windows, window_hz
     from .pattern_store import PatternStore
     from .pfb import Channelizer, chans_for_corridor
     from .synth.protocols import _fhss_modulated, FS_DEFAULT
     from .synth import CLASS_LO_HZ
+    from . import fpga_control as fc
 
     fs = FS_DEFAULT
     lo = CLASS_LO_HZ.get(args.protocol, args.freq)
     scan = _corridor_span(args)
-    if scan and (scan[1] - scan[0]) > IBW_HZ:
-        windows = plan_windows(scan[0], scan[1], IBW_HZ)
+    ibw = window_hz(fc.AIR_FS_HZ)
+    if scan and (scan[1] - scan[0]) > ibw:
+        windows = plan_windows(scan[0], scan[1], ibw)
         log.write({"kind": "lo_sweep", "f_start": scan[0], "f_end": scan[1],
                    "windows": len(windows),
                    "lo_hz": windows[0]["f_center"]})
@@ -814,14 +817,15 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     iq = np.concatenate([seg1, sil, seg3])
 
     store = PatternStore()
-    from . import fpga_control as fc  # вставляет fpga/host в sys.path
     from legion_gateway import FakeTransport
 
     fpga = fc.lf.LegionFpga(FakeTransport(board="bladerf2"))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
                        frame_dt_s=args.frame_samples / fs,
-                       scan_corridor=scan, frame_samples=args.frame_samples)
+                       scan_corridor=scan, frame_samples=args.frame_samples,
+                       ibw_hz=ibw)
+    fsm.fpga_fs_hz = fc.AIR_FS_HZ
     FRAME = args.frame_samples
     rebuilt = {"done": False}
     synth_lo = float(lo)

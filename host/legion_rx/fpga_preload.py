@@ -21,7 +21,7 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
                          chan_step_hz: float = 200.0e3,
                          dwell_us: "int | None" = None,
                          autonomous: bool = False,
-                         fs_hz: float = 36e6,
+                         fs_hz: float = 34e6,
                          lo_hz: float = None) -> dict:
     """next_n позиций (от position) → LUT + GRID. n ≤ 255.
     lo_hz обязателен. Порядок: FS/LO → HOP_LUT → GRID → FLAGS bit4."""

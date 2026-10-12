@@ -140,7 +140,8 @@ class CognitiveFSM:
         """Один раз после автономного LUT: blank 1 hop из 10, idx не трогаем."""
         if self.fpga is None or self._lt_armed or not self._autonomous:
             return
-        fs = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz)
+        from .fpga_control import AIR_FS_HZ
+        fs = float(getattr(self, "fpga_fs_hz", None) or AIR_FS_HZ)
         try:
             ok = bool(self.fpga.enable_look_through(
                 LOOKTHROUGH_HOPS, 1, fs_hz=fs, dwell_us=float(dwell_us)))

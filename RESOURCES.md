@@ -435,7 +435,7 @@ python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /
 
 Цепочка: bladeRF-cli пишет FIFO → C-читатель → PFB → `CorridorDetector` → FSM → `preload_hop_sequence` → `legion_fpga.py`. Look-through — HDL `REG_LT_*`.
 
-`--corridor 2400 2483` — 83 МГц, шире IBW 56 МГц, поэтому `lo_sweep`. LO preload — центр текущего окна. FS приёмника — `--samplerate` (по умолчанию 20 MSPS). В регистр hop `CH_FS` пишется `AIR_FS_HZ` (36 MSPS, каденс ЦАП этого RBF), не USB-rate: иначе период и FTW не совпадут с тактом TX.
+`--corridor 2400 2483` — 83 МГц. Окно одного LO = min(56 МГц AD9361, fs) = 34 МГц → 3 окна. Потолок `IBW_HZ` 56 МГц не менялся. LO preload — центр текущего окна. FS приёмника — `--samplerate` (по умолчанию 20 MSPS). В регистр hop `CH_FS` пишется `AIR_FS_HZ` (34 MSPS, каденс ЦАП при pll_sclk 68 МГц).
 
 Без `--live` — синтетика и `FakeTransport`.
 
