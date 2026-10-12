@@ -1,0 +1,4 @@
+Git Information:
+Commit Hash: b212c61
+Branch: pr-77777-lab-host-pipeline
+Working Directory: clean

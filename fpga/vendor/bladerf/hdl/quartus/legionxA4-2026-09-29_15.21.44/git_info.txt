@@ -1,0 +1,4 @@
+Git Information:
+Commit Hash: 1cdb678
+Branch: cursor/fix-quartus-ram-inference-75ba
+Working Directory: clean

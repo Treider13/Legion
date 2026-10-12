@@ -1,0 +1,419 @@
+----------------
+; Command Info ;
+----------------
+Report Timing: Found 3 setup paths (3 violated).  Worst case slack is -0.463 
+
+Tcl Command:
+    report_timing -setup -file /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/timing_close_2026-10-12/hop72/seed1/pll_setup_0c_full.txt -to_clock [get_clocks {*pll_sclk*}] -npaths 3 -detail full_path
+
+Options:
+    -to_clock [get_clocks {*pll_sclk*}] 
+    -setup 
+    -npaths 3 
+    -detail full_path 
+    -file {/home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/timing_close_2026-10-12/hop72/seed1/pll_setup_0c_full.txt} 
+
+Delay Model:
+    Slow 1100mV 0C Model
+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Summary of Paths                                                                                                                                                                                                                                                                                                                                                                                                                      ;
++--------+-----------------------------------------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+; Slack  ; From Node                                                                               ; To Node                                                               ; Launch Clock                                                                                            ; Latch Clock                                                                                             ; Relationship ; Clock Skew ; Data Delay ;
++--------+-----------------------------------------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+; -0.463 ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360 ; legion_fft_peak:U_legion_fft_peak|top_best_ok_OTERM3340_OTERM3422     ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; -0.161     ; 14.120     ;
+; -0.458 ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360 ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; -0.166     ; 14.110     ;
+; -0.403 ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360 ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; -0.166     ; 14.055     ;
++--------+-----------------------------------------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+
+Path #1: Setup slack is -0.463 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                 ;
+; To Node            ; legion_fft_peak:U_legion_fft_peak|top_best_ok_OTERM3340_OTERM3422                                       ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.518                                                                                                  ;
+; Data Required Time ; 32.055                                                                                                  ;
+; Slack              ; -0.463 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; -0.161 ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.120 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 9     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.787       ; 48         ; 0.000  ; 2.041  ;
+;    Cell                ;        ; 5     ; 4.062       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 15    ; 5.255       ; 37         ; 0.000  ; 1.017  ;
+;    Cell                ;        ; 16    ; 8.865       ; 63         ; 0.000  ; 1.606  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.575       ; 49         ; 0.000  ; 1.933  ;
+;    Cell                ;        ; 5     ; 3.687       ; 51         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.398   ; 6.246    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.785 ;   2.041  ; RR ; IC   ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|clk                              ;
+;   18.398 ;   0.613  ; RR ; CELL ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+; 32.518   ; 14.120   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.398 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+;   18.398 ;   0.000  ; FF ; CELL ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|q                                ;
+;   19.312 ;   0.914  ; FF ; IC   ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|datac                                                                       ;
+;   19.991 ;   0.679  ; FF ; CELL ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|combout                                                                     ;
+;   21.008 ;   1.017  ; FF ; IC   ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|dataf                                                           ;
+;   21.120 ;   0.112  ; FR ; CELL ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|combout                                                         ;
+;   21.511 ;   0.391  ; RR ; IC   ; 1      ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|datac                                                                      ;
+;   22.131 ;   0.620  ; RF ; CELL ; 40     ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|combout                                                                    ;
+;   22.417 ;   0.286  ; FF ; IC   ; 1      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|dataa                                                                ;
+;   23.148 ;   0.731  ; FR ; CELL ; 6      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|combout                                                              ;
+;   23.886 ;   0.738  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|datad                                                                           ;
+;   24.171 ;   0.285  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|shareout                                                                        ;
+;   24.171 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sharein                                                                         ;
+;   25.271 ;   1.100  ; FR ; CELL ; 4      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sumout                                                                          ;
+;   25.517 ;   0.246  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|dataa                                                                           ;
+;   26.874 ;   1.357  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|cout                                                                            ;
+;   26.874 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|cin                                                                             ;
+;   27.365 ;   0.491  ; FF ; CELL ; 3      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|sumout                                                                          ;
+;   27.744 ;   0.379  ; FF ; IC   ; 2      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|dataf                                                                            ;
+;   29.350 ;   1.606  ; FR ; CELL ; 1      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cin                                                                              ;
+;   29.350 ;   0.000  ; RR ; CELL ; 1      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|cin                                                                             ;
+;   29.407 ;   0.057  ; RR ; CELL ; 1      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|cout                                                                            ;
+;   29.407 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N15       ; U_legion_fft_peak|Add36~25|cin                                                                             ;
+;   29.560 ;   0.153  ; RF ; CELL ; 1      ; MLABCELL_X13_Y30_N15       ; U_legion_fft_peak|Add36~25|sumout                                                                          ;
+;   29.875 ;   0.315  ; FF ; IC   ; 1      ; LABCELL_X14_Y30_N6         ; U_legion_fft_peak|d~1|datad                                                                                ;
+;   30.556 ;   0.681  ; FF ; CELL ; 4      ; LABCELL_X14_Y30_N6         ; U_legion_fft_peak|d~1|combout                                                                              ;
+;   31.525 ;   0.969  ; FF ; IC   ; 1      ; MLABCELL_X13_Y32_N30       ; U_legion_fft_peak|LessThan33~12_RTM03423|datad                                                             ;
+;   32.201 ;   0.676  ; FF ; CELL ; 1      ; MLABCELL_X13_Y32_N30       ; U_legion_fft_peak|LessThan33~12_RTM03423|combout                                                           ;
+;   32.201 ;   0.000  ; FF ; IC   ; 1      ; FF_X13_Y32_N31             ; U_legion_fft_peak|top_best_ok_OTERM3340_NEW_REG3421|d                                                      ;
+;   32.518 ;   0.317  ; FF ; CELL ; 1      ; FF_X13_Y32_N31             ; legion_fft_peak:U_legion_fft_peak|top_best_ok_OTERM3340_OTERM3422                                          ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.125   ; 6.085    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.239 ;   1.933  ; RR ; IC   ; 1      ; FF_X13_Y32_N31             ; U_legion_fft_peak|top_best_ok_OTERM3340_NEW_REG3421|clk                                                    ;
+;   30.777 ;   0.538  ; RR ; CELL ; 1      ; FF_X13_Y32_N31             ; legion_fft_peak:U_legion_fft_peak|top_best_ok_OTERM3340_OTERM3422                                          ;
+;   32.125 ;   1.348  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.055   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.055   ; 0.000    ;    ; uTsu ; 1      ; FF_X13_Y32_N31             ; legion_fft_peak:U_legion_fft_peak|top_best_ok_OTERM3340_OTERM3422                                          ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+
+Path #2: Setup slack is -0.458 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                 ;
+; To Node            ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                   ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.508                                                                                                  ;
+; Data Required Time ; 32.050                                                                                                  ;
+; Slack              ; -0.458 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; -0.166 ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.110 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 9     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.787       ; 48         ; 0.000  ; 2.041  ;
+;    Cell                ;        ; 5     ; 4.062       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 15    ; 5.243       ; 37         ; 0.000  ; 1.017  ;
+;    Cell                ;        ; 16    ; 8.867       ; 63         ; 0.000  ; 1.606  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.575       ; 49         ; 0.000  ; 1.933  ;
+;    Cell                ;        ; 5     ; 3.682       ; 51         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.398   ; 6.246    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.785 ;   2.041  ; RR ; IC   ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|clk                              ;
+;   18.398 ;   0.613  ; RR ; CELL ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+; 32.508   ; 14.110   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.398 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+;   18.398 ;   0.000  ; FF ; CELL ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|q                                ;
+;   19.312 ;   0.914  ; FF ; IC   ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|datac                                                                       ;
+;   19.991 ;   0.679  ; FF ; CELL ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|combout                                                                     ;
+;   21.008 ;   1.017  ; FF ; IC   ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|dataf                                                           ;
+;   21.120 ;   0.112  ; FR ; CELL ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|combout                                                         ;
+;   21.511 ;   0.391  ; RR ; IC   ; 1      ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|datac                                                                      ;
+;   22.131 ;   0.620  ; RF ; CELL ; 40     ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|combout                                                                    ;
+;   22.417 ;   0.286  ; FF ; IC   ; 1      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|dataa                                                                ;
+;   23.148 ;   0.731  ; FR ; CELL ; 6      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|combout                                                              ;
+;   23.886 ;   0.738  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|datad                                                                           ;
+;   24.171 ;   0.285  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|shareout                                                                        ;
+;   24.171 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sharein                                                                         ;
+;   25.271 ;   1.100  ; FR ; CELL ; 4      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sumout                                                                          ;
+;   25.517 ;   0.246  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|dataa                                                                           ;
+;   26.874 ;   1.357  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|cout                                                                            ;
+;   26.874 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|cin                                                                             ;
+;   27.365 ;   0.491  ; FF ; CELL ; 3      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|sumout                                                                          ;
+;   27.744 ;   0.379  ; FF ; IC   ; 2      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|dataf                                                                            ;
+;   29.350 ;   1.606  ; FR ; CELL ; 1      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cin                                                                              ;
+;   29.350 ;   0.000  ; RR ; CELL ; 1      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|cin                                                                             ;
+;   29.407 ;   0.057  ; RR ; CELL ; 1      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|cout                                                                            ;
+;   29.407 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N15       ; U_legion_fft_peak|Add36~25|cin                                                                             ;
+;   29.560 ;   0.153  ; RF ; CELL ; 1      ; MLABCELL_X13_Y30_N15       ; U_legion_fft_peak|Add36~25|sumout                                                                          ;
+;   29.875 ;   0.315  ; FF ; IC   ; 1      ; LABCELL_X14_Y30_N6         ; U_legion_fft_peak|d~1|datad                                                                                ;
+;   30.556 ;   0.681  ; FF ; CELL ; 4      ; LABCELL_X14_Y30_N6         ; U_legion_fft_peak|d~1|combout                                                                              ;
+;   31.513 ;   0.957  ; FF ; IC   ; 1      ; MLABCELL_X13_Y32_N6        ; U_legion_fft_peak|LessThan33~6|datad                                                                       ;
+;   32.189 ;   0.676  ; FF ; CELL ; 1      ; MLABCELL_X13_Y32_N6        ; U_legion_fft_peak|LessThan33~6|combout                                                                     ;
+;   32.189 ;   0.000  ; FF ; IC   ; 1      ; FF_X13_Y32_N8              ; U_legion_fft_peak|top_best_bin[0]_OTERM2805_NEW_REG3345|d                                                  ;
+;   32.508 ;   0.319  ; FF ; CELL ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.120   ; 6.080    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.239 ;   1.933  ; RR ; IC   ; 1      ; FF_X13_Y32_N8              ; U_legion_fft_peak|top_best_bin[0]_OTERM2805_NEW_REG3345|clk                                                ;
+;   30.772 ;   0.533  ; RR ; CELL ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
+;   32.120 ;   1.348  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.050   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.050   ; 0.000    ;    ; uTsu ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+
+Path #3: Setup slack is -0.403 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                 ;
+; To Node            ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                   ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.453                                                                                                  ;
+; Data Required Time ; 32.050                                                                                                  ;
+; Slack              ; -0.403 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; -0.166 ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.055 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 9     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.787       ; 48         ; 0.000  ; 2.041  ;
+;    Cell                ;        ; 5     ; 4.062       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 14    ; 5.305       ; 38         ; 0.000  ; 1.017  ;
+;    Cell                ;        ; 15    ; 8.750       ; 62         ; 0.000  ; 1.606  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.575       ; 49         ; 0.000  ; 1.933  ;
+;    Cell                ;        ; 5     ; 3.682       ; 51         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.398   ; 6.246    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.785 ;   2.041  ; RR ; IC   ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|clk                              ;
+;   18.398 ;   0.613  ; RR ; CELL ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+; 32.453   ; 14.055   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.398 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y33_N46              ; legion_fft_peak:U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_OTERM3360                    ;
+;   18.398 ;   0.000  ; FF ; CELL ; 1      ; FF_X7_Y33_N46              ; U_legion_fft_peak|best_bin[7]~0_OTERM2797_OTERM3043_OTERM3285_NEW_REG3359|q                                ;
+;   19.312 ;   0.914  ; FF ; IC   ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|datac                                                                       ;
+;   19.991 ;   0.679  ; FF ; CELL ; 1      ; LABCELL_X10_Y33_N24        ; U_legion_fft_peak|LessThan7~14|combout                                                                     ;
+;   21.008 ;   1.017  ; FF ; IC   ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|dataf                                                           ;
+;   21.120 ;   0.112  ; FR ; CELL ; 1      ; MLABCELL_X9_Y30_N6         ; U_legion_fft_peak|best_mag[22]~1_Duplicate|combout                                                         ;
+;   21.511 ;   0.391  ; RR ; IC   ; 1      ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|datac                                                                      ;
+;   22.131 ;   0.620  ; RF ; CELL ; 40     ; LABCELL_X10_Y30_N48        ; U_legion_fft_peak|best_bin[7]~0|combout                                                                    ;
+;   22.417 ;   0.286  ; FF ; IC   ; 1      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|dataa                                                                ;
+;   23.148 ;   0.731  ; FR ; CELL ; 6      ; LABCELL_X10_Y30_N21        ; U_legion_fft_peak|best_bin[0]_NEW1216|combout                                                              ;
+;   23.886 ;   0.738  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|datad                                                                           ;
+;   24.171 ;   0.285  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N0         ; U_legion_fft_peak|Add34~33|shareout                                                                        ;
+;   24.171 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sharein                                                                         ;
+;   25.271 ;   1.100  ; FR ; CELL ; 4      ; LABCELL_X12_Y30_N3         ; U_legion_fft_peak|Add34~29|sumout                                                                          ;
+;   25.517 ;   0.246  ; RR ; IC   ; 2      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|dataa                                                                           ;
+;   26.874 ;   1.357  ; RF ; CELL ; 1      ; LABCELL_X12_Y30_N33        ; U_legion_fft_peak|Add35~29|cout                                                                            ;
+;   26.874 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|cin                                                                             ;
+;   27.365 ;   0.491  ; FF ; CELL ; 3      ; LABCELL_X12_Y30_N36        ; U_legion_fft_peak|Add35~25|sumout                                                                          ;
+;   27.744 ;   0.379  ; FF ; IC   ; 2      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|dataf                                                                            ;
+;   29.350 ;   1.606  ; FR ; CELL ; 1      ; MLABCELL_X13_Y30_N6        ; U_legion_fft_peak|Add36~9|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cin                                                                              ;
+;   29.350 ;   0.000  ; RR ; CELL ; 1      ; MLABCELL_X13_Y30_N9        ; U_legion_fft_peak|Add36~5|cout                                                                             ;
+;   29.350 ;   0.000  ; RR ; IC   ; 2      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|cin                                                                             ;
+;   29.824 ;   0.474  ; RR ; CELL ; 2      ; MLABCELL_X13_Y30_N12       ; U_legion_fft_peak|Add36~21|sumout                                                                          ;
+;   30.155 ;   0.331  ; RR ; IC   ; 1      ; LABCELL_X14_Y30_N39        ; U_legion_fft_peak|LessThan33~4|datad                                                                       ;
+;   30.629 ;   0.474  ; RF ; CELL ; 1      ; LABCELL_X14_Y30_N39        ; U_legion_fft_peak|LessThan33~4|combout                                                                     ;
+;   31.632 ;   1.003  ; FF ; IC   ; 1      ; MLABCELL_X13_Y32_N6        ; U_legion_fft_peak|LessThan33~6|datac                                                                       ;
+;   32.135 ;   0.503  ; FR ; CELL ; 1      ; MLABCELL_X13_Y32_N6        ; U_legion_fft_peak|LessThan33~6|combout                                                                     ;
+;   32.135 ;   0.000  ; RR ; IC   ; 1      ; FF_X13_Y32_N8              ; U_legion_fft_peak|top_best_bin[0]_OTERM2805_NEW_REG3345|d                                                  ;
+;   32.453 ;   0.318  ; RR ; CELL ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.120   ; 6.080    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 15998  ; CLKCTRL_G8                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.239 ;   1.933  ; RR ; IC   ; 1      ; FF_X13_Y32_N8              ; U_legion_fft_peak|top_best_bin[0]_OTERM2805_NEW_REG3345|clk                                                ;
+;   30.772 ;   0.533  ; RR ; CELL ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
+;   32.120 ;   1.348  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.050   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.050   ; 0.000    ;    ; uTsu ; 1      ; FF_X13_Y32_N8              ; legion_fft_peak:U_legion_fft_peak|top_best_bin[0]_OTERM2805_OTERM3346                                      ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+

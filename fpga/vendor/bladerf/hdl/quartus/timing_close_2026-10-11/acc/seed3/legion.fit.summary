@@ -1,0 +1,20 @@
+Fitter Status : Successful - Sun Oct 11 17:45:09 2026
+Quartus Prime Version : 23.1std.1 Build 993 05/14/2024 SC Lite Edition
+Revision Name : legion
+Top-level Entity Name : bladerf
+Family : Cyclone V
+Device : 5CEBA4F23C8
+Timing Models : Final
+Logic utilization (in ALMs) : 15,062 / 18,480 ( 82 % )
+Total registers : 28300
+Total pins : 173 / 224 ( 77 % )
+Total virtual pins : 0
+Total block memory bits : 2,258,912 / 3,153,920 ( 72 % )
+Total RAM Blocks : 285 / 308 ( 93 % )
+Total DSP Blocks : 40 / 66 ( 61 % )
+Total HSSI RX PCSs : 0
+Total HSSI PMA RX Deserializers : 0
+Total HSSI TX PCSs : 0
+Total HSSI PMA TX Serializers : 0
+Total PLLs : 3 / 4 ( 75 % )
+Total DLLs : 0 / 4 ( 0 % )
