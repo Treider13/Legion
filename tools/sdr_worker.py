@@ -460,6 +460,11 @@ def rx_is_parked(
 SETTLE_TIME_S = 5e-3
 # soapy_power setup(tune_delay=...): у нас то же 5 мс, что уже обоснованы PLL.
 TUNE_DELAY_S = SETTLE_TIME_S
+# soapy_power --tune-delay (релиз: flush читает и выбрасывает, не sleep).
+# Снимает хвост прошлого хопа. --reset-stream (LimeSDR, deactivate) не
+# используем: на живом readStream это зависание скана.
+# 10 мс > полный retune AD9361 ~3.8 мс плюс очередь USB.
+HOP_FLUSH_S = 10e-3
 
 
 def settle_samples(fs: float = 0.0) -> int:
@@ -470,6 +475,18 @@ def settle_samples(fs: float = 0.0) -> int:
     if not fs or fs <= 0:
         return usb_depth
     return min(usb_depth, math.ceil(SETTLE_TIME_S * fs))
+
+
+def hop_flush_samples(fs: float) -> int:
+    """Сколько отсчётов выкинуть после смены LO, не останавливая поток.
+
+    soapy_power tune-delay: читать, пока не пройдёт задержка. Потолок в одну
+    очередь USB (settle_samples) короче retune, и спектр остаётся от первого окна.
+    """
+    usb_depth = USB_RX_BUFFERS * TRANSFER_SAMPLES
+    if not fs or fs <= 0:
+        return usb_depth
+    return max(usb_depth, math.ceil(HOP_FLUSH_S * fs))
 
 
 class IqRing:
@@ -1608,7 +1625,8 @@ class Radio:
 
         setSampleRate на живом потоке валит bladeRF2 (стенд 2026-08-27).
         Rate — только при смене, через deactivate→перестройка→activate.
-        LO (setFrequency) на живом потоке безопасен.
+        LO на живом потоке: setFrequency, затем flush tune-delay
+        (soapy_power). deactivate на каждом хопе вешает readStream.
         Живой TX: часы уже стоят (Nuand t=13047, один BBPLL). Повторный
         setSampleRate, даже на то же число, обрывает горб до иголки.
         bw=None — DIO 40 МГц (scan). Атака передаёт фильтр 56 или FD.
@@ -1639,6 +1657,7 @@ class Radio:
                             self._rx_bw = float(want_bw)
                         except Exception:
                             pass
+                lo_changed = self._rx_hz != center_hz
                 if rate_changed and self.rx is not None and self._rx_on:
                     try:
                         self.dev.deactivateStream(self.rx)
@@ -1652,8 +1671,14 @@ class Radio:
                     # Буфер USB выбирается при setupStream. 4096, открытый на
                     # парковке 2 MSPS, нельзя оставлять на 61.44.
                     self._drop_rx_stream()
-                if self._rx_hz != center_hz:
+                if lo_changed:
                     self.dev.setFrequency(SOAPY_SDR_RX, 0, center_hz)
+                    try:
+                        got = float(self.dev.getFrequency(SOAPY_SDR_RX, 0))
+                        if got > 0:
+                            center_hz = got
+                    except Exception:
+                        pass
                 if self.rx is None:
                     self.rx = self._open_rx_stream(fs)
                     self.dev.activateStream(self.rx)
@@ -1674,7 +1699,11 @@ class Radio:
                         self._droneid_mem.reset()
                     self._droneid_hold = None
                     self._droneid_hold_fs = 0.0
-                    self._discard_left = settle_samples(fs)
+                    # Смена только LO: поток жив, вычитываем хвост прошлого окна.
+                    # Смена часов: поток уже перезапущен, хватает короткого settle.
+                    self._discard_left = (
+                        hop_flush_samples(fs) if lo_changed and not rate_changed else settle_samples(fs)
+                    )
                     self._tune_until = time.monotonic() + TUNE_DELAY_S
                     pending = self._rx_gen + 1
                 else:
@@ -1746,7 +1775,9 @@ class Radio:
                     "reason": "слух пропущен: приём открывается до передачи",
                     **extra,
                 }
-            spec = self._wait_psd(gen, n, self._rx_fs or fs, center_mhz)
+            tuned = (self._rx_hz or (center_mhz * 1e6)) / 1e6
+            spec = self._wait_psd(gen, n, self._rx_fs or fs, tuned)
+            center_mhz = tuned
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         return {"ok": True, "bins": spec, "centerMhz": center_mhz, **extra}
@@ -1805,7 +1836,9 @@ class Radio:
                 }
             # hint, не available(): после LO hop кольцо сброшено, 8192 ≈ 0.6 мс @ 61.44.
             fft_n = attack_pick_fft_n(hint)
-            spec = self._wait_attack_psd(gen, fft_n, self._rx_fs or fs, center_mhz, crop)
+            tuned = (self._rx_hz or (center_mhz * 1e6)) / 1e6
+            spec = self._wait_attack_psd(gen, fft_n, self._rx_fs or fs, tuned, crop)
+            center_mhz = tuned
         except Exception as e:
             return {"ok": False, "reason": f"RX: {e}", "bins": [], **extra}
         extra.update(self._attack_memory_fields(self._rx_fs or fs))

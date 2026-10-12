@@ -713,10 +713,12 @@ def main() -> int:
     md._ensure_rx(4e6, 2454e6)  # тот же тик — без перестройки
     check("кэш rate: 2-й тик без setSampleRate", md.dev.calls["rate"] == 1)
     check("кэш center: 2-й тик без setFrequency", md.dev.calls["freq"] == 1)
-    md._ensure_rx(4e6, 2455e6)  # смена center — только LO, поток жив
+    md._ensure_rx(4e6, 2455e6)  # смена center — только LO, поток жив, flush длиннее очереди USB
     check("смена center: setFrequency снова", md.dev.calls["freq"] == 2)
     check("смена center: rate не тронут", md.dev.calls["rate"] == 1)
     check("смена center: поток не останавливался", md.dev.calls["deact"] == 0)
+    check("hop flush 61.44 = 10 мс", w.hop_flush_samples(61.44e6) == 614_400)
+    check("hop flush не короче очереди USB", w.hop_flush_samples(4e6) >= 32 * 4096)
     md._ensure_rx(1e6, 2455e6)  # смена fs — deactivate → перестройка → activate
     check("смена fs: deactivate перед перестройкой", md.dev.calls["deact"] == 1)
     check("смена fs: setSampleRate снова", md.dev.calls["rate"] == 2)

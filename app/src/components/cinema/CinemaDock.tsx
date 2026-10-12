@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
+
 import { catalogById } from "../../sdr/catalog";
-import { FPGA_AIR_MODE_ACCEPT_RU, isFpgaAirPattern, modeOf } from "../../sense/modes";
+import { rxStatus } from "../../sense/rxTest";
+import { isFpgaAirPattern, modeOf } from "../../sense/modes";
 import { useLegion } from "../../state/store";
 import { connectionLabel } from "../graphite/connectionLabel";
-import { cinemaIsLive, type CinemaMode, runCinemaStop, runSmartAccept } from "./run";
+import { cinemaIsLive, type CinemaMode, runAcceptedTransmit, runCinemaStop, runSmartAccept } from "./run";
 
 interface Props {
   mode: CinemaMode;
@@ -15,6 +18,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const scanPattern = useLegion((s) => s.scanPattern);
   const smartListenLive = useLegion((s) => s.smartListenLive);
   const fhssCorridorReady = useLegion((s) => s.fhssCorridorReady);
+  const smartGridAccepted = useLegion((s) => s.smartGridAccepted);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
@@ -33,7 +37,21 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const txShelfMhz = useLegion((s) => s.txShelfMhz);
   const setTxShelfMhz = useLegion((s) => s.setTxShelfMhz);
   const sdrLink = sl22 ? "SDR" : connectionLabel(openedIface ?? catalogById(sdrId)?.iface).value;
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending, smartListenLive });
+  const [rxRun, setRxRun] = useState(false);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      if (stop) return;
+      const st = await rxStatus();
+      if (!stop && st) setRxRun(st.running);
+      window.setTimeout(tick, 400);
+    };
+    void tick();
+    return () => {
+      stop = true;
+    };
+  }, []);
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending, smartListenLive }) || rxRun;
   const message = fpgaStopPending
     ? fpgaReleasing
       ? `Освобождаем соединение: ${fpgaStopReason ?? "ожидаем подтверждение шлюза"}`
@@ -89,17 +107,28 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Запустить
           </button>
         )}
-        {false && mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !smartGridAccepted && (scanRunning || smartListenLive) && !fpgaArmed && !fpgaBusy ? (
           <button
             type="button"
             className="cinema-go"
             disabled={fpgaStopPending || !fhssCorridorReady}
             onClick={() => void runSmartAccept()}
             title={fhssCorridorReady
-              ? "Сжать коридор в hop-set и ARM"
-              : "Ждём класс FHSS (unique ≥ 3)"}
+              ? "Сузить коридор до найденного участка FHSS"
+              : "Скан ещё идёт по всему коридору, не только по началу"}
           >
-            {FPGA_AIR_MODE_ACCEPT_RU}
+            Принять коридор
+          </button>
+        ) : null}
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && smartGridAccepted && !fpgaArmed && !fpgaBusy ? (
+          <button
+            type="button"
+            className="cinema-go"
+            disabled={fpgaStopPending}
+            onClick={() => void runAcceptedTransmit()}
+            title="Удар по уже посчитанным прыжкам суженного коридора"
+          >
+            Передать
           </button>
         ) : null}
         {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (

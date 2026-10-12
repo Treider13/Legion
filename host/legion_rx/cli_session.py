@@ -6,17 +6,34 @@ legion_gateway errno 16). Второй процесс на `rx status` полу�
 «device busy». Поэтому: `bladeRF-cli -i` живёт всю сессию, команды пишем
 в stdin, `rx status` (шаг 3.9) опрашивается в ТОЙ ЖЕ сессии, пока RX идёт.
 
-Протокол синхронизации: ждём приглашение "bladeRF>" после каждой команды;
-текст между приглашениями — ответ. Таймаут = честная ошибка, не молчание.
+Протокол синхронизации: после команды пишем `echo LEGION_SYNC` и ждём
+эту строку. Приглашение "bladeRF>" на pipe эта сборка не печатает.
 """
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import threading
 import time
 
 PROMPT = "bladeRF>"
+# Эта сборка bladeRF-cli на pipe не печатает приглашение: libtecla сразу
+# читает stdin. Конец команды — отдельная строка echo.
+SYNC = "LEGION_SYNC"
+
+
+def _sync_body(buf: bytes) -> "str | None":
+    """Текст до строки-маркера или приглашения. None, пока строка не целая."""
+    text = buf.decode("utf-8", "replace")
+    if not text.endswith(("\n", "\r")):
+        return None
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if stripped == SYNC or stripped.endswith(PROMPT):
+            return "\n".join(lines[:i])
+    return None
 
 
 class CliError(RuntimeError):
@@ -30,6 +47,9 @@ class _SessionDead(CliError):
 class BladerfCliSession:
     def __init__(self, device: "str | None" = None, cmd_timeout_s: float = 15.0):
         args = ["bladeRF-cli", "-i"]
+        if shutil.which("stdbuf"):
+            # Без этого stdout cli копится блоком и ответ не доходит до read.
+            args = ["stdbuf", "-o0", "-e0", *args]
         if device:
             args += ["-d", device]
         self._timeout = float(cmd_timeout_s)
@@ -49,8 +69,8 @@ class BladerfCliSession:
         self._th = threading.Thread(target=self._pump, daemon=True,
                                     name="bladerf-cli-pump")
         self._th.start()
-        banner = self._wait_prompt()
-        if "bladeRF" not in banner and "error" in banner.lower():
+        banner = self._roundtrip(None)
+        if banner and "bladeRF" not in banner and "error" in banner.lower():
             raise CliError(f"bladeRF-cli стартовал с ошибкой: {banner.strip()}")
 
     # ---- транспорт ----
@@ -58,7 +78,7 @@ class BladerfCliSession:
     def _pump(self) -> None:
         assert self._proc.stdout is not None
         while True:
-            chunk = self._proc.stdout.read1(65536)  # type: ignore[attr-defined]
+            chunk = self._proc.stdout.read(65536)
             if not chunk:
                 with self._cv:
                     self._closed = True
@@ -83,24 +103,41 @@ class BladerfCliSession:
             out, self._async_lines = self._async_lines, []
         return out
 
-    def _wait_prompt(self, timeout: "float | None" = None) -> str:
+    def _wait_sync(self, timeout: "float | None" = None) -> str:
         deadline = time.monotonic() + (timeout or self._timeout)
         with self._cv:
             while True:
-                tail = bytes(self._buf[-64:]).decode("utf-8", "replace")
-                if tail.rstrip().endswith(PROMPT):
-                    text = bytes(self._buf).decode("utf-8", "replace")
+                got = _sync_body(bytes(self._buf))
+                if got is not None:
                     self._buf.clear()
-                    return text
+                    return got
                 if self._closed:
                     text = bytes(self._buf).decode("utf-8", "replace")
                     self._buf.clear()
                     raise _SessionDead(
-                        f"bladeRF-cli завершился без приглашения: {text.strip()}")
+                        f"bladeRF-cli завершился без ответа: {text.strip()}")
                 left = deadline - time.monotonic()
                 if left <= 0:
-                    raise CliError("bladeRF-cli: таймаут ожидания приглашения")
+                    text = bytes(self._buf).decode("utf-8", "replace").strip()
+                    raise CliError(
+                        f"bladeRF-cli: таймаут ожидания ответа: {text[:400]}")
                 self._cv.wait(timeout=left)
+
+    def _write(self, line: str) -> None:
+        assert self._proc.stdin is not None
+        try:
+            self._proc.stdin.write(line.encode() + b"\n")
+            self._proc.stdin.flush()
+        except BrokenPipeError as e:
+            raise _SessionDead("bladeRF-cli: stdin закрыт") from e
+
+    def _roundtrip(self, line: "str | None", timeout: "float | None" = None) -> str:
+        with self._cv:
+            self._buf.clear()
+        if line:
+            self._write(line)
+        self._write(f"echo {SYNC}")
+        return self._wait_sync(timeout)
 
     def cmd(self, line: str, timeout: "float | None" = None) -> str:
         """Команда → ответ до следующего приглашения (без самого приглашения).
@@ -111,19 +148,11 @@ class BladerfCliSession:
     def _cmd_locked(self, line: str, timeout: "float | None" = None) -> str:
         if self._closed or self._proc.poll() is not None:
             raise _SessionDead("bladeRF-cli процесс мёртв")
-        with self._cv:
-            self._buf.clear()
-        assert self._proc.stdin is not None
-        try:
-            self._proc.stdin.write(line.encode() + b"\n")
-            self._proc.stdin.flush()
-        except BrokenPipeError as e:
-            raise _SessionDead("bladeRF-cli: stdin закрыт") from e
-        resp = self._wait_prompt(timeout)
+        resp = self._roundtrip(line, timeout)
         # Эхо команды и приглашение убираем: остаётся тело ответа.
         body = resp.replace(PROMPT, "\n")
-        lines = [ln for ln in body.splitlines()
-                 if ln.strip() and ln.strip() != line.strip()]
+        skip = {line.strip(), f"echo {SYNC}", SYNC, PROMPT}
+        lines = [ln for ln in body.splitlines() if ln.strip() and ln.strip() not in skip]
         out = "\n".join(lines).strip()
         low = out.lower()
         if "error" in low or "usage:" in low or "invalid" in low:

@@ -127,7 +127,7 @@ import {
   fhssArmGate,
   pickFhssLook,
 } from "../sense/fhssArmGate";
-import { evalFhssConfirm, fhssCorridorBand } from "../sense/fhssCorridor";
+import { evalFhssConfirm } from "../sense/fhssCorridor";
 import { maskOwnTxOccupancy, occupancyHopCount } from "../sense/chHitsMask";
 import { fhssPersistOf, listenPersistHops } from "../sense/fhssPersist";
 import { openLoopShelfTxPlan } from "../sense/txShelf";
@@ -355,6 +355,9 @@ interface LegionStore {
   sdrHoldSince: number | null;
   scanCenterMhz: number | null;
   scanBins: ScanBin[];
+  /** Законченный проход soapy по коридору. Строка водопада, не живое окно. */
+  scanSweepBins: ScanBin[];
+  scanSweepSeq: number;
   detections: Detection[];
   lastInterceptMhz: number | null;
   lastCueReason: string;
@@ -908,6 +911,14 @@ const gAttackMemory = new AttackSessionMemory();
 /** Слух умной атаки: живые hop/look до Подтвердить коридор, затем заморозка. */
 let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
 let gSmartAccepted: SmartGridCard | null = null;
+/** Прыжки принятого участка, порядок появления, не больше 256. */
+let gAcceptedHopsMhz: number[] = [];
+/** Сколько окон коридора уже снято в этом обходе и склейка спектра. */
+let gListenSteps = 0;
+/** Номер законченного прохода. Водопад сдвигает строку только по нему. */
+let gSweepSerial = 0;
+let gCorridorCovered = false;
+let gCorridorBins: ScanBin[] = [];
 let gSmartSurvey: { bands: AllowBand[]; f1: string; f2: string; airBw: string } | null = null;
 
 function captureSmartSurvey(s: { sdrBands: AllowBand[]; sdrF1: string; sdrF2: string; fpgaAirBwMhz: string }): void {
@@ -993,6 +1004,10 @@ export function peekSmartListen(): { hopsMhz: number[]; looks: AttackLook[] } {
 
 export function peekSmartAccepted(): SmartGridCard | null {
   return gSmartAccepted;
+}
+
+export function peekAcceptedHopsMhz(): number[] {
+  return [...gAcceptedHopsMhz];
 }
 
 /** Тест: подложить FHSS look в слух умной атаки. */
@@ -1103,7 +1118,7 @@ function attackBrainPatch(
       attackMemoryLine: view.memoryLine,
       attackSuggestPaint: null,
       smartGridCard: smart.smartGridCard,
-      fhssCorridorReady: smart.fhssCorridorReady,
+      fhssCorridorReady: smart.fhssCorridorReady && gCorridorCovered,
     };
   }
   return {
@@ -2457,6 +2472,8 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({ fpgaBusy: false });
     }
   };
+  // Гейт одного взгляда не зовём: удар идёт кнопкой Передать по суженному участку.
+  void startOnboardIntercept;
 
   /** Возврат в скан-фазу цикла FPGA+сканер: DISARM → USB хосту → скан.
    *  skipMhz — частота, которую сканер пропускает (энергия пропала: не
@@ -2617,6 +2634,8 @@ export const useLegion = create<LegionStore>((set, get) => {
     scanDwellMs: "40",
     scanCenterMhz: null,
     scanBins: [],
+    scanSweepBins: [],
+    scanSweepSeq: 0,
     detections: [],
     lastInterceptMhz: null,
     lastCueReason: "",
@@ -2970,7 +2989,17 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
       captureSmartSurvey(s);
-      const corridorBand = fhssCorridorBand(ev.corridor);
+      const seen: number[] = [];
+      for (const raw of gSmartListen.hopsMhz) {
+        if (!Number.isFinite(raw) || raw <= 0) continue;
+        const mhz = Math.round(raw * 1000) / 1000;
+        if (seen.length === 0 || seen[seen.length - 1] !== mhz) seen.push(mhz);
+        if (seen.length >= 256) break;
+      }
+      if (seen.length < 1) {
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: участок пуст — принять нечего`);
+        return false;
+      }
       gSmartAccepted = armCard;
       set({
         smartGridCard: armCard,
@@ -2978,18 +3007,25 @@ export const useLegion = create<LegionStore>((set, get) => {
         smartPeakOverride: false,
         smartListenLive: false,
         fhssCorridorReady: true,
-        sdrBands: [corridorBand],
-        sdrF1: String(Math.round(ev.corridor.f1Mhz * 1000) / 1000),
-        sdrF2: String(Math.round(ev.corridor.f2Mhz * 1000) / 1000),
         fpgaAirBwMhz: String(ev.corridor.lookMhz),
+      });
+      const lo = Math.min(...seen);
+      const hi = Math.max(...seen);
+      const spanLo = seen.length === 1 ? lo - 0.5 : lo;
+      const spanHi = seen.length === 1 ? hi + 0.5 : hi;
+      gAcceptedHopsMhz = seen;
+      const narrowed = { f1Mhz: spanLo, f2Mhz: spanHi };
+      set({
+        sdrBands: [narrowed],
+        sdrF1: String(Math.round(spanLo * 1000) / 1000),
+        sdrF2: String(Math.round(spanHi * 1000) / 1000),
       });
       get().stopScan();
       pushLog(
         "sys",
-        `${FPGA_AIR_MODE_RU}: коридор подтверждён ${ev.corridor.f1Mhz.toFixed(1)}…${ev.corridor.f2Mhz.toFixed(1)} · взгляд ${ev.corridor.lookMhz} МГц · ${armCard.reason} · last_live ${FPGA_SURVEY_GONE_MS} мс`,
+        `${FPGA_AIR_MODE_RU}: коридор сужен ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Передать — удар по этому участку.`,
       );
-      await startOnboardIntercept();
-      return get().fpgaArmed || get().sdrEmulation;
+      return true;
     },
     setAttackPaint: (p) => {
       if (get().scanPattern !== "auto") return;
@@ -5455,7 +5491,11 @@ export const useLegion = create<LegionStore>((set, get) => {
         const smartListen = isFpgaAirPattern(st.scanPattern);
         if (smartListen) {
           gSmartAccepted = null;
-          set({ smartListenLive: true, smartGridAccepted: false });
+          gAcceptedHopsMhz = [];
+          gListenSteps = 0;
+          gCorridorCovered = false;
+          gCorridorBins = [];
+          set({ smartListenLive: true, smartGridAccepted: false, scanSweepBins: [] });
         }
         const attackLive = st.scanPattern === "auto" || smartListen;
         const classLive = detectorListens(st.scanPattern) || smartListen;
@@ -5593,6 +5633,23 @@ export const useLegion = create<LegionStore>((set, get) => {
             frame.lastInterceptMhz = hit?.freqMhz ?? get().lastInterceptMhz;
           }
           if (bins.length > 0) {
+            if (isFpgaAirPattern(get().scanPattern) && get().smartListenLive) {
+              const half = spanMhz > 0 ? spanMhz / 2 : 0;
+              const kept = gCorridorBins.filter((b) => half <= 0 || Math.abs(b.freqMhz - centerMhz) > half);
+              gCorridorBins = [...kept, ...bins].sort((a, c) => a.freqMhz - c.freqMhz);
+              gListenSteps += 1;
+              const nWin = Math.max(1, gWalker?.centers.length ?? 1);
+              gCorridorCovered = gListenSteps >= nWin;
+              // QSpectrumAnalyzer: строка водопада — законченный проход, не каждое окно.
+              if (gListenSteps % nWin === 0) {
+                gSweepSerial += 1;
+                frame.scanSweepBins = gCorridorBins.map((b) => ({ freqMhz: b.freqMhz, powerDbm: b.powerDbm }));
+                frame.scanSweepSeq = gSweepSerial;
+              }
+              if (gListenSteps <= nWin) {
+                pushLog("sys", `коридор ${gListenSteps}/${nWin} · ${centerMhz.toFixed(1)} МГц`);
+              }
+            }
             frame.scanBins = bins;
             Object.assign(frame, ingestHostLab(bins, now));
           }

@@ -49,6 +49,30 @@ function corridorHz(): { fStartHz: number; fEndHz: number } | string {
   return { fStartHz: a * 1e6, fEndHz: b * 1e6 };
 }
 
+export async function primeAccepted(fStartHz: number, fEndHz: number, hopsMhz: number[]): Promise<void> {
+  if (!rxAvailable()) throw new Error("это основное приложение, не браузер");
+  await invoke("legion_rx_prime", { fStartHz, fEndHz, hopsMhz });
+}
+
+export async function startLive(): Promise<string> {
+  if (!rxAvailable()) return "это основное приложение, не браузер";
+  const band = corridorHz();
+  if (typeof band === "string") return band;
+  useLegion.getState().stopScan();
+  await hostClose();
+  await invoke("legion_rx_test_start", {
+    fStartHz: band.fStartHz,
+    fEndHz: band.fEndHz,
+    jamDurationS: rxFields.jam,
+    muteNs: rxFields.mute,
+    lnaGainDb: rxFields.lna,
+    fromLog: false,
+    live: true,
+  });
+  watchers.forEach((fn) => fn());
+  return "коридор: окна 34 МГц";
+}
+
 export async function startRx(fromLog: boolean): Promise<string> {
   if (!rxAvailable()) return "это основное приложение, не браузер";
   const band = corridorHz();

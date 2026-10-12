@@ -528,6 +528,27 @@ def run_test_headless(args) -> int:
     return 0 if app.fsm.test_file else 1
 
 
+def run_live_headless(args) -> int:
+    """Коридор F1–F2, lo_sweep по 34 МГц, пока не придёт Стоп."""
+    from .test_capture import clear_replay
+
+    cfg = _cfg_from_args(args)
+    clear_replay()
+    app = App(cfg, True)
+    _arm_operator(app)
+    app.fsm.replay_pattern = None
+    app.fsm.test_on = False
+    app.fsm.test_note = "коридор: окна 34 МГц, 4 мс"
+
+    def _stop(signum, frame):
+        app._stop_live.set()
+
+    install_shutdown(_stop)
+    app.start_radio()
+    _stream(app, until_file=False)
+    return 0
+
+
 def run_from_log(args) -> int:
     from .test_capture import read_replay
 
@@ -571,6 +592,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--headless", action="store_true")
     p.add_argument("--test", action="store_true")
+    p.add_argument("--live", action="store_true")
     p.add_argument("--run", action="store_true")
     p.add_argument("--load", default="")
     p.add_argument("--f-start", type=float, dest="f_start")
@@ -583,6 +605,8 @@ def main() -> None:
         raise SystemExit(run_load(args.load))
     if args.test:
         raise SystemExit(run_test_headless(args))
+    if args.live:
+        raise SystemExit(run_live_headless(args))
     if args.run:
         raise SystemExit(run_from_log(args))
     app = App(load_config(), args.headless)

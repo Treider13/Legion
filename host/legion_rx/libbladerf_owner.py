@@ -11,6 +11,7 @@ from ctypes import c_int, c_uint, c_uint64, c_void_p, POINTER
 
 _LIB = ctypes.CDLL("libbladeRF.so.2")
 
+FORMAT_SC16_Q11 = 0
 FORMAT_SC16_Q11_META = 1
 LAYOUT_RX_X1 = 0
 LAYOUT_TX_X1 = 1
@@ -18,11 +19,14 @@ CH_RX = 0
 CH_TX = 1
 QUEUE_SLOTS = 16
 MAX_PAIRS = 8
+# libbladeRF.h: принять «сейчас», не ждать метку 0 (она уже в прошлом → -14).
+BLADERF_META_FLAG_RX_NOW = 1 << 31
 # Коды libbladeRF.h. Отдельного кода «PLL» в API нет.
 BLADERF_ERR_UNEXPECTED = -1
 BLADERF_ERR_IO = -5
 BLADERF_ERR_TIMEOUT = -6
 BLADERF_ERR_NODEV = -7
+BLADERF_ERR_TIME_PAST = -14
 BLADERF_ERR_QUEUE_FULL = -15
 BLADERF_ERR_FPGA_OP = -16
 USB_FAULT = (BLADERF_ERR_IO, BLADERF_ERR_TIMEOUT, BLADERF_ERR_NODEV)
@@ -121,12 +125,17 @@ class UsbOwner:
                 return int(rc)
         return int(_LIB.bladerf_set_gain(self.dev, CH_RX, c_int(int(lna_db))))
 
+    def set_frequency(self, lo_hz: int) -> int:
+        """Только LO. set_sample_rate на живом потоке срывает окно."""
+        return int(_LIB.bladerf_set_frequency(self.dev, CH_RX, c_uint64(int(lo_hz))))
+
     def enable_rx(self, on: bool = True) -> int:
         return int(_LIB.bladerf_enable_module(self.dev, CH_RX, on))
 
     def read_sc16(self, n_samples: int, timeout_ms: int = 1000):
         """SC16_Q11_META. Буфер — голые IQ, метка в metadata.timestamp."""
         meta = _Meta()
+        meta.flags = BLADERF_META_FLAG_RX_NOW
         buf = (ctypes.c_int16 * (int(n_samples) * 2))()
         rc = _LIB.bladerf_sync_rx(
             self.dev, ctypes.cast(buf, c_void_p), c_uint(int(n_samples)),
@@ -140,17 +149,18 @@ class UsbOwner:
     def read_frame_bytes(self, n_samples: int, timeout_ms: int = 1000):
         """Ровно один кадр SC16, либо пусто. Метка — timestamp первого сэмпла."""
         rc, buf, ts, n = self.read_sc16(n_samples, timeout_ms)
-        count = int(n) if int(n) else int(n_samples)
-        if rc != 0 or count != int(n_samples):
+        count = int(n)
+        if rc != 0 or count <= 0:
             return int(rc), b"", ts
-        return 0, ctypes.string_at(buf, int(n_samples) * 4), ts
+        return 0, ctypes.string_at(buf, count * 4), ts
 
     def arm_meta_stream(self) -> int:
-        """Метки времени. Без этого формата очередь retune не принимается."""
+        """Оба направления SC16 без META. На этом образе META-RX даёт 508
+        сэмплов и overrun, анализатор не видит кадр."""
         rc = 0
         for layout in (LAYOUT_RX_X1, LAYOUT_TX_X1):
             rc = _LIB.bladerf_sync_config(
-                self.dev, layout, FORMAT_SC16_Q11_META,
+                self.dev, layout, FORMAT_SC16_Q11,
                 16, 8192, 8, 1000)
             if rc != 0:
                 return int(rc)

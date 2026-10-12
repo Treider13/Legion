@@ -751,7 +751,7 @@ class _UsbLive:
     def tune(self, hz: float) -> None:
         self.lo = float(hz)
         if self.usb.open and not self._paused:
-            self.usb.configure(int(self.lo), int(self.fs), int(self.bw), self.lna)
+            self.usb.set_frequency(int(self.lo))
 
     def _prime_cli(self) -> None:
         sess = BladerfCliSession(device=self.device)
@@ -759,6 +759,7 @@ class _UsbLive:
             sess.set_frequency_rx(self.lo)
             sess.set_samplerate_rx(self.fs)
             sess.set_bandwidth_rx(self.bw)
+            sess.cmd("set agc off")
             sess.cmd(f"set gain rx {self.lna}")
         finally:
             sess.close()

@@ -42,6 +42,7 @@ import { TxGainControl } from "./TxGainControl";
 import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
 import { SpectrumScope } from "./SpectrumScope";
+import { SmartAttackFields } from "./cinema/SmartAttackStrip";
 
 export function ScanPanel() {
   const s = useLegion();
@@ -82,6 +83,36 @@ export function ScanPanel() {
       />
     </label>
   );
+
+  if (fpgaAir && !taskLive) {
+    return (
+      <section className="panel" aria-label="Настройки умной атаки">
+        <span className="panel-title">УМНАЯ АТАКА</span>
+        <p className="panel-note">
+          Коридор, сколько секунд бить, пауза на смену стоянки и усиление приёма.
+          Окно приёма 34 МГц, его не меняют. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
+        </p>
+        <SmartAttackFields />
+        <div className="corr-grid">
+          <label>
+            РЕЖИМ
+            <select
+              aria-label="Режим работы SDR"
+              value={s.scanPattern}
+              onChange={(e) => s.setScanPattern(e.target.value as ScanPattern)}
+              disabled={busy}
+            >
+              <option value="auto">{patternOptionRu("auto")}</option>
+              <option value="fpga">{patternOptionRu("fpga")}</option>
+              <option value="sweep">{patternOptionRu("sweep")}</option>
+              <option value="band">{patternOptionRu("band")}</option>
+              <option value="hop">{patternOptionRu("hop")}</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="panel">

@@ -3,7 +3,8 @@
 import { WAVE_AMP_MAX, type WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
-import { useLegion } from "../../state/store";
+import { primeAccepted, setReplayArmed, startRx, stopRx } from "../../sense/rxTest";
+import { peekAcceptedHopsMhz, useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
 export type FpgaStartPath = "solo" | "air" | "auto";
@@ -79,6 +80,19 @@ export async function runSmartAccept(opts?: { peak?: boolean; acceptO4?: boolean
   return useLegion.getState().acceptSmartGridAndArm(opts);
 }
 
+export async function runAcceptedTransmit(): Promise<string> {
+  const s = useLegion.getState();
+  const hops = peekAcceptedHopsMhz();
+  const a = parseFloat(String(s.sdrF1).replace(",", "."));
+  const b = parseFloat(String(s.sdrF2).replace(",", "."));
+  if (!hops.length || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
+    return "сначала Принять коридор";
+  }
+  await primeAccepted(a * 1e6, b * 1e6, hops);
+  setReplayArmed(true);
+  return startRx(true);
+}
+
 export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boolean }): Promise<void> {
   const s = useLegion.getState();
   s.setWorkspace("corridor");
@@ -104,6 +118,7 @@ export async function runCinemaStop(): Promise<void> {
   if (s.fpgaArmed || s.fpgaStopPending) await s.fpgaDisarm();
   if (s.transmitArmed || s.signalTxActive) await s.stopTransmit();
   if (s.scanRunning || s.smartListenLive) s.stopScan();
+  await stopRx();
   if (s.corridorRunning) await s.corridorStop();
 }
 

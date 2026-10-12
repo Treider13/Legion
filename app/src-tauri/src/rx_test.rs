@@ -47,7 +47,7 @@ fn capture_name_ok(name: &str) -> bool {
         && name.ends_with(".json")
 }
 
-fn spawn_rx(from_log: bool, f_start_hz: f64, f_end_hz: f64, jam_duration_s: f64, mute_ns: i64, lna_gain_db: f64) -> Result<(), String> {
+fn spawn_rx(from_log: bool, live: bool, f_start_hz: f64, f_end_hz: f64, jam_duration_s: f64, mute_ns: i64, lna_gain_db: f64) -> Result<(), String> {
     let mut guard = RX.lock().map_err(|_| "rx lock")?;
     if let Some(job) = guard.as_mut() {
         if job.child.try_wait().map_err(|e| e.to_string())?.is_none() {
@@ -55,7 +55,7 @@ fn spawn_rx(from_log: bool, f_start_hz: f64, f_end_hz: f64, jam_duration_s: f64,
         }
     }
     let root = repo_root()?;
-    let mode = if from_log { "--run" } else { "--test" };
+    let mode = if from_log { "--run" } else if live { "--live" } else { "--test" };
     let mut child = Command::new(rx_python(&root))
         .arg("-m")
         .arg("host.legion_rx.main_app")
@@ -114,9 +114,11 @@ pub async fn legion_rx_test_start(
     mute_ns: i64,
     lna_gain_db: f64,
     from_log: bool,
+    live: Option<bool>,
 ) -> Result<(), String> {
+    let live = live.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_rx(from_log, f_start_hz, f_end_hz, jam_duration_s, mute_ns, lna_gain_db)
+        spawn_rx(from_log, live, f_start_hz, f_end_hz, jam_duration_s, mute_ns, lna_gain_db)
     })
     .await
     .map_err(|e| format!("разбор: {e}"))?
@@ -138,6 +140,43 @@ pub fn legion_rx_test_status() -> Result<serde_json::Value, String> {
         "line": line,
         "err": err,
     }))
+}
+
+#[tauri::command]
+pub fn legion_rx_prime(f_start_hz: f64, f_end_hz: f64, hops_mhz: Vec<f64>) -> Result<(), String> {
+    if !f_start_hz.is_finite() || !f_end_hz.is_finite() || f_end_hz <= f_start_hz {
+        return Err("коридор участка пуст".into());
+    }
+    if hops_mhz.is_empty() || hops_mhz.len() > 256 {
+        return Err("прыжков должно быть от 1 до 256".into());
+    }
+    let freqs: Vec<f64> = hops_mhz.into_iter().take(256).collect();
+    let n = freqs.len();
+    let cycle: Vec<u32> = (0..n as u32).collect();
+    let record = serde_json::json!({
+        "pattern_id": "accepted-corridor",
+        "sub_corridor_id": "accepted",
+        "sub": {
+            "f_start": f_start_hz,
+            "f_end": f_end_hz,
+            "sub_corridor_id": "accepted"
+        },
+        "freqs_mhz": freqs,
+        "hop_sequence": cycle,
+        "cycle": cycle,
+        "cycle_length": n,
+        "dwell_us": 1000,
+        "dwell_s": 0.001
+    });
+    let body = serde_json::json!({
+        "record": record,
+        "note": "принятый коридор",
+        "file": "ui"
+    });
+    let path = repo_root()?.join("host/legion_rx/replay_pending.json");
+    let text = serde_json::to_string_pretty(&body).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text + "\n").map_err(|e| format!("запись паттерна: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]

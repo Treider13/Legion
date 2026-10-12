@@ -3,6 +3,7 @@
 // компьютер считает сам. Плата шагает по таблице без команды на каждый прыжок.
 import { useEffect, useState } from "react";
 
+import { TxGainControl } from "../TxGainControl";
 import { isFpgaAirPattern } from "../../sense/modes";
 import {
   loadRx,
@@ -20,18 +21,13 @@ import { useLegion } from "../../state/store";
 
 const RX_WINDOW_MHZ = 34;
 
-export function SmartAttackStrip() {
-  const pattern = useLegion((s) => s.scanPattern);
+export function SmartAttackFields() {
   const f1 = useLegion((s) => s.sdrF1);
   const f2 = useLegion((s) => s.sdrF2);
   const setField = useLegion((s) => s.setSdrAllowField);
   const [jamS, setJamS] = useState(String(rxFields.jam));
   const [muteNs, setMuteNs] = useState(String(rxFields.mute));
   const [lnaDb, setLnaDb] = useState(String(rxFields.lna));
-  const [note, setNote] = useState("");
-  const [files, setFiles] = useState<string[]>([]);
-  const [picked, setPicked] = useState("");
-  const [watching, setWatching] = useState(false);
 
   useEffect(() => {
     const jam = parseFloat(jamS.replace(",", "."));
@@ -41,6 +37,47 @@ export function SmartAttackStrip() {
     if (Number.isFinite(mute)) rxFields.mute = mute;
     if (Number.isFinite(lna)) rxFields.lna = lna;
   }, [jamS, muteNs, lnaDb]);
+
+  return (
+    <div className="corr-grid">
+      <label>
+        Коридор от, МГц
+        <input value={f1} onChange={(e) => setField("sdrF1", e.target.value)} inputMode="decimal" />
+      </label>
+      <label>
+        Коридор до, МГц
+        <input value={f2} onChange={(e) => setField("sdrF2", e.target.value)} inputMode="decimal" />
+      </label>
+      <label title="Сколько секунд плата бьёт по таблице, потом компьютер снова сканирует коридор.">
+        Удар, с
+        <input value={jamS} onChange={(e) => setJamS(e.target.value)} inputMode="decimal" />
+      </label>
+      <label title="Пауза передачи на время смены стоянки, наносекунды. 0 — без паузы.">
+        Пауза retune, нс
+        <input value={muteNs} onChange={(e) => setMuteNs(e.target.value)} inputMode="numeric" />
+      </label>
+      <label>
+        LNA, дБ
+        <input value={lnaDb} onChange={(e) => setLnaDb(e.target.value)} inputMode="decimal" />
+      </label>
+      <label>
+        Окно RX, МГц
+        <input value={String(RX_WINDOW_MHZ)} readOnly />
+      </label>
+      <label title="Смена частоты на плате. Паспорт есть, замера на этой плате нет.">
+        Retune, мкс
+        <input value="нет замера" readOnly />
+      </label>
+    </div>
+  );
+}
+
+export function SmartAttackStrip() {
+  const pattern = useLegion((s) => s.scanPattern);
+  const [note, setNote] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
+  const [picked, setPicked] = useState("");
+  const [watching, setWatching] = useState(false);
 
   useEffect(() => subscribeRx(() => setWatching(true)), []);
 
@@ -89,42 +126,16 @@ export function SmartAttackStrip() {
   if (!isFpgaAirPattern(pattern)) return null;
 
   return (
-    <section className="smart-attack-strip" aria-label="Настройки умной атаки">
+    <section className="smart-attack-strip" aria-label="Умная атака">
       <p>
         Компьютер сканирует коридор окнами по {RX_WINDOW_MHZ} МГц, сам находит прыжки
         и подтверждает паттерн. Затем записывает таблицу частот в плату. Плата бьёт
-        сама {jamS || "15"} с и возвращается к скану того же коридора.
+        сама и возвращается к скану того же коридора. Коридор, удар, пауза и LNA — в настройках.
       </p>
-      <div>
-        <label>
-          Коридор от, МГц
-          <input value={f1} onChange={(e) => setField("sdrF1", e.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          Коридор до, МГц
-          <input value={f2} onChange={(e) => setField("sdrF2", e.target.value)} inputMode="decimal" />
-        </label>
-        <label title="Сколько секунд плата бьёт по таблице, потом компьютер снова сканирует коридор.">
-          Удар, с
-          <input value={jamS} onChange={(e) => setJamS(e.target.value)} inputMode="decimal" />
-        </label>
-        <label title="Пауза передачи на время смены стоянки, наносекунды.">
-          Пауза retune, нс
-          <input value={muteNs} onChange={(e) => setMuteNs(e.target.value)} inputMode="numeric" />
-        </label>
-        <label>
-          LNA, дБ
-          <input value={lnaDb} onChange={(e) => setLnaDb(e.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          Окно RX, МГц
-          <input value={String(RX_WINDOW_MHZ)} readOnly />
-        </label>
-        <label>
-          Retune, мкс
-          <input value="нет замера" readOnly />
-        </label>
-      </div>
+      <TxGainControl tone="cinema" />
+      <p>
+        Ползунок — усиление TX платы. На bladeRF 60 дБ ≈ 0 дБм на SMA. Это выход SDR в дБм, не дБи антенны.
+      </p>
       <div className="smart-attack-actions">
         <button
           type="button"

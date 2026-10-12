@@ -2,10 +2,14 @@
 // LEGION — строка водопада главного кадра.
 // Хост-FFT (scanBins) или взгляд FPGA (LO + гейт). Не рисует глаз.
 // ============================================================================
+import { estimateNoiseFloor } from "../sdr/backend";
 import type { ScanBin } from "../sdr/types";
 
 export const WATERFALL_COLS = 256;
 export const WATERFALL_ROWS = 96;
+/** SDR++ / W4VA: пол у низа палитры, сверху запас на всплеск.
+ *  Иначе шум садится в середину шкалы и водопад становится сплошным. */
+export const WATERFALL_RANGE_DB = 50;
 
 /** dBm → 0…1. Пол около −110, потолок около −40 (как полоса cinema). */
 export function dbmToUnit(dbm: number): number {
@@ -49,6 +53,47 @@ export function rowFromBins(
     const t = span > 1e-9 ? (mhz - a.freqMhz) / span : 0;
     const dbm = a.powerDbm + (b.powerDbm - a.powerDbm) * Math.min(1, Math.max(0, t));
     row[c] = dbmToUnit(dbm);
+  }
+  return row;
+}
+
+/** Строка прохода: пол = медиана нижних 60% (DIO-sys), как чёрный уровень
+ *  QSpectrumAnalyzer. Колонки вне измеренных бинов остаются тишиной. */
+export function rowAboveFloor(
+  bins: readonly ScanBin[],
+  f1: number,
+  f2: number,
+  cols = WATERFALL_COLS,
+): Float32Array {
+  const row = new Float32Array(cols);
+  if (bins.length === 0 || !(f2 > f1)) return row;
+  const finite: ScanBin[] = [];
+  let winLo = Number.POSITIVE_INFINITY;
+  let winHi = Number.NEGATIVE_INFINITY;
+  for (let k = 0; k < bins.length; k++) {
+    const b = bins[k];
+    if (!Number.isFinite(b.powerDbm)) continue;
+    finite.push(b);
+    if (b.freqMhz < winLo) winLo = b.freqMhz;
+    if (b.freqMhz > winHi) winHi = b.freqMhz;
+  }
+  if (finite.length === 0) return row;
+  finite.sort((a, b) => a.freqMhz - b.freqMhz);
+  const floor = estimateNoiseFloor(finite);
+  const step = finite.length >= 2 ? Math.abs(finite[1].freqMhz - finite[0].freqMhz) : 0;
+  const pad = step > 1e-9 ? step * 0.5 : 0;
+  let i = 0;
+  for (let c = 0; c < cols; c++) {
+    const mhz = f1 + ((c + 0.5) / cols) * (f2 - f1);
+    if (mhz < winLo - pad || mhz > winHi + pad) continue;
+    while (i + 1 < finite.length && finite[i + 1].freqMhz < mhz) i += 1;
+    const a = finite[i];
+    const b = finite[Math.min(finite.length - 1, i + 1)];
+    if (!Number.isFinite(a.powerDbm) || !Number.isFinite(b.powerDbm)) continue;
+    const span = b.freqMhz - a.freqMhz;
+    const t = span > 1e-9 ? (mhz - a.freqMhz) / span : 0;
+    const dbm = a.powerDbm + (b.powerDbm - a.powerDbm) * Math.min(1, Math.max(0, t));
+    row[c] = Math.min(1, Math.max(0, (dbm - floor) / WATERFALL_RANGE_DB));
   }
   return row;
 }
@@ -141,7 +186,7 @@ export function nextWaterfallRow(
   cols = WATERFALL_COLS,
 ): Float32Array {
   if (sample.bins.length > 0 && !sample.fpgaArmed) {
-    return rowFromBins(sample.bins, f1, f2, cols);
+    return rowAboveFloor(sample.bins, f1, f2, cols);
   }
   const row = prev && prev.length === cols ? new Float32Array(prev) : new Float32Array(cols);
   for (let c = 0; c < row.length; c++) {

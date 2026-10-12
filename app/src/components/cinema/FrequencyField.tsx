@@ -40,6 +40,7 @@ export function FrequencyField() {
     let receivedSpectrum = false;
     let lastPush = 0;
     let lastKey = "";
+    let lastSweepSeq = 0;
     let lastLo = Number.NaN;
     let lastHi = Number.NaN;
     let heatDirty = true;
@@ -105,14 +106,19 @@ export function FrequencyField() {
       const lookMhz = Math.max(parseFloat(st.fpgaAirBwMhz) || 2, 0.2);
       const fpgaMhz = st.fpgaStatus?.freq_mhz ?? st.lastForwardMhz;
       const det = st.fpgaStatus?.det_active === true;
+      const sweepReady = st.scanSweepBins.length > 0 && st.scanSweepSeq !== lastSweepSeq;
       const key = st.fpgaArmed
         ? `f:${fpgaMhz ?? 0}:${det}:${st.fpgaStatus?.det_count ?? 0}`
         : `b:${st.scanBins.length}:${st.scanBins[0]?.powerDbm ?? 0}:${st.scanCenterMhz ?? 0}`;
-      if (shouldPushWaterfallRow(t - lastPush, 70, st.scanRunning || st.fpgaArmed, key !== lastKey)) {
+      const pushLive = shouldPushWaterfallRow(t - lastPush, 70, st.scanRunning || st.fpgaArmed, key !== lastKey);
+      const useSweep = !st.fpgaArmed && sweepReady;
+      const useLive = !st.fpgaArmed && st.scanSweepBins.length === 0;
+      // QSpectrumAnalyzer: пока проход не закрыт — живое окно, затем одна строка на коридор.
+      if (pushLive && (st.fpgaArmed || useSweep || useLive)) {
         const row = nextWaterfallRow(
           composite,
           {
-            bins: st.scanBins,
+            bins: useSweep ? st.scanSweepBins : st.fpgaArmed ? [] : st.scanBins,
             fpgaArmed: st.fpgaArmed,
             fpgaFreqMhz: fpgaMhz,
             lookMhz,
@@ -122,6 +128,7 @@ export function FrequencyField() {
           hi,
           WATERFALL_COLS,
         );
+        if (useSweep) lastSweepSeq = st.scanSweepSeq;
         composite = row;
         if (!quiet) {
           history.push(row);
@@ -135,7 +142,7 @@ export function FrequencyField() {
         heatDirty = true;
       }
 
-      if (st.scanBins.some(b => finiteDbm(b.powerDbm))) receivedSpectrum = true;
+      if (st.scanBins.some(b => finiteDbm(b.powerDbm)) || st.scanSweepBins.some(b => finiteDbm(b.powerDbm))) receivedSpectrum = true;
       const rows = history.length > 0 ? history : [];
       if (receivedSpectrum && rows.length > 0 && offCtx) {
         if (off.height !== rows.length) {
