@@ -60,7 +60,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     try { return !window.localStorage.getItem("legion.demo.acceptanceNoteSeen"); } catch { return false; }
   });
   const [mode, setMode] = useState<"sdr" | "esp32">("sdr");
-  const [workspace, setWorkspace] = useState<DemoWorkspace>("scan");
+  const [workspace, setWorkspace] = useState<DemoWorkspace>("sdr");
   const [pattern, setPattern] = useState<SdrWalkPattern>("auto");
   const [scanning, setScanning] = useState(false);
   const [transmitArmed, setTransmitArmed] = useState(false);
@@ -242,7 +242,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
     : solo && moving != null
       ? `Только FPGA: тон ${moving.toFixed(3)} МГц по сетке. На плату команда не уходит.`
       : fpgaArmed
-        ? "Умная атака / эфир: хост-сканер не в круге. Платы нет — гейт без телеметрии, ретрансляцию не рисуем."
+        ? "Плата в этом контуре не подключена. Окно оператора — иконка LEGION."
         : hostRx && transmitArmed && rxMhz != null
           ? `RX поймал ${rxMhz.toFixed(3)} МГц в снимке. TX несёт эту частоту.`
           : hostRx && rxMhz != null
@@ -251,7 +251,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
               ? `${patternLabelRu(pattern)}: TX ${moving.toFixed(3)} МГц, шаг ${lookMhz} МГц. Сканер не участвует. На плату команда не уходит.`
               : corridorDraw && moving != null
                 ? `ESP32: синтезатор ${moving.toFixed(3)} МГц, шаг 1 МГц. На рисунке шаг 200 мс (в прошивке 10 мс). По USB команда не уходит.`
-                : "Запустить → коридор → умная атака, эфир+FPGA или только FPGA.";
+                : "Окно оператора — иконка LEGION: кнопки, мониторинг и водопад.";
 
   const openWorkspace = (id: DemoWorkspace) => {
     setWorkspace(id);
@@ -373,7 +373,7 @@ export function DemoShell({ capture, onExit }: { capture: CaptureView | null; on
 
       <footer className="cinema-dock">
         <div className="cinema-modes" role="group" aria-label="Режим">
-          <button type="button" className={mode === "sdr" ? "cinema-mode on" : "cinema-mode"} onClick={() => { if (!live) { setMode("sdr"); setWorkspace("scan"); } }}>
+          <button type="button" className={mode === "sdr" ? "cinema-mode on" : "cinema-mode"} onClick={() => { if (!live) { setMode("sdr"); setWorkspace("sdr"); } }}>
             Умный<span>{connection.value === "USB" ? "USB 3.0" : link.value}</span>
           </button>
           <button type="button" className={mode === "esp32" ? "cinema-mode on" : "cinema-mode"} onClick={() => { if (!live) { setMode("esp32"); setWorkspace("corridor"); } }}>

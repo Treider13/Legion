@@ -89,8 +89,6 @@ $PY -c "import torch" 2>/dev/null && ok "torch (lab CNN, сборка CUDA)" \
   || miss "torch — pip install -r host/requirements-torch.txt"
 $PY -c "import tensorrt" 2>/dev/null && ok "tensorrt" \
   || miss "tensorrt — pip install -r host/requirements-trt.txt"
-$PY -c "import PyQt6, pyqtgraph" 2>/dev/null && ok "PyQt6 + pyqtgraph (водопад)" \
-  || miss "PyQt6 pyqtgraph — pip install -r host/requirements-lab.txt"
 if compgen -G "host/legion_rx/reader/legion_creader*.so" >/dev/null; then
   ok "C-читатель legion_creader"
 else

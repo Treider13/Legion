@@ -20,6 +20,7 @@ struct BuildState {
     child: Child,
     log_path: PathBuf,
     quartus_dir: PathBuf,
+    repo_root: PathBuf,
     size: String,
     started: SystemTime,
 }
@@ -255,6 +256,7 @@ fn legion_build_start_blocking(board: &str, size: &str) -> Result<serde_json::Va
         child,
         log_path: log_path.clone(),
         quartus_dir: quartus,
+        repo_root: root,
         size: size.to_string(),
         started: SystemTime::now(),
     });
@@ -344,6 +346,15 @@ fn find_artifact(quartus: &Path, size: &str, started: SystemTime) -> Option<serd
     None
 }
 
+/// Ярлык меню после успешного образа. Ошибка ярлыка сборку не отменяет.
+fn install_operator_icon(root: &Path) {
+    let script = root.join("tools/install_operator_icon.sh");
+    if !script.is_file() {
+        return;
+    }
+    let _ = Command::new("bash").arg(&script).status();
+}
+
 #[tauri::command]
 pub fn legion_build_status() -> serde_json::Value {
     let mut guard = match BUILD.lock() {
@@ -368,6 +379,9 @@ pub fn legion_build_status() -> serde_json::Value {
             let artifact = find_artifact(&st.quartus_dir, &st.size, st.started);
             let log_path = st.log_path.to_string_lossy().to_string();
             let elapsed = st.started.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+            if code == 0 && artifact.is_some() {
+                install_operator_icon(&st.repo_root);
+            }
             *guard = None;
             serde_json::json!({
                 "running": false,

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 import { PositionPanel } from "../components/PositionPanel";
-import { patternOptionRu, type SdrWalkPattern } from "../sense/modes";
+import type { SdrWalkPattern } from "../sense/modes";
 
 const ESP32 = [
   ["synth", "СИНТЕЗАТОР", "USB → ESP32 → ADF4351"],
@@ -12,8 +12,6 @@ const ESP32 = [
 
 const SDR = [
   ["sdr", "SDR", "Ethernet · офиц. FPGA"],
-  ["scan", "СКАН + TX SDR", "умная атака или хост атака"],
-  ["signal", "ТИП СИГНАЛА", "FPGA без сканера · волна"],
   ["sdrFlash", "ПРОШИВКА SDR", "офиц. FPGA/FX3 · не ESP32"],
   ["sdrCustom", "КАСТОМ FPGA", "сборка legion · bladeRF-cli"],
   ["position", "ПОЗИЦИЯ", "трасса до антенны противника"],
@@ -24,14 +22,14 @@ export type DemoWorkspace = (typeof ESP32)[number][0] | (typeof SDR)[number][0];
 export function DemoSettings({
   mode,
   workspace,
-  pattern,
-  scanning,
-  lookText,
-  busy,
+  pattern: _pattern,
+  scanning: _scanning,
+  lookText: _lookText,
+  busy: _busy,
   onWorkspace,
-  onPattern,
-  onLook,
-  onScan,
+  onPattern: _onPattern,
+  onLook: _onLook,
+  onScan: _onScan,
   onClose,
 }: {
   mode: "sdr" | "esp32";
@@ -99,36 +97,6 @@ export function DemoSettings({
           <div className="panel-grid panel-grid-one">
             {workspace === "position" ? (
               <PositionPanel />
-            ) : workspace === "scan" ? (
-              <section className="panel">
-                <span className="panel-title">РЕЖИМ SDR // АТАКА ИЛИ TX С НОУТБУКА</span>
-                <p className="panel-note">Хост-скан и FPGA вместе не работают (один USB). Сканер демо крутит снимок, на плату не пишет.</p>
-                <div className="corr-grid">
-                  <label>
-                    РЕЖИМ
-                    <select aria-label="Режим работы SDR" value={pattern} disabled={busy} onChange={(e) => onPattern(e.target.value as SdrWalkPattern)}>
-                      <option value="auto">{patternOptionRu("auto")}</option>
-                      <option value="fpga">{patternOptionRu("fpga")}</option>
-                      <option value="sweep">{patternOptionRu("sweep")}</option>
-                      <option value="band">{patternOptionRu("band")}</option>
-                      <option value="hop">{patternOptionRu("hop")}</option>
-                    </select>
-                  </label>
-                </div>
-                {(pattern === "sweep" || pattern === "band" || pattern === "hop") && (
-                  <div className="corr-grid">
-                    <label>
-                      ШАГ TX МГц
-                      <input aria-label="Шаг TX" inputMode="decimal" value={lookText} disabled={busy} onChange={(e) => onLook(e.target.value)} />
-                    </label>
-                  </div>
-                )}
-                {pattern === "auto" && (
-                  <button type="button" className={scanning ? "btn-danger" : "btn-primary"} onClick={onScan}>
-                    {scanning ? "СТОП СКАН" : "СКАНИРОВАТЬ"}
-                  </button>
-                )}
-              </section>
             ) : (
               <section className="panel">
                 <span className="panel-title">{tabs.find((tab) => tab[0] === workspace)?.[1] ?? "ПАНЕЛЬ"}</span>

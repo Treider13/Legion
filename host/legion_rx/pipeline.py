@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Пайплайн лаборатории (шаги 3–9):
 
-    FIFO → C reader → CuPy PFB → TensorRT → hopMap → legion_fpga.py → viewer
+    FIFO → C reader → CuPy PFB → TensorRT → hopMap → legion_fpga.py → окно
 
 Режимы (подкоманды):
   rx-cli    шаг 3: bladeRF-cli → /tmp/iq → C-читатель → OverrunMonitor.
@@ -1014,8 +1014,19 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                                "f_start": fsm.sub["f_start"],
                                "f_end": fsm.sub["f_end"]})
                 rebuilt["done"] = True
-            if pub and frames % 20 == 0:
-                pub.send_ch_pwr(pwr)
+            if pub is not None:
+                iq = np.asarray(fr.complex64())
+                n = min(int(iq.size), 8 * 1024)
+                if n >= 1024:
+                    spec = np.asarray(spectrum_db(iq[:n], 1024, 512, np))
+                    half = 0.5 * float(fs)
+                    pub.send_wf_row(
+                        spec,
+                        f_start_hz=float(fsm.lo_hz) - half,
+                        f_end_hz=float(fsm.lo_hz) + half)
+                    pub.send_spec(spec)
+                if frames % 20 == 0:
+                    pub.send_ch_pwr(pwr)
             log.write({"kind": "tick", "i": frames, "state": rec["state"],
                        "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
                        "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
@@ -1068,7 +1079,7 @@ def live_from_app(app, stop_event) -> int:
     log = JsonLog("gui")
     try:
         return _run_cognitive_live(
-            args, log, None, fsm=app.fsm, stop_event=stop_event)
+            args, log, app.bus.viz, fsm=app.fsm, stop_event=stop_event)
     finally:
         log.close()
 
@@ -1203,7 +1214,7 @@ def main() -> int:
         p.add_argument("--duration-s", type=float, default=60.0)
         p.add_argument("--frame-samples", type=int, default=FRAME_SAMPLES)
         p.add_argument("--publish", action="store_true",
-                       help="публиковать в UDP для viewer (шаг 8)")
+                       help="публиковать спектр в UDP (окно читает свою шину)")
         p.add_argument("--udp-port", type=int, default=5590)
 
     def gp(p):
