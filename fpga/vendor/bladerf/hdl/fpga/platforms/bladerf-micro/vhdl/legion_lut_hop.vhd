@@ -289,6 +289,8 @@ begin
                         pend_ftw_ch <= '1';
                     else
                         -- ch·step готово: собрать FTW и делить на fs_ftw.
+                        -- f_rf: 40 бит, wrap при |f0+ch·step| ≥ 2^40.
+                        -- При реальных ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
                         f_rf := f0_hz_r + resize(mult_p, 40);
                         diff := signed(resize(f_rf, 42))
                                 + resize(shift_q, 42)

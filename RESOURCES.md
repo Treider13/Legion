@@ -315,7 +315,7 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 | `LEGION_REG_GRID_SHIFT_HZ` 0x55 | int32 в FTW hop | hop |
 | `LEGION_REG_GRID_RSV` 0x57 | фаза + hop_ch STATUS | hop / NIOS |
 | `LEGION_REG_PROTO_PERIOD` 0x32 | DRFM walk + запас hop | `legion_lb_walk` / hop |
-| Таймер индекса CH_LUT | исходники есть | `legion_lut_hop.vhd` |
+| Таймер индекса HOP_LUT (0x5E) | исходники есть | `legion_lut_hop.vhd` |
 | `GRID_FLAG_AUTONOMOUS` | 1<<4, HDL читает | `legion_fpga.py`, pkg |
 
 ## HDL hop-тракт — исправления
