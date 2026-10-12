@@ -42,10 +42,10 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
   return (
     <footer className="cinema-dock">
-      {mode === "sdr" && (
+      {mode === "sdr" && !isFpgaAirPattern(scanPattern) && (
         <label
           className="cinema-shelf"
-          title="Ширина горба на анализаторе: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр. Умная атака и эфир копируют антенну — полка их не расширяет."
+          title="Ширина горба на анализаторе: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр."
         >
           <span>ПОЛКА, МГц</span>
           <input
@@ -89,7 +89,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Запустить
           </button>
         )}
-        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
+        {false && mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
           <button
             type="button"
             className="cinema-go"
@@ -113,7 +113,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Шлюз
           </button>
         ) : null}
-        {transmitArmed ? (
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) ? null : transmitArmed ? (
           <button type="button" className="cinema-go stop" onClick={() => void useLegion.getState().stopTransmit()}>
             Стоп передачу
           </button>
@@ -126,7 +126,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-            {message || "Запустить → слух Soapy → Подтвердить коридор → умная атака ARM. Эфир+FPGA или только FPGA — сразу."}
+            {message || "Запустить: компьютер сканирует коридор и сам подтверждает прыжки. Плата бьёт по таблице, умная атака, потом скан заново."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

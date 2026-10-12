@@ -66,10 +66,10 @@ export function GraphiteConsole({
       </header>
       <GraphiteFacts source={source} sourceNote={sourceNote} range={range} rangeNote={rangeNote} />
       {spectrum && <div className="graphite-spectrum">{spectrum}</div>}
-      <section className="graphite-history" id="graphite-history" aria-label="История спектра">
+      <section className="graphite-history" id="graphite-history" aria-label="Водопад">
         <header>
-          <span>История спектра</span>
-          <small>Штатное отображение данных</small>
+          <span>Водопад</span>
+          <small>Скан компьютера, затем удар платы</small>
         </header>
         {history}
       </section>

@@ -968,6 +968,7 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
         fsm.sweeper.radio = _RxProxy(radio)
     fsm.usb = radio.usb
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
+    fsm.lna_gain_db = float(getattr(args, "lna", 20))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     rebuilt = {"done": False}
     frames = 0
@@ -998,6 +999,11 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
             finally:
                 fpga.end_tick()
             frames += 1
+            try:
+                from .test_capture import maybe_save_test
+                maybe_save_test(fsm, pub)
+            except Exception:
+                pass
             if (not rebuilt["done"]) and fsm.sub is not None:
                 width = fsm.sub["f_end"] - fsm.sub["f_start"]
                 m = chans_for_corridor(width)

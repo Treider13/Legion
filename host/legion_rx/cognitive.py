@@ -380,15 +380,51 @@ class CognitiveFSM:
                  "f_end": parent.get("f_end", max(hops))},
                 self.sub, axis=self._spec_axis())
 
+    def _corridor_hz(self) -> "tuple | None":
+        c = self.scan_corridor
+        if not c:
+            return None
+        if isinstance(c, dict):
+            return float(c["f_start"]), float(c["f_end"])
+        return float(c[0]), float(c[1])
+
+    def arm_replay(self, record: dict) -> None:
+        """Следующий цикл слушает сохранённый паттерн и бьёт по нему."""
+        self.replay_pattern = record
+
+    def _replay(self, record: dict, t_s: float) -> None:
+        pid = record.get("pattern_id")
+        sub = record.get("sub")
+        if not pid or not isinstance(sub, dict):
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "t_s": float(t_s), "action": "replay_skip"})
+            return
+        self.store.patterns[pid] = record
+        self.pid = pid
+        self.sub = sub
+        try:
+            self._jam_now(t_s, preload=True)
+        except Exception as exc:
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "t_s": float(t_s), "action": "replay_fail", "error": str(exc)})
+
     def _tick_listening(self, ch_pwr, freqs_hz, t_s: float) -> None:
+        replay = getattr(self, "replay_pattern", None)
+        if replay:
+            self.replay_pattern = None
+            self._replay(replay, t_s)
+            return
         out = self.det.update(ch_pwr, freqs_hz, t_s)
         for b in out["bursts"]:
             self._listen_freqs.append(float(b["f_center"]))
         self._listen_freqs = self._listen_freqs[-64:]
         post = self.det.posterior()
         hops = self._listen_freqs
-        if self.scan_corridor:
-            a, b = float(self.scan_corridor[0]), float(self.scan_corridor[1])
+        pair = self._corridor_hz()
+        if pair:
+            a, b = pair
             if (b - a) > self.ibw_hz:
                 self.sweeper.setup(a, b)
                 self.sweeper.tune_current(self.sweeper.sample_count)

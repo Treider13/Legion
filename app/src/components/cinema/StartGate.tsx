@@ -268,18 +268,6 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
               </label>
             </div>
-            <label
-              className="cinema-shelf-line"
-              title="Ширина горба с ноутбука: Передать, качание, случайная. Умная атака её не ставит — ширину тракта задаёт Взгляд выше."
-            >
-              Полка, МГц
-              <input
-                aria-label="Полка передачи, МГц"
-                value={txShelfMhz}
-                onChange={(e) => setTxShelfMhz(e.target.value)}
-                inputMode="decimal"
-              />
-            </label>
             <div className="cinema-gate-row">
               <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
                 Порог чувствительности
@@ -404,6 +392,52 @@ export function StartGate({ mode, onClose }: Props) {
               </button>
             </div>
             <p className="cinema-gate-lead">{hopNo ?? (path === "air" ? airWalkReason : walkPlan.reason)}</p>
+            <div className="cinema-waves">
+              <p className="cinema-waves-title">Тип сигнала</p>
+              <div className="cinema-waves-list" role="listbox" aria-label="Тип сигнала">
+                {WAVE_CATALOG.map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    role="option"
+                    aria-selected={w.id === wave}
+                    className={w.id === wave ? "cinema-wave on" : "cinema-wave"}
+                    onClick={() => setWave(w.id)}
+                  >
+                    {w.title}
+                  </button>
+                ))}
+              </div>
+              <p className="cinema-wave-desc">{selected.desc}</p>
+              {wave === "css" && (
+                <div className="cinema-gate-row">
+                  <label title="Spreading factor. ELRS 2.4 LoRa 250 Гц — SF6; 500 Гц LoRa — SF5 (common.cpp)">
+                    SF
+                    <input
+                      aria-label="CSS SF"
+                      type="number"
+                      min={cssSfP?.min}
+                      max={cssSfP?.max}
+                      step={cssSfP?.step}
+                      value={cssSf}
+                      onChange={(e) => setCssSf(parseFloat(e.target.value))}
+                    />
+                  </label>
+                  <label title="Полоса LoRa. ELRS 2.4 — 812.5 кГц (SX1280 BW_0800). 500 кГц — SX127x 900">
+                    Полоса, кГц
+                    <input
+                      aria-label="CSS полоса"
+                      type="number"
+                      min={cssBwP?.min}
+                      max={cssBwP?.max}
+                      step={cssBwP?.step}
+                      value={cssBw}
+                      onChange={(e) => setCssBw(parseFloat(e.target.value))}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
             {path === "air" && <p className="cinema-gate-warn">{SELF_EXCITE_WARN}</p>}
           </>
         ) : mode === "sdr" && step === "path" ? (
@@ -470,10 +504,10 @@ export function StartGate({ mode, onClose }: Props) {
         ) : (
           <>
             <p className="cinema-kicker">{mode === "sdr" ? "Умный · SDR" : "Простой · ESP32"}</p>
-            <h2 id={titleId}>{mode === "sdr" ? "Коридор и тип сигнала" : "Коридор синтезатора"}</h2>
+            <h2 id={titleId}>{mode === "sdr" ? "Коридор" : "Коридор синтезатора"}</h2>
             <p className="cinema-gate-lead">
               {mode === "sdr"
-                ? `Дальше: ${FPGA_AIR_MODE_RU.toLowerCase()} (плата сама ищет всплеск и ставит окно), эфир+FPGA без онбордового обзора или только FPGA. Тип сигнала — волна для генерации в FPGA.`
+                ? `Дальше: ${FPGA_AIR_MODE_RU.toLowerCase()} (плата сама ищет всплеск и ставит окно), эфир+FPGA без онбордового обзора или только FPGA.`
                 : "ESP32 ведёт ADF4351 по коридору. Скана эфира нет — только сетка синтезатора."}
             </p>
 
@@ -487,69 +521,6 @@ export function StartGate({ mode, onClose }: Props) {
                 <input value={f2} onChange={(e) => setF2(e.target.value)} inputMode="decimal" />
               </label>
             </div>
-            {mode === "sdr" && (
-              <label
-                className="cinema-shelf-line"
-                title="Ширина горба: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр."
-              >
-                Полка, МГц
-                <input
-                  aria-label="Полка передачи, МГц"
-                  value={txShelfMhz}
-                  onChange={(e) => setTxShelfMhz(e.target.value)}
-                  inputMode="decimal"
-                />
-              </label>
-            )}
-
-            {mode === "sdr" && (
-              <div className="cinema-waves">
-                <p className="cinema-waves-title">Тип сигнала</p>
-                <div className="cinema-waves-list" role="listbox" aria-label="Тип сигнала">
-                  {WAVE_CATALOG.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      role="option"
-                      aria-selected={w.id === wave}
-                      className={w.id === wave ? "cinema-wave on" : "cinema-wave"}
-                      onClick={() => setWave(w.id)}
-                    >
-                      {w.title}
-                    </button>
-                  ))}
-                </div>
-                <p className="cinema-wave-desc">{selected.desc}</p>
-                {wave === "css" && (
-                  <div className="cinema-gate-row">
-                    <label title="Spreading factor. ELRS 2.4 LoRa 250 Гц — SF6; 500 Гц LoRa — SF5 (common.cpp)">
-                      SF
-                      <input
-                        aria-label="CSS SF"
-                        type="number"
-                        min={cssSfP?.min}
-                        max={cssSfP?.max}
-                        step={cssSfP?.step}
-                        value={cssSf}
-                        onChange={(e) => setCssSf(parseFloat(e.target.value))}
-                      />
-                    </label>
-                    <label title="Полоса LoRa. ELRS 2.4 — 812.5 кГц (SX1280 BW_0800). 500 кГц — SX127x 900">
-                      Полоса, кГц
-                      <input
-                        aria-label="CSS полоса"
-                        type="number"
-                        min={cssBwP?.min}
-                        max={cssBwP?.max}
-                        step={cssBwP?.step}
-                        value={cssBw}
-                        onChange={(e) => setCssBw(parseFloat(e.target.value))}
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-            )}
 
             <label className="cinema-check" title="Подтверждение, что выход усилителя замкнут на эквивалент антенны 50 Ом, а не на открытый эфир. Без этого старт заблокирован.">
               <input type="checkbox" checked={ohm} onChange={(e) => setOhm(e.target.checked)} />
