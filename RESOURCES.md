@@ -368,7 +368,8 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 
 ## Что не сделано
 
-- Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет, прошивка не выполнялась. Живой режим в коде есть, на эфире не гонялся.
+- Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет. Живой режим в коде есть, на эфире не гонялся.
+- Образ с `hop_tick`: seeds 1–3 не закрыли Slow 0°C. Тег `v1.2-rbf-hop-lt-sync-72mhz` не ставился.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
 - Ветка `pr-77777-lab-host-pipeline` на origin. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`. Hop-код до `a71479e`. «LUT работает на эфире» не заявляется.
 
@@ -405,8 +406,26 @@ Host на listen-hop не снимает FLAGS bit4: иначе `idx` замир
 по смене `idx`. FLAGS bit4 при этом не снимается.
 
 PERIOD > 255 и ни одного `hop_tick` — прежний счётчик сэмплов.
-Образ `v1.1` (md5 `6ce02ebc…`) входа `hop_tick` не содержит.
+Образ `v1.1` (md5 `6ce02ebc…`, тег `v1.1-rbf-hop-72mhz`) входа `hop_tick` не содержит.
+Сборки с `hop_tick` (12.10.2026, commit `b212c61`) timing не закрыли. Тега `v1.2` нет.
 Blank на плате не измерялся.
+
+## RBF hop_tick — timing не закрыт (12.10.2026)
+
+Quartus 23.1std.1, `bladeRF-micro` A4, revision `legion`, seeds 1–3.
+Критерий Slow 0°C setup ≥ 0 не выполнен. Худший путь не в `hop_tick`:
+`legion_lb_xlat|phase_acc[31]` → `legion_lb_xlat|pre_q[5]` на `pll_sclk`
+(seed 3, Slow 0°C, slack **−0.223 нс**, data delay 14.404 нс, relationship 13.888 нс).
+Логику не менял.
+
+| seed | каталог | ALM | M10K | DSP | Slow 85C su | Slow 0C su | TNS 0C | md5 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `legionxA4-2026-10-12_10.35.22` | 13 269 (72 %) | 284 | 35 | +0.433 | **−0.137** | −0.226 | `10e199525ee7d7177b2c295605604a04` |
+| 2 | `legionxA4-2026-10-12_10.42.36` | 13 245 (72 %) | 284 | 35 | +0.430 | **−0.042** | −0.042 | `4effd95910fc3594f9715fcf5b057657` |
+| 3 | `legionxA4-2026-10-12_10.49.40` | 13 284 (72 %) | 284 | 35 | +0.108 | **−0.223** | −0.223 | `34dd9b4692b0091ba98b851237e4d6c4` |
+
+Slow 85C у всех трёх setup > 0 и TNS 0. Прошивать эти RBF как закрытый образ нельзя.
+Рабочий закрытый образ по-прежнему `legionxA4-2026-10-12_09.27.36`, md5 `6ce02ebc8b23d03e01048674fc26c9f9`.
 
 ## Live mode
 
