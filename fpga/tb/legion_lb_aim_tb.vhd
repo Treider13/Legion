@@ -80,6 +80,7 @@ begin
         sample_en <= '1';
         wait until rising_edge(clock);
         sample_en <= '0';
+        wait until rising_edge(clock);
         wait for 1 ns;
         yi := unpack_i(dout);
         yq := unpack_q(dout);
@@ -90,6 +91,7 @@ begin
         -- bin +64 = fs/4: каждый сэмпл +90°. Сэмпл 0 ещё фаза 0.
         ch_target <= x"80000040";
         sample_en <= '1';
+        wait until rising_edge(clock); -- S1 захват
         wait until rising_edge(clock); -- этот valid ещё на фазе 0 (bin0 не шагнул)
         wait for 1 ns;
         yi := unpack_i(dout);
@@ -118,6 +120,7 @@ begin
         wait until rising_edge(clock);
         ch_target <= x"800000C0";
         sample_en <= '1';
+        wait until rising_edge(clock); -- S1
         wait until rising_edge(clock); -- фаза 0
         wait until rising_edge(clock); -- −90°
         wait for 1 ns;
@@ -139,6 +142,7 @@ begin
         end loop;
         ch_target <= x"80000040";
         -- этот фронт ещё cis(10/256), шаг уже +64. Следующий — 74/256.
+        wait until rising_edge(clock);
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         wait for 1 ns;

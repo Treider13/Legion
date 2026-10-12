@@ -59,6 +59,8 @@ architecture tb of legion_lb_xlat_tb is
             qq <= to_signed(sq, 16);
             v  <= '1';
             wait until rising_edge(c);
+            v  <= '0';
+            wait until rising_edge(c);
             wait for 1 ns;
             if o_v = '1' then
                 so_i := to_integer(o_i);
@@ -69,8 +71,6 @@ architecture tb of legion_lb_xlat_tb is
                     n_out := n_out + 1;
                 end if;
             end if;
-            v  <= '0';
-            wait until rising_edge(c);
         end loop;
     end procedure;
 begin

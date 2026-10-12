@@ -68,33 +68,42 @@ architecture rtl of legion_tx_mux is
     signal ramp_k   : unsigned(4 downto 0);
     -- Предыдущий play_valid: слот Q после последнего сэмпла (play_en уже 0).
     signal play_valid_d : std_logic;
+    -- lb_amp_q15: pre → mag/sign → ×Q15. 17×16 в одном такте с out = −9.9 ns.
+    signal pre_i, pre_q : signed(15 downto 0);
+    signal pre_v        : std_logic;
+    signal mag_i, mag_q : unsigned(16 downto 0);
+    signal sgn_i, sgn_q : std_logic;
+    signal amp_v        : std_logic;
+    signal sel_i, sel_q : signed(15 downto 0);
+    signal sel_v        : std_logic;
+    signal use_amp      : std_logic;
+    signal prod_i, prod_q : unsigned(32 downto 0);
+    signal prod_sgn_i, prod_sgn_q : std_logic;
+    signal prod_v : std_logic;
+    attribute preserve : boolean;
+    attribute preserve of pre_i : signal is true;
+    attribute preserve of mag_i : signal is true;
+    attribute preserve of mag_q : signal is true;
+    attribute preserve of prod_i : signal is true;
+    attribute preserve of prod_q : signal is true;
+    attribute multstyle : string;
+    attribute multstyle of prod_i : signal is "dsp";
+    attribute multstyle of prod_q : signal is "dsp";
 
-    -- Модуль × Q15, затем знак: ASR отрицательных дал бы I ≠ −Q.
-    function lb_amp_q15(x : signed(15 downto 0)) return signed is
-        variable ext  : signed(16 downto 0);
-        variable mag  : unsigned(16 downto 0);
-        variable prod : unsigned(32 downto 0);
-        variable y    : signed(15 downto 0);
+    function abs17(x : signed(15 downto 0)) return unsigned is
+        variable ext : signed(16 downto 0);
     begin
         ext := resize(x, 17);
         if ext < 0 then
-            mag := unsigned(-ext);
-        else
-            mag := unsigned(ext);
+            return unsigned(-ext);
         end if;
-        prod := mag * to_unsigned(LEGION_LB_AMP_Q15, 16);
-        y := signed(prod(30 downto 15));
-        if ext < 0 then
-            return -y;
-        end if;
-        return y;
+        return unsigned(ext);
     end function;
+
 begin
     live <= arm and wd_ok;
 
     process(clock, reset)
-        variable gi : signed(15 downto 0);
-        variable gq : signed(15 downto 0);
     begin
         if reset = '1' then
             phase     <= '0';
@@ -102,13 +111,17 @@ begin
             lb_rd_en  <= '0';
             lb_i      <= (others => '0');
             lb_q      <= (others => '0');
-            out_i     <= (others => '0');
-            out_q     <= (others => '0');
-            out_valid <= '0';
             det_d        <= '0';
             ramping      <= '0';
             ramp_k       <= (others => '0');
             play_valid_d <= '0';
+            pre_i        <= (others => '0');
+            pre_q        <= (others => '0');
+            pre_v        <= '0';
+            sel_i        <= (others => '0');
+            sel_q        <= (others => '0');
+            sel_v        <= '0';
+            use_amp      <= '0';
         elsif rising_edge(clock) then
             lb_rd_en <= '0';
             lb_valid <= '0';
@@ -147,11 +160,12 @@ begin
                 phase <= '0';
             end if;
 
+            use_amp <= '0';
             case mode is
                 when LEGION_MODE_PASS =>
-                    out_i     <= host_i;
-                    out_q     <= host_q;
-                    out_valid <= host_valid;
+                    sel_i <= host_i;
+                    sel_q <= host_q;
+                    sel_v <= host_valid;
                 when LEGION_MODE_PLAYER =>
                     -- Три разных «play_valid=0», их нельзя склеивать:
                     --   play_valid=1           — сэмпл плеера, каденс его;
@@ -163,65 +177,108 @@ begin
                     -- Фаза mux крутится всё время MODE_PLAYER, фаза плеера
                     -- сбрасывается при play_en=0. После DELAY они не совпадают.
                     if live = '1' and play_valid = '1' then
-                        out_i <= play_i; out_q <= play_q; out_valid <= '1';
+                        sel_i <= play_i; sel_q <= play_q; sel_v <= '1';
                     elsif live = '1' and (play_en = '1' or play_valid_d = '1') then
-                        out_i <= (others => '0'); out_q <= (others => '0');
-                        out_valid <= '0';
+                        sel_i <= (others => '0'); sel_q <= (others => '0');
+                        sel_v <= '0';
                     else
-                        out_i <= (others => '0'); out_q <= (others => '0');
-                        out_valid <= phase;
+                        sel_i <= (others => '0'); sel_q <= (others => '0');
+                        sel_v <= phase;
                     end if;
                 when LEGION_MODE_NCO | LEGION_MODE_AIM =>
+                    use_amp <= '1';
                     if live = '1' then
-                        -- LUT NCO ≈ 1.0 (2047<<4). Масштаб на mux, не в
-                        -- entity: legion_nco_tb держит контракт полной шкалы.
-                        -- AIM — тот же тракт, FTW снаружи: legion_bin_ftw(CH_TARGET).
-                        out_i <= lb_amp_q15(nco_i);
-                        out_q <= lb_amp_q15(nco_q);
-                        out_valid <= nco_valid;
+                        pre_i <= nco_i;
+                        pre_q <= nco_q;
+                        pre_v <= nco_valid;
                     else
-                        out_i <= (others => '0'); out_q <= (others => '0');
-                        out_valid <= phase;
+                        pre_i <= (others => '0');
+                        pre_q <= (others => '0');
+                        pre_v <= phase;
                     end if;
                 when LEGION_MODE_LB_GATED | LEGION_MODE_LB_ALWAYS =>
-                    -- Каденс valid ВСЕГДА (когда live): FIFO пуст → нули,
-                    -- иначе valid=0 надолго → DAC держит ПОСЛЕДНИЙ сэмпл
-                    -- (lms6002d.vhd). Гейт (GATED) режет ДАННЫЕ, не каденс.
+                    use_amp <= '1';
                     if live = '1' then
-                        out_valid <= phase;
-                        gi := lb_amp_q15(lb_i);
-                        gq := lb_amp_q15(lb_q);
+                        pre_v <= phase;
                         if blank = '1' then
-                            out_i <= (others => '0');
-                            out_q <= (others => '0');
+                            pre_i <= (others => '0');
+                            pre_q <= (others => '0');
                         elsif lb_valid = '1' and (mode = LEGION_MODE_LB_ALWAYS or det_active = '1') then
-                            out_i <= gi;
-                            out_q <= gq;
+                            pre_i <= lb_i;
+                            pre_q <= lb_q;
                         elsif lb_valid = '1' and ramping = '1' then
-                            -- Спад: сначала (lb × k)/32 как раньше, затем 0.9.
-                            -- Рампа от уже масштабированного ломала I=−Q
-                            -- (ASR отрицательных). |lb|≤32768 → ×31 < 2^20.
-                            gi := resize(shift_right(resize(lb_i, 32) * to_integer(ramp_k), 5), 16);
-                            gq := resize(shift_right(resize(lb_q, 32) * to_integer(ramp_k), 5), 16);
-                            out_i <= lb_amp_q15(gi);
-                            out_q <= lb_amp_q15(gq);
+                            pre_i <= resize(shift_right(resize(lb_i, 32) * to_integer(ramp_k), 5), 16);
+                            pre_q <= resize(shift_right(resize(lb_q, 32) * to_integer(ramp_k), 5), 16);
                             if ramp_k = 0 then
                                 ramping <= '0';
                             else
                                 ramp_k <= ramp_k - 1;
                             end if;
                         else
-                            out_i <= (others => '0');
-                            out_q <= (others => '0');
+                            pre_i <= (others => '0');
+                            pre_q <= (others => '0');
                         end if;
                     else
-                        out_i <= (others => '0'); out_q <= (others => '0');
-                        out_valid <= phase;
+                        pre_i <= (others => '0');
+                        pre_q <= (others => '0');
+                        pre_v <= phase;
                     end if;
                 when others =>
-                    out_i <= (others => '0'); out_q <= (others => '0');
-                    out_valid <= phase;
+                    sel_i <= (others => '0'); sel_q <= (others => '0');
+                    sel_v <= phase;
             end case;
+        end if;
+    end process;
+
+    mag_p : process(clock)
+    begin
+        if rising_edge(clock) then
+            mag_i <= abs17(pre_i);
+            mag_q <= abs17(pre_q);
+            sgn_i <= pre_i(15);
+            sgn_q <= pre_q(15);
+            amp_v <= pre_v;
+        end if;
+    end process;
+
+    mul_p : process(clock)
+    begin
+        if rising_edge(clock) then
+            prod_i     <= mag_i * to_unsigned(LEGION_LB_AMP_Q15, 16);
+            prod_q     <= mag_q * to_unsigned(LEGION_LB_AMP_Q15, 16);
+            prod_sgn_i <= sgn_i;
+            prod_sgn_q <= sgn_q;
+            prod_v     <= amp_v;
+        end if;
+    end process;
+
+    out_p : process(clock, reset)
+        variable y_i, y_q : signed(15 downto 0);
+    begin
+        if reset = '1' then
+            out_i     <= (others => '0');
+            out_q     <= (others => '0');
+            out_valid <= '0';
+        elsif rising_edge(clock) then
+            if use_amp = '1' then
+                y_i := signed(prod_i(30 downto 15));
+                y_q := signed(prod_q(30 downto 15));
+                if prod_sgn_i = '1' then
+                    out_i <= -y_i;
+                else
+                    out_i <= y_i;
+                end if;
+                if prod_sgn_q = '1' then
+                    out_q <= -y_q;
+                else
+                    out_q <= y_q;
+                end if;
+                out_valid <= prod_v;
+            else
+                out_i     <= sel_i;
+                out_q     <= sel_q;
+                out_valid <= sel_v;
+            end if;
         end if;
     end process;
 end architecture;

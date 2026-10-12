@@ -57,6 +57,9 @@ architecture rtl of legion_lb_walk is
     signal run      : std_logic;
     signal use_proto : std_logic;
     signal eff_period : unsigned(31 downto 0);
+    signal tap_q      : unsigned(11 downto 0) := (others => '0');
+    signal tap1_q     : unsigned(11 downto 0) := (others => '0');
+    signal cur_q      : unsigned(31 downto 0) := (others => '0');
 
     function tap_cap(mx : unsigned(31 downto 0)) return unsigned is
         variable cap : unsigned(11 downto 0);
@@ -93,11 +96,11 @@ begin
     use_proto  <= '1' when step_src = '1' and proto_period /= 0 else '0';
     eff_period <= proto_period when use_proto = '1' else walk_period;
     run        <= enable and arm;
-    tap       <= delay_init when run = '0' else tap0_r;
-    tap1      <= delay1_init when run = '0' else tap1_r;
+    tap       <= tap_q;
+    tap1      <= tap1_q;
     ftw0      <= ftw0_init when run = '0' else ftw0_r;
     ftw1      <= ftw1_init when run = '0' else ftw1_r;
-    cur_delay <= resize(delay_init, 32) when run = '0' else resize(tap0_r, 32);
+    cur_delay <= cur_q;
 
     control : process(clock, reset)
         variable do_step : boolean;
@@ -113,7 +116,19 @@ begin
             ftw0i_d  <= (others => '0');
             ftw1i_d  <= (others => '0');
             period_c <= (others => '0');
+            tap_q    <= (others => '0');
+            tap1_q   <= (others => '0');
+            cur_q    <= (others => '0');
         elsif rising_edge(clock) then
+            if run = '0' then
+                tap_q  <= delay_init;
+                tap1_q <= delay1_init;
+                cur_q  <= resize(delay_init, 32);
+            else
+                tap_q  <= tap0_r;
+                tap1_q <= tap1_r;
+                cur_q  <= resize(tap0_r, 32);
+            end if;
             det_d   <= det_active;
             init0_d <= delay_init;
             init1_d <= delay1_init;

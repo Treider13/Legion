@@ -19,10 +19,13 @@ import {
 } from "./smartGrid";
 
 /** Застывший two-ray: 64 @ 56 MSPS ≈ 1.14 мкс ≈ 1/B ELRS LoRa BW_0800.
- *  На другом fs — round(64·fs/56e6), не «всегда 64». 2 MSPS → 2. */
+ *  На другом fs — round(64·fs/56e6), не «всегда 64». 36 MSPS → 41. 2 MSPS → 2.
+ *  RBF 72 МГц: mixer+aim +2 сэмпла — общий путь, в delay1 не входят. */
 export const DRFM_TAP0 = 0;
 export const DRFM_TAP1_TWORY = 64;
 export const DRFM_TWORY_FS_HZ = 56e6;
+export const DRFM_PIPELINE_EXTRA_SAMPLES = 2;
+export const DRFM_RBF_FS_HZ = 36e6;
 /** Q15 0.5. Mux потом ещё ×0.9 — не ставить 29491 на отвод. */
 export const DRFM_AMP_HALF = 16384;
 /** 1 SCS DroneID / OcuSync PHY (Schiller 2023, proto17). */
@@ -36,6 +39,12 @@ export const DRFM_ZC_RU = "drfm · ZC CFO 15 кГц";
 export function drfmTworyDelay1(fsHz: number): number {
   const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : DRFM_TWORY_FS_HZ;
   return Math.max(1, Math.min(4095, Math.round((DRFM_TAP1_TWORY * fs) / DRFM_TWORY_FS_HZ)));
+}
+
+/** mixer+aim +2 / fs. @ 36e6 = 55.556 нс. Не прибавлять к delay1. */
+export function drfmPipelineExtraS(fsHz: number): number {
+  const fs = Number.isFinite(fsHz) && fsHz > 0 ? fsHz : DRFM_RBF_FS_HZ;
+  return DRFM_PIPELINE_EXTRA_SAMPLES / fs;
 }
 
 export function drfmTworyRu(delay1: number): string {

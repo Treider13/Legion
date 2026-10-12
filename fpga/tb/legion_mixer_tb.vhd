@@ -49,12 +49,13 @@ begin
         reset <= '0';
         wait until rising_edge(clock);
 
-        -- Обход: mix_en=0, dout=din на следующем sample_en (как смесь)
+        -- Обход: mix_en=0, dout=din через S1+S2 (2 sample_en-такта)
         mix_en <= '0';
         din <= pack_iq(1234, -5678);
         sample_en <= '1';
         wait until rising_edge(clock);
         sample_en <= '0';
+        wait until rising_edge(clock);
         wait until rising_edge(clock);
         assert unpack_i(dout) = 1234 and unpack_q(dout) = -5678
             report "FAIL: bypass mix_en=0" severity failure;
@@ -67,6 +68,7 @@ begin
         sample_en <= '1';
         wait until rising_edge(clock);
         sample_en <= '0';
+        wait until rising_edge(clock);
         wait until rising_edge(clock);
         yi := unpack_i(dout);
         yq := unpack_q(dout);
@@ -82,6 +84,7 @@ begin
         wait until rising_edge(clock);
         sample_en <= '0';
         wait until rising_edge(clock);
+        wait until rising_edge(clock);
         yi := unpack_i(dout);
         yq := unpack_q(dout);
         assert abs(yi + 2000) < 80 and abs(yq - 10000) < 80
@@ -94,6 +97,7 @@ begin
         sample_en <= '1';
         wait until rising_edge(clock);
         sample_en <= '0';
+        wait until rising_edge(clock);
         wait until rising_edge(clock);
         assert unpack_i(dout) = -1 and unpack_q(dout) = 2
             report "FAIL: bypass after mix" severity failure;

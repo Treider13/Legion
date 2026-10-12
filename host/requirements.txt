@@ -1,0 +1,6 @@
+# LEGION host — CPU / тесты (без CUDA).
+# Лаборатория GPU: pip install -r host/requirements-lab.txt
+numpy>=1.26
+scipy>=1.11
+pytest>=8.0
+pyusb>=1.2

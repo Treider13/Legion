@@ -1,0 +1,38 @@
+seed=3
+pll_sclk=72.000000 MHz
+DATA_CLK=144.0 MHz
+fs=36e6
+revision=legion
+device=5CEBA4F23C8
+0032e678c6993d723e1500196c225edca4fb9b4e
+## pr-77777-lab-host-pipeline...origin/pr-77777-lab-host-pipeline
+ M fpga/hdl/legion.sdc
+ M fpga/hdl/legion_lb_aim.vhd
+ M fpga/hdl/legion_mixer.vhd
+ M fpga/host/legion_fpga.py
+ M fpga/integration/bladerf-legion.vhd
+ M fpga/tb/legion_lb_aim_tb.vhd
+ M fpga/tb/legion_mixer_tb.vhd
+ M fpga/vendor/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/axi_ad9361/axi_ad9361_alt_lvds_rx.v
+ M fpga/vendor/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/axi_ad9361/axi_ad9361_alt_lvds_tx.v
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/legion.sdc
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-legion.vhd
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/legion_lb_aim.vhd
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/legion_mixer.vhd
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf/vhdl/bladerf-legion.vhd
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf/vhdl/legion_lb_aim.vhd
+ M fpga/vendor/bladerf/hdl/fpga/platforms/bladerf/vhdl/legion_mixer.vhd
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-09-29_15.21.44/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-09-29_15.50.11/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-10_10.07.48/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_16.39.57/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_17.05.24/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_17.30.56/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_17.56.26/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_18.20.28/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_18.31.52/
+?? fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-11_23.08.28/
+?? fpga/vendor/bladerf/hdl/quartus/seed_margin_2026-10-10/
+?? fpga/vendor/bladerf/hdl/quartus/timing_close_2026-10-11/
+?? fpga/vendor/bladerf/hdl/quartus/work/

@@ -34,6 +34,10 @@ end entity;
 architecture rtl of legion_look_through is
     signal phase     : std_logic;
     signal count     : unsigned(31 downto 0);
+    signal count_q   : unsigned(31 downto 0);
+    signal period_q  : unsigned(31 downto 0);
+    signal width_q   : unsigned(31 downto 0);
+    signal cmp_ge_q  : std_logic;
     signal blank_r   : std_logic;
     signal en_ok     : std_logic;
 
@@ -49,6 +53,12 @@ architecture rtl of legion_look_through is
     signal last_off  : unsigned(31 downto 0);
     signal have_on   : std_logic;
     signal blank_d   : std_logic;
+    signal energy_s1 : unsigned(31 downto 0);
+    signal valid_s1  : std_logic;
+    signal blank_s1  : std_logic;
+    signal avg_s2    : unsigned(31 downto 0);
+    signal pend_s2   : std_logic;
+    signal blank_s2  : std_logic;
 begin
     en_ok <= enable when period /= 0 and width /= 0 else '0';
     blank <= blank_r;
@@ -58,28 +68,44 @@ begin
     status(31 downto 2) <= (others => '0');
 
     -- Каденс как mux: каждый 2-й tx_clock = один сэмпл ЦАП.
-    -- blank ровно WIDTH сэмплов: count 0..period-1 он, period..period+width-1 офф.
+    -- count 0..period-1 он, period..period+width-1 офф (wrap живой).
+    -- blank: count_q/period_q → cmp_ge_q. +1..2 tx_clock vs count (хост).
+    blank_r <= cmp_ge_q;
     tx_fsm : process(tx_clock, tx_reset)
     begin
         if tx_reset = '1' then
-            phase   <= '0';
-            count   <= (others => '0');
-            blank_r <= '0';
+            phase    <= '0';
+            count    <= (others => '0');
+            count_q  <= (others => '0');
+            period_q <= (others => '0');
+            width_q  <= (others => '0');
+            cmp_ge_q <= '0';
         elsif rising_edge(tx_clock) then
             phase <= not phase;
             if en_ok = '0' then
-                count   <= (others => '0');
-                blank_r <= '0';
-            elsif phase = '1' then
-                if count < period then
-                    blank_r <= '0';
-                    count   <= count + 1;
+                count    <= (others => '0');
+                count_q  <= (others => '0');
+                period_q <= (others => '0');
+                width_q  <= (others => '0');
+                cmp_ge_q <= '0';
+            else
+                count_q  <= count;
+                period_q <= period;
+                width_q  <= width;
+                if count_q >= period_q and period_q /= 0 then
+                    cmp_ge_q <= '1';
                 else
-                    blank_r <= '1';
-                    if count + 1 >= period + width then
-                        count <= (others => '0');
-                    else
+                    cmp_ge_q <= '0';
+                end if;
+                if phase = '1' then
+                    if count < period then
                         count <= count + 1;
+                    else
+                        if count + 1 >= period + width then
+                            count <= (others => '0');
+                        else
+                            count <= count + 1;
+                        end if;
                     end if;
                 end if;
             end if;
@@ -117,7 +143,6 @@ begin
     end process;
 
     rx_energy : process(rx_clock, rx_reset)
-        variable energy   : unsigned(31 downto 0);
         variable i_sq     : signed(31 downto 0);
         variable q_sq     : signed(31 downto 0);
         variable avg      : unsigned(47 downto 0);
@@ -127,13 +152,19 @@ begin
         variable edge     : boolean;
     begin
         if rx_reset = '1' then
-            acc      <= (others => '0');
-            wcount   <= (others => '0');
-            last_on  <= (others => '0');
-            last_off <= (others => '0');
-            have_on  <= '0';
-            echo_rx  <= '0';
-            blank_d  <= '0';
+            acc       <= (others => '0');
+            wcount    <= (others => '0');
+            last_on   <= (others => '0');
+            last_off  <= (others => '0');
+            have_on   <= '0';
+            echo_rx   <= '0';
+            blank_d   <= '0';
+            energy_s1 <= (others => '0');
+            valid_s1  <= '0';
+            blank_s1  <= '0';
+            avg_s2    <= (others => '0');
+            pend_s2   <= '0';
+            blank_s2  <= '0';
         elsif rising_edge(rx_clock) then
             if win_shift > 12 then
                 win_last := to_unsigned(4095, 13);
@@ -154,45 +185,71 @@ begin
             end if;
 
             if en_rx = '0' then
-                acc      <= (others => '0');
-                wcount   <= (others => '0');
-                last_on  <= (others => '0');
-                last_off <= (others => '0');
-                have_on  <= '0';
-                echo_rx  <= '0';
-                blank_d  <= '0';
+                acc       <= (others => '0');
+                wcount    <= (others => '0');
+                last_on   <= (others => '0');
+                last_off  <= (others => '0');
+                have_on   <= '0';
+                echo_rx   <= '0';
+                blank_d   <= '0';
+                energy_s1 <= (others => '0');
+                valid_s1  <= '0';
+                blank_s1  <= '0';
+                avg_s2    <= (others => '0');
+                pend_s2   <= '0';
+                blank_s2  <= '0';
             else
                 edge := (blank_rx /= blank_d);
                 blank_d <= blank_rx;
-                -- Фронт blank: окно смешало он/офф — не коммитить (EA look-through).
+                -- S1: I²+Q²
                 if edge then
-                    acc    <= (others => '0');
-                    wcount <= (others => '0');
+                    valid_s1 <= '0';
                 elsif rx_valid = '1' then
                     i_sq := rx_i * rx_i;
                     q_sq := rx_q * rx_q;
-                    energy := unsigned(i_sq) + unsigned(q_sq);
-                    acc    <= acc + energy;
-                    wcount <= wcount + 1;
+                    energy_s1 <= unsigned(i_sq) + unsigned(q_sq);
+                    valid_s1  <= '1';
+                    blank_s1  <= blank_rx;
+                else
+                    valid_s1 <= '0';
+                end if;
+                -- S2: окно / avg (energy_s1 предыдущего такта)
+                if edge then
+                    acc     <= (others => '0');
+                    wcount  <= (others => '0');
+                    pend_s2 <= '0';
+                elsif valid_s1 = '1' then
                     if wcount = win_last then
-                        avg := shift_right(acc + energy, sh);
-                        acc    <= (others => '0');
-                        wcount <= (others => '0');
-                        if blank_rx = '0' then
-                            last_on <= avg(31 downto 0);
-                            have_on <= '1';
-                        else
-                            last_off <= avg(31 downto 0);
-                            if have_on = '1' then
-                                if last_on >= det_thr then
-                                    if avg(31 downto 0) < shift_right(last_on, ratio) then
-                                        echo_rx <= '1';
-                                    else
-                                        echo_rx <= '0';
-                                    end if;
+                        avg := shift_right(acc + energy_s1, sh);
+                        avg_s2   <= avg(31 downto 0);
+                        pend_s2  <= '1';
+                        blank_s2 <= blank_s1;
+                        acc      <= (others => '0');
+                        wcount   <= (others => '0');
+                    else
+                        acc     <= acc + energy_s1;
+                        wcount  <= wcount + 1;
+                        pend_s2 <= '0';
+                    end if;
+                else
+                    pend_s2 <= '0';
+                end if;
+                -- S3: last_on/off + echo (avg_s2 предыдущего такта)
+                if pend_s2 = '1' then
+                    if blank_s2 = '0' then
+                        last_on <= avg_s2;
+                        have_on <= '1';
+                    else
+                        last_off <= avg_s2;
+                        if have_on = '1' then
+                            if last_on >= det_thr then
+                                if avg_s2 < shift_right(last_on, ratio) then
+                                    echo_rx <= '1';
                                 else
                                     echo_rx <= '0';
                                 end if;
+                            else
+                                echo_rx <= '0';
                             end if;
                         end if;
                     end if;

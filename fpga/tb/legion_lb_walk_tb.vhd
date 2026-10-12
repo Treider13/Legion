@@ -163,6 +163,7 @@ begin
         assert tap = to_unsigned(0, 12) and ftw0 = to_unsigned(10, 32)
             report "FAIL: period 4, 3 samples must not step" severity failure;
         pulse_sample(sample_en, 1);
+        tick(1);
         assert tap = to_unsigned(1, 12)
             report "FAIL: period 4 fourth sample steps tap" severity failure;
         assert tap1 = to_unsigned(65, 12)
@@ -179,6 +180,7 @@ begin
             report "FAIL: no step while det=0" severity failure;
         det_active <= '1';
         pulse_sample(sample_en, 4);
+        tick(1);
         assert tap = to_unsigned(2, 12)
             report "FAIL: period restarts after det gap" severity failure;
 
@@ -200,9 +202,11 @@ begin
         assert tap = to_unsigned(0, 12)
             report "FAIL: proto 3, 2 samples must not step" severity failure;
         pulse_sample(sample_en, 1);
+        tick(1);
         assert tap = to_unsigned(1, 12)
             report "FAIL: proto 3 third sample steps without det" severity failure;
         pulse_sample(sample_en, 3);
+        tick(1);
         assert tap = to_unsigned(2, 12)
             report "FAIL: proto continues across det=0" severity failure;
 
@@ -221,6 +225,7 @@ begin
             report "FAIL: proto=0 must not free-run" severity failure;
         det_active <= '1';
         pulse_sample(sample_en, 2);
+        tick(1);
         assert tap = to_unsigned(1, 12)
             report "FAIL: proto=0 falls back to WALK_PERIOD" severity failure;
 

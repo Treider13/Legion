@@ -153,7 +153,9 @@ architecture rtl of legion_regs is
     signal lbf1_meta, lbf1_tx   : std_logic_vector(31 downto 0);
     signal lba_meta, lba_tx     : std_logic_vector(31 downto 0);
     signal wper_meta, wper_tx   : std_logic_vector(31 downto 0);
-    signal wfs_meta, wfs_tx     : std_logic_vector(31 downto 0);
+    signal wfs_meta0, wfs_tx0   : std_logic_vector(31 downto 0);
+    signal wfs_meta1, wfs_tx1   : std_logic_vector(31 downto 0);
+    signal wfs_meta2, wfs_tx2   : std_logic_vector(31 downto 0);
     signal pper_meta, pper_tx   : std_logic_vector(31 downto 0);
     signal ppul_meta, ppul_tx   : std_logic_vector(31 downto 0);
     signal src_meta, src_tx     : std_logic;
@@ -186,7 +188,16 @@ architecture rtl of legion_regs is
     signal bins_meta, bins_nios : std_logic_vector(63 downto 0);
     signal act_meta, act_nios   : std_logic_vector(7 downto 0);
     signal fs_meta, fs_rx       : std_logic_vector(31 downto 0);
-    signal lo_meta, lo_rx       : std_logic_vector(31 downto 0);
+    signal lo_meta0, lo_rx0     : std_logic_vector(31 downto 0);
+    signal lo_meta1, lo_rx1     : std_logic_vector(31 downto 0);
+    signal lo_meta2, lo_rx2     : std_logic_vector(31 downto 0);
+
+    attribute preserve   : boolean;
+    attribute dont_merge : boolean;
+    attribute preserve   of wfs_meta0, wfs_meta1, wfs_meta2, wfs_tx0, wfs_tx1, wfs_tx2 : signal is true;
+    attribute dont_merge of wfs_meta0, wfs_meta1, wfs_meta2, wfs_tx0, wfs_tx1, wfs_tx2 : signal is true;
+    attribute preserve   of lo_meta0, lo_meta1, lo_meta2, lo_rx0, lo_rx1, lo_rx2 : signal is true;
+    attribute dont_merge of lo_meta0, lo_meta1, lo_meta2, lo_rx0, lo_rx1, lo_rx2 : signal is true;
     signal aim_meta, aim_rx     : std_logic_vector(31 downto 0);
 
     -- det_count: gray CDC rx → nios (x40 rx_clock ≠ nios_clk; micro совпадают)
@@ -322,7 +333,9 @@ begin
             lbf1_meta <= (others => '0'); lbf1_tx <= (others => '0');
             lba_meta  <= (others => '0'); lba_tx <= (others => '0');
             wper_meta <= (others => '0'); wper_tx <= (others => '0');
-            wfs_meta  <= (others => '0'); wfs_tx <= (others => '0');
+            wfs_meta0 <= (others => '0'); wfs_tx0 <= (others => '0');
+            wfs_meta1 <= (others => '0'); wfs_tx1 <= (others => '0');
+            wfs_meta2 <= (others => '0'); wfs_tx2 <= (others => '0');
             pper_meta <= (others => '0'); pper_tx <= (others => '0');
             ppul_meta <= (others => '0'); ppul_tx <= (others => '0');
             src_meta  <= '0'; src_tx <= '0';
@@ -353,7 +366,9 @@ begin
             lbf1_meta <= r_lb_ftw1;    lbf1_tx <= lbf1_meta;
             lba_meta  <= r_lb_amp;     lba_tx  <= lba_meta;
             wper_meta <= r_walk_period; wper_tx <= wper_meta;
-            wfs_meta  <= r_walk_ftw_step; wfs_tx <= wfs_meta;
+            wfs_meta0 <= r_walk_ftw_step; wfs_tx0 <= wfs_meta0;
+            wfs_meta1 <= r_walk_ftw_step; wfs_tx1 <= wfs_meta1;
+            wfs_meta2 <= r_walk_ftw_step; wfs_tx2 <= wfs_meta2;
             pper_meta <= r_proto_period; pper_tx <= pper_meta;
             ppul_meta <= r_proto_pulse;  ppul_tx <= ppul_meta;
             src_meta  <= r_step_src;     src_tx  <= src_meta;
@@ -386,7 +401,9 @@ begin
     tx_lb_amp0    <= unsigned(lba_tx(15 downto 0));
     tx_lb_amp1    <= unsigned(lba_tx(31 downto 16));
     tx_walk_period <= unsigned(wper_tx);
-    tx_walk_ftw_step <= unsigned(wfs_tx);
+    tx_walk_ftw_step(10 downto 0)  <= unsigned(wfs_tx0(10 downto 0));
+    tx_walk_ftw_step(21 downto 11) <= unsigned(wfs_tx1(21 downto 11));
+    tx_walk_ftw_step(31 downto 22) <= unsigned(wfs_tx2(31 downto 22));
     tx_proto_period <= unsigned(pper_tx);
     tx_proto_pulse  <= unsigned(ppul_tx);
     tx_drfm_step_src <= src_tx;
@@ -433,7 +450,9 @@ begin
             lutd_meta <= (others => '0'); lutd_rx <= (others => '0');
             lutt_meta <= '0'; lutt_rx <= '0'; lutt_rx_d <= '0';
             fs_meta  <= (others => '0'); fs_rx  <= (others => '0');
-            lo_meta  <= (others => '0'); lo_rx  <= (others => '0');
+            lo_meta0 <= (others => '0'); lo_rx0 <= (others => '0');
+            lo_meta1 <= (others => '0'); lo_rx1 <= (others => '0');
+            lo_meta2 <= (others => '0'); lo_rx2 <= (others => '0');
             aim_meta <= (others => '0'); aim_rx <= (others => '0');
         elsif rising_edge(rx_clock) then
             thr_meta <= r_det_thr;   thr_rx <= thr_meta;
@@ -447,7 +466,9 @@ begin
             lutt_rx   <= lutt_meta;
             lutt_rx_d <= lutt_rx;
             fs_meta  <= r_ch_fs;     fs_rx  <= fs_meta;
-            lo_meta  <= r_ch_lo;     lo_rx  <= lo_meta;
+            lo_meta0 <= r_ch_lo; lo_rx0 <= lo_meta0;
+            lo_meta1 <= r_ch_lo; lo_rx1 <= lo_meta1;
+            lo_meta2 <= r_ch_lo; lo_rx2 <= lo_meta2;
             -- arm и bin одним словом: 2FF не разводит их на такт.
             aim_meta <= r_ch_target; aim_rx <= aim_meta;
         end if;
@@ -468,7 +489,9 @@ begin
     rx_lut_addr     <= unsigned(luta_rx);
     rx_lut_data     <= unsigned(lutd_rx);
     rx_ch_fs_hz     <= unsigned(fs_rx);
-    rx_ch_lo_khz    <= unsigned(lo_rx);
+    rx_ch_lo_khz(10 downto 0)  <= unsigned(lo_rx0(10 downto 0));
+    rx_ch_lo_khz(21 downto 11) <= unsigned(lo_rx1(21 downto 11));
+    rx_ch_lo_khz(31 downto 22) <= unsigned(lo_rx2(31 downto 22));
 
     -- det_count: зарегистрировать gray в rx, 2FF в nios, раскодировать
     cdc_det_src : process(rx_clock, rx_reset)

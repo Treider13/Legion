@@ -1,0 +1,5 @@
+logs/
+__pycache__/
+legion_rx/reader/legion_creader*.so
+models/
+*.pyc
