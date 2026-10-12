@@ -170,3 +170,27 @@ def extract_subcorridor(hop_freqs_hz, parent_corridor_id: str,
 def in_subcorridor(freq_hz: float, sub: dict) -> bool:
     """Жёсткая граница: работать ТОЛЬКО внутри sub-corridor."""
     return float(sub["f_start"]) <= float(freq_hz) <= float(sub["f_end"])
+
+
+IBW_HZ = 56.0e6  # bladeRF 2.0 micro, приём [F11]
+
+
+def ibw_visibility(sub: dict, lo_hz: float, ibw_hz: float = IBW_HZ) -> dict:
+    """Видимая доля sub в текущем IBW. width > IBW → неполный паттерн."""
+    width = float(sub["f_end"]) - float(sub["f_start"])
+    half = 0.5 * float(ibw_hz)
+    vis_lo = max(float(sub["f_start"]), float(lo_hz) - half)
+    vis_hi = min(float(sub["f_end"]), float(lo_hz) + half)
+    visible = max(0.0, vis_hi - vis_lo)
+    frac = visible / max(width, 1.0)
+    wider = width > float(ibw_hz)
+    note = ""
+    if wider:
+        note = "FHSS шире IBW"
+        if frac < 0.5:
+            note += "; видимая часть <50%, паттерн неполный"
+        else:
+            note += "; работа по видимой части"
+    return {"width_hz": width, "wider_than_ibw": wider,
+            "visible_hz": visible, "visible_frac": frac,
+            "visible_lo": vis_lo, "visible_hi": vis_hi, "note": note}

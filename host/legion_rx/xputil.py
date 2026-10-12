@@ -1,7 +1,7 @@
 """Backend numpy/cupy (шаг 4.1). Только CuPy — scikit-cuda запрещён.
 
 Лабораторный режим — GPU (RTX 5050, CUDA ≥ 12.8, CuPy ≥ 13.3): backend()
-без GPU честно падает, если явно не разрешён CPU (тесты/офлайн-разбор).
+без GPU падает, если явно не разрешён CPU (тесты/офлайн-разбор).
 """
 from __future__ import annotations
 

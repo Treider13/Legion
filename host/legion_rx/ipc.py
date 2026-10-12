@@ -68,10 +68,15 @@ class UdpPublisher:
 
     # ---- когнитивный контур (ТЗ п.9) ----
 
-    def send_corridor(self, parent: dict, sub: dict) -> None:
-        self.send("corridor", {
-            "parent": [parent.get("f_start"), parent.get("f_end")],
-            "sub": [sub.get("f_start"), sub.get("f_end")]})
+    def send_corridor(self, parent: dict, sub: dict,
+                      axis: "tuple | None" = None) -> None:
+        """axis = (f_start_hz, f_end_hz, nfft) спектра fftshift.
+        bin = (f − f_start) / (f_end − f_start) × nfft. Без axis рамки скрыты."""
+        msg = {"parent": [parent.get("f_start"), parent.get("f_end")],
+               "sub": [sub.get("f_start"), sub.get("f_end")]}
+        if axis is not None:
+            msg["axis"] = [float(x) for x in axis]
+        self.send("corridor", msg)
 
     def send_pred(self, channel, t_s: float, pattern_id: "str | None") -> None:
         self.send("pred", {"channel": channel, "t": round(float(t_s), 4),
@@ -84,7 +89,8 @@ class UdpPublisher:
                           "confidence": rec.get("confidence"),
                           "sequence_type": rec.get("sequence_type"),
                           "jams_sent": rec.get("jams_sent"),
-                          "pdr_target": rec.get("pdr_target")})
+                          "pdr_target": rec.get("pdr_target"),
+                          "threat": rec.get("threat")})
 
     def close(self) -> None:
         self._sock.close()

@@ -422,7 +422,7 @@ class FakeTransport:
                         lf.REG_WALK_FTW_STEP,
                         lf.REG_CH_CTRL, lf.REG_CH_IDX, lf.REG_CH_PWR,
                         lf.REG_PEAK1, lf.REG_PEAK2, lf.REG_PEAK3,
-                        lf.REG_CH_LUT,
+                        lf.REG_CH_LUT, lf.REG_HOP_LUT,
                         lf.REG_GRID_META, lf.REG_GRID_F0_HZ, lf.REG_GRID_STEP_HZ,
                         lf.REG_GRID_PRI_US, lf.REG_GRID_SHIFT_HZ, lf.REG_GRID_FLAGS,
                         lf.REG_CH_PWR_THR, lf.REG_AIM_CH):
@@ -1324,7 +1324,7 @@ class LegionGateway:
                 "ch_ctrl": lf.REG_CH_CTRL, "ch_idx": lf.REG_CH_IDX,
                 "ch_pwr": lf.REG_CH_PWR, "peak1": lf.REG_PEAK1,
                 "peak2": lf.REG_PEAK2, "peak3": lf.REG_PEAK3,
-                "ch_lut": lf.REG_CH_LUT,
+                "ch_lut": lf.REG_CH_LUT, "hop_lut": lf.REG_HOP_LUT,
                 "grid_meta": lf.REG_GRID_META, "grid_f0_hz": lf.REG_GRID_F0_HZ,
                 "grid_step_hz": lf.REG_GRID_STEP_HZ, "grid_pri_us": lf.REG_GRID_PRI_US,
                 "grid_shift_hz": lf.REG_GRID_SHIFT_HZ, "grid_flags": lf.REG_GRID_FLAGS,

@@ -74,7 +74,7 @@
 #define LEGION_REG_PEAK1          0x2E  /* STATUS mux: Top-N 1 */
 #define LEGION_REG_PEAK2          0x2F
 #define LEGION_REG_PEAK3          0x30
-#define LEGION_REG_CH_LUT         0x31  /* write {idx[15:8], ch[7:0]} */
+#define LEGION_REG_CH_LUT         0x31  /* RX bin→ch {idx[15:8], ch[7:0]} */
 #define LEGION_REG_PROTO_PERIOD   0x32  /* период пакета, сэмплы (хост) */
 #define LEGION_REG_PROTO_PULSE    0x33  /* длительность пакета, сэмплы */
 #define LEGION_REG_DRFM_STEP_SRC  0x34  /* 0=WALK_PERIOD, 1=PROTO_PERIOD */
@@ -106,20 +106,21 @@
 #define LEGION_REG_CH_BINS_47     0x4E  /* пики слотов 4..7 */
 #define LEGION_REG_CH_FS_HZ       0x4F  /* NIOS → HDL */
 #define LEGION_REG_CH_LO_KHZ      0x50  /* центр взгляда → HDL */
-/* Сетка умной атаки — только NIOS (HDL when others => null). Не 0x32–0x50. */
+/* GRID 0x51–0x57 → HDL latch + NIOS shadow. HOP_LUT 0x5E → HDL. */
 #define LEGION_REG_GRID_META      0x51  /* n, n_used, conf, source, kind */
 #define LEGION_REG_GRID_F0_HZ     0x52  /* uint32: Hz если влезает; 5.8 → кГц */
 #define LEGION_REG_GRID_STEP_HZ   0x53
 #define LEGION_REG_GRID_PRI_US    0x54  /* 0 = не часы walk */
 #define LEGION_REG_GRID_SHIFT_HZ  0x55  /* int32 residual FreqCorrection */
 #define LEGION_REG_GRID_FLAGS     0x56
-#define LEGION_REG_GRID_RSV       0x57  /* reserved, 0 */
+#define LEGION_REG_GRID_RSV       0x57  /* фаза; read [15:8]=hop_ch */
 #define LEGION_REG_CH_PWR_THR     0x58  /* [15:0] порог канала CH_PWR */
 #define LEGION_REG_AIM_CH         0x59  /* [7:0] канал или 0xFF, [31] armed */
 #define LEGION_REG_LT_CTRL        0x5A  /* bit0 EN, [7:4] ratio_shift */
 #define LEGION_REG_LT_PERIOD      0x5B  /* сэмплы TX-он */
 #define LEGION_REG_LT_WIDTH       0x5C  /* сэмплы blank */
 #define LEGION_REG_LT_STATUS      0x5D  /* [0] echo_hold [1] blank */
+#define LEGION_REG_HOP_LUT        0x5E  /* hop idx→ch {idx[15:8], ch[7:0]} */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -158,7 +159,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_LT_STATUS
+#define LEGION_REG_MAX            LEGION_REG_HOP_LUT
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u
@@ -188,6 +189,7 @@
 #define LEGION_GRID_FLAG_F0UNC    (1u << 1)
 #define LEGION_GRID_FLAG_ZC       (1u << 2)
 #define LEGION_GRID_FLAG_FCORR    (1u << 3)
+#define LEGION_GRID_FLAG_AUTONOMOUS (1u << 4) /* HDL: шагать CH_LUT */
 #define LEGION_C58_KHZ            5100000u
 #define LEGION_CH_PWR_VALID(w)    (((w) & 0x80000000u) != 0)
 #define LEGION_CH_PWR_FRAME(w)    (((w) >> 24) & LEGION_FRAME_MASK)

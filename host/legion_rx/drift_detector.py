@@ -1,8 +1,7 @@
 """DriftDetector — детект сбоя паттерна (фаза 4 ТЗ).
 
-Метрика: LP score (match живых скачков с подтверждённым паттерном) в
-скользящем окне. score < 0.7 НА ПРОТЯЖЕНИИ 3 циклов подряд → DRIFT_DETECTED
-(→ пауза помехи, переобучение — фаза 1).
+Метрика: доля align ±1 живых скачков с паттерном. score < 0.7
+на протяжении need тиков (need = max(3, 3×cycle_length)) → DRIFT.
 """
 from __future__ import annotations
 
@@ -31,6 +30,10 @@ class DriftDetector:
                 "score": s,
                 "mean_score": sum(self._window) / len(self._window),
                 "strikes": self._strikes}
+
+    def set_cycles(self, cycle_length: int) -> None:
+        """need = max(3, 3×cycle_length) тиков, не 3 кадра."""
+        self.need = max(3, 3 * max(1, int(cycle_length)))
 
     def reset(self) -> None:
         self._strikes = 0

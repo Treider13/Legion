@@ -1,11 +1,8 @@
 """EffectivenessMonitor — контроль эффективности помехи (фаза 4 ТЗ).
 
-Метрика — PDR-прокси цели: доля НАБЛЮДАЕМЫХ всплесков от ожидаемых по
-паттерну (expected из плана помехи). Честно: декодирования пакетов нет —
-это выживаемость всплесков в эфире, не протокольный PDR; FER = 1 − PDR_proxy.
-
-  PDR_proxy > pdr_high после удара → jamming ineffective → adjust strategy.
-  PDR_proxy < pdr_floor             → jamming effective  → поддерживать.
+Метрика — PDR-прокси: доля наблюдаемых всплесков от ожидаемых.
+Декодирования пакетов нет: выживаемость всплесков, не протокольный PDR.
+FER = 1 − PDR_proxy.
 """
 from __future__ import annotations
 
@@ -16,14 +13,15 @@ class EffectivenessMonitor:
         self.floor = float(pdr_floor)
         self.high = float(pdr_high)
         self.window = int(window)
-        self._exp: list[int] = []
-        self._obs: list[int] = []
+        self._exp: list[float] = []
+        self._obs: list[float] = []
         self.jams_applied = 0
 
-    def update(self, expected: int, observed: int) -> None:
-        """Тик контроля: expected — всплесков по плану, observed — видимых."""
-        self._exp.append(max(0, int(expected)))
-        self._obs.append(max(0, min(int(observed), int(expected))))
+    def update(self, expected: float, observed: float) -> None:
+        e = max(0.0, float(expected))
+        o = max(0.0, float(observed))
+        self._exp.append(e)
+        self._obs.append(o)
         self._exp = self._exp[-self.window:]
         self._obs = self._obs[-self.window:]
 
@@ -33,9 +31,7 @@ class EffectivenessMonitor:
     @property
     def pdr(self) -> "float | None":
         e = sum(self._exp)
-        if e <= 0:
-            return None
-        return sum(self._obs) / e
+        return sum(self._obs) / max(e, 1e-9)
 
     @property
     def fer(self) -> "float | None":
@@ -43,9 +39,8 @@ class EffectivenessMonitor:
         return None if p is None else 1.0 - p
 
     def evaluate(self) -> dict:
-        """effective/ineffective/unknown + PDR/FER для лога и FSM."""
         p = self.pdr
-        if p is None or self.jams_applied == 0:
+        if self.jams_applied == 0:
             verdict = "unknown"
         elif p < self.floor:
             verdict = "effective"

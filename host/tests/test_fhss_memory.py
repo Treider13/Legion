@@ -96,7 +96,8 @@ def test_fpga_preload_20():
     store.mark_confirmed(pid)
     store.mark_confirmed(pid)
     store.mark_confirmed(pid)
-    pre = preload_hop_sequence(fpga, store.get(pid), sub, next_n=20)
+    pre = preload_hop_sequence(fpga, store.get(pid), sub, next_n=20,
+                               lo_hz=2440e6)
     assert pre["written"] == 20
     assert pre["lut_writes"] == 20
 

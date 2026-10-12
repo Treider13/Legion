@@ -5,8 +5,9 @@
 Работает ТОЛЬКО в границах sub-corridor (каналы вне f_start..f_end не
 рассматриваются — запрещено ТЗ).
 
-Валидация [G6]: FHSDT (dwell в ±20% от скользящей медианы), FHSDC
-(duty cycle). ≥16 валидных скачков → add_pattern в PatternStore (фаза 1).
+Валидация [G6]: FHSDT (dwell в ±20% от скользящей медианы), FHSDC.
+Коммит: период найден и записано ≥ 2 полных цикла (поиск 2..4096).
+AFH без периода — после 2×4096 скачков.
 """
 from __future__ import annotations
 
@@ -14,30 +15,43 @@ import numpy as np
 
 from .corridor import in_subcorridor
 
-MIN_HOPS_FOR_PATTERN = 16
 FHSDT_TOL = 0.20  # ±20% (ТЗ/[G6])
+MIN_OBS_HOPS = 8    # минимум наблюдений до поиска периода (не сетка!)
+MAX_CYCLE = 4096    # потолок поиска периода (ТЗ: сетка ЛЮБАЯ до 4096)
+# Контрольные точки поиска периода (удвоение): покрывают любую сетку
+# с перерасходом ≤ 2×, стоимость поиска не чаще чем в 2 раза от цикла.
+_CHECKPOINTS = (8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512,
+                768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288)
 
 
 class HopRecorder:
-    def __init__(self, sub_corridor: dict, chan_step_hz: float = 312.5e3):
+    def __init__(self, sub_corridor: dict, chan_step_hz: float = 312.5e3,
+                 n_chans: "int | None" = None,
+                 samples_per_frame: int = 20_000):
         self.sub = dict(sub_corridor)
         self.chan_step = float(chan_step_hz)
+        self.n_chans = n_chans
+        self.spf = int(samples_per_frame)
         self.hops: list[dict] = []
         self.valid_count = 0
         self.duty_cycle = 0.0
         self._seq = 0
-        self._cur: "int | None" = None     # текущий доминантный канал
+        self._cur: "int | None" = None
         self._cur_t0 = 0.0
         self._frames = 0
         self._active = 0
         self._dwells: list[float] = []
+        self._energy: list[float] = []
+        self._period: "tuple | None" = None
+        self._checked = 0
 
     def update(self, ch_pwr, freqs_hz, t_s: float) -> "dict | None":
         """Тик. Возвращает запись скачка при смене доминантного канала."""
         p = np.asarray(ch_pwr, dtype=np.float64)
         f = np.asarray(freqs_hz, dtype=np.float64)
         self._frames += 1
-        # маска sub-corridor: вне границ — нули (жёстко, ТЗ)
+        self._energy.append(float(np.max(p)) if p.size else 0.0)
+        # маска sub-corridor: вне границ — нули
         mask = np.array([in_subcorridor(x, self.sub) for x in f])
         if not mask.any():
             return None
@@ -62,6 +76,7 @@ class HopRecorder:
                 "freq_mhz": float(f[self._cur]) / 1e6,
                 "dwell_us": dwell_us,
                 "t_start": self._cur_t0,
+                "sample_count": self._frames * self.spf,
                 "confidence": float(min(1.0, p_sub[k] / (thr + 1e-12) / 3.0)),
             }
             self._seq += 1
@@ -80,12 +95,42 @@ class HopRecorder:
         self._cur_t0 = float(t_s)
         return hop
 
-    def maybe_commit(self, store) -> "str | None":
-        """≥16 валидных скачков → add_pattern (статус pending), pattern_id."""
-        if self.valid_count < MIN_HOPS_FOR_PATTERN:
+    def median_dwell_us(self) -> "float | None":
+        if not self._dwells:
             return None
-        return store.add_pattern(self.sub, self.hops)
+        return float(np.median(self._dwells))
+
+    def ready(self) -> "tuple | None":
+        """Период найден и записано ≥ 2 полных цикла."""
+        from .pattern_store import find_period_tolerant
+
+        if self._period is None:
+            if self.valid_count < MIN_OBS_HOPS:
+                return None
+            nxt = next((c for c in _CHECKPOINTS if c > self._checked), None)
+            if nxt is None or self.valid_count < nxt:
+                return None
+            self._checked = self.valid_count
+            seq = [h["channel_idx"] for h in self.hops]
+            self._period = find_period_tolerant(
+                seq, tol=1, m=self.n_chans, max_cycle=MAX_CYCLE)
+        if self._period is None:
+            return None
+        period, score = self._period
+        if self.valid_count >= 2 * period:
+            return (period, score)
+        return None
+
+    def maybe_commit(self, store) -> "str | None":
+        """Адаптивный коммит: (период + ≥2 цикла) → add_pattern (pending).
+        AFH-край: период не найден после 2×MAX_CYCLE скачков — фиксируем
+        запись как есть (cycle=вся запись, тип adaptive_afh)."""
+        if self.ready() is not None:
+            return store.add_pattern(self.sub, self.hops)
+        if self._period is None and self.valid_count >= 2 * MAX_CYCLE:
+            return store.add_pattern(self.sub, self.hops)
+        return None
 
     def reset(self) -> None:
         """Переобучение (drift): счётчики в ноль, sub-corridor тот же."""
-        self.__init__(self.sub, self.chan_step)
+        self.__init__(self.sub, self.chan_step, self.n_chans, self.spf)

@@ -46,7 +46,6 @@ from .synth.dataset import spec_from_iq
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 FIFO_PATH = "/tmp/iq"
 FS_LAB = 20.0e6  # USB I/Q на ПК (Nuand [F1], не эфир RBF)
-FS_RBF = 36.0e6  # AD9361 / pll_sclk=72 МГц. +2 sample = 55.556 нс
 FRAME_SAMPLES = 20_000  # 1 мс при 20 MSPS
 
 
@@ -465,7 +464,7 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     if clf is not None:
         clf.warmup()
     # FakeTransport: путь записи регистров legion_fpga.py без железа
-    # (реальный pack/xfer в память — замер честной стоимости решения+записи).
+    # pack/xfer в память — стоимость решения+записи в логе.
     # fpga/host уже на sys.path (fpga_control вставил при импорте).
     from legion_gateway import FakeTransport
 
@@ -526,10 +525,10 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
 
 def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     """Когнитивный контур (ТЗ п.8): LISTENING→…→JAMMING→MONITORING→…
-    bench: синтез FHSS + скрипт молчания/возврата цели; FPGA — FakeTransport
-    (реальный путь legion_fpga.py, регистры проверяемы). --live: FIFO+USB."""
+    bench: синтез FHSS на фиксированном LO (CLASS_LO_HZ). Смена fsm.lo_hz
+    меняет подписи freqs, waveform не перестраивается. --live: FIFO+USB."""
     from .cognitive import CognitiveFSM
-    from .cognitive import LISTENING, MONITORING, JAMMING, TARGET_SILENT
+    from .cognitive import LISTENING, MONITORING, TARGET_SILENT
     from .pattern_store import PatternStore
     from .pfb import Channelizer, chans_for_corridor
     from .synth.protocols import _fhss_modulated, FS_DEFAULT
@@ -542,8 +541,6 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
              airtime=400e-6)
     seg1 = _fhss_modulated(args.protocol, p, fs, args.silent_at_s, lo,
                            args.seed, 25.0)["iq"]
-    seg2 = _fhss_modulated(args.protocol, p, fs, args.reappear_at_s - args.silent_at_s,
-                           lo, args.seed, 25.0)["iq"]  # тот же seed → тот же паттерн
     rng = np.random.default_rng(args.seed)
     sil = ((rng.standard_normal(int(fs * (args.reappear_at_s - args.silent_at_s))) +
             1j * rng.standard_normal(int(fs * (args.reappear_at_s - args.silent_at_s))))
@@ -559,25 +556,41 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
 
     fpga = fc.lf.LegionFpga(FakeTransport(board="bladerf2"))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
-    freqs = np.asarray([ch.channel_freq(k, fs) + lo for k in range(args.n_chans)])
+    scan = None
+    if getattr(args, "scan_start", None) and getattr(args, "scan_end", None):
+        scan = (float(args.scan_start), float(args.scan_end))
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
-                       frame_dt_s=args.frame_samples / fs)
+                       frame_dt_s=args.frame_samples / fs,
+                       scan_corridor=scan, frame_samples=args.frame_samples)
     FRAME = args.frame_samples
     rebuilt = {"done": False}
+    lo_mismatch = {"done": False}
     n_fr = len(iq) // FRAME
     for i in range(n_fr):
         seg = iq[i * FRAME: (i + 1) * FRAME]
+        freqs = np.asarray([ch.channel_freq(k, fs) + fsm.lo_hz
+                            for k in range(ch.m)])
         y = ch.channelize(seg)
         rec = fsm.tick(ch.ch_power(y), freqs, (i + 1) * FRAME / fs)
+        if (not lo_mismatch["done"]) and abs(fsm.lo_hz - lo) > 1.0:
+            log.write({"kind": "bench_lo_mismatch", "synth_lo_hz": lo,
+                       "fsm_lo_hz": fsm.lo_hz, "tick": i,
+                       "note": "IQ на synth_lo; смена LO не двигает waveform"})
+            lo_mismatch["done"] = True
         # адаптивная канализация (ТЗ п.12): n_chans = ширина sub / 200 кГц
         if (not rebuilt["done"]) and fsm.sub is not None:
             width = fsm.sub["f_end"] - fsm.sub["f_start"]
             m = chans_for_corridor(width)
             if m != args.n_chans:
                 ch = Channelizer(m, args.taps, xp=np)
-                freqs = np.asarray([ch.channel_freq(k, fs) + lo
+                freqs = np.asarray([ch.channel_freq(k, fs) + fsm.lo_hz
                                     for k in range(m)])
                 fsm.n_chans = m
+                store.n_chans = m
+                if fsm.rec is not None:
+                    fsm.rec.n_chans = m
+                from .hopmap import FallbackPredictor
+                fsm.fallback = FallbackPredictor(m, fsm.dt)
                 log.write({"kind": "adaptive_grid", "n_chans": m,
                            "width_hz": width, "tick": i})
             rebuilt["done"] = True
@@ -679,6 +692,8 @@ def main() -> int:
     p6.add_argument("--taps", type=int, default=8)
     p6.add_argument("--publish", action="store_true")
     p6.add_argument("--udp-port", type=int, default=5590)
+    p6.add_argument("--scan-start", type=float, default=None)
+    p6.add_argument("--scan-end", type=float, default=None)
 
     args = ap.parse_args()
     log = JsonLog(args.mode)

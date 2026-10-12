@@ -101,7 +101,7 @@ package legion_pkg is
     constant LEGION_REG_PEAK1      : natural := 16#2E#; -- STATUS mux: пик 1
     constant LEGION_REG_PEAK2      : natural := 16#2F#;
     constant LEGION_REG_PEAK3      : natural := 16#30#;
-    constant LEGION_REG_CH_LUT     : natural := 16#31#; -- write {idx[15:8], ch[7:0]}
+    constant LEGION_REG_CH_LUT     : natural := 16#31#; -- RX bin→ch {idx[15:8], ch[7:0]}
     -- PROTO_PERIOD: период пакета в сэмплах (хост). Пример @40 MSPS:
     --   ELRS 1000 Гц = 40000; OcuSync двойной пакет 6.8 мс = 272000.
     -- PROTO_PULSE: длительность пакета в сэмплах (хост; walk не гейтит).
@@ -152,23 +152,28 @@ package legion_pkg is
     constant LEGION_REG_CH_BINS_47    : natural := 16#4E#; -- пики слотов 4..7
     constant LEGION_REG_CH_FS_HZ      : natural := 16#4F#; -- NIOS → HDL
     constant LEGION_REG_CH_LO_KHZ     : natural := 16#50#; -- центр взгляда
-    -- Сетка умной атаки: только NIOS (HDL when others => null). Не 0x32–0x50.
+    -- Сетка умной атаки: HDL latch + таймер индекса LUT (legion_lut_hop).
     constant LEGION_REG_GRID_META      : natural := 16#51#;
     constant LEGION_REG_GRID_F0_HZ     : natural := 16#52#;
     constant LEGION_REG_GRID_STEP_HZ   : natural := 16#53#;
-    constant LEGION_REG_GRID_PRI_US    : natural := 16#54#;
-    constant LEGION_REG_GRID_SHIFT_HZ  : natural := 16#55#;
+    constant LEGION_REG_GRID_PRI_US    : natural := 16#54#; -- период хопа, мкс
+    constant LEGION_REG_GRID_SHIFT_HZ  : natural := 16#55#; -- int32, в FTW hop
     constant LEGION_REG_GRID_FLAGS     : natural := 16#56#;
-    constant LEGION_REG_GRID_RSV       : natural := 16#57#;
+    constant LEGION_REG_GRID_RSV       : natural := 16#57#; -- фаза; STATUS: hop_ch
+    constant LEGION_GRID_FLAG_AUTONOMOUS : natural := 4; -- FLAGS bit4
+    constant LEGION_GRID_F0_KHZ_GATE    : natural := 10000000;
     constant LEGION_REG_CH_PWR_THR     : natural := 16#58#; -- [15:0] канал
     constant LEGION_REG_AIM_CH         : natural := 16#59#; -- [7:0] или 0xFF
-    -- Look-through: HDL, не GRID_RSV 0x57 (NIOS-only). pio_addr 7 бит.
+    -- Look-through: HDL 0x5A–0x5D. RSV 0x57 — фаза hop, не LT. pio_addr 7 бит.
     -- CTRL bit0 EN; [7:4] ratio_shift (E_off < E_on >> n → эхо).
     -- PERIOD/WIDTH — сэмплы каденса TX (каждый 2-й tx_clock), не такты.
     constant LEGION_REG_LT_CTRL        : natural := 16#5A#;
     constant LEGION_REG_LT_PERIOD      : natural := 16#5B#;
     constant LEGION_REG_LT_WIDTH       : natural := 16#5C#;
     constant LEGION_REG_LT_STATUS      : natural := 16#5D#; -- STATUS mux
+    -- Hop LUT отдельно от RX 0x31: NIOS rebuild_lut пишет bin→ch в 0x31
+    -- и не должен затирать последовательность хопа.
+    constant LEGION_REG_HOP_LUT        : natural := 16#5E#; -- hop idx→ch {idx[15:8], ch[7:0]}
 
     constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
     constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;

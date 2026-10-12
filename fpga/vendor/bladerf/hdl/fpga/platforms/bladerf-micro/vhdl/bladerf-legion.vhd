@@ -204,6 +204,8 @@ architecture legion of bladerf is
     signal lg_tx_walk_hold  : std_logic;
     signal lg_tx_lb_delay   : unsigned(11 downto 0);
     signal lg_tx_lb_ftw     : unsigned(31 downto 0);
+    signal lg_tx_hop_auto   : std_logic;
+    signal lg_mix_ftw0      : unsigned(31 downto 0);
     signal lg_tx_lb_delay1  : unsigned(11 downto 0);
     signal lg_tx_lb_ftw1    : unsigned(31 downto 0);
     signal lg_tx_lb_amp0    : unsigned(15 downto 0);
@@ -1223,6 +1225,7 @@ begin
         tx_walk_hold  => lg_tx_walk_hold,
         tx_lb_delay   => lg_tx_lb_delay,
         tx_lb_ftw     => lg_tx_lb_ftw,
+        tx_hop_auto   => lg_tx_hop_auto,
         tx_lb_delay1  => lg_tx_lb_delay1,
         tx_lb_ftw1    => lg_tx_lb_ftw1,
         tx_lb_amp0    => lg_tx_lb_amp0,
@@ -1430,6 +1433,7 @@ begin
         ftw0_init    => lg_tx_lb_ftw,
         ftw1_init    => lg_tx_lb_ftw1,
         ftw_step     => lg_tx_walk_ftw_step,
+        hop_auto     => lg_tx_hop_auto,
         det_active   => lg_det_active_tx,
         sample_en    => lg_mux_rd_en,
         tap          => lg_lbw_tap0,
@@ -1537,14 +1541,16 @@ begin
         sample_en => lg_mux_rd_en,
         dout      => lg_lb_dly1
       );
-    lg_mix0_en <= '1' when lg_lbw_ftw0 /= 0 else '0';
+    -- hop_auto: смеситель tap0 берёт hop_ftw, walk не прибавляет FTW.
+    lg_mix_ftw0 <= lg_tx_lb_ftw when lg_tx_hop_auto = '1' else lg_lbw_ftw0;
+    lg_mix0_en <= '1' when lg_mix_ftw0 /= 0 else '0';
     lg_mix1_en <= '1' when lg_lbw_ftw1 /= 0 else '0';
     U_legion_mix_nco0 : entity work.legion_nco
       port map (
         clock     => tx_clock,
         reset     => tx_reset,
         enable    => lg_mix0_en,
-        ftw       => lg_lbw_ftw0,
+        ftw       => lg_mix_ftw0,
         out_i     => lg_mix0_i,
         out_q     => lg_mix0_q,
         out_valid => lg_mix0_valid

@@ -218,8 +218,9 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | `effectiveness_monitor.py` | PDR low → effective |
 | `drift_detector.py` | LP < 0.7 × 3 → DRIFT |
 | `fpga_control.py` | `apply_predictive_jam` только confirmed |
-| `fpga_preload.py` | 20 прыжков LUT |
-| `cognitive.py` | LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→DRIFT/SILENT/RE_ACQUIRE |
+| `fpga_preload.py` | LUT ≤ 255 + GRID_PRI/FLAGS/RSV (фаза) |
+| `lo_sweep.py` | окна IBW 56 МГц, overlap 15%, сшивание по sample_count |
+| `cognitive.py` | LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING |
 | `pipeline.py` | FSM + `chans_for_corridor` (ширина/200 кГц) |
 | `classify` | 3 класса: drone / wifi / noise |
 
@@ -228,7 +229,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 ## Лаборатория (нет bladeRF на этой машине)
 
 ### AD9361 36 MSPS
-1. Прошить `legionxA4-2026-10-11_23.08.28/legionxA4.rbf` (md5 `bd0316396c32bb6e615061f3bdf413fe`).
+1. Прошить `legionxA4-2026-10-12_09.27.36/legionxA4.rbf` (md5 `6ce02ebc8b23d03e01048674fc26c9f9`, hop LUT).
 2. `bladeRF-cli -e "set samplerate rx 36M"`
 3. `bladeRF-cli -e "print samplerate rx"` → 36000000.
 4. `bladeRF-cli -e "rx start"`; 60 с; `rx status` → `rx_overruns=0`.
@@ -256,8 +257,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 
 ## Когнитивный контур FHSS-памяти (шаги 3–9+, 11.10.2026)
 
-«Услышал → понял паттерн → запомнил → немедленно отработал → контролирует →
-адаптируется». FSM: LISTENING→LEARNING→CONFIRMING→JAMMING→MONITORING→
+FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 (DRIFT_DETECTED|TARGET_SILENT|RE_ACQUIRE|RE_LEARNING).
 
 | Компонент | Реализация | Источник |
@@ -265,19 +265,110 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | CorridorDetector | динамический EMA-пол на бин, теги start/end/freq; коридор = аккумуляция активности + дилатация ±1 бин (краевое расщепление PFB) | [G1] |
 | P(hopping\|data) | байесовские лог-шансы (CV интервалов, duty, всплески); rate mean ± 95% CI | [G2] |
 | Sub-corridor | f_min−400 кГц … f_max+400 кГц, id parent+sub; работа ТОЛЬКО внутри | ТЗ |
-| HopRecorder | [seq, ch, freq, dwell_us, t, conf]; FHSDT ±20%, FHSDC; ≥16 → store | [G6] |
-| PatternStore | уникальные ID, pending/confirmed/legacy (не удаляются); find_match min 8 скачков, ±1 бин; период _find_period (усечённый хвост) | [G5] |
-| sequence_type | table_based / pseudo_random / adaptive_afh (эвристика по периоду/охвату) | [G2] |
-| Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub (ValueError), amp0+amp1≤1.0 [F16], horizon=1 | [G4] |
-| fpga_preload | LUT×20 (write_ch_lut) + set_grid(FHSS, OPERATOR) через legion_fpga.py; замер per-write | ТЗ |
-| EffectivenessMonitor | PDR-прокси = выживаемость всплесков (без декода — честно); effective<0.5 / ineffective>0.8 | ТЗ |
-| DriftDetector | LP<0.7 × 3 цикла → DRIFT_DETECTED → stop_jam → RE_LEARNING (legacy) | ТЗ |
-| TARGET_SILENT | >100 мс тишины → stop_jam → фаза 5; find_match по 8 → удар по памяти | ТЗ |
-| Классификатор | 3 класса (drone/wifi/noise), --no-group3 для полного набора | ТЗ п.11 |
-| Адаптивная сетка | n_chans = ширина коридора / 200 кГц (chans_for_corridor) | ТЗ п.12 |
-| Fallback | Markov-1/period (HopTracker); DDPG [G3] — отдельный этап RL-обучения | [G3] |
+| HopRecorder | hops + sample_count + energy; коммит = период + ≥2 цикла | [G6] |
+| PatternStore | ID, pending/confirmed/legacy; find_match доля align ±1; match_need; find_cycle_period (автокорр.) | [G5] |
+| sequence_type | table_based / pseudo_random / adaptive_afh | [G2] |
+| Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
+| fpga_preload | LUT ≤ 255; host пишет GRID+FS/LO; HDL legion_lut_hop шагает индекс | ТЗ |
+| EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
+| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
+| TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
+| Классификатор | 3 класса (drone/wifi/noise) | ТЗ п.11 |
+| Сетка | поиск периода 2..4096; LUT 2..255 | ТЗ п.12 |
+| Fallback | Markov-1 HopTracker в FSM, если find_match пуст | [G3] |
 
-Замеры (bench, FakeTransport, 1 с): подтверждение 3 цикла → помеха в том же
-тике (immediate); preload LUT — 2 события (первый удар + ре-захват); FPGA —
-автономная карта. Тесты: 98 passed (host/tests, +18 когнитивных).
-Железо: per-hop удары и preload на USB — замер в лаборатории.
+Помеха в том же Python-тике, что confirm; USB-замер — лаборатория.
+
+## lo_sweep
+
+Сканирование коридора шире IBW 56 МГц: окна с перекрытием 15%.
+400 МГц → 9 окон × 4 мс ≈ 36 мс. Сшивание по sample_count.
+Quick-tune: LRU 256 + `set_frequency_rx`. `bladerf_get_quick_tune`
+недоступен через `legion_fpga.py`. Очередь retune ≤ 16. fs при частых
+retune ≤ 20 Msps.
+
+## Универсальная сетка FHSS (12.10.2026)
+
+| Факт | Значение |
+|---|---|
+| Сетка (поиск) | 2..4096 из сигнала |
+| LUT / автономия | cycle≤255: после RBF `v1.1-rbf-hop-72mhz` FLAGS.AUTONOMOUS → HDL шагает HOP_LUT 0x5E; >255 — host |
+| Частота | через lo_sweep. IBW 56 МГц за раз |
+| Коридор | sub = [f_min−400 кГц, f_max+400 кГц]; шире IBW — окна |
+| Коммит | период найден и ≥ 2 цикла |
+| Позиция jam | +1 только при смене канала, `% cycle_length` |
+| Viewer | axis=(f_start, f_end, nfft) STFT-1024 fftshift |
+| Preload | теоретическая оценка; замер — лаборатория |
+| LP score | доля align ±1 |
+
+## HDL таймер LUT (12.10.2026, `fpga/hdl`)
+
+`legion_lut_hop.vhd`: период = PRI_US·fs/1e6 сэмплов (запас — PROTO_PERIOD).
+FLAGS bit4 + n_eff≠0 → индекс LUT++, FTW = (f0+ch·step+shift−lo)/fs·2^32 на `tx_lb_ftw`.
+NIOS GRID 0x51–0x57 больше не `return true` до poke — слово уходит в HDL.
+Нетлист в RBF `v1.1-rbf-hop-72mhz` (seed3, 12.10.2026 09:27). Лаборатория не гонялась.
+
+| Элемент | Статус | Где |
+|---|---|---|
+| `LEGION_REG_GRID_PRI_US` 0x54 | HDL latch | `legion_regs.vhd` |
+| `LEGION_REG_GRID_FLAGS` 0x56 | HDL latch, bit4 AUTO | pkg + hop |
+| `LEGION_REG_GRID_SHIFT_HZ` 0x55 | int32 в FTW hop | hop |
+| `LEGION_REG_GRID_RSV` 0x57 | фаза + hop_ch STATUS | hop / NIOS |
+| `LEGION_REG_PROTO_PERIOD` 0x32 | DRFM walk + запас hop | `legion_lb_walk` / hop |
+| Таймер индекса HOP_LUT (0x5E) | в RBF v1.1 | `legion_lut_hop.vhd` |
+| `GRID_FLAG_AUTONOMOUS` | 1<<4, HDL читает | `legion_fpga.py`, pkg |
+
+## HDL hop-тракт — исправления
+
+- Combo-divide → multi-cycle: `legion_divider.vhd` (64 такта, restoring). Период и `rsv mod n_eff` идут через него. FTW — прежний 32-тактный делитель `mag·2^32/fs_ftw`. Операторов `/` и `mod` в hop нет.
+- Combo-mult → multi-cycle: `legion_mult.vhd` (32 такта, shift-add). `pri·fs`, `f0·1000`, `lo·1000`, `ch·step` идут через него. Оператора `*` в hop нет.
+- n=0 → FTW=0. `auto=0` или `n_eff=0` держат `hop_ftw=0` (не `lut(0)`).
+- Порядок preload: CH_FS, CH_LO, HOP_LUT 0x5E, GRID (META/F0/STEP/PRI/SHIFT/RSV), FLAGS bit4 последним, PROTO, CH_CTRL.
+- Hop LUT разведён с RX: 0x31 = bin→ch канализатора; 0x5E = idx→ch hop. NIOS `rebuild_lut` не затирает hop.
+- CH_LO обязателен: `preload_hop_sequence` без `lo_hz` → ValueError.
+- SHIFT 0x55 подключён: `FTW = (f0 + ch·step + shift − lo) / fs · 2^32` (shift — int32).
+- RSV readback: NIOS 0x57 возвращает `legion_grid_rsv` в [7:0]; HDL STATUS mux даёт hop_ch в [15:8].
+- Walk не сдвигает hop при `hop_auto=1`: смеситель tap0 берёт `hop_ftw`, walk продолжает двигать отводы.
+- `n_eff` — эффективная длина (n_used если ≠0, иначе n). `hop_ch` — текущий канал в STATUS 0x57.
+- Timing: CLOSED, seed3. См. секцию ниже. seed1/seed2 Slow 0°C не закрыли.
+
+## Timing CLOSED — hop LUT 72 МГц (12.10.2026)
+
+pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM, `U_div` 114, `U_mult` 143 (`map.rpt`).
+
+Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0, Fmax **75.12 МГц**).
+Slow 85C setup **+0.772 нс**, hold +0.285. Отрицательных slack в `sta.summary` нет.
+
+RBF seed=3: `fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-12_09.27.36/legionxA4.rbf`
+md5 `6ce02ebc8b23d03e01048674fc26c9f9`. Копия: `timing_close_2026-10-12/hop72/`.
+Tag: `v1.1-rbf-hop-72mhz`. Автономный LUT: в этом RBF (лаборатория не гонялась).
+
+Старый RBF без hop: `legionxA4-2026-10-11_23.08.28`, md5 `bd0316396c32bb6e615061f3bdf413fe`.
+
+| seed | fit | ALM | M10K | DSP | pll su 85C | pll ho | Slow 0C su | worst |
+|---|---|---|---|---|---|---|---|---|
+| 1 | OK 09:14:40 | 13 166 (**71 %**) | 284 | 35 | +0.061 | +0.290 | **−0.463** FAIL | fft_peak `best_bin`→`top_best_ok` data 14.120 |
+| 2 | OK 09:21:49 | 13 164 (**71 %**) | 284 | 35 | **−0.078** FAIL | +0.240 | **−0.214** | lb_xlat `Mux17`→`pre_q[9]` data 14.127 |
+| 3 | OK 09:27:36 | 13 158 (**71 %**, frozen RBF) | 284 | 35 | **+0.772** | +0.285 | **+0.576** | fft_peak `best_bin`→`top_best_bin` data 12.867 |
+
+STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` не писался (quartus_sta CLI); цифры из `report_timing`.
+
+## Что не сделано
+
+- Лаборатория: USB/preload/hop на плате.
+- `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
+- Push не делался — по требованию.
+
+## Ограничения
+
+- LUT: 256 слотов, индекс 8 бит, n≤255. Cycle > 255 — видимая часть, удар с host.
+- IBW: 56 МГц. Коридор шире — lo_sweep.
+- Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
+- Quick-tune: LRU на host; ~500 мкс / полный шаг ~3.8 мс — цифры [F13]/[F14], не замер.
+- Look-through: каждые 10 hops host не бьёт 1 hop (~10% hops).
+  `set_look_through` / REG_LT_* не вызываются.
+- Два передатчика: не поддерживается.
+- Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
+- Автономия LUT: после `v1.1-rbf-hop-72mhz`. Cycle > 255 — удар с host.
+  Look-through: host не бьёт 1 из 10 hops. rolling 256 нет. «<1 мс» не заявлено.
+- f_rf: 40 бит, wrap при \|f0+ch·step\| ≥ 2^40. В ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.

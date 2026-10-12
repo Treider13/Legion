@@ -34,6 +34,7 @@ architecture tb of legion_regs_tb is
     signal tx_walk_hold  : std_logic;
     signal tx_lb_delay   : unsigned(11 downto 0);
     signal tx_lb_ftw     : unsigned(31 downto 0);
+    signal tx_hop_auto   : std_logic;
     signal tx_lb_delay1  : unsigned(11 downto 0);
     signal tx_lb_ftw1    : unsigned(31 downto 0);
     signal tx_lb_amp0    : unsigned(15 downto 0);
@@ -105,6 +106,7 @@ begin
             tx_delay => tx_delay, tx_walk_step => tx_walk_step, tx_walk_max => tx_walk_max,
             tx_walk_en => tx_walk_en, tx_walk_auto => tx_walk_auto, tx_walk_hold => tx_walk_hold,
             tx_lb_delay => tx_lb_delay, tx_lb_ftw => tx_lb_ftw,
+            tx_hop_auto => tx_hop_auto,
             tx_lb_delay1 => tx_lb_delay1, tx_lb_ftw1 => tx_lb_ftw1,
             tx_lb_amp0 => tx_lb_amp0, tx_lb_amp1 => tx_lb_amp1,
             tx_walk_period => tx_walk_period, tx_walk_ftw_step => tx_walk_ftw_step,
