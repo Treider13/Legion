@@ -1,0 +1,7 @@
+# Библиотеки TensorRT. Индекс NVIDIA первым: на PyPI лежит только заглушка,
+# она качает то же колесо внутри сборки и блокирует остальные пакеты.
+# Ставить после requirements-lab.txt.
+--index-url https://pypi.nvidia.com
+--extra-index-url https://pypi.org/simple
+tensorrt-cu13-libs>=10.8
+tensorrt-cu13>=10.8

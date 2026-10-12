@@ -27,7 +27,7 @@ def _import_trt():
     except ImportError as e:
         raise RuntimeError(
             "tensorrt не установлен: лаборатория — TensorRT>=10.8 "
-            "(pip install tensorrt, CUDA>=12.8)") from e
+            "(pip install -r host/requirements-trt.txt)") from e
 
 
 def build_engine(onnx_path: str, engine_path: str, fp16: bool = True) -> str:
