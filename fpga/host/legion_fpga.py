@@ -527,6 +527,34 @@ class LegionFpga:
                 self.write_reg(REG_LT_WIDTH, int(width) & 0xFFFFFFFF) and
                 self.write_reg(REG_LT_CTRL, ctrl))
 
+    def enable_look_through(self, period_hops: int = 10,
+                            listen_len_hops: int = 1, *,
+                            fs_hz: float, dwell_us: float,
+                            ratio: int = 2) -> bool:
+        """Blank TX через REG_LT_*, без FLAGS bit4.
+
+        HDL: 0x5B — сэмплы TX-он, 0x5C — сэмплы blank. Отдельного
+        REG_LT_LEN нет. Цикл 10 hops с 1 hop слушания: он = 9, blank = 1.
+        hop_samp = dwell_us·1e-6·fs (каденс сэмпла ЦАП, не хост-тик).
+        """
+        fs = float(fs_hz)
+        dwell = float(dwell_us)
+        if fs <= 0 or dwell <= 0:
+            raise ValueError("enable_look_through: fs_hz и dwell_us > 0")
+        cycle = int(period_hops)
+        listen = int(listen_len_hops)
+        if cycle < 2 or listen < 1 or listen >= cycle:
+            raise ValueError(
+                "enable_look_through: period_hops > listen_len_hops ≥ 1")
+        hop_samp = max(1, int(round(dwell * 1e-6 * fs)))
+        on_samp = (cycle - listen) * hop_samp
+        blank_samp = listen * hop_samp
+        return self.set_look_through(True, on_samp, blank_samp, ratio=ratio)
+
+    def disable_look_through(self) -> bool:
+        """Снять blank: EN=0, PERIOD=0, WIDTH=0. Индекс HOP_LUT не трогает."""
+        return self.set_look_through(False)
+
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)
 

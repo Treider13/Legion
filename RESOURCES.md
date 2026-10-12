@@ -373,11 +373,29 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 - IBW: 56 МГц. Коридор шире — lo_sweep.
 - Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
 - Quick-tune: LRU на host; ~500 мкс / полный шаг ~3.8 мс — цифры [F13]/[F14], не замер.
-- Look-through: 1 hop/10, TX не глушится (архитектурное решение).
-  `set_look_through` / REG_LT_* не вызываются.
+- Look-through: HDL `REG_LT_*`, не FLAGS bit4. См. секцию ниже.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
 - Автономия LUT: после `v1.1-rbf-hop-72mhz`. Cycle > 255 — удар с host.
-  Look-through: 1 hop/10, TX не глушится (архитектурное решение).
   rolling 256 нет. «<1 мс» не заявлено. При AUTO host не пишет LB_FTW каждый hop.
+  «LUT работает на эфире» не заявляется: лаборатория не гонялась.
 - f_rf: 40 бит, wrap при \|f0+ch·step\| ≥ 2^40. В ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
+
+## Look-through
+
+HDL `legion_look_through` гасит ЦАП и не трогает индекс `legion_lut_hop`.
+Host на listen-hop не снимает FLAGS bit4: иначе `idx` замирает и при
+повторном AUTO загружается из `rsv`.
+
+| Регистр | Адрес | Семантика |
+|---|---|---|
+| `REG_LT_CTRL` | `0x5A` | bit0 EN, [7:4] ratio_shift |
+| `REG_LT_PERIOD` | `0x5B` | сэмплы TX-он |
+| `REG_LT_WIDTH` | `0x5C` | сэмплы blank. `REG_LT_LEN` в HDL нет |
+| `REG_LT_STATUS` | `0x5D` | [0] echo_hold, [1] blank |
+
+Период 10 hops, слушание 1 hop: PERIOD = 9×hop_samp, WIDTH = 1×hop_samp.
+`hop_samp = dwell_us × 1e-6 × fs`. Включение один раз после автономного
+preload (`enable_look_through(10, 1)`). Drift: `disable_look_through()`
+и стоп LUT (FLAGS bit4=0 уже не listen-hop) → `RE_LEARNING`.
+Blank на плате не измерялся.

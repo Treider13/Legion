@@ -74,8 +74,7 @@ class CognitiveFSM:
         self._tick_i = 0
         self._last_jam_ch: "int | None" = None
         self._autonomous = False
-        self._lt_hops = 0
-        self._lt_listen = False
+        self._lt_armed = False
         self._scan_t0 = 0.0
         self._grid_step_hz = 200.0e3
         self._fb: dict = {}
@@ -137,6 +136,26 @@ class CognitiveFSM:
                 "action": "set_grid_fail", "autonomous": on})
         self._autonomous = on if ok else self._autonomous
 
+    def _arm_look_through(self, dwell_us) -> None:
+        """Один раз после автономного LUT: blank 1 hop из 10, idx не трогаем."""
+        if self.fpga is None or self._lt_armed or not self._autonomous:
+            return
+        fs = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz)
+        try:
+            ok = bool(self.fpga.enable_look_through(
+                LOOKTHROUGH_HOPS, 1, fs_hz=fs, dwell_us=float(dwell_us)))
+        except (TypeError, ValueError, RuntimeError) as e:
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "action": "look_through_fail", "why": str(e)})
+            return
+        self._lt_armed = ok
+        self.transitions.append({
+            "tick": self._tick_i, "from": self.state, "to": self.state,
+            "action": "look_through", "ok": ok,
+            "period_hops": LOOKTHROUGH_HOPS, "listen_hops": 1,
+            "fs_hz": fs, "dwell_us": float(dwell_us)})
+
     def _jam_now(self, t_s: float, preload: bool = False) -> dict:
         from .fpga_control import apply_predictive_jam
         from .fpga_preload import LUT_CAP, preload_hop_sequence
@@ -165,6 +184,8 @@ class CognitiveFSM:
                 self._autonomous = bool(out["autonomous"])
                 pat["lut_n"] = pre_n
                 pat["visible_only"] = out["visible_only"]
+                if self._autonomous:
+                    self._arm_look_through(dwell or pat.get("dwell_us") or 1000)
                 if out["visible_only"]:
                     self.transitions.append({
                         "tick": self._tick_i, "from": self.state, "to": self.state,
@@ -192,7 +213,10 @@ class CognitiveFSM:
         from .fpga_control import stop_jam
 
         self._autonomous = False
+        self._lt_armed = False
         if self.fpga is not None:
+            self.fpga.disable_look_through()
+            # Стоп LUT (drift / silent), не listen-hop: blank делает REG_LT_*.
             self._set_lut_flag(False)
             stop_jam(self.fpga)
         self.transitions.append({"tick": self._tick_i, "from": self.state,
@@ -410,33 +434,15 @@ class CognitiveFSM:
         if hop is not None:
             rec = self.store.get(self.pid)
             self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
-            self._lt_hops += 1
-            if self._lt_listen:
-                self._lt_listen = False
-                cyc = rec.get("cycle") or []
-                if rec.get("lut_n") and not rec.get("visible_only"):
-                    self._set_lut_flag(True)
-                if cyc and abs(int(hop["channel_idx"])
-                               - int(cyc[self.position % len(cyc)])) > 1:
-                    exp = cyc[self.position % len(cyc)]
-                    self._stop_jam(t_s, "lookthrough")
-                    self._go(DRIFT_DETECTED, t_s, observed=hop["channel_idx"],
-                             expected=exp)
-                    self.rec.reset()
-                    self._live = []
-                    self._go(RE_LEARNING, t_s)
-                    return
-            else:
-                if self._lt_hops >= LOOKTHROUGH_HOPS:
-                    self._lt_hops = 0
-                    self._lt_listen = True
-                    self._set_lut_flag(False)
-                if nxt is not None and lp_score >= 0.7:
-                    if nxt != self._last_jam_ch:
-                        if not self._autonomous:
-                            self._jam_now(t_s)
-                        self._last_jam_ch = nxt
-                    self._go(MONITORING, t_s, keep=True)
+            # Listen-hop глушит HDL (REG_LT_*). FLAGS bit4 не снимаем:
+            # иначе idx замирает и при повторном AUTO грузится из rsv.
+            # LP совпал — идём дальше. Drift уже ушёл в RE_LEARNING выше.
+            if nxt is not None and lp_score >= 0.7:
+                if nxt != self._last_jam_ch:
+                    if not self._autonomous:
+                        self._jam_now(t_s)
+                    self._last_jam_ch = nxt
+                self._go(MONITORING, t_s, keep=True)
         if (self._last_hop_t is not None
                 and float(t_s) - self._last_hop_t > SILENT_S):
             self._stop_jam(t_s, "target_silent")
