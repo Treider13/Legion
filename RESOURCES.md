@@ -281,6 +281,8 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 
 ## lo_sweep
 
+История на 11.10.2026, до UsbOwner. Живой контур v1.3 — секция «Полка DRFM» ниже.
+
 Сканирование коридора шире IBW 56 МГц: окна с перекрытием 15%.
 400 МГц → 9 окон × 4 мс ≈ 36 мс. Сшивание по sample_count.
 Quick-tune: LRU 256 + `set_frequency_rx`. `bladerf_get_quick_tune`
@@ -338,6 +340,8 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 
 ## Timing CLOSED — hop LUT 72 МГц (12.10.2026)
 
+История. Это образ v1.1, не frozen v1.3. Актуальные цифры — секция «Полка DRFM по времени».
+
 pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM (seed1 `map.rpt`; у frozen seed3 `map.rpt` нет), `U_div` 114, `U_mult` 143.
 
 Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0).
@@ -367,6 +371,8 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 - Лаборатория: USB, preload, hop на плате. Без платы «LUT работает на эфире» не заявлять.
 
 ## Что не сделано
+
+История на момент v1.2. С v1.3 `bladerf_get_quick_tune` вызывается из `host/legion_rx/libbladerf_owner.py`. HEAD и тег — в секции полки.
 
 - Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет. Образ v1.2 на эфире не гонялся.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
@@ -453,10 +459,70 @@ Slow 85C у всех трёх setup > 0 и TNS 0. Эти образы на 72 М
 python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /tmp/iq --samplerate 20M
 ```
 
-Цепочка: bladeRF-cli пишет FIFO → C-читатель → PFB → `CorridorDetector` → FSM → `preload_hop_sequence` → `legion_fpga.py`. Look-through — HDL `REG_LT_*`.
+Живой `cognitive --live`: bladeRF-cli выставляет частоту, LNA и полосу и закрывается. Дальше USB держит `UsbOwner` (libbladeRF): поток SC16_Q11_META, кадры в FIFO, C-читатель → PFB → FSM. `schedule_retune` пары RX+TX — через тот же `UsbOwner`. Запись регистров на время кадра отпускает libbladeRF и забирает его обратно. Консоль во время удара устройство не открывает.
 
-`--corridor 2400 2483` — 83 МГц. Окно одного LO = min(56 МГц AD9361, fs) = 34 МГц → 3 окна. Потолок `IBW_HZ` 56 МГц не менялся. LO preload — центр текущего окна. FS приёмника — `--samplerate` (по умолчанию 20 MSPS). В регистр hop `CH_FS` пишется `AIR_FS_HZ` (34 MSPS, каденс ЦАП при pll_sclk 68 МГц).
+`--corridor 2400 2483` — 83 МГц. Окно одного LO = fs = 34 МГц → 3 окна. Живой поток этого режима идёт на `AIR_FS` 34 MSPS. Look-through — HDL `REG_LT_*`.
 
 Без `--live` — синтетика и `FakeTransport`.
 
-Один владелец USB: на время записи FPGA стрим останавливается и поднимается снова. Задержка handoff на плате не мерялась. «LUT работает» — только после лаборатории.
+`mute_ns` в `config.json` равен 0, пока лаборатория не измерит длительность. «LUT работает» — только после удара на плате.
+
+## Полка DRFM по времени (12.10.2026)
+
+Quartus Prime Lite 23.1std.1, `bladeRF-micro` A4, revision `legion`.
+Образы после одного такта `ch_r` и `hop_tick`. git_info сборки: `b9aa911` clean. Тег `v1.3-rbf-multi-lo-68mhz`.
+
+Slow 0°C setup `pll_sclk` на сидах 1–3 положительный, TNS 0. Fast 0°C hold `tck` на этих трёх тоже положительный. Hold `pll_sclk` не закрыт только на сиде 3 (−0.013 нс). Это разброс fitter. HDL после разбора пути не менялся, RBF не пересобирался.
+
+Worst hold path сида 3, Fast 1100mV 0°C, оба такта `pll_sclk~PLL_OUTPUT_COUNTER|divclk`. Timing Analyzer по базе `work/bladerf-micro-A4-legion` (md5 RBF совпал с сидом 3): `report_hold_pll_seed3.txt:39-55`.
+
+- Источник: `legion_lb_xlat:U_legion_lb_xlat|Add2~1_OTERM2229`
+- Назначение: `legion_lb_xlat:U_legion_lb_xlat|pre_s[0]`
+- Data delay 0.511 нс, clock skew 0.524 нс, slack −0.013 нс
+- Путь внутри `legion_lb_xlat` (legacy, сумматор → `pre_s`). Не `lut_hop`, не look-through, не `legion_regs`.
+
+Сводная строка −0.013: `legionxA4-2026-10-12_15.36.32/legionxA4.sta.summary` и `legionxA4.sta.rpt:2200`. В `sta.rpt` регистров нет, только slack часов.
+
+Frozen = seed 2. Путь `timing_close_2026-10-12/hop-lt-68mhz-frozen/legionxA4.rbf`. md5 `4db61f199a08b8e6f3ed1e67caed5ed5`. Исходный каталог `legionxA4-2026-10-12_15.29.07`. Slow 0°C setup pll_sclk +1.209, TNS 0. Fast 0°C hold pll_sclk +0.080, tck +0.112. Тег `v1.3-rbf-multi-lo-68mhz`.
+
+Критерий frozen: хотя бы один seed PASS на обоих углах и обоих клоках (Slow 0°C setup `pll_sclk`, Fast 0°C hold `pll_sclk` и `tck`, TNS 0). Сид 3 FAIL на одном hold-пути в `legion_lb_xlat` (legacy, slack −0.013 нс). Это не блокер. Сид 1 тоже PASS и в заморозку не выбран: запас hold меньше (+0.060).
+
+| seed | вердикт | каталог | ALM | M10K | DSP | Slow 0C setup pll_sclk | TNS | Fast 0C hold pll_sclk | Fast 0C hold tck | md5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | PASS | `legionxA4-2026-10-12_15.22.03` | 11 887 (64 %) | 285 | 35 | +0.977 | 0 | +0.060 | +0.121 | `5e0d3b49f9f7ebdf5aa417b93d148e5f` |
+| 2 | PASS, frozen | `legionxA4-2026-10-12_15.29.07` | 11 886 (64 %) | 285 | 35 | +1.209 | 0 | +0.080 | +0.112 | `4db61f199a08b8e6f3ed1e67caed5ed5` |
+| 3 | FAIL hold pll_sclk | `legionxA4-2026-10-12_15.36.32` | 11 898 (64 %) | 285 | 35 | +0.926 | 0 | −0.013, TNS −0.013 | +0.013 | `252f933954a84c9b9c5df84437571f10` |
+
+M10K 285: на одну таблицу больше, чем у v1.2 (284). Это 256×32 кГц, если Quartus собрал память. Отдельный отчёт RAM inference здесь не разбирался.
+
+- Окно одного LO = fs = 34 МГц при pll_sclk 68 МГц. Пятно уже или равно 34 МГц — одна стоянка. Иначе N = ceil((f_max − f_min − fs) / step) + 1, step = fs × 0.85 = 28.9 МГц. Последняя стоянка накрывает f_max. Больше 8 стоянок — восемь самых плотных, в отчёте сколько МГц осталось снаружи. Шаг шире fs не делается.
+- Профили quick-tune: не больше 8 пар RX+TX, снимаются после сужения пятна. Скачок несущей больше 100 МГц — не быстрый профиль. Граница диапазонов xA4 — 3 ГГц, не 1.5 ГГц. Переход через 3 ГГц — полная калибровка.
+- Mute duration — регистр 0x64, наносекунды. Формула в HDL остаётся ticks = mute_ns × 34 / 1000: RBF v1.3 уже собран, пересборка запрещена. Счётчик на `pll_sclk` 68 МГц, поэтому ненулевой mute_ns будет примерно вдвое короче запрошенного. В `config.json` `mute_ns` = 0: счётчик не стартует. 98 % не обещается.
+- Данные LUT в hop не проходят 2FF. Intel CDC-50008: побитовый 2FF на шине, которая не код Грея, рвёт слово. Через границу тактов идёт строб, данные держатся до фронта. `lo_khz` — отдельный 2FF всего слова.
+- Look-through: 1 слушающий прыжок из 100. Автономный флаг не снимается. Запись 0x57 отпускает libbladeRF на этот тик: второе открытие USB даёт EBUSY. Индекс переставляется, если услышанная частота в текущем окне.
+- Retune time на плате не измерен. В окне поле пустое, пока лаборатория не запишет число.
+- LUT: 256 ячеек по 32 бита, значение в килогерцах. Инициализации в reset нет, запись по одному адресу за такт. Чтение — в регистр. Через границу тактов идёт только строб.
+- Разбор пятна останавливается после двух совпавших кругов. Широкий поиск остаётся 4 мс.
+- Длительность удара — параметр, по умолчанию 15 с, не константа в коде. После таймера поиск снова идёт по исходному коридору оператора.
+- 0x55 — сдвиг в герцах, знаковое, один раз, без ×1000. lo_khz × 1000 в формуле. Умножитель 32×32→64 только до вычитания. После вычитания diff 40 бит. Знак diff отделяется до битового цикла. Цикл ftw_bit 31→0 на модуле, не на 64 битах.
+- Обход индекса: 9-битное сравнение, не 8-битное.
+- LEGION_REG_MAX = 0x64. Адреса 0x5E данные LUT, 0x5F начало, 0x60 конец, 0x61 адрес, 0x62 строб данных, 0x63 строб границ, 0x64 mute.
+- На время удара USB держит libbladeRF (`host/legion_rx/libbladerf_owner.py`), не bladeRF-cli. Очередь retune 16 мест, пара RX+TX — два места, доливается пачками. quick_tune не NULL.
+- Задержки 0 и 64 и амплитуда 32767 пишутся при загрузке полки. apply_predictive_jam на автономном пути не вызывается.
+- Лаборатория ещё впереди: замер mute duration, замер retune time, удар на плате.
+
+## Лаборатория v1.3
+
+Образ: `timing_close_2026-10-12/hop-lt-68mhz-frozen/legionxA4.rbf`, md5 `4db61f199a08b8e6f3ed1e67caed5ed5`.
+
+Прошивка: `bladeRF-cli -l <этот rbf>`. После загрузки `bladeRF-cli -e version` показывает FPGA. md5 файла сверяет `host/legion_rx/ops.py` при старте.
+
+Замер mute. В `config.json` поставить `mute_ns` (например 100000). Старт удара. На анализаторе спектра смотреть провал несущей между прыжками. Записать измеренные наносекунды обратно в `retune` не путать с mute. Пока `mute_ns` = 0, провала от счётчика нет. Формула в RBF — ×34/1000 при такте 68 МГц: измерение покажет примерно половину запрошенного.
+
+Замер retune. Два LO внутри 100 МГц, пара quick_tune, метка в `schedule_retune`. Разница меток RX metadata и момента смены на спектре — микросекунды в `config.json` поле `retune_time_us`.
+
+Удар ELRS 2.4. Коридор 2400e6–2483e6, jam 15 с, LNA 20, эквивалент 50 Ом, не антенна. `python -m host.legion_rx.main_app`, Start. PASS: FSM доходит до JAMMING или MULTI_LO, USB overruns не растут пачкой, TX глушится по Stop. FAIL: устройство не открылось, md5 RBF другой, FSM не выходит из LISTENING за время коридора.
+
+## Лицензии рядом с полкой
+
+См. `LICENSES.md`. Nuand HDL — MIT. Хост Nuand — LGPL-2.1. ADI HDL — лицензия Analog Devices, только на компоненте ADI. Sandia `gr-fhss_utils` — GPL-3.0, в дерево не входит.

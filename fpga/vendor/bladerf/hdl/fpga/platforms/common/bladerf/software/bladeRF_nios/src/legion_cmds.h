@@ -120,7 +120,14 @@
 #define LEGION_REG_LT_PERIOD      0x5B  /* сэмплы TX-он */
 #define LEGION_REG_LT_WIDTH       0x5C  /* сэмплы blank */
 #define LEGION_REG_LT_STATUS      0x5D  /* [0] echo_hold [1] blank */
-#define LEGION_REG_HOP_LUT        0x5E  /* hop idx→ch {idx[15:8], ch[7:0]} */
+#define LEGION_REG_HOP_LUT        0x5E  /* кГц, слово целиком */
+#define LEGION_REG_HOP_LUT_DATA   0x5E
+#define LEGION_REG_HOP_START_IDX  0x5F
+#define LEGION_REG_HOP_END_IDX    0x60
+#define LEGION_REG_HOP_LUT_ADDR   0x61
+#define LEGION_REG_HOP_STROBE_DATA  0x62
+#define LEGION_REG_HOP_STROBE_APPLY 0x63
+#define LEGION_REG_HOP_MUTE_NS    0x64
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -159,7 +166,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_HOP_LUT
+#define LEGION_REG_MAX            LEGION_REG_HOP_MUTE_NS
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u
@@ -224,6 +231,9 @@
 /* Запись/чтение регистра LEGION в FPGA (через PIO legion_wdata/legion_aws).
  * Реализация — в legion_cmds.c; вызывается из pkt_8x32.c (case 0x80). */
 bool legion_reg_write(uint8_t addr, uint32_t data);
+/* Метка retune TX: молчание, затем lo_khz из таблицы профиля (0..7). */
+void legion_hop_mute_arm(void);
+void legion_hop_commit_lo(uint8_t profile_num);
 bool legion_reg_read(uint8_t addr, uint32_t *data);
 
 /* Эфир micro: подъём/стендбай воздушного тракта через Nuand RFIC-интерфейс

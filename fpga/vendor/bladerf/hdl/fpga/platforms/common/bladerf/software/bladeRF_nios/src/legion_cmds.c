@@ -152,6 +152,7 @@ static uint32_t legion_ch_active2;
 static uint32_t legion_ch_active3;
 static uint32_t legion_ch_fs_hz;
 static uint32_t legion_ch_lo_shadow;
+static uint32_t legion_hop_lo_tab[8];
 static uint32_t legion_grid_meta;
 static uint32_t legion_grid_f0_hz;
 static uint32_t legion_grid_step_hz;
@@ -881,6 +882,22 @@ static void legion_pio_poke(uint8_t addr, uint32_t data)
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | addr);
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+}
+
+void legion_hop_mute_arm(void)
+{
+    /* Та же несущая: FTW не меняется, запись 0x50 запускает счётчик молчания. */
+    legion_pio_poke(LEGION_REG_CH_LO_KHZ, legion_ch_lo_shadow);
+}
+
+void legion_hop_commit_lo(uint8_t profile_num)
+{
+    uint32_t lo = legion_hop_lo_tab[profile_num & 7u];
+    if (lo == 0u) {
+        return;
+    }
+    legion_ch_lo_shadow = lo;
+    legion_pio_poke(LEGION_REG_CH_LO_KHZ, lo);
 }
 
 static void legion_ch_push_lo_fs(void)
@@ -3417,6 +3434,12 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             break;
 
         case LEGION_REG_CH_LO_KHZ:
+            /* Бит 31: запись lo_khz в слот профиля 0..7, без живой несущей. */
+            if ((data & 0x80000000u) != 0u) {
+                unsigned slot = (data >> 28) & 7u;
+                legion_hop_lo_tab[slot] = data & 0x0fffffffu;
+                return true;
+            }
             legion_ch_lo_shadow = data;
             break;
 

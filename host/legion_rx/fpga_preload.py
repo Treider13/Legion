@@ -1,7 +1,9 @@
 """fpga_preload — LUT FHSS в FPGA (write_hop_lut + set_grid).
 
-Индекс LUT 8 бит: n_pre ≤ 255. Cycle > 255 — видимый префикс, без
-догрузки на ходу. Host пишет CH_FS/CH_LO, затем HOP_LUT 0x5E, затем
+Индекс LUT 8 бит: 256 ячеек, адреса 0..255. Поле meta n тоже 8 бит,
+256 в него не входит (клэмп 255; 0 в HDL — это TX_MUTE). Обход ряда
+задаёт end_idx, не это поле. Cycle длиннее 256 — видимый префикс.
+Host пишет CH_FS/CH_LO, затем HOP_LUT 0x5E, затем
 GRID; FLAGS bit4 — последним. 0x31 — RX bin→ch, не hop.
 HDL legion_lut_hop шагает индекс LUT по PRI_US (FLAGS bit4).
 PROTO_PERIOD — запасной период в сэмплах и по-прежнему шаг DRFM walk.
@@ -13,7 +15,7 @@ import time
 
 from . import fpga_control as fc
 
-LUT_CAP = 255
+LUT_CAP = 256
 
 
 def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
@@ -23,7 +25,7 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
                          autonomous: bool = False,
                          fs_hz: float = 34e6,
                          lo_hz: float = None) -> dict:
-    """next_n позиций (от position) → LUT + GRID. n ≤ 255.
+    """next_n позиций (от position) → LUT + GRID. Адреса 0..255.
     lo_hz обязателен. Порядок: FS/LO → HOP_LUT → GRID → FLAGS bit4."""
     from .corridor import in_subcorridor
 
@@ -100,3 +102,47 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
             "dwell_us": dwell, "period_us": period_us,
             "autonomous": autonomous, "phase": phase,
             "visible_only": visible, "lut_n": written}
+
+
+def preload_drfm_shelf(fpga, pattern: dict, sub_corridor: dict,
+                       fs_hz: float = 34e6, shift_hz: int = 15000,
+                       mute_ns: int = 0) -> dict:
+    """Килогерцы ряда, границы, задержки 0/64, амплитуда 32767.
+
+    apply_predictive_jam при этом не вызывается: он затирает амплитуду.
+    FLAGS автономности — последним, после полки.
+    """
+    lf = fc.lf
+    freqs = pattern.get("freqs_mhz") or []
+    if not freqs:
+        raise ValueError("preload_drfm_shelf: нет freqs_mhz")
+    n = min(LUT_CAP, len(freqs))
+    # meta n — 8 бит. 256 адресов пишутся, в поле длины остаётся 255.
+    for i in range(n):
+        khz = int(round(float(freqs[i]) * 1000.0))
+        if not fpga.write_hop_khz(i, khz):
+            raise RuntimeError(f"preload_drfm_shelf: ячейка {i}")
+    if not fpga.apply_hop_range(0, n - 1):
+        raise RuntimeError("preload_drfm_shelf: границы ряда")
+    # 32767 в регистре, ЦАП уже умножает на 0.90.
+    amp = (32767 & 0xFFFF)
+    ok = fpga.write_reg(lf.REG_LB_DELAY, 0)
+    ok = fpga.write_reg(lf.REG_LB_DELAY1, 64) and ok
+    ok = fpga.write_reg(lf.REG_LB_AMP, amp) and ok
+    ok = fpga.set_hop_mute_ns(int(mute_ns)) and ok
+    dwell = int(pattern.get("dwell_us") or 1000)
+    f0 = int(round(float(sub_corridor["f_start"])))
+    ok = fpga.set_grid(
+        meta=lf.pack_grid_meta(n=min(n, 255), n_used=min(n, 255), conf=90,
+                               source=lf.GRID_SRC_OPERATOR,
+                               kind=lf.GRID_KIND_FHSS),
+        f0_hz=lf.pack_grid_f0(f0),
+        step_hz=0,
+        pri_us=max(1, dwell),
+        shift_hz=int(shift_hz),
+        flags=lf.GRID_FLAG_AUTONOMOUS,
+        rsv=0) and ok
+    ok = fpga.write_reg(lf.REG_CH_FS_HZ, int(round(float(fs_hz))) & 0xFFFFFFFF) and ok
+    if not ok:
+        raise RuntimeError("preload_drfm_shelf: полка или сетка")
+    return {"written": n, "shift_hz": int(shift_hz), "mute_ns": int(mute_ns)}

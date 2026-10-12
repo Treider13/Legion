@@ -1,23 +1,14 @@
 -- ============================================================================
--- LEGION — таймер индекса HOP_LUT 0x5E (шаги 1–3).
--- Хост пишет HOP_LUT 0x5E (последовательность каналов) и GRID:
---   PRI_US 0x54 — период одного хопа, мкс
---   FLAGS  0x56 — bit4 AUTONOMOUS
---   RSV    0x57 — стартовая фаза (индекс)
---   META   0x51 — n / n_used (8 бит); n_eff = n_used если ≠0, иначе n
---   F0/STEP/SHIFT/FS/LO — FTW = (f0 + ch·step + shift − lo) / fs · 2^32
--- Каденс — сэмпл TX (каждый 2-й tx_clock), как look-through / walk-off.
--- hop_tick — '1' один tx_clock в такт idx++ (граница dwell). Не reload из RSV.
--- PROTO_PERIOD — запасной период в сэмплах, если PRI_US=0 или fs=0.
--- Без AUTONOMOUS или при n_eff=0 индекс не шагает; FTW держит 0.
---
--- Деление периода и RSV mod n_eff — legion_divider (64 такта, не "/").
--- Умножения pri·fs, f0·1000, lo·1000, ch·step — legion_mult (32 такта, не "*").
--- FTW — свой последовательный делитель (32 такта, mag·2^32/fs_ftw).
--- fs_ftw — копия fs, захваченная на старте FTW (не fs_q периода).
--- Домен: только tx_clock (= pll_sclk). Входов с других клоков нет:
--- legion_regs даёт уже 2FF-синхронизированные GRID/FS/LO/HOP_LUT.
--- CH_LUT 0x31 — только RX-канализатор, сюда не приходит.
+-- LEGION — таймер индекса HOP_LUT (кГц, 32×256).
+-- FTW = (LUT_khz×1000 + shift_hz − lo_khz×1000) / fs · 2^32.
+-- Умножение ×1000 — legion_mult, 64 бита, только до вычитания.
+-- diff — 40 бит. Знак отделяется до цикла ftw_bit (31→0), цикл не шире 40.
+-- shift_hz — регистр 0x55, знаковое, один раз. Старого сумматора ch·step нет.
+-- LUT не инициализируется в reset: одна запись за такт, чтение в регистр.
+-- Индекс: 9-битное сравнение с end_idx, переход в start_idx.
+-- start>end или n_eff=0 → tx_mute. Молчание метки — счётчик тактов tx_clock
+-- (34 МГц): ticks = mute_ns × 34 / 1000 = mute_ns × 34e6 / 1e9.
+-- Домен: только tx_clock. Строб записи LUT уже снят в legion_regs.
 -- ============================================================================
 library ieee;
 use ieee.std_logic_1164.all;
@@ -40,84 +31,111 @@ entity legion_lut_hop is
         lo_khz       : in  unsigned(31 downto 0);
         lut_we       : in  std_logic;
         lut_addr     : in  unsigned(7 downto 0);
-        lut_data     : in  unsigned(7 downto 0);
+        lut_data     : in  unsigned(31 downto 0);
+        start_idx    : in  unsigned(7 downto 0);
+        end_idx      : in  unsigned(7 downto 0);
+        apply_we     : in  std_logic;
+        mute_ns      : in  unsigned(31 downto 0);
+        mute_arm     : in  std_logic;
         hop_auto     : out std_logic;
         hop_ch       : out unsigned(7 downto 0);
         hop_ftw      : out unsigned(31 downto 0);
-        hop_tick     : out std_logic
+        hop_tick     : out std_logic;
+        tx_mute      : out std_logic
     );
 end entity;
 
 architecture rtl of legion_lut_hop is
-    type lut_t is array (0 to 255) of unsigned(7 downto 0);
-    type div_sel_t is (DIV_PERIOD, DIV_MOD);
-    type mult_sel_t is (MULT_PERIOD, MULT_F0, MULT_LO, MULT_CH);
+    type lut_t is array (0 to 255) of unsigned(31 downto 0);
+    type div_sel_t is (DIV_PERIOD, DIV_MOD, DIV_MUTE);
+    type mult_sel_t is (MULT_PERIOD, MULT_LUT, MULT_LO, MULT_MUTE);
 
-    signal lut        : lut_t;
-    signal samp_ph    : std_logic;
-    signal idx        : unsigned(7 downto 0);
-    signal cnt        : unsigned(31 downto 0);
-    signal period     : unsigned(31 downto 0);
-    signal n_eff      : unsigned(7 downto 0);
-    signal auto_r     : std_logic;
-    signal ch_r       : unsigned(7 downto 0);
-    signal ftw_r      : unsigned(31 downto 0);
-    signal pri_q      : unsigned(31 downto 0);
-    signal fs_q       : unsigned(31 downto 0);
-    signal proto_q    : unsigned(31 downto 0);
-    signal rsv_q      : unsigned(7 downto 0);
-    signal n_q        : unsigned(7 downto 0);
-    signal shift_q    : signed(31 downto 0);
+    signal lut         : lut_t;
+    signal lut_q       : unsigned(31 downto 0);
+    signal samp_ph     : std_logic;
+    signal idx         : unsigned(7 downto 0);
+    signal cnt         : unsigned(31 downto 0);
+    signal period      : unsigned(31 downto 0);
+    signal n_eff       : unsigned(7 downto 0);
+    signal auto_r      : std_logic;
+    signal ftw_r       : unsigned(31 downto 0);
+    signal pri_q       : unsigned(31 downto 0);
+    signal fs_q        : unsigned(31 downto 0);
+    signal proto_q     : unsigned(31 downto 0);
+    signal rsv_q       : unsigned(7 downto 0);
+    signal n_q         : unsigned(7 downto 0);
+    signal shift_q     : signed(31 downto 0);
+    signal start_q     : unsigned(7 downto 0);
+    signal end_q       : unsigned(7 downto 0);
 
-    signal prod_r     : unsigned(63 downto 0);
+    signal prod_r      : unsigned(63 downto 0);
     signal pend_period : std_logic;
     signal pend_mod    : std_logic;
     signal pend_mult_p : std_logic;
-    signal pend_ftw_f0 : std_logic;
+    signal pend_ftw_lut : std_logic;
     signal pend_ftw_lo : std_logic;
-    signal pend_ftw_ch : std_logic;
+    signal pend_mute_mul : std_logic;
+    signal pend_mute_div : std_logic;
     signal div_lock    : std_logic;
     signal start_div   : std_logic;
     signal inflight    : div_sel_t;
     signal div_dividend : unsigned(63 downto 0);
     signal div_divisor  : unsigned(31 downto 0);
-    signal div_q      : unsigned(31 downto 0);
-    signal div_rem    : unsigned(31 downto 0);
-    signal div_valid  : std_logic;
-    signal div_busy   : std_logic;
+    signal div_q       : unsigned(31 downto 0);
+    signal div_rem     : unsigned(31 downto 0);
+    signal div_valid   : std_logic;
+    signal div_busy    : std_logic;
 
-    signal start_mult : std_logic;
-    signal mult_lock  : std_logic;
-    signal minflight  : mult_sel_t;
-    signal mult_a     : unsigned(31 downto 0);
-    signal mult_b     : unsigned(31 downto 0);
-    signal mult_p     : unsigned(63 downto 0);
-    signal mult_valid : std_logic;
-    signal mult_busy  : std_logic;
-    signal f0_hz_r    : unsigned(39 downto 0);
-    signal lo_hz_r    : unsigned(39 downto 0);
+    signal start_mult  : std_logic;
+    signal mult_lock   : std_logic;
+    signal minflight   : mult_sel_t;
+    signal mult_a      : unsigned(31 downto 0);
+    signal mult_b      : unsigned(31 downto 0);
+    signal mult_p      : unsigned(63 downto 0);
+    signal mult_valid  : std_logic;
+    signal mult_busy   : std_logic;
+    signal lut_hz_r    : unsigned(39 downto 0);
+    signal lo_hz_r     : unsigned(39 downto 0);
 
-    signal ftw_busy   : std_logic;
-    signal ftw_bit    : integer range 0 to 31;
-    signal ftw_rem    : unsigned(63 downto 0);
-    signal ftw_q      : unsigned(31 downto 0);
-    signal ftw_neg    : std_logic;
-    signal need_ftw   : std_logic;
-    signal f0_q       : unsigned(31 downto 0);
-    signal step_q     : unsigned(31 downto 0);
-    signal lo_q       : unsigned(31 downto 0);
-    signal fs_ftw     : unsigned(31 downto 0);
-    signal ch_div     : unsigned(7 downto 0);
-    signal hop_tick_r : std_logic;
+    signal ftw_busy    : std_logic;
+    signal ftw_bit     : integer range 0 to 31;
+    signal ftw_rem     : unsigned(63 downto 0);
+    signal ftw_q       : unsigned(31 downto 0);
+    signal ftw_neg     : std_logic;
+    signal need_ftw    : std_logic;
+    signal lo_q        : unsigned(31 downto 0);
+    signal fs_ftw      : unsigned(31 downto 0);
+    signal lut_held    : unsigned(31 downto 0);
+    signal ch_r        : unsigned(31 downto 0);
+    signal hop_tick_r  : std_logic;
+    signal hop_tick_d  : std_logic;
+    signal bounds_r    : std_logic;
+    signal mute_ns_q   : unsigned(31 downto 0);
+    signal mute_ticks  : unsigned(31 downto 0);
+    signal mute_cnt    : unsigned(31 downto 0);
+    signal mute_run    : std_logic;
+    signal tx_mute_r   : std_logic;
 begin
-    -- n_eff: n_used (meta[15:8]) если задан, иначе n (meta[7:0]).
     n_eff <= unsigned(meta(15 downto 8)) when unsigned(meta(15 downto 8)) /= 0
              else unsigned(meta(7 downto 0));
 
     hop_auto <= auto_r;
-    hop_ch   <= ch_r;
+    hop_ch   <= idx;
     hop_ftw  <= ftw_r;
-    hop_tick <= hop_tick_r;
+    -- Один такт между импульсом индекса и look_through.
+    hop_tick <= hop_tick_d;
+    tx_mute  <= tx_mute_r;
+
+    -- Память: нет сброса массива, одна запись и чтение в регистр за такт.
+    ram_p : process(clk)
+    begin
+        if rising_edge(clk) then
+            if lut_we = '1' then
+                lut(to_integer(lut_addr)) <= lut_data;
+            end if;
+            lut_q <= lut(to_integer(idx));
+        end if;
+    end process;
 
     U_div : entity work.legion_divider
         generic map (
@@ -137,7 +155,6 @@ begin
             busy     => div_busy
         );
 
-    -- 32 такта: pri·fs, f0·1000, lo·1000, ch·step. Не оператор "*".
     U_mult : entity work.legion_mult
         generic map (
             A_W => 32,
@@ -156,27 +173,23 @@ begin
         );
 
     process(clk, reset)
-        variable auto_v   : std_logic;
-        variable nxt      : unsigned(8 downto 0);
-        variable f_rf     : unsigned(39 downto 0);
-        variable diff     : signed(41 downto 0);
-        variable mag      : unsigned(39 downto 0);
-        variable tmp      : unsigned(63 downto 0);
-        variable cmp      : unsigned(31 downto 0);
-        variable qv       : unsigned(31 downto 0);
-        variable reload     : boolean;
+        variable auto_v    : std_logic;
+        variable nxt       : unsigned(8 downto 0);
+        variable diff64    : signed(63 downto 0);
+        variable mag       : unsigned(39 downto 0);
+        variable tmp       : unsigned(63 downto 0);
+        variable cmp       : unsigned(31 downto 0);
+        variable qv        : unsigned(31 downto 0);
+        variable reload    : boolean;
         variable period_upd : boolean;
+        variable mute_now  : std_logic;
     begin
         if reset = '1' then
-            for i in 0 to 255 loop
-                lut(i) <= to_unsigned(i, 8);
-            end loop;
             samp_ph      <= '0';
             idx          <= (others => '0');
             cnt          <= (others => '0');
             period       <= (others => '0');
             auto_r       <= '0';
-            ch_r         <= (others => '0');
             ftw_r        <= (others => '0');
             pri_q        <= (others => '0');
             fs_q         <= (others => '0');
@@ -184,13 +197,16 @@ begin
             rsv_q        <= (others => '0');
             n_q          <= (others => '0');
             shift_q      <= (others => '0');
+            start_q      <= (others => '0');
+            end_q        <= (others => '0');
             prod_r       <= (others => '0');
             pend_period  <= '0';
             pend_mod     <= '0';
             pend_mult_p  <= '0';
-            pend_ftw_f0  <= '0';
+            pend_ftw_lut <= '0';
             pend_ftw_lo  <= '0';
-            pend_ftw_ch  <= '0';
+            pend_mute_mul <= '0';
+            pend_mute_div <= '0';
             div_lock     <= '0';
             start_div    <= '0';
             inflight     <= DIV_PERIOD;
@@ -201,7 +217,7 @@ begin
             minflight    <= MULT_PERIOD;
             mult_a       <= (others => '0');
             mult_b       <= (others => '0');
-            f0_hz_r      <= (others => '0');
+            lut_hz_r     <= (others => '0');
             lo_hz_r      <= (others => '0');
             ftw_busy     <= '0';
             ftw_bit      <= 0;
@@ -209,26 +225,41 @@ begin
             ftw_q        <= (others => '0');
             ftw_neg      <= '0';
             need_ftw     <= '0';
-            f0_q         <= (others => '0');
-            step_q       <= (others => '0');
             lo_q         <= (others => '0');
             fs_ftw       <= (others => '0');
-            ch_div       <= (others => '0');
+            lut_held     <= (others => '0');
+            ch_r         <= (others => '0');
             hop_tick_r   <= '0';
+            hop_tick_d   <= '0';
+            bounds_r     <= '0';
+            mute_ns_q    <= (others => '0');
+            mute_ticks   <= (others => '0');
+            mute_cnt     <= (others => '0');
+            mute_run     <= '0';
+            tx_mute_r    <= '0';
         elsif rising_edge(clk) then
             samp_ph    <= not samp_ph;
             start_div  <= '0';
             start_mult <= '0';
             hop_tick_r <= '0';
+            -- Старый импульс уходит потребителю на следующем такте.
+            hop_tick_d <= hop_tick_r;
+            -- Чтение LUT уже в lut_q. Использование — ещё через такт.
+            ch_r       <= lut_q;
 
-            if lut_we = '1' then
-                lut(to_integer(lut_addr)) <= lut_data;
+            if apply_we = '1' then
+                start_q <= start_idx;
+                end_q   <= end_idx;
+            end if;
+            if start_q > end_q then
+                bounds_r <= '1';
+            else
+                bounds_r <= '0';
             end if;
 
             auto_v := flags(LEGION_GRID_FLAG_AUTONOMOUS);
             auto_r <= auto_v;
 
-            -- Период: умножение многотактно, затем divide / 1e6.
             period_upd := pri_us /= pri_q or fs_hz /= fs_q or
                           proto_period /= proto_q;
             if period_upd then
@@ -244,7 +275,11 @@ begin
                 end if;
             end if;
 
-            -- Фаза: rsv mod n_eff через тот же делитель (остаток).
+            if mute_ns /= mute_ns_q then
+                mute_ns_q     <= mute_ns;
+                pend_mute_mul <= '1';
+            end if;
+
             reload := (auto_v = '1' and auto_r = '0') or
                       rsv /= rsv_q or n_eff /= n_q;
             if reload then
@@ -258,13 +293,13 @@ begin
                     pend_mod <= '1';
                 end if;
             elsif samp_ph = '1' and auto_v = '1' and n_eff /= 0 and
-                  period /= 0 then
+                  period /= 0 and bounds_r = '0' then
                 if cnt + 1 >= period then
                     cnt <= (others => '0');
                     hop_tick_r <= '1';
                     nxt := resize(idx, 9) + 1;
-                    if nxt >= resize(n_eff, 9) then
-                        idx <= (others => '0');
+                    if nxt > resize(end_q, 9) then
+                        idx <= start_q;
                     else
                         idx <= nxt(7 downto 0);
                     end if;
@@ -273,10 +308,38 @@ begin
                 end if;
             end if;
 
+            mute_now := mute_run;
+            if mute_arm = '1' and mute_ticks /= 0 then
+                mute_cnt <= mute_ticks;
+                mute_run <= '1';
+                mute_now := '1';
+            elsif mute_run = '1' then
+                if mute_cnt <= 1 then
+                    mute_cnt <= (others => '0');
+                    mute_run <= '0';
+                    mute_now := '0';
+                else
+                    mute_cnt <= mute_cnt - 1;
+                    mute_now := '1';
+                end if;
+            end if;
+
+            if mute_run = '1' and mute_now = '0' then
+                need_ftw <= '1';
+            end if;
+
+            if auto_v = '1' and (mute_now = '1' or bounds_r = '1' or n_eff = 0) then
+                tx_mute_r <= '1';
+            else
+                tx_mute_r <= '0';
+            end if;
+
             if div_valid = '1' then
                 div_lock <= '0';
                 if inflight = DIV_PERIOD then
                     period <= div_q;
+                elsif inflight = DIV_MUTE then
+                    mute_ticks <= div_q;
                 else
                     idx <= div_rem(7 downto 0);
                 end if;
@@ -287,27 +350,25 @@ begin
                 if minflight = MULT_PERIOD then
                     prod_r      <= mult_p;
                     pend_period <= '1';
+                elsif minflight = MULT_MUTE then
+                    prod_r        <= mult_p;
+                    pend_mute_div <= '1';
                 elsif auto_v = '1' and n_eff /= 0 then
-                    if minflight = MULT_F0 then
-                        f0_hz_r     <= resize(mult_p, 40);
+                    if minflight = MULT_LUT then
+                        lut_hz_r    <= resize(mult_p, 40);
                         pend_ftw_lo <= '1';
                     elsif minflight = MULT_LO then
-                        lo_hz_r     <= resize(mult_p, 40);
-                        pend_ftw_ch <= '1';
-                    else
-                        -- ch·step готово: собрать FTW и делить на fs_ftw.
-                        -- f_rf: 40 бит, wrap при |f0+ch·step| ≥ 2^40.
-                        -- При реальных ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
-                        f_rf := f0_hz_r + resize(mult_p, 40);
-                        diff := signed(resize(f_rf, 42))
-                                + resize(shift_q, 42)
-                                - signed(resize(lo_hz_r, 42));
-                        if diff < 0 then
+                        lo_hz_r <= resize(mult_p, 40);
+                        -- 64-битное сложение: LUT·1000 + знаковое 0x55 − LO·1000.
+                        diff64 := signed(resize(lut_hz_r, 64))
+                                  + resize(shift_q, 64)
+                                  - signed(resize(mult_p, 64));
+                        if diff64 < 0 then
                             ftw_neg <= '1';
-                            mag     := unsigned(-diff(39 downto 0));
+                            mag     := unsigned(-diff64(39 downto 0));
                         else
                             ftw_neg <= '0';
-                            mag     := unsigned(diff(39 downto 0));
+                            mag     := unsigned(diff64(39 downto 0));
                         end if;
                         ftw_rem  <= resize(mag, 64);
                         ftw_q    <= (others => '0');
@@ -317,7 +378,6 @@ begin
                 end if;
             end if;
 
-            -- Не стартовать в тот же такт, что обновление входов.
             if (not period_upd) and div_lock = '0' and div_busy = '0' and
                start_div = '0' then
                 if pend_period = '1' then
@@ -326,8 +386,14 @@ begin
                     pend_period  <= '0';
                     inflight     <= DIV_PERIOD;
                     div_dividend <= prod_r;
-                    -- 1_000_000: мкс → сэмплы (period = pri_us · fs / 1e6).
                     div_divisor  <= to_unsigned(1_000_000, 32);
+                elsif pend_mute_div = '1' then
+                    start_div     <= '1';
+                    div_lock      <= '1';
+                    pend_mute_div <= '0';
+                    inflight      <= DIV_MUTE;
+                    div_dividend  <= prod_r;
+                    div_divisor   <= to_unsigned(1000, 32);
                 elsif pend_mod = '1' and n_eff /= 0 then
                     start_div    <= '1';
                     div_lock     <= '1';
@@ -347,52 +413,46 @@ begin
                     minflight   <= MULT_PERIOD;
                     mult_a      <= pri_us;
                     mult_b      <= fs_hz;
-                elsif pend_ftw_f0 = '1' then
-                    start_mult  <= '1';
-                    mult_lock   <= '1';
-                    pend_ftw_f0 <= '0';
-                    minflight   <= MULT_F0;
-                    mult_a      <= f0_q;
-                    -- 1000: кГц → Гц (F0 ниже GATE хранится в кГц).
-                    mult_b      <= to_unsigned(1000, 32);
+                elsif pend_ftw_lut = '1' then
+                    start_mult   <= '1';
+                    mult_lock    <= '1';
+                    pend_ftw_lut <= '0';
+                    minflight    <= MULT_LUT;
+                    mult_a       <= lut_held;
+                    mult_b       <= to_unsigned(1000, 32);
                 elsif pend_ftw_lo = '1' then
                     start_mult  <= '1';
                     mult_lock   <= '1';
                     pend_ftw_lo <= '0';
                     minflight   <= MULT_LO;
                     mult_a      <= lo_q;
-                    -- 1000: CH_LO кГц → Гц.
                     mult_b      <= to_unsigned(1000, 32);
-                elsif pend_ftw_ch = '1' then
-                    start_mult  <= '1';
-                    mult_lock   <= '1';
-                    pend_ftw_ch <= '0';
-                    minflight   <= MULT_CH;
-                    mult_a      <= resize(ch_div, 32);
-                    mult_b      <= step_q;
+                elsif pend_mute_mul = '1' then
+                    start_mult    <= '1';
+                    mult_lock     <= '1';
+                    pend_mute_mul <= '0';
+                    minflight     <= MULT_MUTE;
+                    mult_a        <= mute_ns_q;
+                    -- 34 такта на мкс при 34 МГц: ticks = ns × 34 / 1000.
+                    mult_b        <= to_unsigned(34, 32);
                 end if;
             end if;
 
-            ch_r <= lut(to_integer(idx));
-
-            if ch_r /= ch_div or f0 /= f0_q or step_hz /= step_q or
-               lo_khz /= lo_q or fs_hz /= fs_ftw or shift_hz /= shift_q then
+            if ch_r /= lut_held or lo_khz /= lo_q or fs_hz /= fs_ftw or
+               shift_hz /= shift_q then
                 need_ftw <= '1';
             end if;
 
-            -- n_eff=0 или нет AUTO → FTW=0 (не lut(0)).
-            if auto_v = '0' or n_eff = 0 then
-                ftw_r       <= (others => '0');
-                need_ftw    <= '0';
-                ftw_busy    <= '0';
-                pend_ftw_f0 <= '0';
-                pend_ftw_lo <= '0';
-                pend_ftw_ch <= '0';
+            if auto_v = '0' or n_eff = 0 or bounds_r = '1' or mute_now = '1' then
+                ftw_r        <= (others => '0');
+                need_ftw     <= '0';
+                ftw_busy     <= '0';
+                pend_ftw_lut <= '0';
+                pend_ftw_lo  <= '0';
             elsif ftw_busy = '1' then
                 tmp := ftw_rem(62 downto 0) & '0';
                 cmp := tmp(63 downto 32);
                 qv  := ftw_q;
-                -- fs_ftw: копия fs на старте FTW, не fs_q периода.
                 if fs_ftw /= 0 and cmp >= fs_ftw then
                     ftw_rem <= tmp - (fs_ftw & x"00000000");
                     qv(ftw_bit) := '1';
@@ -413,18 +473,11 @@ begin
                 end if;
             elsif need_ftw = '1' and fs_hz /= 0 then
                 need_ftw <= '0';
-                f0_q     <= f0;
-                step_q   <= step_hz;
                 lo_q     <= lo_khz;
                 shift_q  <= shift_hz;
-                ch_div   <= ch_r;
+                lut_held <= ch_r;
                 fs_ftw   <= fs_hz;
-                if f0 < to_unsigned(LEGION_GRID_F0_KHZ_GATE, 32) then
-                    pend_ftw_f0 <= '1';
-                else
-                    f0_hz_r     <= resize(f0, 40);
-                    pend_ftw_lo <= '1';
-                end if;
+                pend_ftw_lut <= '1';
             end if;
         end if;
     end process;

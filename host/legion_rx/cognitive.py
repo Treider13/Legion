@@ -23,6 +23,9 @@ INITIAL_SCAN = "INITIAL_SCAN"
 LEARNING = "LEARNING"
 CONFIRMING = "CONFIRMING"
 JAMMING = "JAMMING"
+MULTI_LO = "MULTI_LO"
+TIMER = "TIMER"
+RE_SCAN = "RE_SCAN"
 MONITORING = "MONITORING"
 TARGET_SILENT = "TARGET_SILENT"
 RE_ACQUIRE = "RE_ACQUIRE"
@@ -33,7 +36,7 @@ MIN_CONFIRMS = 3
 MATCH_GO = 0.9
 SILENT_S = 0.100
 P_HOPPING_GO = 0.6
-LOOKTHROUGH_HOPS = 10
+LOOKTHROUGH_HOPS = 100
 NFFT_SPEC = 1024
 
 
@@ -81,13 +84,29 @@ class CognitiveFSM:
         if getattr(store, "n_chans", None) is None:
             store.n_chans = self.n_chans
         self._listen_freqs: list[float] = []
+        self.jam_duration_s = 15.0
+        self._jam_until: "float | None" = None
+        self._paused = False
+        self._state_since = 0.0
 
     def _go(self, to: str, t_s: float, **extra) -> None:
+        if to != self.state:
+            self._state_since = float(t_s)
         rec = {"tick": self._tick_i, "from": self.state, "to": to,
                "t_s": round(float(t_s), 6), "pattern_id": self.pid,
                "jams_sent": self.jams_sent, **extra}
         self.transitions.append(rec)
         self.state = to
+
+    def _watch(self, t_s: float) -> None:
+        age = float(t_s) - float(self._state_since)
+        if self.state == CONFIRMING and age > 300.0:
+            self._rescan_origin(t_s, "watchdog_confirming")
+        elif self.state == LEARNING and age > 120.0:
+            self._rescan_origin(t_s, "watchdog_learning")
+        elif self.state == MONITORING and age > 10.0:
+            self._stop_jam(t_s, "watchdog_monitoring")
+            self._go("TARGET_SILENT", t_s, note="watchdog")
 
     def _spec_axis(self) -> tuple:
         half = 0.5 * self.fs_hz
@@ -137,7 +156,11 @@ class CognitiveFSM:
         self._autonomous = on if ok else self._autonomous
 
     def _arm_look_through(self, dwell_us) -> None:
-        """Один раз после автономного LUT: blank 1 hop из 10, idx не трогаем."""
+        """Один раз после автономного LUT: 1 слушающий прыжок из 100.
+        Автономный флаг не снимается. Запись 0x57 идёт через периферийный
+        USB: libbladeRF держит устройство монопольно, поэтому этот тик
+        отпускает поток и забирает его обратно.
+        """
         if self.fpga is None or self._lt_armed or not self._autonomous:
             return
         from .fpga_control import AIR_FS_HZ
@@ -157,48 +180,110 @@ class CognitiveFSM:
             "period_hops": LOOKTHROUGH_HOPS, "listen_hops": 1,
             "fs_hz": fs, "dwell_us": float(dwell_us)})
 
+    def pause(self, t_s: float) -> None:
+        """Пауза глушит передачу. FPGA иначе продолжает ряд."""
+        self._paused = True
+        self._stop_jam(t_s, "pause")
+
+    def resume(self, t_s: float) -> None:
+        self._paused = False
+        self._go(LISTENING, t_s, note="resume")
+
+    def _rescan_origin(self, t_s: float, why: str) -> None:
+        """После таймера — исходный коридор оператора, не узкое пятно."""
+        self._stop_jam(t_s, why)
+        self._jam_until = None
+        self.sub = None
+        self.rec = None
+        self.pid = None
+        self._live = []
+        self._listen_freqs = []
+        self._go(LISTENING, t_s, note="rescan_origin",
+                 corridor=self.scan_corridor)
+
     def _jam_now(self, t_s: float, preload: bool = False) -> dict:
-        from .fpga_control import apply_predictive_jam
-        from .fpga_preload import LUT_CAP, preload_hop_sequence
+        from .fpga_preload import LUT_CAP
 
         if self.fpga is None:
             raise RuntimeError("FSM: помеха без FPGA-транспорта")
         pat = self.store.get(self.pid)
         fs_hop = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz)
-        jam = apply_predictive_jam(self.fpga, self.sub, pat,
-                                   position=self.position, lo_hz=self.lo_hz,
-                                   fs_hz=fs_hop, horizon=1)
+        # Автономный удар не вызывает apply_predictive_jam: тот пишет amp 0.90.
+        if preload:
+            from .fpga_preload import preload_drfm_shelf
+            from .lo_window_planner import plan_stations, assign_windows
+            from .profile_cache import ProfileCache
+            shelf = preload_drfm_shelf(
+                self.fpga, pat, self.sub, fs_hz=fs_hop,
+                shift_hz=15000, mute_ns=int(getattr(self, "mute_ns", 0)))
+            hops = [float(x) * 1e6 for x in (pat.get("freqs_mhz") or [])]
+            plan = plan_stations(self.sub["f_start"], self.sub["f_end"],
+                                 fs_hop, hops)
+            cache = ProfileCache()
+            cache.store_after_narrow(self.fpga, plan["centers_hz"])
+            scenario = assign_windows(hops, plan["centers_hz"], fs_hop)
+            if hasattr(self.fpga, "yield_usb"):
+                self.fpga.yield_usb()
+            usb = getattr(self, "usb", None)
+            if usb is not None and getattr(usb, "open", False):
+                from .libbladerf_owner import BLADERF_ERR_QUEUE_FULL
+                tune_fail = False
+                queue_full = False
+                for i, pair in enumerate(cache.pairs):
+                    if usb.capture_pair(i, int(pair["lo_hz"])) != 0:
+                        tune_fail = True
+                        break
+                dwell = float(pat.get("dwell_s") or 1e-3)
+                lead = int(getattr(usb, "last_timestamp", 0)) + int(fs_hop * 0.05)
+                marks = cache.batch_marks(scenario, dwell, lead, fs_hop)
+                for batch in cache.chunks(marks):
+                    if tune_fail or queue_full:
+                        break
+                    for mark in batch:
+                        if mark["full_cal"] or mark["lo_hz"] is None:
+                            continue
+                        rc = usb.schedule_pair(int(mark["window"]),
+                                               int(mark["lo_hz"]),
+                                               int(mark["sample"]))
+                        if rc == BLADERF_ERR_QUEUE_FULL:
+                            queue_full = True
+                            break
+                        if rc != 0:
+                            tune_fail = True
+                            break
+                if queue_full:
+                    self.transitions.append({
+                        "tick": self._tick_i, "from": self.state,
+                        "to": self.state, "t_s": float(t_s),
+                        "action": "queue_full"})
+                if tune_fail:
+                    self._rescan_origin(t_s, "tune_fail")
+            self._lo_plan = plan
+            self._lo_scenario = scenario
+            jam = {"f_jam_hz": hops[0] if hops else 0.0,
+                   "shelf": shelf, "stations": plan["n"],
+                   "outside_hz": plan["outside_hz"]}
+        else:
+            from .fpga_control import apply_predictive_jam
+            jam = apply_predictive_jam(self.fpga, self.sub, pat,
+                                       position=self.position, lo_hz=self.lo_hz,
+                                       fs_hz=fs_hop, horizon=1)
         pre_n = 0
         if preload:
-            cyc = max(1, len(pat.get("cycle") or []))
-            auto = cyc <= LUT_CAP
-            n_pre = min(cyc, LUT_CAP)
-            step = max(1e3, (self.sub["f_end"] - self.sub["f_start"]) / 255.0)
-            self._grid_step_hz = step
-            dwell = pat.get("dwell_us")
-            try:
-                out = preload_hop_sequence(self.fpga, pat, self.sub,
-                                           position=self.position, next_n=n_pre,
-                                           chan_step_hz=step, dwell_us=dwell,
-                                           autonomous=auto, fs_hz=fs_hop,
-                                           lo_hz=self.lo_hz)
-                pre_n = out["written"]
-                self._autonomous = bool(out["autonomous"])
-                pat["lut_n"] = pre_n
-                pat["visible_only"] = out["visible_only"]
-                if self._autonomous:
-                    self._arm_look_through(dwell or pat.get("dwell_us") or 1000)
-                if out["visible_only"]:
-                    self.transitions.append({
-                        "tick": self._tick_i, "from": self.state, "to": self.state,
-                        "t_s": float(t_s), "action": "visible_part",
-                        "cycle": cyc, "lut_n": pre_n})
-            except (ValueError, RuntimeError) as e:
-                self._autonomous = False
-                self.transitions.append({
-                    "tick": self._tick_i, "from": self.state, "to": self.state,
-                    "t_s": float(t_s), "action": "preload_fail",
-                    "why": str(e)})
+            cyc = max(1, len(pat.get("cycle") or pat.get("freqs_mhz") or []))
+            self._autonomous = cyc <= LUT_CAP
+            pre_n = int(jam.get("shelf", {}).get("written") or 0)
+            pat["lut_n"] = pre_n
+            dwell = pat.get("dwell_us") or 1000
+            if self._autonomous:
+                self._arm_look_through(dwell)
+            self._jam_until = float(t_s) + float(self.jam_duration_s)
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "t_s": float(t_s), "action": "drfm_shelf",
+                "stations": jam.get("stations"),
+                "outside_hz": jam.get("outside_hz"),
+                "until": self._jam_until})
         self.store.mark_jammed(self.pid)
         self.jams_sent += 1
         self.eff.mark_jam_applied()
@@ -230,6 +315,7 @@ class CognitiveFSM:
 
     def tick(self, ch_pwr, freqs_hz, t_s: float) -> dict:
         self._tick_i += 1
+        self._watch(float(t_s))
         self.sweeper.sample_count = int(round(float(t_s) * self.fs_hz))
         self._fb = self.fallback.update(ch_pwr, t_s)
         st = self.state
@@ -256,7 +342,7 @@ class CognitiveFSM:
                 self._tick_learning(t_s)
             elif st == CONFIRMING:
                 self._tick_confirming(t_s)
-            elif st in (MONITORING, JAMMING):
+            elif st in (MONITORING, JAMMING, MULTI_LO, TIMER):
                 self._tick_monitoring(ch_pwr, freqs_hz, t_s, hop)
             elif st == TARGET_SILENT:
                 self._tick_target_silent(t_s)
@@ -431,9 +517,16 @@ class CognitiveFSM:
         if count >= MIN_CONFIRMS and rec["confirmed"]:
             self.store.classify_threat_type(self.pid)
             self._jam_now(t_s, preload=True)
-            self._go(MONITORING, t_s, confirms=count)
+            nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
+            self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count)
 
     def _tick_monitoring(self, ch_pwr, freqs_hz, t_s: float, hop) -> None:
+        if self._jam_until is not None and float(t_s) >= float(self._jam_until):
+            self._go(RE_SCAN, t_s, note="jam_timer")
+            self._rescan_origin(t_s, "jam_timer")
+            return
+        if self.state in (JAMMING, MULTI_LO) and self._jam_until is not None:
+            self.state = TIMER
         pid2, nxt, lp = match_and_predict(self.store, self._live,
                                           self.sub["sub_corridor_id"])
         lp_score = lp if pid2 == self.pid else 0.0
@@ -456,6 +549,16 @@ class CognitiveFSM:
         if hop is not None:
             rec = self.store.get(self.pid)
             self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
+            if self._autonomous and self.fpga is not None:
+                self._lt_i = int(getattr(self, "_lt_i", 0)) + 1
+                if self._lt_i % LOOKTHROUGH_HOPS == 0:
+                    plan = getattr(self, "_lo_plan", None) or {}
+                    centers = plan.get("centers_hz") or []
+                    heard = float(np.asarray(freqs_hz)[int(np.argmax(ch_pwr))])
+                    half = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz) / 2.0
+                    if centers and any(abs(heard - float(c)) <= half for c in centers):
+                        # Монопольный libbladeRF: запись регистра отпускает поток.
+                        self.fpga.write_reg(0x57, int(self.position) & 0xFF)
             # Listen-hop глушит HDL (REG_LT_*). FLAGS bit4 не снимаем:
             # иначе idx замирает и при повторном AUTO грузится из rsv.
             # LP совпал — идём дальше. Drift уже ушёл в RE_LEARNING выше.

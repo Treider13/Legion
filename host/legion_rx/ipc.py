@@ -94,3 +94,59 @@ class UdpPublisher:
 
     def close(self) -> None:
         self._sock.close()
+
+
+class InProcessBus:
+    """Команды окна в тот же процесс, где FSM. USB один.
+
+    Команды: start, stop, pause, save, load, reset.
+    Кадр состояния читает окно. UDP-вьювер этот класс не заменяет.
+    """
+
+    COMMANDS = ("start", "stop", "pause", "save", "load", "reset")
+
+    def __init__(self) -> None:
+        self.cmd: "str | None" = None
+        self.params: dict = {}
+        self.state: dict = {
+            "state": "LISTENING",
+            "jam_remaining_s": 0.0,
+            "jam_duration_s": 15.0,
+            "pattern_id": None,
+            "cycle_length": 0,
+            "jams_count": 0,
+            "current_lo_window": None,
+            "freq_shift_hz": 15000,
+            "threat": None,
+            "scan_cycle_count": 0,
+        }
+
+    def submit(self, cmd: str, **params) -> None:
+        if cmd not in self.COMMANDS:
+            raise ValueError(cmd)
+        self.cmd = cmd
+        self.params = dict(params)
+
+    def take(self) -> "tuple[str | None, dict]":
+        cmd, params = self.cmd, self.params
+        self.cmd = None
+        self.params = {}
+        return cmd, params
+
+    def publish_fsm(self, fsm, t_s: float) -> None:
+        until = getattr(fsm, "_jam_until", None)
+        remain = 0.0 if until is None else max(0.0, float(until) - float(t_s))
+        plan = getattr(fsm, "_lo_plan", None) or {}
+        self.state = {
+            "state": fsm.state,
+            "jam_remaining_s": remain,
+            "jam_duration_s": float(getattr(fsm, "jam_duration_s", 15.0)),
+            "pattern_id": fsm.pid,
+            "cycle_length": int((fsm.store.get(fsm.pid) or {}).get("cycle_length") or 0)
+            if fsm.pid else 0,
+            "jams_count": int(getattr(fsm, "jams_sent", 0)),
+            "current_lo_window": plan.get("n"),
+            "freq_shift_hz": 15000,
+            "threat": (fsm.store.get(fsm.pid) or {}).get("threat") if fsm.pid else None,
+            "scan_cycle_count": int(getattr(fsm, "_tick_i", 0)),
+        }

@@ -9,8 +9,10 @@ need = min(base, cycle) при cycle≤64; max(8, cycle//8) при cycle>64.
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from pathlib import Path
 
 # Типы последовательности (шаг 10 ТЗ)
 SEQ_PSEUDO = "pseudo_random"
@@ -25,6 +27,26 @@ class PatternStore:
         # None → выводится из данных (max+1). При адаптивной сетке
         # (chans_for_corridor) FSM обновляет это поле.
         self.n_chans = n_chans
+        self.path = Path(__file__).resolve().parent / "patterns.json"
+        self.legacy_path = Path(__file__).resolve().parent / "patterns_legacy.json"
+        self.load()
+
+    def load(self) -> None:
+        if self.path.is_file():
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                self.patterns = data
+
+    def save(self) -> None:
+        self.path.write_text(
+            json.dumps(self.patterns, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        legacy = {pid: rec.get("legacy") or []
+                  for pid, rec in self.patterns.items()
+                  if rec.get("legacy")}
+        self.legacy_path.write_text(
+            json.dumps(legacy, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
 
     # ---- CRUD ----
 
@@ -46,6 +68,7 @@ class PatternStore:
                 per = find_period_tolerant(seq, m=self.n_chans)
                 rec["hop_sequence"] = seq
                 rec["freqs_mhz"] = freqs
+                rec["freq_khz"] = [int(round(x * 1000.0)) for x in freqs]
                 rec["updated"] = time.time()
                 rec["cycle_length"] = per[0] if per else len(seq)
                 rec["cycle"] = seq[: rec["cycle_length"]]
@@ -63,6 +86,7 @@ class PatternStore:
             "sub": dict(sub_corridor),
             "hop_sequence": seq,
             "freqs_mhz": freqs,
+            "freq_khz": [int(round(x * 1000.0)) for x in freqs],
             "cycle_length": cyc_len,
             "cycle": seq[:cyc_len],  # канонический цикл для align/predict
             "dwell_s": (sorted(dwells)[len(dwells) // 2] / 1e6
@@ -232,7 +256,9 @@ def apply_timer_cycle(rec: dict, energy=None, dt_s: float = 1e-3) -> dict:
 def find_period_tolerant(seq: list, tol: int = 1, m: "int | None" = None,
                          min_score: float = 0.85,
                          max_cycle: int = 4096) -> "tuple | None":
-    """Период ЛЮБОЙ длины 2..max_cycle (4096), с допуском ±tol каналов
+    """Период ряда во времени: seq[i] совпадает с seq[i+p].
+    Это не автокорреляция частот.
+    Длина 2..max_cycle (4096), допуск ±tol каналов
     (джиттер/краевое расщепление) и усечённым хвостом. p=1 исключён:
     при tol=1 последовательная таблица 0,1,2,… даёт ложный период 1.
     Критерий: доля совпадений seq[i]≈seq[i+p] ≥ min_score при
