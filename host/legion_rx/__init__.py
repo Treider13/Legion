@@ -4,4 +4,4 @@
 классификация (PyTorch→ONNX→TensorRT), hop map, управление FPGA через
 репозиторный legion_fpga.py (NIOS PIO, без raw poke).
 """
-__version__ = "0.1.0"
+__version__ = "1.3.0"

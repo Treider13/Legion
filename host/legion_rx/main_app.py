@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from .cognitive import CognitiveFSM, LISTENING
+from .ops import acquire_lock, install_shutdown, rbf_warning, validate_config
 from .pattern_store import PatternStore
 from .ipc import InProcessBus
 
@@ -35,8 +37,7 @@ def load_config() -> dict:
     cfg = dict(DEFAULTS)
     if CONFIG_PATH.is_file():
         cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    cfg["rx_fs_hz"] = 34.0e6
-    return cfg
+    return validate_config(cfg)
 
 
 def save_config(cfg: dict) -> None:
@@ -60,13 +61,31 @@ class App:
             "corridor_id": "operator",
         }
         self.pending = dict(cfg)
+        self._stop_live = threading.Event()
+        self._radio = None
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_path = HERE / f"log_{stamp}.txt"
         self._log("старт")
+        note = rbf_warning(HERE.parents[2])
+        if note:
+            self._log(note)
 
     def _log(self, line: str) -> None:
+        self._rotate_log()
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%H:%M:%S')} {line}\n")
+
+    def _rotate_log(self) -> None:
+        if not self.log_path.is_file() or self.log_path.stat().st_size < 10 * 1024 * 1024:
+            return
+        for i in range(4, 0, -1):
+            src = Path(f"{self.log_path}.{i}")
+            dst = Path(f"{self.log_path}.{i + 1}")
+            if i == 4 and src.is_file():
+                src.unlink()
+            elif src.is_file():
+                src.replace(dst)
+        self.log_path.replace(Path(f"{self.log_path}.1"))
 
     def apply_pending_on_cycle(self) -> None:
         """Следующий цикл слушает новые границы и длительность."""
@@ -88,15 +107,20 @@ class App:
             return
         if cmd == "start":
             self.fsm._paused = False
+            self.start_radio()
             self._log("start")
         elif cmd == "stop":
             self.fsm._stop_jam(t_s, "stop")
+            self._stop_live.set()
+            self.fsm.store.save()
+            save_config(self.cfg)
             self._log("stop")
         elif cmd == "pause":
             self.fsm.pause(t_s)
             self._log("pause")
         elif cmd == "save":
             save_config(self.cfg)
+            self.fsm.store.save()
             self._log(f"save {CONFIG_PATH.name}")
         elif cmd == "load":
             self.cfg = load_config()
@@ -118,6 +142,34 @@ class App:
         self.apply_pending_on_cycle()
         self.bus.publish_fsm(self.fsm, t_s)
         return self.bus.state
+
+    def start_radio(self) -> None:
+        if self._radio is not None and self._radio.is_alive():
+            return
+        self._stop_live.clear()
+        self._radio = threading.Thread(
+            target=self._radio_body, daemon=True, name="legion-live")
+        self._radio.start()
+
+    def _radio_body(self) -> None:
+        from .pipeline import live_from_app
+        try:
+            live_from_app(self, self._stop_live)
+        except Exception as exc:
+            self._log(f"радио: {exc}")
+
+    def shutdown(self, signum, _frame) -> None:
+        self._stop_live.set()
+        try:
+            self.fsm._stop_jam(time.time(), "signal")
+        except Exception:
+            pass
+        try:
+            self.fsm.store.save()
+            save_config(self.cfg)
+        except Exception:
+            pass
+        raise SystemExit(128 + int(signum))
 
 
 def run_ui(app: App) -> None:
@@ -221,10 +273,12 @@ def run_ui(app: App) -> None:
 
 
 def main() -> None:
+    acquire_lock()
     p = argparse.ArgumentParser()
     p.add_argument("--headless", action="store_true")
     args = p.parse_args()
     app = App(load_config(), args.headless)
+    install_shutdown(app.shutdown)
     if args.headless:
         st = app.tick_status(time.time())
         print(json.dumps(st, ensure_ascii=False))

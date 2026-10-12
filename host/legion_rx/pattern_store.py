@@ -9,8 +9,10 @@ need = min(base, cycle) при cycle≤64; max(8, cycle//8) при cycle>64.
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from pathlib import Path
 
 # Типы последовательности (шаг 10 ТЗ)
 SEQ_PSEUDO = "pseudo_random"
@@ -25,6 +27,26 @@ class PatternStore:
         # None → выводится из данных (max+1). При адаптивной сетке
         # (chans_for_corridor) FSM обновляет это поле.
         self.n_chans = n_chans
+        self.path = Path(__file__).resolve().parent / "patterns.json"
+        self.legacy_path = Path(__file__).resolve().parent / "patterns_legacy.json"
+        self.load()
+
+    def load(self) -> None:
+        if self.path.is_file():
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                self.patterns = data
+
+    def save(self) -> None:
+        self.path.write_text(
+            json.dumps(self.patterns, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        legacy = {pid: rec.get("legacy") or []
+                  for pid, rec in self.patterns.items()
+                  if rec.get("legacy")}
+        self.legacy_path.write_text(
+            json.dumps(legacy, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
 
     # ---- CRUD ----
 

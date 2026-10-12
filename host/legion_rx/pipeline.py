@@ -32,6 +32,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
+
+from .ops import sanitize
+
+_LIVE: dict = {}
+
+
+def _on_signal(signum, _frame) -> None:
+    raise SystemExit(128 + int(signum))
 import queue
 import sys
 import threading
@@ -64,7 +73,28 @@ class JsonLog:
         self._f = open(self.path, "a", buffering=1)
 
     def write(self, rec: dict) -> None:
-        self._f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        line = json.dumps(sanitize(rec), ensure_ascii=False) + "\n"
+        self._rotate(len(line.encode()))
+        self._f.write(line)
+
+    def _rotate(self, incoming: int) -> None:
+        """10 МБ, пять файлов: path, path.1 … path.4."""
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            size = 0
+        if size + incoming < 10 * 1024 * 1024:
+            return
+        self._f.close()
+        for i in range(4, 0, -1):
+            src = f"{self.path}.{i}"
+            dst = f"{self.path}.{i + 1}"
+            if i == 4 and os.path.exists(src):
+                os.remove(src)
+            elif os.path.exists(src):
+                os.replace(src, dst)
+        os.replace(self.path, f"{self.path}.1")
+        self._f = open(self.path, "a", buffering=1)
 
     def close(self) -> None:
         self._f.close()
@@ -715,6 +745,8 @@ class _UsbLive:
         self._io = threading.Lock()
         self._paused = False
         self.streaming = False
+        self.fault = ""
+        self.usb_errors = 0
 
     def tune(self, hz: float) -> None:
         self.lo = float(hz)
@@ -768,9 +800,28 @@ class _UsbLive:
                 with self._io:
                     if self._paused or not self.usb.open:
                         raw = b""
+                        rc = 0
                     else:
-                        _rc, raw, _ts = self.usb.read_frame_bytes(
+                        rc, raw, _ts = self.usb.read_frame_bytes(
                             self.frame_samples)
+                if rc in (-5, -6, -7):
+                    self.usb_errors += 1
+                    if self.usb_errors >= 3:
+                        self.fault = "usb"
+                        break
+                    with self._io:
+                        self.usb.release()
+                    time.sleep(0.2)
+                    with self._io:
+                        if self.usb.acquire(self.device or "") == 0:
+                            self.usb.configure(
+                                int(self.lo), int(self.fs), int(self.bw),
+                                self.lna)
+                            self.usb.arm_meta_stream()
+                            self.usb.enable_rx(True)
+                    continue
+                if rc == 0:
+                    self.usb_errors = 0
                 if not raw:
                     time.sleep(0.002)
                     continue
@@ -874,7 +925,8 @@ class _UsbHandoff:
         return getattr(self._ensure(), name)
 
 
-def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
+def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
+                        fsm=None, stop_event=None) -> int:
     """Живой IQ: UsbOwner → FIFO → C-читатель → PFB → FSM."""
     from .cognitive import CognitiveFSM
     from .lo_sweep import plan_windows, window_hz
@@ -902,20 +954,36 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     radio = _UsbLive(args, fs, lo)
     radio.start()
     fpga = _UsbHandoff(radio)
-    store = PatternStore()
-    fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
-                       radio=_RxProxy(radio), scan_corridor=(f1, f2),
-                       frame_dt_s=args.frame_samples / fs,
-                       frame_samples=args.frame_samples, ibw_hz=ibw)
+    if fsm is None:
+        store = PatternStore()
+        fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
+                           radio=_RxProxy(radio), scan_corridor=(f1, f2),
+                           frame_dt_s=args.frame_samples / fs,
+                           frame_samples=args.frame_samples, ibw_hz=ibw)
+    else:
+        store = fsm.store
+        fsm.lo_hz = lo
+        fsm.fpga = fpga
+        fsm.pub = pub
+        fsm.sweeper.radio = _RxProxy(radio)
     fsm.usb = radio.usb
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
     ch = Channelizer(args.n_chans, args.taps, xp=np)
     rebuilt = {"done": False}
     frames = 0
+    _LIVE["fsm"] = fsm
+    _LIVE["radio"] = radio
     try:
         radio.start()
         t0 = time.perf_counter()
-        while time.perf_counter() - t0 < args.duration_s:
+        while stop_event is None or not stop_event.is_set():
+            if stop_event is None and time.perf_counter() - t0 >= args.duration_s:
+                break
+            if radio.fault == "usb":
+                fsm._stop_jam(time.time(), "usb")
+                fsm._rescan_origin(time.time(), "usb")
+                radio.fault = ""
+                break
             fr = radio.read_frame()
             if fr is None:
                 if radio.src is not None and radio.src.eof:
@@ -965,8 +1033,44 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
         return 0
     finally:
+        try:
+            fsm._stop_jam(time.time(), "shutdown")
+        except Exception:
+            pass
+        try:
+            fsm.store.save()
+        except Exception:
+            pass
         fpga.close()
         radio.stop()
+        _LIVE.clear()
+
+
+def live_from_app(app, stop_event) -> int:
+    """Тот же UsbOwner, что и --live, в процессе окна."""
+    from types import SimpleNamespace
+    from .ops import rbf_warning
+    note = rbf_warning(Path(__file__).resolve().parents[2])
+    if note:
+        app._log(note)
+    args = SimpleNamespace(
+        corridor=(app.cfg["f_start_hz"], app.cfg["f_end_hz"]),
+        duration_s=10 ** 9,
+        frame_samples=FRAME_SAMPLES,
+        n_chans=64,
+        taps=8,
+        fifo=FIFO_PATH,
+        device=None,
+        bw=20.0e6,
+        lna=int(app.cfg.get("lna_gain_db") or 20),
+        mode="cognitive",
+    )
+    log = JsonLog("gui")
+    try:
+        return _run_cognitive_live(
+            args, log, None, fsm=app.fsm, stop_event=stop_event)
+    finally:
+        log.close()
 
 
 def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
@@ -1080,6 +1184,12 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
 # ---------------------------------------------------------------- main
 
 def main() -> int:
+    from .ops import acquire_lock, install_shutdown, rbf_warning
+    acquire_lock()
+    install_shutdown(_on_signal)
+    note = rbf_warning(Path(__file__).resolve().parents[2])
+    if note:
+        print(note, file=sys.stderr)
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="mode", required=True)
