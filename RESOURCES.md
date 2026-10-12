@@ -464,7 +464,7 @@ python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /
 ## Полка DRFM по времени (12.10.2026)
 
 Quartus Prime Lite 23.1std.1, `bladeRF-micro` A4, revision `legion`.
-Образы после одного такта `ch_r` и `hop_tick`. git_info: `b9aa911` clean. Тег v1.3 не ставился.
+Образы после одного такта `ch_r` и `hop_tick`. git_info сборки: `b9aa911` clean. Тег `v1.3-rbf-multi-lo-68mhz`.
 
 Slow 0°C setup `pll_sclk` на сидах 1–3 положительный, TNS 0. Fast 0°C hold `tck` на этих трёх тоже положительный. Hold `pll_sclk` не закрыт только на сиде 3 (−0.013 нс). Это разброс fitter. HDL после разбора пути не менялся, RBF не пересобирался.
 
@@ -477,7 +477,9 @@ Worst hold path сида 3, Fast 1100mV 0°C, оба такта `pll_sclk~PLL_OU
 
 Сводная строка −0.013: `legionxA4-2026-10-12_15.36.32/legionxA4.sta.summary` и `legionxA4.sta.rpt:2200`. В `sta.rpt` регистров нет, только slack часов.
 
-Frozen = seed 2. Каталог `legionxA4-2026-10-12_15.29.07`, md5 `4db61f199a08b8e6f3ed1e67caed5ed5`. Slow setup +1.209, Fast hold pll_sclk +0.080, Fast hold tck +0.112, TNS 0. Сид 1 тоже PASS и в заморозку не выбран: запас hold меньше (+0.060).
+Frozen = seed 2. Путь `timing_close_2026-10-12/hop-lt-68mhz-frozen/legionxA4.rbf`. md5 `4db61f199a08b8e6f3ed1e67caed5ed5`. Исходный каталог `legionxA4-2026-10-12_15.29.07`. Slow 0°C setup pll_sclk +1.209, TNS 0. Fast 0°C hold pll_sclk +0.080, tck +0.112. Тег `v1.3-rbf-multi-lo-68mhz`.
+
+Критерий frozen: хотя бы один seed PASS на обоих углах и обоих клоках (Slow 0°C setup `pll_sclk`, Fast 0°C hold `pll_sclk` и `tck`, TNS 0). Сид 3 FAIL на одном hold-пути в `legion_lb_xlat` (legacy, slack −0.013 нс). Это не блокер. Сид 1 тоже PASS и в заморозку не выбран: запас hold меньше (+0.060).
 
 | seed | вердикт | каталог | ALM | M10K | DSP | Slow 0C setup pll_sclk | TNS | Fast 0C hold pll_sclk | Fast 0C hold tck | md5 |
 |---|---|---|---|---|---|---|---|---|---|---|
