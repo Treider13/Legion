@@ -623,6 +623,7 @@ class _LiveRx:
             self.mon = None
         if self.sess is not None:
             try:
+                # RX стоп на время записи FPGA: у FX3 один владелец USB.
                 self.sess.rx_stop()
             except Exception:
                 pass

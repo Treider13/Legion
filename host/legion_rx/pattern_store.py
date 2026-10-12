@@ -30,7 +30,8 @@ class PatternStore:
 
     def add_pattern(self, sub_corridor: dict, hops: list,
                     dedupe_score: float = 0.9) -> str:
-        """Новый паттерн из записи HopRecorder (период + ≥2 цикла).
+        """Новый паттерн из записи HopRecorder.
+        Здесь проверка len ≥ 2. Два цикла проверяет hop_recorder.maybe_commit.
         Дубликат в том же sub (match ≥ dedupe_score) — тот же ID."""
         seq = [int(h["channel_idx"]) for h in hops]
         freqs = [float(h["freq_mhz"]) for h in hops]

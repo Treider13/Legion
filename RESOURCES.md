@@ -340,7 +340,9 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 
 pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM (seed1 `map.rpt`; у frozen seed3 `map.rpt` нет), `U_div` 114, `U_mult` 143.
 
-Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0, Fmax **75.12 МГц**).
+Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0).
+Fmax **75.12 МГц** вычислено из slack: 1/(13.888 − 0.576) нс
+(`pll_setup_0c_full.txt`, `sta.summary`). Отдельной строки Fmax в summary нет.
 Slow 85C setup **+0.772 нс**, hold +0.285. Отрицательных slack в `sta.summary` нет.
 
 RBF seed=3: `fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-12_09.27.36/legionxA4.rbf`
