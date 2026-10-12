@@ -189,7 +189,7 @@
 #define LEGION_GRID_FLAG_F0UNC    (1u << 1)
 #define LEGION_GRID_FLAG_ZC       (1u << 2)
 #define LEGION_GRID_FLAG_FCORR    (1u << 3)
-#define LEGION_GRID_FLAG_AUTONOMOUS (1u << 4) /* HDL: шагать CH_LUT */
+#define LEGION_GRID_FLAG_AUTONOMOUS (1u << 4) /* HDL: шагать HOP_LUT 0x5E */
 #define LEGION_C58_KHZ            5100000u
 #define LEGION_CH_PWR_VALID(w)    (((w) & 0x80000000u) != 0)
 #define LEGION_CH_PWR_FRAME(w)    (((w) >> 24) & LEGION_FRAME_MASK)

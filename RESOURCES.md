@@ -216,7 +216,7 @@ GPU <5 мс, IMD3 тракта, acc>0.95, TRT --bench, 60 FPS, AD9361 36 MSPS) �
 | `pattern_store.py` | add/find_match в том же sub |
 | `hopmap.py` | PatternStore + Markov fallback |
 | `effectiveness_monitor.py` | PDR low → effective |
-| `drift_detector.py` | LP < 0.7 × 3 → DRIFT |
+| `drift_detector.py` | LP < 0.7 × max(3, 3×cycle) hops → DRIFT |
 | `fpga_control.py` | `apply_predictive_jam` только confirmed |
 | `fpga_preload.py` | LUT ≤ 255 + GRID_PRI/FLAGS/RSV (фаза) |
 | `lo_sweep.py` | окна IBW 56 МГц, overlap 15%, сшивание по sample_count |
@@ -271,7 +271,7 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 | Упреждающая помеха | apply_predictive_jam: только confirmed, только в sub, amp0+amp1≤1.0 [F16] | [G4] |
 | fpga_preload | LUT ≤ 255; host пишет GRID+FS/LO; HDL legion_lut_hop шагает индекс | ТЗ |
 | EffectivenessMonitor | PDR-прокси = observed/max(expected, 1e-9); float | ТЗ |
-| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) тиков → DRIFT | ТЗ |
+| DriftDetector | доля align ±1 < 0.7 × max(3, 3×cycle) hops → DRIFT | ТЗ |
 | TARGET_SILENT | >100 мс → stop; RE_ACQUIRE need=max(8, cycle//8) при cycle>64 | ТЗ |
 | Классификатор | 3 класса (drone/wifi/noise) | ТЗ п.11 |
 | Сетка | поиск периода 2..4096; LUT 2..255 | ТЗ п.12 |
@@ -286,6 +286,10 @@ FSM: LISTENING→INITIAL_SCAN→LEARNING→CONFIRMING→JAMMING→MONITORING→
 Quick-tune: LRU 256 + `set_frequency_rx`. `bladerf_get_quick_tune`
 недоступен через `legion_fpga.py`. Очередь retune ≤ 16. fs при частых
 retune ≤ 20 Msps.
+`finish().stitched` (дубли overlap сняты, `hole` при разрыве ~4 мс между
+окнами) загружается в `HopRecorder.load_stitched`. Обучающий recorder
+не пустой: прыжки всех окон на одной сетке от `sub.f_start`.
+2400–2483 МГц → 2 окна. На эфире этот ряд не снимался.
 
 ## Универсальная сетка FHSS (12.10.2026)
 
@@ -334,9 +338,11 @@ NIOS GRID 0x51–0x57 больше не `return true` до poke — слово �
 
 ## Timing CLOSED — hop LUT 72 МГц (12.10.2026)
 
-pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM, `U_div` 114, `U_mult` 143 (`map.rpt`).
+pll_sclk = **72 МГц**. fs = **36 MSPS**. Hop в нетлисте: `U_lut_hop` 3001 ALM (seed1 `map.rpt`; у frozen seed3 `map.rpt` нет), `U_div` 114, `U_mult` 143.
 
-Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0, Fmax **75.12 МГц**).
+Timing status: **CLOSED** (seed3 Slow 0°C setup **+0.576 нс**, TNS 0).
+Fmax **75.12 МГц** вычислено из slack: 1/(13.888 − 0.576) нс
+(`pll_setup_0c_full.txt`, `sta.summary`). Отдельной строки Fmax в summary нет.
 Slow 85C setup **+0.772 нс**, hold +0.285. Отрицательных slack в `sta.summary` нет.
 
 RBF seed=3: `fpga/vendor/bladerf/hdl/quartus/legionxA4-2026-10-12_09.27.36/legionxA4.rbf`
@@ -353,22 +359,104 @@ Tag: `v1.1-rbf-hop-72mhz`. Автономный LUT: в этом RBF (лабор
 
 STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` не писался (quartus_sta CLI); цифры из `report_timing`.
 
+## Требования к пересборке
+
+- Пересборка FPGA с `legion_divider` / `legion_mult` / `legion_lut_hop` (master + vendor x40/micro).
+- QIP: `divider` → `mult` → `hop` (`bladerf-legion.qip` обеих платформ).
+- Timing Slow 0°C setup ≥ 0 (TNS 0). seed1/seed2 hop72 Slow 0°C не закрыли; frozen — seed3.
+- Лаборатория: USB, preload, hop на плате. Без платы «LUT работает на эфире» не заявлять.
+
 ## Что не сделано
 
-- Лаборатория: USB/preload/hop на плате.
+- Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет. Образ v1.2 на эфире не гонялся.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
-- Push не делался — по требованию.
+- Ветка `pr-77777-lab-host-pipeline` на origin. HEAD `9400e57`, тег `v1.2-rbf-hop-lt-68mhz` актуален. `v1.0`/`v1.1` — архив (72 МГц). «LUT работает на эфире» не заявляется.
 
 ## Ограничения
 
 - LUT: 256 слотов, индекс 8 бит, n≤255. Cycle > 255 — видимая часть, удар с host.
-- IBW: 56 МГц. Коридор шире — lo_sweep.
+- Окно одного LO: min(56 МГц AD9361, fs). Сейчас fs = 34 MSPS → 34 МГц. Коридор 400 МГц → 14 окон × 4 мс ≈ 56 мс. 2400–2483 → 3 окна.
 - Перестройка: ~4 мс. Пропуск ~4 прыжка при 1000 Гц.
 - Quick-tune: LRU на host; ~500 мкс / полный шаг ~3.8 мс — цифры [F13]/[F14], не замер.
-- Look-through: каждые 10 hops host не бьёт 1 hop (~10% hops).
-  `set_look_through` / REG_LT_* не вызываются.
+- Look-through: HDL `REG_LT_*`, не FLAGS bit4. См. секцию ниже.
 - Два передатчика: не поддерживается.
 - Обнаружение НСУ (1 Вт, 11 дБи): 5–10 км прямая видимость, 1.5–3 км город.
 - Автономия LUT: после `v1.1-rbf-hop-72mhz`. Cycle > 255 — удар с host.
-  Look-through: host не бьёт 1 из 10 hops. rolling 256 нет. «<1 мс» не заявлено.
+  rolling 256 нет. «<1 мс» не заявлено. При AUTO host не пишет LB_FTW каждый hop.
+  «LUT работает на эфире» не заявляется: лаборатория не гонялась.
 - f_rf: 40 бит, wrap при \|f0+ch·step\| ≥ 2^40. В ISM (f0 ≤ 6 ГГц, ch·step ≤ 255 МГц) не достигается.
+
+## Look-through
+
+HDL `legion_look_through` гасит ЦАП и не трогает индекс `legion_lut_hop`.
+Host на listen-hop не снимает FLAGS bit4: иначе `idx` замирает и при
+повторном AUTO загружается из `rsv`.
+
+| Регистр | Адрес | Семантика |
+|---|---|---|
+| `REG_LT_CTRL` | `0x5A` | bit0 EN, [7:4] ratio_shift |
+| `REG_LT_PERIOD` | `0x5B` | hop-тики TX-он, если значение ≤ 255 |
+| `REG_LT_WIDTH` | `0x5C` | hop-тики blank. `REG_LT_LEN` в HDL нет |
+| `REG_LT_STATUS` | `0x5D` | [0] echo_hold, [1] blank |
+
+`legion_lut_hop` выдаёт `hop_tick` на один `tx_clock` при `idx++`.
+`legion_look_through` считает эти импульсы. `enable_look_through(10, 1)`
+пишет PERIOD=9, WIDTH=1: blank, пока счётчик ∈ [9, 10), то есть 1 hop из 10
+по смене `idx`. FLAGS bit4 при этом не снимается.
+
+PERIOD > 255 и ни одного `hop_tick` — прежний счётчик сэмплов.
+Текущий такт: pll_sclk **68 МГц**, fs **34 MSPS**, DATA_CLK 136 МГц.
+Blank на плате не измерялся. «LUT работает на эфире» не заявляется.
+
+## RBF v1.2 — pll_sclk 68 МГц (12.10.2026)
+
+Причина смены частоты: hop_tick при 72 МГц не закрыл Slow 0°C
+(худший slack −0.223 нс, `lb_xlat phase_acc[31]` → `pre_q[5]`, период 13.888 нс).
+68 МГц даёт период 14.704 нс. VCO LVDS: вход 136 МГц ×4 = **544 МГц**,
+`pll_sclk` = VCO/8 = **68 МГц**. 544 МГц ниже паспортных 600 МГц;
+Quartus образ собрал, как раньше собрал 576 МГц при 72 МГц.
+
+Образ seed 3 (наибольший запас Slow 0°C): `timing_close_2026-10-12/hop-lt-68mhz/seed3/legionxA4.rbf`
+md5 `2d5ccc3dc49cd2e390195b0c8ea16149`
+sha256 `cfb4271fce0935d3522b887829efd4e17f7f980646e761237125c722f8679c12`
+Тег `v1.2-rbf-hop-lt-68mhz`.
+Старый закрытый образ v1.1 не переписывался: `legionxA4-2026-10-12_09.27.36`, md5 `6ce02ebc8b23d03e01048674fc26c9f9`, pll_sclk 72 МГц.
+
+Fmax `pll_sclk` в `sta.rpt` seed 3: Slow 85C **75.01 МГц**, Slow 0C **73.43 МГц**. Это строки отчёта, не пересчёт.
+
+| seed | каталог | ALM | M10K | DSP | Slow 85C | Slow 0C | TNS |
+|---|---|---|---|---|---|---|---|
+| 1 | `legionxA4-2026-10-12_11.09.17` | 13 281 (72 %) | 284 | 35 | +0.973 | +0.591 | 0 |
+| 2 | `legionxA4-2026-10-12_11.16.47` | 13 256 (72 %) | 284 | 35 | +0.801 | +0.325 | 0 |
+| 3 | `legionxA4-2026-10-12_11.24.01` | 13 295 (72 %) | 284 | 35 | +1.373 | +1.086 | 0 |
+
+## Архив: hop_tick при 72 МГц — Slow 0°C FAIL
+
+Quartus 23.1std.1, `bladeRF-micro` A4, revision `legion`, seeds 1–3.
+Критерий Slow 0°C setup ≥ 0 не выполнен. Худший путь не в `hop_tick`:
+`legion_lb_xlat|phase_acc[31]` → `legion_lb_xlat|pre_q[5]` на `pll_sclk`
+(seed 3, Slow 0°C, slack **−0.223 нс**, data delay 14.404 нс, relationship 13.888 нс).
+Логику не менял.
+
+| seed | каталог | ALM | M10K | DSP | Slow 85C su | Slow 0C su | TNS 0C | md5 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `legionxA4-2026-10-12_10.35.22` | 13 269 (72 %) | 284 | 35 | +0.433 | **−0.137** | −0.226 | `10e199525ee7d7177b2c295605604a04` |
+| 2 | `legionxA4-2026-10-12_10.42.36` | 13 245 (72 %) | 284 | 35 | +0.430 | **−0.042** | −0.042 | `4effd95910fc3594f9715fcf5b057657` |
+| 3 | `legionxA4-2026-10-12_10.49.40` | 13 284 (72 %) | 284 | 35 | +0.108 | **−0.223** | −0.223 | `34dd9b4692b0091ba98b851237e4d6c4` |
+
+Slow 85C у всех трёх setup > 0 и TNS 0. Эти образы на 72 МГц прошивать нельзя.
+Закрытый образ с `hop_tick` — v1.2, 68 МГц, секция выше. v1.1 (`09.27.36`, md5 `6ce02ebc…`) остаётся предыдущим закрытым образом без `hop_tick`.
+
+## Live mode
+
+```
+python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /tmp/iq --samplerate 20M
+```
+
+Цепочка: bladeRF-cli пишет FIFO → C-читатель → PFB → `CorridorDetector` → FSM → `preload_hop_sequence` → `legion_fpga.py`. Look-through — HDL `REG_LT_*`.
+
+`--corridor 2400 2483` — 83 МГц. Окно одного LO = min(56 МГц AD9361, fs) = 34 МГц → 3 окна. Потолок `IBW_HZ` 56 МГц не менялся. LO preload — центр текущего окна. FS приёмника — `--samplerate` (по умолчанию 20 MSPS). В регистр hop `CH_FS` пишется `AIR_FS_HZ` (34 MSPS, каденс ЦАП при pll_sclk 68 МГц).
+
+Без `--live` — синтетика и `FakeTransport`.
+
+Один владелец USB: на время записи FPGA стрим останавливается и поднимается снова. Задержка handoff на плате не мерялась. «LUT работает» — только после лаборатории.

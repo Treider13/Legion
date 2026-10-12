@@ -1,0 +1,4 @@
+Git Information:
+Commit Hash: 4446171
+Branch: cursor/look-through-class-drfm
+Working Directory: dirty

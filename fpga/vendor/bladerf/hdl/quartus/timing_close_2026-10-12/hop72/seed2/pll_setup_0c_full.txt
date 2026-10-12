@@ -1,0 +1,495 @@
+----------------
+; Command Info ;
+----------------
+Report Timing: Found 3 setup paths (3 violated).  Worst case slack is -0.214 
+
+Tcl Command:
+    report_timing -setup -file /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/timing_close_2026-10-12/hop72/seed2/pll_setup_0c_full.txt -to_clock [get_clocks {*pll_sclk*}] -npaths 3 -detail full_path
+
+Options:
+    -to_clock [get_clocks {*pll_sclk*}] 
+    -setup 
+    -npaths 3 
+    -detail full_path 
+    -file {/home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/timing_close_2026-10-12/hop72/seed2/pll_setup_0c_full.txt} 
+
+Delay Model:
+    Slow 1100mV 0C Model
+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Summary of Paths                                                                                                                                                                                                                                                                                                                                               ;
++--------+-----------------------------------------------+------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+; Slack  ; From Node                                     ; To Node                                  ; Launch Clock                                                                                            ; Latch Clock                                                                                             ; Relationship ; Clock Skew ; Data Delay ;
++--------+-----------------------------------------------+------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+; -0.214 ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30] ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9] ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; 0.339      ; 14.371     ;
+; -0.214 ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30] ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9] ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; 0.339      ; 14.371     ;
+; -0.210 ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[31] ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9] ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ; 13.888       ; 0.348      ; 14.376     ;
++--------+-----------------------------------------------+------------------------------------------+---------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------+--------------+------------+------------+
+
+Path #1: Setup slack is -0.214 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                           ;
+; To Node            ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.745                                                                                                  ;
+; Data Required Time ; 32.531                                                                                                  ;
+; Slack              ; -0.214 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; 0.339  ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.371 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 4     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.769       ; 48         ; 0.000  ; 2.023  ;
+;    Cell                ;        ; 5     ; 4.056       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 28    ; 5.165       ; 36         ; 0.000  ; 1.347  ;
+;    Cell                ;        ; 29    ; 9.206       ; 64         ; 0.000  ; 4.339  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.568       ; 46         ; 0.000  ; 1.926  ;
+;    Cell                ;        ; 5     ; 4.169       ; 54         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.374   ; 6.222    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.767 ;   2.023  ; RR ; IC   ; 1      ; FF_X7_Y16_N41              ; U_legion_lb_xlat|phase_acc[30]|clk                                                                         ;
+;   18.374 ;   0.607  ; RR ; CELL ; 1      ; FF_X7_Y16_N41              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                              ;
+; 32.745   ; 14.371   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.374 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y16_N41              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                              ;
+;   18.374 ;   0.000  ; RR ; CELL ; 13     ; FF_X7_Y16_N41              ; U_legion_lb_xlat|phase_acc[30]|q                                                                           ;
+;   18.786 ;   0.412  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N0          ; U_legion_lb_xlat|Add1~1|datab                                                                              ;
+;   20.211 ;   1.425  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N0          ; U_legion_lb_xlat|Add1~1|cout                                                                               ;
+;   20.211 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|cin                                                                                ;
+;   20.211 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|cout                                                                               ;
+;   20.211 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cin                                                                                ;
+;   20.268 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cout                                                                               ;
+;   20.268 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cin                                                                               ;
+;   20.268 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cout                                                                              ;
+;   20.268 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cin                                                                               ;
+;   20.325 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cout                                                                              ;
+;   20.325 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cin                                                                               ;
+;   20.325 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cout                                                                              ;
+;   20.325 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cin                                                                               ;
+;   20.382 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cout                                                                              ;
+;   20.382 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cin                                                                               ;
+;   20.382 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cout                                                                              ;
+;   20.382 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cin                                                                               ;
+;   20.456 ;   0.074  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cout                                                                              ;
+;   20.456 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cin                                                                               ;
+;   20.456 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cout                                                                              ;
+;   20.456 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|cin                                                                               ;
+;   21.001 ;   0.545  ; RF ; CELL ; 4      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|sumout                                                                            ;
+;   22.266 ;   1.265  ; FF ; IC   ; 16     ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|bx[10]                                                                             ;
+;   26.605 ;   4.339  ; FF ; CELL ; 3      ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|resulta[11]                                                                        ;
+;   27.952 ;   1.347  ; FF ; IC   ; 3      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|datad                                                                             ;
+;   28.337 ;   0.385  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|shareout                                                                          ;
+;   28.337 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|sharein                                                                           ;
+;   28.918 ;   0.581  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|cout                                                                              ;
+;   28.918 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cin                                                                               ;
+;   28.918 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cout                                                                              ;
+;   28.918 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cin                                                                               ;
+;   28.975 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cout                                                                              ;
+;   28.975 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cin                                                                                ;
+;   28.975 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cout                                                                               ;
+;   28.975 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cin                                                                                ;
+;   29.032 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cout                                                                               ;
+;   29.032 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cin                                                                                ;
+;   29.032 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cout                                                                               ;
+;   29.032 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cin                                                                               ;
+;   29.086 ;   0.054  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cout                                                                              ;
+;   29.086 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cin                                                                               ;
+;   29.086 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cout                                                                              ;
+;   29.086 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cin                                                                               ;
+;   29.222 ;   0.136  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cout                                                                              ;
+;   29.222 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cin                                                                               ;
+;   29.222 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cout                                                                              ;
+;   29.222 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cin                                                                               ;
+;   29.279 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cout                                                                              ;
+;   29.279 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cin                                                                               ;
+;   29.279 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cout                                                                              ;
+;   29.279 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|cin                                                                               ;
+;   29.780 ;   0.501  ; FF ; CELL ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|sumout                                                                            ;
+;   30.809 ;   1.029  ; FF ; IC   ; 1      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|datae                                                                     ;
+;   31.175 ;   0.366  ; FF ; CELL ; 3      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|combout                                                                   ;
+;   32.287 ;   1.112  ; FF ; IC   ; 1      ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|ay[9]                                                                             ;
+;   32.745 ;   0.458  ; FR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.601   ; 6.561    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.232 ;   1.926  ; RR ; IC   ; 75     ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|clk[0]                                                                            ;
+;   31.252 ;   1.020  ; RR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
+;   32.601 ;   1.349  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.531   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.531   ; 0.000    ;    ; uTsu ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+
+Path #2: Setup slack is -0.214 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                           ;
+; To Node            ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.745                                                                                                  ;
+; Data Required Time ; 32.531                                                                                                  ;
+; Slack              ; -0.214 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; 0.339  ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.371 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 4     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.769       ; 48         ; 0.000  ; 2.023  ;
+;    Cell                ;        ; 5     ; 4.056       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 27    ; 5.165       ; 36         ; 0.000  ; 1.347  ;
+;    Cell                ;        ; 28    ; 9.206       ; 64         ; 0.000  ; 4.339  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.568       ; 46         ; 0.000  ; 1.926  ;
+;    Cell                ;        ; 5     ; 4.169       ; 54         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.374   ; 6.222    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.767 ;   2.023  ; RR ; IC   ; 1      ; FF_X7_Y16_N41              ; U_legion_lb_xlat|phase_acc[30]|clk                                                                         ;
+;   18.374 ;   0.607  ; RR ; CELL ; 1      ; FF_X7_Y16_N41              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                              ;
+; 32.745   ; 14.371   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.374 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y16_N41              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[30]                                                              ;
+;   18.374 ;   0.000  ; RR ; CELL ; 13     ; FF_X7_Y16_N41              ; U_legion_lb_xlat|phase_acc[30]|q                                                                           ;
+;   18.786 ;   0.412  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|datab                                                                              ;
+;   20.211 ;   1.425  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|cout                                                                               ;
+;   20.211 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cin                                                                                ;
+;   20.268 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cout                                                                               ;
+;   20.268 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cin                                                                               ;
+;   20.268 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cout                                                                              ;
+;   20.268 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cin                                                                               ;
+;   20.325 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cout                                                                              ;
+;   20.325 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cin                                                                               ;
+;   20.325 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cout                                                                              ;
+;   20.325 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cin                                                                               ;
+;   20.382 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cout                                                                              ;
+;   20.382 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cin                                                                               ;
+;   20.382 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cout                                                                              ;
+;   20.382 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cin                                                                               ;
+;   20.456 ;   0.074  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cout                                                                              ;
+;   20.456 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cin                                                                               ;
+;   20.456 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cout                                                                              ;
+;   20.456 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|cin                                                                               ;
+;   21.001 ;   0.545  ; RF ; CELL ; 4      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|sumout                                                                            ;
+;   22.266 ;   1.265  ; FF ; IC   ; 16     ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|bx[10]                                                                             ;
+;   26.605 ;   4.339  ; FF ; CELL ; 3      ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|resulta[11]                                                                        ;
+;   27.952 ;   1.347  ; FF ; IC   ; 3      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|datad                                                                             ;
+;   28.337 ;   0.385  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|shareout                                                                          ;
+;   28.337 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|sharein                                                                           ;
+;   28.918 ;   0.581  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|cout                                                                              ;
+;   28.918 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cin                                                                               ;
+;   28.918 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cout                                                                              ;
+;   28.918 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cin                                                                               ;
+;   28.975 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cout                                                                              ;
+;   28.975 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cin                                                                                ;
+;   28.975 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cout                                                                               ;
+;   28.975 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cin                                                                                ;
+;   29.032 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cout                                                                               ;
+;   29.032 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cin                                                                                ;
+;   29.032 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cout                                                                               ;
+;   29.032 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cin                                                                               ;
+;   29.086 ;   0.054  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cout                                                                              ;
+;   29.086 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cin                                                                               ;
+;   29.086 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cout                                                                              ;
+;   29.086 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cin                                                                               ;
+;   29.222 ;   0.136  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cout                                                                              ;
+;   29.222 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cin                                                                               ;
+;   29.222 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cout                                                                              ;
+;   29.222 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cin                                                                               ;
+;   29.279 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cout                                                                              ;
+;   29.279 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cin                                                                               ;
+;   29.279 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cout                                                                              ;
+;   29.279 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|cin                                                                               ;
+;   29.780 ;   0.501  ; FF ; CELL ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|sumout                                                                            ;
+;   30.809 ;   1.029  ; FF ; IC   ; 1      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|datae                                                                     ;
+;   31.175 ;   0.366  ; FF ; CELL ; 3      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|combout                                                                   ;
+;   32.287 ;   1.112  ; FF ; IC   ; 1      ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|ay[9]                                                                             ;
+;   32.745 ;   0.458  ; FR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.601   ; 6.561    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.232 ;   1.926  ; RR ; IC   ; 75     ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|clk[0]                                                                            ;
+;   31.252 ;   1.020  ; RR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
+;   32.601 ;   1.349  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.531   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.531   ; 0.000    ;    ; uTsu ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+
+Path #3: Setup slack is -0.210 (VIOLATED)
+===============================================================================
++------------------------------------------------------------------------------------------------------------------------------+
+; Path Summary                                                                                                                 ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; Property           ; Value                                                                                                   ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+; From Node          ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[31]                                                           ;
+; To Node            ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                ;
+; Launch Clock       ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Latch Clock        ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk ;
+; Data Arrival Time  ; 32.741                                                                                                  ;
+; Data Required Time ; 32.531                                                                                                  ;
+; Slack              ; -0.210 (VIOLATED)                                                                                       ;
++--------------------+---------------------------------------------------------------------------------------------------------+
+
++--------------------------------------------------------------------------------------+
+; Statistics                                                                           ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Property               ; Value  ; Count ; Total Delay ; % of Total ; Min    ; Max    ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+; Setup Relationship     ; 13.888 ;       ;             ;            ;        ;        ;
+; Clock Skew             ; 0.348  ;       ;             ;            ;        ;        ;
+; Data Delay             ; 14.376 ;       ;             ;            ;        ;        ;
+; Number of Logic Levels ;        ; 4     ;             ;            ;        ;        ;
+; Physical Delays        ;        ;       ;             ;            ;        ;        ;
+;  Arrival Path          ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.769       ; 48         ; 0.000  ; 2.023  ;
+;    Cell                ;        ; 5     ; 4.047       ; 52         ; 0.378  ; 1.661  ;
+;    PLL Compensation    ;        ; 1     ; -1.603      ; 0          ; -1.603 ; -1.603 ;
+;   Data                 ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 27    ; 5.142       ; 36         ; 0.000  ; 1.347  ;
+;    Cell                ;        ; 28    ; 9.234       ; 64         ; 0.000  ; 4.339  ;
+;    uTco                ;        ; 1     ; 0.000       ; 0          ; 0.000  ; 0.000  ;
+;  Required Path         ;        ;       ;             ;            ;        ;        ;
+;   Clock                ;        ;       ;             ;            ;        ;        ;
+;    IC                  ;        ; 6     ; 3.568       ; 46         ; 0.000  ; 1.926  ;
+;    Cell                ;        ; 5     ; 4.169       ; 54         ; 0.355  ; 1.412  ;
+;    PLL Compensation    ;        ; 1     ; -2.525      ; 0          ; -2.525 ; -2.525 ;
++------------------------+--------+-------+-------------+------------+--------+--------+
+Note: Negative delays are omitted from totals when calculating percentages
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Arrival Path                                                                                                                                                                  ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 12.152   ; 12.152   ;    ;      ;        ;                            ; launch edge time                                                                                           ;
+; 18.365   ; 6.213    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   12.152 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   12.152 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   12.152 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   13.162 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   14.069 ;   0.907  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   14.447 ;   0.378  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   14.447 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   12.844 ;   -1.603 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   12.844 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   14.505 ;   1.661  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   15.344 ;   0.839  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   15.744 ;   0.400  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   17.767 ;   2.023  ; RR ; IC   ; 1      ; FF_X7_Y16_N56              ; U_legion_lb_xlat|phase_acc[31]|clk                                                                         ;
+;   18.365 ;   0.598  ; RR ; CELL ; 1      ; FF_X7_Y16_N56              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[31]                                                              ;
+; 32.741   ; 14.376   ;    ;      ;        ;                            ; data path                                                                                                  ;
+;   18.365 ;   0.000  ;    ; uTco ; 1      ; FF_X7_Y16_N56              ; legion_lb_xlat:U_legion_lb_xlat|phase_acc[31]                                                              ;
+;   18.365 ;   0.000  ; RR ; CELL ; 13     ; FF_X7_Y16_N56              ; U_legion_lb_xlat|phase_acc[31]|q                                                                           ;
+;   18.754 ;   0.389  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|dataa                                                                              ;
+;   20.207 ;   1.453  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N3          ; U_legion_lb_xlat|Add1~5|cout                                                                               ;
+;   20.207 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cin                                                                                ;
+;   20.264 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N6          ; U_legion_lb_xlat|Add1~9|cout                                                                               ;
+;   20.264 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cin                                                                               ;
+;   20.264 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N9          ; U_legion_lb_xlat|Add1~13|cout                                                                              ;
+;   20.264 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cin                                                                               ;
+;   20.321 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N12         ; U_legion_lb_xlat|Add1~17|cout                                                                              ;
+;   20.321 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cin                                                                               ;
+;   20.321 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N15         ; U_legion_lb_xlat|Add1~21|cout                                                                              ;
+;   20.321 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cin                                                                               ;
+;   20.378 ;   0.057  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N18         ; U_legion_lb_xlat|Add1~25|cout                                                                              ;
+;   20.378 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cin                                                                               ;
+;   20.378 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N21         ; U_legion_lb_xlat|Add1~29|cout                                                                              ;
+;   20.378 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cin                                                                               ;
+;   20.452 ;   0.074  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N24         ; U_legion_lb_xlat|Add1~33|cout                                                                              ;
+;   20.452 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cin                                                                               ;
+;   20.452 ;   0.000  ; RR ; CELL ; 1      ; LABCELL_X7_Y16_N27         ; U_legion_lb_xlat|Add1~37|cout                                                                              ;
+;   20.452 ;   0.000  ; RR ; IC   ; 2      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|cin                                                                               ;
+;   20.997 ;   0.545  ; RF ; CELL ; 4      ; LABCELL_X7_Y16_N30         ; U_legion_lb_xlat|Add1~41|sumout                                                                            ;
+;   22.262 ;   1.265  ; FF ; IC   ; 16     ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|bx[10]                                                                             ;
+;   26.601 ;   4.339  ; FF ; CELL ; 3      ; DSP_X8_Y13_N0              ; U_legion_lb_xlat|Add4~8|resulta[11]                                                                        ;
+;   27.948 ;   1.347  ; FF ; IC   ; 3      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|datad                                                                             ;
+;   28.333 ;   0.385  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N33         ; U_legion_lb_xlat|Add8~81|shareout                                                                          ;
+;   28.333 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|sharein                                                                           ;
+;   28.914 ;   0.581  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N36         ; U_legion_lb_xlat|Add8~77|cout                                                                              ;
+;   28.914 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cin                                                                               ;
+;   28.914 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N39         ; U_legion_lb_xlat|Add8~73|cout                                                                              ;
+;   28.914 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cin                                                                               ;
+;   28.971 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N42         ; U_legion_lb_xlat|Add8~65|cout                                                                              ;
+;   28.971 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cin                                                                                ;
+;   28.971 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N45         ; U_legion_lb_xlat|Add8~1|cout                                                                               ;
+;   28.971 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cin                                                                                ;
+;   29.028 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N48         ; U_legion_lb_xlat|Add8~5|cout                                                                               ;
+;   29.028 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cin                                                                                ;
+;   29.028 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N51         ; U_legion_lb_xlat|Add8~9|cout                                                                               ;
+;   29.028 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cin                                                                               ;
+;   29.082 ;   0.054  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N54         ; U_legion_lb_xlat|Add8~13|cout                                                                              ;
+;   29.082 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cin                                                                               ;
+;   29.082 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y13_N57         ; U_legion_lb_xlat|Add8~17|cout                                                                              ;
+;   29.082 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cin                                                                               ;
+;   29.218 ;   0.136  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N0          ; U_legion_lb_xlat|Add8~21|cout                                                                              ;
+;   29.218 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cin                                                                               ;
+;   29.218 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N3          ; U_legion_lb_xlat|Add8~25|cout                                                                              ;
+;   29.218 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cin                                                                               ;
+;   29.275 ;   0.057  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N6          ; U_legion_lb_xlat|Add8~29|cout                                                                              ;
+;   29.275 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cin                                                                               ;
+;   29.275 ;   0.000  ; FF ; CELL ; 1      ; LABCELL_X7_Y12_N9          ; U_legion_lb_xlat|Add8~33|cout                                                                              ;
+;   29.275 ;   0.000  ; FF ; IC   ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|cin                                                                               ;
+;   29.776 ;   0.501  ; FF ; CELL ; 2      ; LABCELL_X7_Y12_N12         ; U_legion_lb_xlat|Add8~37|sumout                                                                            ;
+;   30.805 ;   1.029  ; FF ; IC   ; 1      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|datae                                                                     ;
+;   31.171 ;   0.366  ; FF ; CELL ; 3      ; LABCELL_X7_Y15_N51         ; U_legion_lb_xlat|a_q~9_Duplicate|combout                                                                   ;
+;   32.283 ;   1.112  ; FF ; IC   ; 1      ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|ay[9]                                                                             ;
+;   32.741 ;   0.458  ; FR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Data Required Path                                                                                                                                                                 ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; Total    ; Incr     ; RF ; Type ; Fanout ; Location                   ; Element                                                                                                    ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+; 26.040   ; 26.040   ;    ;      ;        ;                            ; latch edge time                                                                                            ;
+; 32.601   ; 6.561    ;    ;      ;        ;                            ; clock path                                                                                                 ;
+;   26.040 ;   0.000  ;    ;      ;        ;                            ; source latency                                                                                             ;
+;   26.040 ;   0.000  ;    ;      ; 1      ; PIN_V15                    ; adi_rx_clock                                                                                               ;
+;   26.040 ;   0.000  ; RR ; IC   ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|i                                                                                       ;
+;   27.050 ;   1.010  ; RR ; CELL ; 1      ; IOIBUF_X38_Y0_N1           ; adi_rx_clock~input|o                                                                                       ;
+;   27.916 ;   0.866  ; RR ; IC   ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkin[0]   ;
+;   28.271 ;   0.355  ; RR ; CELL ; 1      ; PLLREFCLKSELECT_X54_Y7_N0  ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT|clkout     ;
+;   28.271 ;   0.000  ; RR ; IC   ; 11     ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin      ;
+;   25.746 ;   -2.525 ; RR ; COMP ; 3      ; FRACTIONALPLL_X54_Y1_N0    ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]      ;
+;   25.746 ;   0.000  ; RR ; IC   ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0] ;
+;   27.158 ;   1.412  ; RR ; CELL ; 1      ; PLLOUTPUTCOUNTER_X54_Y2_N1 ; U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk    ;
+;   27.934 ;   0.776  ; RR ; IC   ; 1      ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|inclk                ;
+;   28.306 ;   0.372  ; RR ; CELL ; 16018  ; CLKCTRL_G9                 ; U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|coreclk_buf|sd10|outclk               ;
+;   30.232 ;   1.926  ; RR ; IC   ; 75     ; DSP_X8_Y17_N0              ; U_legion_lb_xlat|Add11~8|clk[0]                                                                            ;
+;   31.252 ;   1.020  ; RR ; CELL ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
+;   32.601 ;   1.349  ;    ;      ;        ;                            ; clock pessimism removed                                                                                    ;
+; 32.531   ; -0.070   ;    ;      ;        ;                            ; clock uncertainty                                                                                          ;
+; 32.531   ; 0.000    ;    ; uTsu ; 0      ; DSP_X8_Y17_N0              ; legion_lb_xlat:U_legion_lb_xlat|pre_q[9]                                                                   ;
++----------+----------+----+------+--------+----------------------------+------------------------------------------------------------------------------------------------------------+
+
+----------------------------
+; Extra Fitter Information ;
+----------------------------
+HTML report is unavailable in plain text report export.
+
+

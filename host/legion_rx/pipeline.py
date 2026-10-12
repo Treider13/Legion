@@ -18,6 +18,10 @@
   bench     офлайн без железа: синтез → PFB → классификатор → hop map →
             замеры задержек и точности предсказания (критерии 6.4, 9.4
             проверяются здесь до выезда в лабораторию).
+  cognitive  FHSS-память. Без --live — синтетика и FakeTransport.
+            --live --corridor F1 F2 --fifo /tmp/iq: C-читатель →
+            Burst Detector → FSM → preload. Запись FPGA забирает USB
+            у bladeRF-cli и возвращает стрим (один владелец FX3).
 
 Журнал каждого прогона: host/logs/<ts>-<mode>.jsonl.
 """
@@ -407,13 +411,13 @@ def run_integrate(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
         # --- фаза управления (USB у legion_fpga.py через FpgaBridge) ---
         t_h0 = time.perf_counter()
         ok = False
-        air_fs = fc.AIR_FS_HZ  # 36e6 — эфир RBF, не USB args.fs
+        air_fs = fc.AIR_FS_HZ  # 34e6 — эфир RBF, не USB args.fs
         try:
             with fc.FpgaBridge() as br:
                 ok = br.fpga.set_air_fs_hz(int(air_fs))
                 ok = fc.apply_profile(br.fpga, p, air_fs) and ok
                 ok = br.fpga.heartbeat() and ok
-                # +2 sample @ 36e6 = 55.6 нс; MCP PIO 55.6 нс. USB >> обоих.
+                # +2 sample @ 34e6 = 58.8 нс; MCP PIO 58.8 нс. USB >> обоих.
         except Exception as e:
             log.write({"kind": "fpga_error", "cycle": cycle, "error": str(e)})
             print(f"integrate: FPGA недоступна (цикл {cycle}): {e}",
@@ -523,19 +527,281 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
 
 # ---------------------------------------------------------------- когнитив
 
+def _mix_lo_retune(iq: np.ndarray, fs: float, old_lo: float,
+                   new_lo: float) -> np.ndarray:
+    """Смена LO как у радио: RF = IF + LO не двигается, IF сдвигается на
+    (old_lo − new_lo). Не регенерация hops (фаза сетки сохранится)."""
+    df = float(old_lo) - float(new_lo)
+    if abs(df) < 1.0 or iq.size == 0:
+        return iq
+    n = np.arange(iq.shape[0], dtype=np.float64)
+    rot = np.exp(1j * (2.0 * np.pi * df / float(fs)) * n)
+    return (iq * rot).astype(np.complex64)
+
+
+def _hz_arg(v) -> float:
+    """2400 / 2400M / 2.4e9 → Гц. Число меньше 1e6 без суффикса — МГц."""
+    if isinstance(v, str):
+        t = v.strip().lower().replace(" ", "")
+        mult = 1.0
+        suffixed = False
+        for suf, m in (("msps", 1e6), ("mhz", 1e6), ("khz", 1e3),
+                       ("hz", 1.0), ("m", 1e6), ("k", 1e3)):
+            if t.endswith(suf):
+                mult = m
+                suffixed = True
+                t = t[: -len(suf)]
+                break
+        val = float(t) * mult
+    else:
+        val = float(v)
+        suffixed = False
+    if not suffixed and 0.0 < val < 1.0e6:
+        val *= 1.0e6
+    return val
+
+
+def _corridor_span(args) -> "tuple | None":
+    cor = getattr(args, "corridor", None)
+    if cor:
+        a, b = _hz_arg(cor[0]), _hz_arg(cor[1])
+        return (min(a, b), max(a, b))
+    if getattr(args, "scan_start", None) and getattr(args, "scan_end", None):
+        return (float(args.scan_start), float(args.scan_end))
+    return None
+
+
+class _RxProxy:
+    """LO для LoSweeper: пишет в текущую сессию bladeRF-cli."""
+
+    def __init__(self, live: "_LiveRx"):
+        self._live = live
+
+    def set_frequency_rx(self, hz: float) -> None:
+        self._live.tune(float(hz))
+
+
+class _LiveRx:
+    """bladeRF-cli → FIFO. stop() отдаёт USB, start() поднимает стрим снова."""
+
+    def __init__(self, args, fs_hz: float, lo_hz: float):
+        self.device = getattr(args, "device", None)
+        self.fifo = args.fifo
+        self.fs = float(fs_hz)
+        self.bw = float(getattr(args, "bw", None) or 20.0e6)
+        self.frame_samples = int(args.frame_samples)
+        self.lo = float(lo_hz)
+        self.sess = None
+        self.src = None
+        self.mon = None
+        self.streaming = False
+
+    def tune(self, hz: float) -> None:
+        self.lo = float(hz)
+        if self.sess is not None:
+            self.sess.set_frequency_rx(self.lo)
+
+    def start(self) -> None:
+        if self.streaming:
+            return
+        ensure_fifo(self.fifo)
+        self.sess = BladerfCliSession(device=self.device)
+        self.sess.set_frequency_rx(self.lo)
+        self.sess.set_samplerate_rx(self.fs)
+        self.sess.set_bandwidth_rx(self.bw)
+        self.sess.rx_config(file=self.fifo, fmt="bin", n=0)
+        self.src = FifoSource(self.fifo, self.frame_samples, self.fs)
+        self.src.start()
+        self.sess.rx_start()
+        self.mon = OverrunMonitor(self.sess)
+        self.mon.start()
+        self.streaming = True
+
+    def stop(self) -> None:
+        if self.mon is not None:
+            self.mon.stop()
+            self.mon = None
+        if self.sess is not None:
+            try:
+                # RX стоп на время записи FPGA: у FX3 один владелец USB.
+                self.sess.rx_stop()
+            except Exception:
+                pass
+            self.sess.close()
+            self.sess = None
+        if self.src is not None:
+            self.src.stop()
+            self.src = None
+        self.streaming = False
+
+    def read_frame(self, timeout: float = 0.5):
+        if self.src is None:
+            return None
+        try:
+            return self.src.frames.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    @property
+    def eof(self) -> bool:
+        return self.src is not None and self.src.eof
+
+
+class _HandoffFpga:
+    """LegionFpga через FpgaBridge. Перед записью стрим отпускает USB."""
+
+    def __init__(self, radio: _LiveRx):
+        self._radio = radio
+        self._br = None
+        self._held = False
+
+    def _ensure(self):
+        if self._br is not None:
+            return self._br.fpga
+        self._radio.stop()
+        self._held = True
+        from . import fpga_control as fc
+        br = fc.FpgaBridge()
+        br.__enter__()
+        self._br = br
+        return br.fpga
+
+    def end_tick(self) -> None:
+        if self._br is None and not self._held:
+            return
+        if self._br is not None:
+            try:
+                self._br.__exit__(None, None, None)
+            finally:
+                self._br = None
+        self._held = False
+        self._radio.start()
+
+    def close(self) -> None:
+        if self._br is not None:
+            try:
+                self._br.__exit__(None, None, None)
+            finally:
+                self._br = None
+        self._held = False
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
+
+
+def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
+    """Живой IQ: FIFO → C-читатель → PFB → CorridorDetector внутри FSM."""
+    from .cognitive import CognitiveFSM
+    from .lo_sweep import plan_windows, window_hz
+    from .pattern_store import PatternStore
+    from .pfb import Channelizer, chans_for_corridor
+    from . import fpga_control as fc
+
+    span = _corridor_span(args)
+    if span is None:
+        print("cognitive --live: нужен --corridor F_START F_END",
+              file=sys.stderr)
+        return 2
+    f1, f2 = span
+    fs = _hz_arg(getattr(args, "samplerate", None) or "20M")
+    ibw = window_hz(fc.AIR_FS_HZ)
+    windows = plan_windows(f1, f2, ibw)
+    lo = float(windows[0]["f_center"])
+    log.write({"kind": "live", "f_start": f1, "f_end": f2,
+               "fs_rx_hz": fs, "fpga_fs_hz": fc.AIR_FS_HZ,
+               "lo_hz": lo, "windows": len(windows),
+               "lo_sweep": (f2 - f1) > ibw})
+    if not _preflight(args, log):
+        return 2
+    radio = _LiveRx(args, fs, lo)
+    fpga = _HandoffFpga(radio)
+    store = PatternStore()
+    fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
+                       radio=_RxProxy(radio), scan_corridor=(f1, f2),
+                       frame_dt_s=args.frame_samples / fs,
+                       frame_samples=args.frame_samples, ibw_hz=ibw)
+    fsm.fpga_fs_hz = fc.AIR_FS_HZ
+    ch = Channelizer(args.n_chans, args.taps, xp=np)
+    rebuilt = {"done": False}
+    frames = 0
+    try:
+        radio.start()
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < args.duration_s:
+            fr = radio.read_frame()
+            if fr is None:
+                if radio.src is not None and radio.src.eof:
+                    break
+                continue
+            freqs = np.asarray([ch.channel_freq(k, fs) + fsm.lo_hz
+                                for k in range(ch.m)])
+            try:
+                y = ch.channelize(fr.complex64())
+                pwr = np.asarray(ch.ch_power(y), dtype=np.float64)
+                rec = fsm.tick(pwr, freqs, fr.t_done)
+            finally:
+                fpga.end_tick()
+            frames += 1
+            if (not rebuilt["done"]) and fsm.sub is not None:
+                width = fsm.sub["f_end"] - fsm.sub["f_start"]
+                m = chans_for_corridor(width)
+                if m != ch.m:
+                    ch = Channelizer(m, args.taps, xp=np)
+                    fsm.n_chans = m
+                    store.n_chans = m
+                    if fsm.rec is not None:
+                        fsm.rec.n_chans = m
+                    from .hopmap import FallbackPredictor
+                    fsm.fallback = FallbackPredictor(m, fsm.dt)
+                    log.write({"kind": "adaptive_grid", "n_chans": m,
+                               "width_hz": width,
+                               "f_start": fsm.sub["f_start"],
+                               "f_end": fsm.sub["f_end"]})
+                rebuilt["done"] = True
+            if pub and frames % 20 == 0:
+                pub.send_ch_pwr(pwr)
+            log.write({"kind": "tick", "i": frames, "state": rec["state"],
+                       "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
+                       "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
+        verdict = {
+            "live": True, "frames": frames,
+            "f_start": f1, "f_end": f2, "lo_hz": fsm.lo_hz,
+            "fs_rx_hz": fs, "fpga_fs_hz": fsm.fpga_fs_hz,
+            "lo_sweep_windows": len(windows),
+            "states_path": [t["to"] for t in fsm.transitions],
+            "final_state": fsm.state, "jams_sent": fsm.jams_sent,
+            "overruns": radio.mon.verdict() if radio.mon else None,
+        }
+        log.write({"kind": "verdict", **verdict})
+        print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
+        return 0
+    finally:
+        fpga.close()
+        radio.stop()
+
+
 def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
-    """Когнитивный контур (ТЗ п.8): LISTENING→…→JAMMING→MONITORING→…
-    bench: синтез FHSS на фиксированном LO (CLASS_LO_HZ). Смена fsm.lo_hz
-    меняет подписи freqs, waveform не перестраивается. --live: FIFO+USB."""
+    """Когнитивный контур. --live: FIFO и FPGA. Без флага: синтетика."""
+    if getattr(args, "live", False):
+        return _run_cognitive_live(args, log, pub)
     from .cognitive import CognitiveFSM
     from .cognitive import LISTENING, MONITORING, TARGET_SILENT
+    from .lo_sweep import plan_windows, window_hz
     from .pattern_store import PatternStore
     from .pfb import Channelizer, chans_for_corridor
     from .synth.protocols import _fhss_modulated, FS_DEFAULT
     from .synth import CLASS_LO_HZ
+    from . import fpga_control as fc
 
     fs = FS_DEFAULT
     lo = CLASS_LO_HZ.get(args.protocol, args.freq)
+    scan = _corridor_span(args)
+    ibw = window_hz(fc.AIR_FS_HZ)
+    if scan and (scan[1] - scan[0]) > ibw:
+        windows = plan_windows(scan[0], scan[1], ibw)
+        log.write({"kind": "lo_sweep", "f_start": scan[0], "f_end": scan[1],
+                   "windows": len(windows),
+                   "lo_hz": windows[0]["f_center"]})
     p = dict(hop_rate=args.hop_rate, band=(lo - 8e6, lo + 8e6),
              n_hops=args.n_hops, mod="flrc", baud=1.3e6, dev=325e3,
              airtime=400e-6)
@@ -551,32 +817,34 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     iq = np.concatenate([seg1, sil, seg3])
 
     store = PatternStore()
-    from . import fpga_control as fc  # вставляет fpga/host в sys.path
     from legion_gateway import FakeTransport
 
     fpga = fc.lf.LegionFpga(FakeTransport(board="bladerf2"))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
-    scan = None
-    if getattr(args, "scan_start", None) and getattr(args, "scan_end", None):
-        scan = (float(args.scan_start), float(args.scan_end))
     fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
                        frame_dt_s=args.frame_samples / fs,
-                       scan_corridor=scan, frame_samples=args.frame_samples)
+                       scan_corridor=scan, frame_samples=args.frame_samples,
+                       ibw_hz=ibw)
+    fsm.fpga_fs_hz = fc.AIR_FS_HZ
     FRAME = args.frame_samples
     rebuilt = {"done": False}
-    lo_mismatch = {"done": False}
+    synth_lo = float(lo)
     n_fr = len(iq) // FRAME
     for i in range(n_fr):
+        if abs(fsm.lo_hz - synth_lo) > 1.0:
+            start = i * FRAME
+            iq[start:] = _mix_lo_retune(iq[start:], fs, synth_lo, fsm.lo_hz)
+            log.write({"kind": "bench_lo_retune", "old_lo_hz": synth_lo,
+                       "new_lo_hz": fsm.lo_hz,
+                       "mix_df_hz": synth_lo - fsm.lo_hz,
+                       "tick": i, "sample": start})
+            synth_lo = float(fsm.lo_hz)
+            lo = synth_lo
         seg = iq[i * FRAME: (i + 1) * FRAME]
         freqs = np.asarray([ch.channel_freq(k, fs) + fsm.lo_hz
                             for k in range(ch.m)])
         y = ch.channelize(seg)
         rec = fsm.tick(ch.ch_power(y), freqs, (i + 1) * FRAME / fs)
-        if (not lo_mismatch["done"]) and abs(fsm.lo_hz - lo) > 1.0:
-            log.write({"kind": "bench_lo_mismatch", "synth_lo_hz": lo,
-                       "fsm_lo_hz": fsm.lo_hz, "tick": i,
-                       "note": "IQ на synth_lo; смена LO не двигает waveform"})
-            lo_mismatch["done"] = True
         # адаптивная канализация (ТЗ п.12): n_chans = ширина sub / 200 кГц
         if (not rebuilt["done"]) and fsm.sub is not None:
             width = fsm.sub["f_end"] - fsm.sub["f_start"]
@@ -678,7 +946,7 @@ def main() -> int:
     p5.add_argument("--udp-port", type=int, default=5590)
     cl(p5)
     p6 = sub.add_parser("cognitive",
-                        help="когнитивный контур FHSS-памяти (bench, FakeTransport)")
+                        help="FHSS-память: синтетика или --live FIFO")
     p6.add_argument("--protocol", default="elrs_24")
     p6.add_argument("--freq", type=float, default=2400e6)
     p6.add_argument("--hop-rate", type=float, default=1000.0)
@@ -694,6 +962,16 @@ def main() -> int:
     p6.add_argument("--udp-port", type=int, default=5590)
     p6.add_argument("--scan-start", type=float, default=None)
     p6.add_argument("--scan-end", type=float, default=None)
+    p6.add_argument("--corridor", nargs=2, metavar=("F_START", "F_END"),
+                    help="коридор: 2400 2483 = МГц, либо Гц если ≥ 1e6")
+    p6.add_argument("--live", action="store_true",
+                    help="живой IQ с bladeRF-cli, не синтетика")
+    p6.add_argument("--samplerate", default="20M",
+                    help="RX samplerate живого режима")
+    p6.add_argument("--fifo", default=FIFO_PATH,
+                    help="FIFO bladeRF-cli (по умолчанию /tmp/iq)")
+    p6.add_argument("--device", default=None)
+    p6.add_argument("--bw", type=float, default=20.0e6)
 
     args = ap.parse_args()
     log = JsonLog(args.mode)

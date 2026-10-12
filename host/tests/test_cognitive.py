@@ -102,11 +102,13 @@ def test_extract_subcorridor_exact():
 # ---------------------------------------------------------------- recorder
 
 def test_hop_recorder_commits_at_16():
+    """Период CYCLE=12 виден после ≥8 сравнений (кадр ≥20) и коммитится
+    при ≥2 циклах. 16 кадров период ещё не закрывают."""
     sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
     rec = HopRecorder(sub)
-    for i, v in enumerate(air_cycle(20)):
+    for i, v in enumerate(air_cycle(40)):
         rec.update(v, _freqs(), (i + 1) * 1e-3)
-    assert rec.valid_count >= 16
+    assert rec.valid_count >= 2 * len(CYCLE)
     store = PatternStore()
     pid = rec.maybe_commit(store)
     assert pid and store.patterns[pid]["status"] == "pending"
@@ -170,7 +172,7 @@ def test_drift_detector():
     d = DriftDetector()
     assert d.update(0.5)["drift"] is False
     assert d.update(0.6)["drift"] is False
-    assert d.update(0.4)["drift"] is True  # 3 цикла < 0.7
+    assert d.update(0.4)["drift"] is True  # 3 hops < 0.7
     d.reset()
     assert d.update(0.9)["drift"] is False
 

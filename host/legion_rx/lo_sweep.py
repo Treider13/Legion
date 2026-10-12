@@ -13,7 +13,12 @@ from __future__ import annotations
 import math
 from collections import OrderedDict
 
-IBW_HZ = 56.0e6
+IBW_HZ = 56.0e6          # потолок аналогового фильтра AD9361
+
+
+def window_hz(fs_hz: float, ceiling_hz: float = IBW_HZ) -> float:
+    """Окно одного LO: min(потолок AD9361, fs). fs=34e6 → 34 МГц."""
+    return min(float(ceiling_hz), float(fs_hz))
 OVERLAP = 0.15          # доля перекрытия соседних окон
 SCAN_DWELL_S = 4.0e-3   # dwell окна; полный retune ~3.8 мс [F13]
 RETUNE_QUEUE = 16

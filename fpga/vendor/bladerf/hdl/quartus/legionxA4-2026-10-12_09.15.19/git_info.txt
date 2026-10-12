@@ -1,0 +1,4 @@
+Git Information:
+Commit Hash: 98c3baa
+Branch: pr-77777-lab-host-pipeline
+Working Directory: dirty

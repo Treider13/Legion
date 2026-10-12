@@ -1,7 +1,8 @@
 """DriftDetector — детект сбоя паттерна (фаза 4 ТЗ).
 
 Метрика: доля align ±1 живых скачков с паттерном. score < 0.7
-на протяжении need тиков (need = max(3, 3×cycle_length)) → DRIFT.
+на протяжении need hops (need = max(3, 3×cycle_length)) → DRIFT.
+FSM зовёт update() только при смене канала, не на каждый кадр.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ class DriftDetector:
         self._window: list[float] = []
 
     def update(self, lp_score: float) -> dict:
-        """Тик с LP score текущего цикла → {drift, score, strikes}."""
+        """Один hop с LP score → {drift, score, strikes}."""
         s = float(lp_score)
         self._window.append(s)
         self._window = self._window[-16:]
@@ -32,7 +33,7 @@ class DriftDetector:
                 "strikes": self._strikes}
 
     def set_cycles(self, cycle_length: int) -> None:
-        """need = max(3, 3×cycle_length) тиков, не 3 кадра."""
+        """need = max(3, 3×cycle_length) hops, не кадры FSM."""
         self.need = max(3, 3 * max(1, int(cycle_length)))
 
     def reset(self) -> None:

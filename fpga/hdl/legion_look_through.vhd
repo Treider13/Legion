@@ -1,6 +1,9 @@
 -- ============================================================================
 -- LEGION — look-through на стоящем LO (не SEARCH mute, не 6 мс SETTLE).
--- TX-домен: раз в PERIOD на WIDTH сэмплов нули на ЦАП, каденс valid жив.
+-- hop_tick (tx_clock, один такт на idx++): при PERIOD ≤ 255 единица — hop.
+--   blank, пока счётчик hop ∈ [PERIOD, PERIOD+WIDTH).
+-- PERIOD > 255 и hop_tick не было — прежний счётчик сэмплов.
+-- TX-домен: нули на ЦАП, каденс valid жив.
 -- RX-домен: энергия окна TX-он vs TX-офф. TX-офф тише → echo_hold (своё
 -- эхо, гейт закрыть). Энергия осталась → чужой сигнал, гейт жив.
 -- CDC: blank/enable — 2FF (Cummings SNUG2008: однобит). ratio — квазистатик
@@ -19,6 +22,7 @@ entity legion_look_through is
         enable      : in  std_logic;
         period      : in  unsigned(31 downto 0);
         width       : in  unsigned(31 downto 0);
+        hop_tick    : in  std_logic := '0';
         ratio_shift : in  unsigned(3 downto 0);
         det_thr     : in  unsigned(31 downto 0);
         win_shift   : in  unsigned(3 downto 0);
@@ -40,6 +44,9 @@ architecture rtl of legion_look_through is
     signal cmp_ge_q  : std_logic;
     signal blank_r   : std_logic;
     signal en_ok     : std_logic;
+    signal hop_seen  : std_logic;
+    signal hcount    : unsigned(31 downto 0);
+    signal hblank    : std_logic;
 
     signal blank_meta, blank_rx : std_logic;
     signal en_meta, en_rx       : std_logic;
@@ -67,10 +74,13 @@ begin
     status(1) <= blank_r;
     status(31 downto 2) <= (others => '0');
 
-    -- Каденс как mux: каждый 2-й tx_clock = один сэмпл ЦАП.
-    -- count 0..period-1 он, period..period+width-1 офф (wrap живой).
-    -- blank: count_q/period_q → cmp_ge_q. +1..2 tx_clock vs count (хост).
-    blank_r <= cmp_ge_q;
+    -- Каденс сэмплов: каждый 2-й tx_clock.
+    -- count 0..period-1 он, period..period+width-1 офф.
+    -- PERIOD ≤ 255 — hop-тики (индекс LUT 8 бит). До первого hop_tick blank=0,
+    -- иначе сэмпльный счётчик с числом 9 резал бы каждый 10-й сэмпл.
+    -- PERIOD > 255 и hop_tick нет — прежний сэмпльный fallback.
+    blank_r <= hblank when hop_seen = '1' or period <= to_unsigned(255, 32)
+               else cmp_ge_q;
     tx_fsm : process(tx_clock, tx_reset)
     begin
         if tx_reset = '1' then
@@ -107,6 +117,37 @@ begin
                             count <= count + 1;
                         end if;
                     end if;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- PERIOD ≤ 255: blank = hblank (hop_tick).
+    -- PERIOD > 255: fallback на сэмплы.
+    hop_fsm : process(tx_clock, tx_reset)
+        variable nxt : unsigned(31 downto 0);
+    begin
+        if tx_reset = '1' then
+            hop_seen <= '0';
+            hcount   <= (others => '0');
+            hblank   <= '0';
+        elsif rising_edge(tx_clock) then
+            if en_ok = '0' then
+                hop_seen <= '0';
+                hcount   <= (others => '0');
+                hblank   <= '0';
+            elsif hop_tick = '1' then
+                hop_seen <= '1';
+                if hcount + 1 >= period + width then
+                    nxt := (others => '0');
+                else
+                    nxt := hcount + 1;
+                end if;
+                hcount <= nxt;
+                if period /= 0 and nxt >= period then
+                    hblank <= '1';
+                else
+                    hblank <= '0';
                 end if;
             end if;
         end if;

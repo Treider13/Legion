@@ -1,0 +1,160 @@
+Flow report for legion
+Sun Oct 11 18:20:27 2026
+Quartus Prime Version 23.1std.1 Build 993 05/14/2024 SC Lite Edition
+
+
+---------------------
+; Table of Contents ;
+---------------------
+  1. Legal Notice
+  2. Flow Summary
+  3. Flow Settings
+  4. Flow Non-Default Global Settings
+  5. Flow Elapsed Time
+  6. Flow OS Summary
+  7. Flow Log
+  8. Flow Messages
+  9. Flow Suppressed Messages
+
+
+
+----------------
+; Legal Notice ;
+----------------
+Copyright (C) 2024  Intel Corporation. All rights reserved.
+Your use of Intel Corporation's design tools, logic functions 
+and other software and tools, and any partner logic 
+functions, and any output files from any of the foregoing 
+(including device programming or simulation files), and any 
+associated documentation or information are expressly subject 
+to the terms and conditions of the Intel Program License 
+Subscription Agreement, the Intel Quartus Prime License Agreement,
+the Intel FPGA IP License Agreement, or other applicable license
+agreement, including, without limitation, that your use is for
+the sole purpose of programming logic devices manufactured by
+Intel and sold by Intel or its authorized distributors.  Please
+refer to the applicable agreement for further details, at
+https://fpgasoftware.intel.com/eula.
+
+
+
++----------------------------------------------------------------------------------+
+; Flow Summary                                                                     ;
++---------------------------------+------------------------------------------------+
+; Flow Status                     ; Successful - Sun Oct 11 18:20:27 2026          ;
+; Quartus Prime Version           ; 23.1std.1 Build 993 05/14/2024 SC Lite Edition ;
+; Revision Name                   ; legion                                         ;
+; Top-level Entity Name           ; bladerf                                        ;
+; Family                          ; Cyclone V                                      ;
+; Device                          ; 5CEBA4F23C8                                    ;
+; Timing Models                   ; Final                                          ;
+; Logic utilization (in ALMs)     ; 15,283 / 18,480 ( 83 % )                       ;
+; Total registers                 ; 28172                                          ;
+; Total pins                      ; 173 / 224 ( 77 % )                             ;
+; Total virtual pins              ; 0                                              ;
+; Total block memory bits         ; 2,258,912 / 3,153,920 ( 72 % )                 ;
+; Total DSP Blocks                ; 36 / 66 ( 55 % )                               ;
+; Total HSSI RX PCSs              ; 0                                              ;
+; Total HSSI PMA RX Deserializers ; 0                                              ;
+; Total HSSI TX PCSs              ; 0                                              ;
+; Total HSSI PMA TX Serializers   ; 0                                              ;
+; Total PLLs                      ; 3 / 4 ( 75 % )                                 ;
+; Total DLLs                      ; 0 / 4 ( 0 % )                                  ;
++---------------------------------+------------------------------------------------+
+
+
++-----------------------------------------+
+; Flow Settings                           ;
++-------------------+---------------------+
+; Option            ; Setting             ;
++-------------------+---------------------+
+; Start date & time ; 10/11/2026 18:11:52 ;
+; Main task         ; Compilation         ;
+; Revision Name     ; legion              ;
++-------------------+---------------------+
+
+
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Flow Non-Default Global Settings                                                                                                                                                                                                  ;
++----------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------+--------------------+-------------+------------+
+; Assignment Name                              ; Value                                                                                                                              ; Default Value      ; Entity Name ; Section Id ;
++----------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------+--------------------+-------------+------------+
+; ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP          ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; COMPILER_SIGNATURE_ID                        ; 40350040311625.179173151225968                                                                                                     ; --                 ; --          ; --         ;
+; ENABLE_DRC_SETTINGS                          ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; ENABLE_SIGNALTAP                             ; Off                                                                                                                                ; --                 ; --          ; --         ;
+; FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION   ; Always                                                                                                                             ; Automatically      ; --          ; --         ;
+; FITTER_AUTO_EFFORT_DESIRED_SLACK_MARGIN      ; 1 ns                                                                                                                               ; 0 ns               ; --          ; --         ;
+; FITTER_EFFORT                                ; Standard Fit                                                                                                                       ; Auto Fit           ; --          ; --         ;
+; IOBANK_VCCIO                                 ; 2.5V                                                                                                                               ; --                 ; --          ; 4A         ;
+; IOBANK_VCCIO                                 ; 3.3V                                                                                                                               ; --                 ; --          ; 8A         ;
+; IOBANK_VCCIO                                 ; 2.5V                                                                                                                               ; --                 ; --          ; 5B         ;
+; IOBANK_VCCIO                                 ; 1.8V                                                                                                                               ; --                 ; --          ; 3B         ;
+; IOBANK_VCCIO                                 ; 3.3V                                                                                                                               ; --                 ; --          ; 5A         ;
+; IOBANK_VCCIO                                 ; 1.8V                                                                                                                               ; --                 ; --          ; 3A         ;
+; IOBANK_VCCIO                                 ; 3.3V                                                                                                                               ; --                 ; --          ; 7A         ;
+; MISC_FILE                                    ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/nios_system/synthesis/../nios_system.cmp         ; --                 ; --          ; --         ;
+; MISC_FILE                                    ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/nios_system/synthesis/../../nios_system.qsys     ; --                 ; --          ; --         ;
+; NUM_PARALLEL_PROCESSORS                      ; All                                                                                                                                ; --                 ; --          ; --         ;
+; OPTIMIZATION_TECHNIQUE                       ; Speed                                                                                                                              ; Balanced           ; --          ; --         ;
+; OPTIMIZE_POWER_DURING_FITTING                ; Off                                                                                                                                ; Normal compilation ; --          ; --         ;
+; OUTPUT_IO_TIMING_FAR_END_VMEAS               ; Half Signal Swing                                                                                                                  ; --                 ; --          ; --         ;
+; OUTPUT_IO_TIMING_FAR_END_VMEAS               ; Half Signal Swing                                                                                                                  ; --                 ; --          ; --         ;
+; OUTPUT_IO_TIMING_NEAR_END_VMEAS              ; Half Vccio                                                                                                                         ; --                 ; --          ; --         ;
+; OUTPUT_IO_TIMING_NEAR_END_VMEAS              ; Half Vccio                                                                                                                         ; --                 ; --          ; --         ;
+; PHYSICAL_SYNTHESIS_COMBO_LOGIC               ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; PHYSICAL_SYNTHESIS_EFFORT                    ; Extra                                                                                                                              ; Normal             ; --          ; --         ;
+; PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION      ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; PHYSICAL_SYNTHESIS_REGISTER_RETIMING         ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; PROJECT_OUTPUT_DIRECTORY                     ; output_files                                                                                                                       ; --                 ; --          ; --         ;
+; QII_AUTO_PACKED_REGISTERS                    ; Normal                                                                                                                             ; Auto               ; --          ; --         ;
+; ROUTER_CLOCKING_TOPOLOGY_ANALYSIS            ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ; On                                                                                                                                 ; Auto               ; --          ; --         ;
+; ROUTER_TIMING_OPTIMIZATION_LEVEL             ; MAXIMUM                                                                                                                            ; Normal             ; --          ; --         ;
+; SEARCH_PATH                                  ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/bladeRF_nios/mem_init/                           ; --                 ; --          ; --         ;
+; SLD_FILE                                     ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/nios_system/synthesis/nios_system.regmap         ; --                 ; --          ; --         ;
+; SLD_FILE                                     ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/nios_system/synthesis/nios_system.debuginfo      ; --                 ; --          ; --         ;
+; SLD_INFO                                     ; QSYS_NAME nios_system HAS_SOPCINFO 1 GENERATION_ID 1790684667                                                                      ; --                 ; nios_system ; --         ;
+; SOPCINFO_FILE                                ; /home/treider/Legion/fpga/vendor/bladerf/hdl/quartus/work/bladerf-micro-A4-legion/nios_system/synthesis/../../nios_system.sopcinfo ; --                 ; --          ; --         ;
+; SYNTHESIS_ONLY_QIP                           ; On                                                                                                                                 ; --                 ; --          ; --         ;
+; SYNTH_PROTECT_SDC_CONSTRAINT                 ; On                                                                                                                                 ; Off                ; --          ; --         ;
+; TOP_LEVEL_ENTITY                             ; bladerf                                                                                                                            ; legion             ; --          ; --         ;
+; VHDL_INPUT_VERSION                           ; VHDL_2008                                                                                                                          ; VHDL_1993          ; --          ; --         ;
++----------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------+--------------------+-------------+------------+
+
+
++--------------------------------------------------------------------------------------------------------------------------+
+; Flow Elapsed Time                                                                                                        ;
++----------------------+--------------+-------------------------+---------------------+------------------------------------+
+; Module Name          ; Elapsed Time ; Average Processors Used ; Peak Virtual Memory ; Total CPU Time (on all processors) ;
++----------------------+--------------+-------------------------+---------------------+------------------------------------+
+; Analysis & Synthesis ; 00:00:57     ; 2.0                     ; 1297 MB             ; 00:01:56                           ;
+; Fitter               ; 00:06:43     ; 1.5                     ; 3413 MB             ; 00:21:13                           ;
+; Timing Analyzer      ; 00:00:31     ; 4.3                     ; 1781 MB             ; 00:02:02                           ;
+; Assembler            ; 00:00:08     ; 1.0                     ; 754 MB              ; 00:00:09                           ;
+; Total                ; 00:08:19     ; --                      ; --                  ; 00:25:20                           ;
++----------------------+--------------+-------------------------+---------------------+------------------------------------+
+
+
++-----------------------------------------------------------------------------------------+
+; Flow OS Summary                                                                         ;
++----------------------+---------------------+--------------+------------+----------------+
+; Module Name          ; Machine Hostname    ; OS Name      ; OS Version ; Processor type ;
++----------------------+---------------------+--------------+------------+----------------+
+; Analysis & Synthesis ; treider-LOQ-15IRX10 ; Ubuntu 26.04 ; 26         ; x86_64         ;
+; Fitter               ; treider-LOQ-15IRX10 ; Ubuntu 26.04 ; 26         ; x86_64         ;
+; Timing Analyzer      ; treider-LOQ-15IRX10 ; Ubuntu 26.04 ; 26         ; x86_64         ;
+; Assembler            ; treider-LOQ-15IRX10 ; Ubuntu 26.04 ; 26         ; x86_64         ;
++----------------------+---------------------+--------------+------------+----------------+
+
+
+------------
+; Flow Log ;
+------------
+quartus_map --read_settings_files=on --write_settings_files=off bladerf -c legion
+quartus_fit --read_settings_files=on --write_settings_files=off bladerf -c legion
+quartus_sta bladerf -c legion
+quartus_asm --read_settings_files=on --write_settings_files=off bladerf -c legion
+
+
+

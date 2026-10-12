@@ -41,6 +41,7 @@ entity legion_regs is
         tx_lb_delay   : out unsigned(11 downto 0);
         tx_lb_ftw     : out unsigned(31 downto 0);
         tx_hop_auto   : out std_logic;
+        tx_hop_tick   : out std_logic;
         tx_lb_delay1  : out unsigned(11 downto 0);
         tx_lb_ftw1    : out unsigned(31 downto 0);
         tx_lb_amp0    : out unsigned(15 downto 0);
@@ -188,6 +189,7 @@ architecture rtl of legion_regs is
     signal hlutd_meta, hlutd_tx : std_logic_vector(7 downto 0);
     signal hlutt_meta, hlutt_tx, hlutt_tx_d : std_logic;
     signal hop_auto             : std_logic;
+    signal hop_tick_s           : std_logic;
     signal hop_ftw              : unsigned(31 downto 0);
     signal hop_ch               : unsigned(7 downto 0);
     signal hopch_meta, hopch_nios : unsigned(7 downto 0);
@@ -471,6 +473,7 @@ begin
     tx_lb_delay   <= unsigned(lbd_tx);
     tx_lb_ftw     <= hop_ftw when hop_auto = '1' else unsigned(lbf_tx);
     tx_hop_auto   <= hop_auto;
+    tx_hop_tick   <= hop_tick_s;
     U_lut_hop : entity work.legion_lut_hop
         port map (
             clk          => tx_clock,
@@ -490,7 +493,8 @@ begin
             lut_data     => unsigned(hlutd_tx),
             hop_auto     => hop_auto,
             hop_ch       => hop_ch,
-            hop_ftw      => hop_ftw
+            hop_ftw      => hop_ftw,
+            hop_tick     => hop_tick_s
         );
     tx_lb_delay1  <= unsigned(lbd1_tx);
     tx_lb_ftw1    <= unsigned(lbf1_tx);

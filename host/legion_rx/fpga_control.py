@@ -41,7 +41,7 @@ PLL_SETTLE_S = 0.006  # AD9361 LO settle 6 мс (lock 20–50 мкс, запас
 # RBF 72 МГц: PIO не чаще 1 раза в 4 клока = 55.556 нс; USB bulk >> этого.
 MCP_PIO_MIN_S = lf.mcp_pio_min_s()
 PIPELINE_EXTRA_SAMPLES = lf.PIPELINE_EXTRA_SAMPLES
-AIR_FS_HZ = lf.AIR_FS_FOR_PLL_SCLK_HZ  # 36e6 — эфир AD9361, не USB RX
+AIR_FS_HZ = lf.AIR_FS_FOR_PLL_SCLK_HZ  # 34e6 — эфир AD9361, не USB RX
 
 _log = logging.getLogger(__name__)
 _last_pio_t: float | None = None

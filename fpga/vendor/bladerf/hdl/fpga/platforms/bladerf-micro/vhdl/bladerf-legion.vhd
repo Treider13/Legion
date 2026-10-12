@@ -205,6 +205,7 @@ architecture legion of bladerf is
     signal lg_tx_lb_delay   : unsigned(11 downto 0);
     signal lg_tx_lb_ftw     : unsigned(31 downto 0);
     signal lg_tx_hop_auto   : std_logic;
+    signal lg_tx_hop_tick   : std_logic;
     signal lg_mix_ftw0      : unsigned(31 downto 0);
     signal lg_tx_lb_delay1  : unsigned(11 downto 0);
     signal lg_tx_lb_ftw1    : unsigned(31 downto 0);
@@ -1226,6 +1227,7 @@ begin
         tx_lb_delay   => lg_tx_lb_delay,
         tx_lb_ftw     => lg_tx_lb_ftw,
         tx_hop_auto   => lg_tx_hop_auto,
+        tx_hop_tick   => lg_tx_hop_tick,
         tx_lb_delay1  => lg_tx_lb_delay1,
         tx_lb_ftw1    => lg_tx_lb_ftw1,
         tx_lb_amp0    => lg_tx_lb_amp0,
@@ -1300,6 +1302,7 @@ begin
         enable      => lg_tx_lt_en,
         period      => lg_tx_lt_period,
         width       => lg_tx_lt_width,
+        hop_tick    => lg_tx_hop_tick,
         ratio_shift => lg_tx_lt_ratio,
         det_thr     => unsigned(lg_det_thr_rx),
         win_shift   => lg_det_shift_rx,
