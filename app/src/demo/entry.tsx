@@ -1,5 +1,11 @@
-import { OperatorHome } from "./OperatorHome";
+import { lazy, Suspense } from "react";
+
+const LiveApp = lazy(() => import("../App.tsx"));
 
 export function LegionEntry() {
-  return <OperatorHome />;
+  return (
+    <Suspense fallback={null}>
+      <LiveApp />
+    </Suspense>
+  );
 }

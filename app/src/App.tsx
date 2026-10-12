@@ -11,10 +11,12 @@ import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChro
 import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { catalogById } from "./sdr/catalog";
+import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
 
 import { BootSequence } from "./components/boot/BootSequence";
+import { FrequencyField } from "./components/cinema/FrequencyField";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
 import { coolingWarn, heroStatusLine } from "./components/cinema/status";
 import { modeOf } from "./sense/modes";
@@ -199,11 +201,8 @@ function App() {
         sourceNote={connection.note}
         range={formatDisplayRange(range)}
         rangeNote={rangeBandCount ? `границы из списка (${rangeBandCount})` : "границы F1–F2"}
-        history={
-          <p className="cinema-whisper">
-            Живой спектр и водопад — в окне оператора. Иконка LEGION в меню появляется после сборки образа FPGA.
-          </p>
-        }
+        spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
+        history={<FrequencyField />}
       />
 
       {cooling && (

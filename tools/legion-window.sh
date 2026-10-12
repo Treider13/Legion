@@ -1,8 +1,7 @@
 #!/bin/bash
-# Окно оператора: управление, мониторинг, живой водопад.
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cd "$ROOT" || exit 1
-if [ -x "$ROOT/.venv/bin/python" ]; then
-  exec "$ROOT/.venv/bin/python" -m host.legion_rx.main_app
+# Иконка меню открывает основное приложение: спектр, водопад и настройки.
+if [ -x /usr/bin/legion ]; then
+  exec /usr/bin/legion
 fi
-exec python3 -m host.legion_rx.main_app
+echo "Нет /usr/bin/legion. Из каталога репозитория: ./tools/install_desktop.sh" >&2
+exit 1
