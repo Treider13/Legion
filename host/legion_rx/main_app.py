@@ -280,8 +280,74 @@ def run_ui(app: App) -> None:
         subprocess.Popen(["xdg-open", str(app.log_path)])
 
     tk.Button(controls, text="ЖУРНАЛ", command=open_log).grid(row=9, column=1, sticky="w")
+
+    from .test_capture import TEST_SECONDS, apply_capture, maybe_save_test
+
+    app.fields = {
+        "f0": f0, "f1": f1, "jam": jam, "mute": mute,
+        "lna": lna, "retune": retune,
+    }
+
+    def on_test():
+        try:
+            app.pending.update({
+                "f_start_hz": float(f0.get()),
+                "f_end_hz": float(f1.get()),
+                "jam_duration_s": float(jam.get()),
+                "mute_ns": int(float(mute.get())),
+                "lna_gain_db": float(lna.get()),
+            })
+        except ValueError:
+            status.set("тест: в полях числа")
+            return
+        if getattr(app.fsm, "test_on", False):
+            app.fsm.test_finish_now = True
+            maybe_save_test(app.fsm, app.bus.viz)
+            return
+        app.cfg.update(app.pending)
+        save_config(app.cfg)
+        app.fsm.jam_duration_s = float(app.pending["jam_duration_s"])
+        app.fsm.mute_ns = int(app.pending["mute_ns"])
+        app.fsm.lna_gain_db = float(app.pending["lna_gain_db"])
+        app.fsm.retune_time_us = app.cfg.get("retune_time_us")
+        app.fsm.scan_corridor = {
+            "f_start": float(app.pending["f_start_hz"]),
+            "f_end": float(app.pending["f_end_hz"]),
+            "corridor_id": "operator",
+        }
+        app.fsm.replay_pattern = None
+        app.fsm.test_jams_base = int(app.fsm.jams_sent)
+        app.fsm.test_on = True
+        app.fsm.test_saved = False
+        app.fsm.test_finish_now = False
+        app.fsm.test_file = None
+        app.fsm.test_note = "тест идёт — включи ELRS рядом"
+        app.fsm.test_deadline = time.time() + TEST_SECONDS
+        app.fsm.test_log_path = str(app.log_path)
+        app._log("тест: слушаю коридор")
+        push()
+
+    def on_load():
+        from tkinter import filedialog
+        from .test_capture import CAPTURE_DIR
+        CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+        path = filedialog.askopenfilename(
+            initialdir=str(CAPTURE_DIR),
+            filetypes=[("захват", "*.json"), ("все", "*")])
+        if not path:
+            return
+        try:
+            note = apply_capture(app, Path(path))
+            save_config(app.cfg)
+        except Exception as exc:
+            note = f"не загрузился: {exc}"
+        app._log(note)
+        app.fsm.test_note = note
+
+    tk.Button(controls, text="ТЕСТ", command=on_test).grid(row=10, column=0, sticky="w")
+    tk.Button(controls, text="ЗАГРУЗИТЬ", command=on_load).grid(row=10, column=1, sticky="w")
     tk.Label(controls, textvariable=status, justify="left", wraplength=360).grid(
-        row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
     tk.Label(view, text="Спектр и водопад", anchor="w").grid(row=0, column=0, sticky="w")
     spec_cv = tk.Canvas(view, height=150, bg="#0b0e14", highlightthickness=0)
@@ -306,12 +372,25 @@ def run_ui(app: App) -> None:
         if viz["f0"] is not None and viz["f1"] is not None:
             band = f"  {viz['f0']/1e6:.3f}–{viz['f1']/1e6:.3f} МГц"
         spec_note = "спектр ждёт кадр" if spec is None else f"спектр {spec.size} точек{band}"
+        extra = ""
+        if getattr(app.fsm, "test_on", False):
+            left = max(0.0, float(app.fsm.test_deadline) - time.time())
+            extra = f"\nтест, осталось {left:.0f} с — включи ELRS рядом"
+            radio = app._radio
+            stalled = radio is None or not radio.is_alive()
+            if left <= 0 and stalled:
+                maybe_save_test(app.fsm, app.bus.viz)
+            elif time.time() >= float(app.fsm.test_deadline) + 3.0:
+                maybe_save_test(app.fsm, app.bus.viz)
+        note = getattr(app.fsm, "test_note", None)
+        if note:
+            extra += f"\n{note}"
         status.set(
             f"{st['state']}  осталось {st['jam_remaining_s']:.1f} с  "
             f"pattern {st['pattern_id']}  цикл {st['cycle_length']}  "
             f"ударов {st['jams_count']}  окно {st['current_lo_window']}  "
             f"сдвиг {st['freq_shift_hz']} Гц  threat {st['threat']}\n"
-            f"{spec_note}")
+            f"{spec_note}{extra}")
         spec_cv.delete("all")
         w = max(spec_cv.winfo_width(), 640)
         h = 150

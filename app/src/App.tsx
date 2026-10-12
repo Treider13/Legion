@@ -11,7 +11,6 @@ import { GraphiteConsole, GraphiteNav } from "./components/graphite/GraphiteChro
 import { connectionLabel } from "./components/graphite/connectionLabel";
 import { useGraphiteMotion } from "./components/graphite/useGraphiteMotion";
 import { catalogById } from "./sdr/catalog";
-import { ScanPanel } from "./components/ScanPanel";
 import { SpectrumScope } from "./components/SpectrumScope";
 import { SceneBoundary } from "./components/SceneBoundary";
 import { displayRange, formatDisplayRange } from "./components/displayRange";
@@ -19,6 +18,7 @@ import { displayRange, formatDisplayRange } from "./components/displayRange";
 import { BootSequence } from "./components/boot/BootSequence";
 import { CinemaDock } from "./components/cinema/CinemaDock";
 import { FrequencyField } from "./components/cinema/FrequencyField";
+import { SmartAttackStrip } from "./components/cinema/SmartAttackStrip";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
 import { StartGate } from "./components/cinema/StartGate";
 import { coolingWarn, heroStatusLine } from "./components/cinema/status";
@@ -206,6 +206,8 @@ function App() {
         </div>
       </section>
 
+      <SmartAttackStrip />
+
       <GraphiteConsole
         source={connection.value}
         sourceNote={connection.note}
@@ -214,10 +216,6 @@ function App() {
         spectrum={mode === "sdr" ? <SpectrumScope /> : undefined}
         history={<FrequencyField />}
       />
-
-      <section className="console" style={{ padding: "0 18px 18px" }}>
-        <ScanPanel />
-      </section>
 
       {cooling && (
         <div className="cinema-warn" role="alert">
@@ -241,7 +239,14 @@ function App() {
       <CinemaDock
         mode={mode}
         onMode={(m) => setWorkspace(m === "sdr" ? "scan" : "corridor")}
-        onStart={() => setGate(true)}
+        onStart={() => {
+          const s = useLegion.getState();
+          if (mode === "sdr" && s.scanPattern === "fpga") {
+            s.startScan();
+            return;
+          }
+          setGate(true);
+        }}
         onSettings={() => setSettings(true)}
       />
 

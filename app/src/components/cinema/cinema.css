@@ -627,6 +627,45 @@ button.cinema-wave.on:hover:not(:disabled) {
   }
 }
 
+.smart-attack-strip {
+  flex: 0 0 auto;
+  margin: 0 18px 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(167, 183, 192, 0.22);
+  border-radius: 3px;
+  background: #0b0e10;
+  color: #c5d0d6;
+  font-size: 12px;
+}
+
+.smart-attack-strip p {
+  margin: 0 0 8px;
+}
+
+.smart-attack-strip div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.smart-attack-strip label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.smart-attack-strip input {
+  width: 8.5rem;
+  padding: 4px 6px;
+  border: 1px solid rgba(167, 183, 192, 0.35);
+  border-radius: 2px;
+  background: #07080c;
+  color: #e8e4dc;
+  font: inherit;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cinema-go,
   .cinema-mode,
