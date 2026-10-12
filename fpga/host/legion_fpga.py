@@ -553,7 +553,7 @@ class LegionFpga:
 
     def disable_look_through(self) -> bool:
         """Снять blank: EN=0, PERIOD=0, WIDTH=0. Индекс HOP_LUT не трогает."""
-        return self.set_look_through(False)
+        return self.set_look_through(False, ratio=0)
 
     def set_loopback_shift(self, shift: int) -> bool:
         return self.write_reg(REG_LB_SHIFT, shift & 0xF)

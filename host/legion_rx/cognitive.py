@@ -163,9 +163,10 @@ class CognitiveFSM:
         if self.fpga is None:
             raise RuntimeError("FSM: помеха без FPGA-транспорта")
         pat = self.store.get(self.pid)
+        fs_hop = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz)
         jam = apply_predictive_jam(self.fpga, self.sub, pat,
                                    position=self.position, lo_hz=self.lo_hz,
-                                   fs_hz=self.fs_hz, horizon=1)
+                                   fs_hz=fs_hop, horizon=1)
         pre_n = 0
         if preload:
             cyc = max(1, len(pat.get("cycle") or []))
@@ -178,7 +179,7 @@ class CognitiveFSM:
                 out = preload_hop_sequence(self.fpga, pat, self.sub,
                                            position=self.position, next_n=n_pre,
                                            chan_step_hz=step, dwell_us=dwell,
-                                           autonomous=auto, fs_hz=self.fs_hz,
+                                           autonomous=auto, fs_hz=fs_hop,
                                            lo_hz=self.lo_hz)
                 pre_n = out["written"]
                 self._autonomous = bool(out["autonomous"])
@@ -202,7 +203,9 @@ class CognitiveFSM:
         self.eff.mark_jam_applied()
         self._go(JAMMING, t_s, action="jam+preload",
                  f_jam_hz=jam["f_jam_hz"], preload_n=pre_n,
-                 autonomous=self._autonomous, immediate=True)
+                 autonomous=self._autonomous, immediate=True,
+                 lo_hz=self.lo_hz, fs_hz=fs_hop,
+                 f_start=self.sub["f_start"], f_end=self.sub["f_end"])
         if self.pub and self.pid:
             nxt = match_and_predict(self.store, self._live,
                                     self.sub["sub_corridor_id"])

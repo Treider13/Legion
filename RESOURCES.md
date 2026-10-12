@@ -362,10 +362,9 @@ STA: `timing_close_2026-10-12/hop72/seed{1,2,3}/`. seed2 official `sta.summary` 
 
 ## Что не сделано
 
-- Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет, прошивка не выполнялась.
+- Лаборатория: USB/preload/hop на плате. 12.10.2026: `bladeRF-cli -p` — устройств нет, прошивка не выполнялась. Живой режим в коде есть, на эфире не гонялся.
 - `bladerf_get_quick_tune`: нет в `legion_fpga.py` (PIO/FakeTransport). Host — LRU + `set_frequency_rx`.
-- `pipeline cognitive` — bench и `FakeTransport`. Аргумента `--corridor` и живого FIFO+USB нет.
-- Ветка `pr-77777-lab-host-pipeline` на origin, ahead 0. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`. Hop-код до `a71479e`.
+- Ветка `pr-77777-lab-host-pipeline` на origin. Тег `v1.1-rbf-hop-72mhz` на origin, объект `0e2307b`. Hop-код до `a71479e`. «LUT работает на эфире» не заявляется.
 
 ## Ограничения
 
@@ -399,3 +398,17 @@ Host на listen-hop не снимает FLAGS bit4: иначе `idx` замир
 preload (`enable_look_through(10, 1)`). Drift: `disable_look_through()`
 и стоп LUT (FLAGS bit4=0 уже не listen-hop) → `RE_LEARNING`.
 Blank на плате не измерялся.
+
+## Live mode
+
+```
+python -m host.legion_rx.pipeline cognitive --corridor 2400 2483 --live --fifo /tmp/iq --samplerate 20M
+```
+
+Цепочка: bladeRF-cli пишет FIFO → C-читатель → PFB → `CorridorDetector` → FSM → `preload_hop_sequence` → `legion_fpga.py`. Look-through — HDL `REG_LT_*`.
+
+`--corridor 2400 2483` — 83 МГц, шире IBW 56 МГц, поэтому `lo_sweep`. LO preload — центр текущего окна. FS приёмника — `--samplerate` (по умолчанию 20 MSPS). В регистр hop `CH_FS` пишется `AIR_FS_HZ` (36 MSPS, каденс ЦАП этого RBF), не USB-rate: иначе период и FTW не совпадут с тактом TX.
+
+Без `--live` — синтетика и `FakeTransport`.
+
+Один владелец USB: на время записи FPGA стрим останавливается и поднимается снова. Задержка handoff на плате не мерялась. «LUT работает» — только после лаборатории.
