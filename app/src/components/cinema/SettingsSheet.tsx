@@ -7,7 +7,9 @@ import { PaPanel } from "../PaPanel";
 import { Esp32FlashPanel } from "../Esp32FlashPanel";
 import { LegionFlashPanel } from "../LegionFlashPanel";
 import { PositionPanel } from "../PositionPanel";
+import { ScanPanel } from "../ScanPanel";
 import { SdrFlashPanel } from "../SdrFlashPanel";
+import { SignalPanel } from "../SignalPanel";
 import { SdrPanel } from "../SdrPanel";
 import { SynthPanel } from "../SynthPanel";
 import { WorkspaceNav } from "../WorkspaceNav";
@@ -58,12 +60,9 @@ export function SettingsSheet({ onClose }: Props) {
             {workspace === "sdr" && <SdrPanel />}
             {workspace === "sdrFlash" && <SdrFlashPanel />}
             {workspace === "sdrCustom" && <LegionFlashPanel />}
-            {(workspace === "scan" || workspace === "signal") && (
-              <p className="panel-note">
-                Старый экран атаки снят. Окно оператора — иконка LEGION: кнопки, мониторинг и живой водопад.
-              </p>
-            )}
+            {workspace === "scan" && <ScanPanel />}
             {workspace === "position" && <PositionPanel />}
+            {workspace === "signal" && <SignalPanel />}
             {workspace === "pa" && <PaPanel />}
             {workspace === "esp32Flash" && <Esp32FlashPanel />}
           </div>
