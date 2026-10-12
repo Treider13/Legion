@@ -17,6 +17,7 @@ from .lo_window_planner import plan_stations
 
 HERE = Path(__file__).resolve().parent
 CAPTURE_DIR = HERE.parent / "tests" / "captures"
+REPLAY_PATH = HERE / "replay_pending.json"
 TEST_SECONDS = 40
 DONE_STATES = (JAMMING, MULTI_LO)
 _CLAIM = threading.Lock()
@@ -69,6 +70,25 @@ def save_capture(report: dict) -> Path:
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8")
     return path
+
+
+def write_replay(record: dict, note: str, source: str) -> None:
+    REPLAY_PATH.write_text(
+        json.dumps(
+            {"record": record, "note": note, "file": source},
+            ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def read_replay() -> "dict | None":
+    if not REPLAY_PATH.is_file():
+        return None
+    data = json.loads(REPLAY_PATH.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else None
+
+
+def clear_replay() -> None:
+    REPLAY_PATH.unlink(missing_ok=True)
 
 
 def load_capture(path: Path) -> dict:

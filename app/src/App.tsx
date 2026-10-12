@@ -19,6 +19,7 @@ import { BootSequence } from "./components/boot/BootSequence";
 import { CinemaDock } from "./components/cinema/CinemaDock";
 import { FrequencyField } from "./components/cinema/FrequencyField";
 import { SmartAttackStrip } from "./components/cinema/SmartAttackStrip";
+import { replayArmedNow, startRx } from "./sense/rxTest";
 import { SettingsSheet } from "./components/cinema/SettingsSheet";
 import { StartGate } from "./components/cinema/StartGate";
 import { coolingWarn, heroStatusLine } from "./components/cinema/status";
@@ -242,6 +243,10 @@ function App() {
         onStart={() => {
           const s = useLegion.getState();
           if (mode === "sdr" && s.scanPattern === "fpga") {
+            if (replayArmedNow()) {
+              void startRx(true);
+              return;
+            }
             s.startScan();
             return;
           }

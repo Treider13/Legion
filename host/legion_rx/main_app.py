@@ -425,11 +425,166 @@ def run_ui(app: App) -> None:
     root.mainloop()
 
 
+def _cfg_from_args(args) -> dict:
+    cfg = load_config()
+    if args.f_start is not None:
+        cfg["f_start_hz"] = float(args.f_start)
+    if args.f_end is not None:
+        cfg["f_end_hz"] = float(args.f_end)
+    if args.jam is not None:
+        cfg["jam_duration_s"] = float(args.jam)
+    if args.mute is not None:
+        cfg["mute_ns"] = int(args.mute)
+    if args.lna is not None:
+        cfg["lna_gain_db"] = float(args.lna)
+    save_config(cfg)
+    return cfg
+
+
+def _emit_rx(app: App, running: bool) -> None:
+    from .test_capture import _down
+
+    viz = app.bus.viz.snapshot()
+    spec = viz.get("spec")
+    left = None
+    if getattr(app.fsm, "test_on", False):
+        left = max(0.0, float(app.fsm.test_deadline) - time.time())
+    line = {
+        "kind": "rx",
+        "running": running,
+        "state": app.fsm.state,
+        "note": getattr(app.fsm, "test_note", "") or "",
+        "file": getattr(app.fsm, "test_file", None),
+        "pattern_id": app.fsm.pid,
+        "left_s": left,
+        "f0_hz": viz.get("f0"),
+        "f1_hz": viz.get("f1"),
+        "db": _down(spec, 96) if spec is not None else [],
+    }
+    print(json.dumps(line, ensure_ascii=False), flush=True)
+
+
+def _arm_operator(app: App) -> None:
+    app.fsm.jam_duration_s = float(app.cfg["jam_duration_s"])
+    app.fsm.mute_ns = int(app.cfg["mute_ns"])
+    app.fsm.lna_gain_db = float(app.cfg["lna_gain_db"])
+    app.fsm.retune_time_us = app.cfg.get("retune_time_us")
+    app.fsm.scan_corridor = {
+        "f_start": float(app.cfg["f_start_hz"]),
+        "f_end": float(app.cfg["f_end_hz"]),
+        "corridor_id": "operator",
+    }
+
+
+def _stream(app: App, until_file: bool) -> None:
+    from .test_capture import maybe_save_test
+
+    while not app._stop_live.is_set():
+        _emit_rx(app, True)
+        if until_file and getattr(app.fsm, "test_file", None):
+            break
+        if until_file and not getattr(app.fsm, "test_on", False):
+            break
+        radio = app._radio
+        if until_file and radio is not None and not radio.is_alive():
+            app.fsm.test_finish_now = True
+            maybe_save_test(app.fsm, app.bus.viz)
+            if not getattr(app.fsm, "test_note", ""):
+                app.fsm.test_note = "радио остановилось"
+            break
+        time.sleep(0.4)
+    if until_file and getattr(app.fsm, "test_on", False):
+        app.fsm.test_finish_now = True
+        maybe_save_test(app.fsm, app.bus.viz)
+    _emit_rx(app, False)
+
+
+def run_test_headless(args) -> int:
+    from .test_capture import TEST_SECONDS, clear_replay
+
+    cfg = _cfg_from_args(args)
+    clear_replay()
+    app = App(cfg, True)
+    _arm_operator(app)
+    app.fsm.replay_pattern = None
+    app.fsm.test_jams_base = int(app.fsm.jams_sent)
+    app.fsm.test_on = True
+    app.fsm.test_saved = False
+    app.fsm.test_finish_now = False
+    app.fsm.test_file = None
+    app.fsm.test_note = "тест идёт — включи ELRS рядом"
+    app.fsm.test_deadline = time.time() + TEST_SECONDS
+    app.fsm.test_log_path = str(app.log_path)
+    app._log("тест: слушаю коридор")
+
+    def _stop(signum, frame):
+        app.fsm.test_finish_now = True
+        app._stop_live.set()
+
+    install_shutdown(_stop)
+    app.start_radio()
+    _stream(app, until_file=True)
+    app.shutdown(0, None)
+    return 0 if app.fsm.test_file else 1
+
+
+def run_from_log(args) -> int:
+    from .test_capture import read_replay
+
+    cfg = _cfg_from_args(args)
+    app = App(cfg, True)
+    _arm_operator(app)
+    pending = read_replay()
+    record = (pending or {}).get("record")
+    if not isinstance(record, dict):
+        print(json.dumps({
+            "kind": "rx", "running": False,
+            "note": "нет загруженного лога", "file": None, "db": [],
+        }, ensure_ascii=False), flush=True)
+        return 2
+    app.fsm.arm_replay(record)
+    app.fsm.test_note = str((pending or {}).get("note") or "удар по логу")
+    install_shutdown(app.shutdown)
+    app.start_radio()
+    _stream(app, until_file=False)
+    app.shutdown(0, None)
+    return 0
+
+
+def run_load(path: str) -> int:
+    from .test_capture import apply_capture, clear_replay, write_replay
+
+    app = App(load_config(), True)
+    note = apply_capture(app, Path(path))
+    save_config(app.cfg)
+    record = getattr(app.fsm, "replay_pattern", None)
+    if isinstance(record, dict):
+        write_replay(record, note, str(path))
+    else:
+        clear_replay()
+    print(json.dumps({"ok": True, "note": note}, ensure_ascii=False), flush=True)
+    return 0
+
+
 def main() -> None:
     acquire_lock()
     p = argparse.ArgumentParser()
     p.add_argument("--headless", action="store_true")
+    p.add_argument("--test", action="store_true")
+    p.add_argument("--run", action="store_true")
+    p.add_argument("--load", default="")
+    p.add_argument("--f-start", type=float, dest="f_start")
+    p.add_argument("--f-end", type=float, dest="f_end")
+    p.add_argument("--jam", type=float)
+    p.add_argument("--mute", type=int)
+    p.add_argument("--lna", type=float)
     args = p.parse_args()
+    if args.load:
+        raise SystemExit(run_load(args.load))
+    if args.test:
+        raise SystemExit(run_test_headless(args))
+    if args.run:
+        raise SystemExit(run_from_log(args))
     app = App(load_config(), args.headless)
     install_shutdown(app.shutdown)
     if args.headless:
