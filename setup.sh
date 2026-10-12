@@ -50,15 +50,25 @@ if [ -f .venv/bin/activate ]; then
   PY=python
   ok "venv .venv активирован"
 else
-  warn "venv не создан — python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt"
+  warn "venv не создан — python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt && pip install -r host/requirements-torch.txt && pip install -r host/requirements-lab.txt && pip install -r host/requirements-trt.txt"
   if [ "$INSTALL" = "1" ]; then
     python3 -m venv --system-site-packages .venv && . .venv/bin/activate && PY=python && ok "venv .venv создан"
   fi
 fi
 
 if [ "$INSTALL" = "1" ]; then
-  echo "  … pip: tools + fpga + host (CPU/тесты)"
+  echo "  … apt: плата, SoapySDR, окно, компилятор"
+  sudo apt install -y python3-tk python3-dev build-essential gcc \
+    bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxA4 \
+    python3-soapysdr soapysdr-tools soapysdr-module-bladerf \
+    python3-numpy python3-usb libusb-1.0-0 || true
+  echo "  … pip: tools + fpga + host + лабораторный GPU"
   $PY -m pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt || true
+  $PY -m pip install -r host/requirements-torch.txt || true
+  $PY -m pip install -r host/requirements-lab.txt || true
+  $PY -m pip install -r host/requirements-trt.txt || true
+  echo "  … C-читатель FIFO"
+  (cd host && PYTHONPATH=. $PY -m legion_rx.reader.build) || true
 fi
 
 $PY -c "import numpy" 2>/dev/null && ok "numpy (сканер эфира)" \
@@ -71,10 +81,21 @@ $PY -c "import scipy" 2>/dev/null && ok "scipy (PFB/host)" \
   || { miss "scipy — pip install -r host/requirements.txt"; maybe "scipy" $PY -m pip install -r host/requirements.txt; }
 $PY -c "import pytest" 2>/dev/null && ok "pytest (host/tests)" \
   || { miss "pytest — pip install -r host/requirements.txt"; maybe "pytest" $PY -m pip install -r host/requirements.txt; }
+$PY -c "import tkinter" 2>/dev/null && ok "tkinter (окно Legion)" \
+  || { miss "tkinter — sudo apt install python3-tk"; maybe "python3-tk" sudo apt install -y python3-tk; }
 $PY -c "import cupy" 2>/dev/null && ok "cupy (lab GPU)" \
-  || warn "cupy нет — lab GPU: pip install -r host/requirements-lab.txt"
-$PY -c "import torch" 2>/dev/null && ok "torch (lab CNN)" \
-  || warn "torch нет — lab CNN: pip install -r host/requirements-lab.txt"
+  || miss "cupy — pip install -r host/requirements-lab.txt"
+$PY -c "import torch" 2>/dev/null && ok "torch (lab CNN, сборка CUDA)" \
+  || miss "torch — pip install -r host/requirements-torch.txt"
+$PY -c "import tensorrt" 2>/dev/null && ok "tensorrt" \
+  || miss "tensorrt — pip install -r host/requirements-trt.txt"
+$PY -c "import PyQt6, pyqtgraph" 2>/dev/null && ok "PyQt6 + pyqtgraph (водопад)" \
+  || miss "PyQt6 pyqtgraph — pip install -r host/requirements-lab.txt"
+if compgen -G "host/legion_rx/reader/legion_creader*.so" >/dev/null; then
+  ok "C-читатель legion_creader"
+else
+  miss "C-читатель — cd host && PYTHONPATH=. python -m legion_rx.reader.build"
+fi
 # systemd-юнит ExecStart=/usr/bin/python3 — venv его не кормит.
 if /usr/bin/python3 -c "import usb" 2>/dev/null; then
   ok "python3-usb в /usr/bin/python3 (systemd шлюз)"

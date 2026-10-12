@@ -47,7 +47,7 @@ def backend(prefer: str = "gpu"):
         if prefer == "gpu":
             raise RuntimeError(
                 "CuPy/CUDA недоступны: " + cupy_unavailable_reason() +
-                " (лаборатория: cupy-cuda12x>=13.3, CUDA>=12.8, драйвер Blackwell)")
+                " (лаборатория: cupy-cuda13x>=13.3, CUDA 13, драйвер Blackwell)")
     import numpy as np
 
     return np

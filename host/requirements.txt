@@ -1,5 +1,8 @@
-# LEGION host — CPU / тесты (без CUDA).
-# Лаборатория GPU: pip install -r host/requirements-lab.txt
+# LEGION host — процессор и тесты.
+# Полная установка на ПК: ./setup.sh --install
+# pip по порядку: tools/requirements.txt, fpga/requirements.txt,
+# этот файл, requirements-torch.txt, requirements-lab.txt, requirements-trt.txt.
+# tkinter, libbladeRF и SoapySDR — пакеты apt, не pip.
 numpy>=1.26
 scipy>=1.11
 pytest>=8.0

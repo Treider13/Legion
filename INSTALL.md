@@ -18,10 +18,11 @@ legion привязаны к Linux-инструментам (pyusb/systemd/Quart
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip nodejs npm \
+sudo apt install -y git python3 python3-venv python3-pip python3-tk \
+  python3-dev build-essential nodejs npm \
   bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxA4 \
   python3-soapysdr soapysdr-tools soapysdr-module-bladerf python3-numpy \
-  python3-usb
+  python3-usb libusb-1.0-0
 ```
 
 - **bladeRF-cli / libbladeRF** — прошивка FPGA/FX3 и драйвер платы.
@@ -72,12 +73,16 @@ ls /etc/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null | grep -i nuand
 ```bash
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
 pip install -r tools/requirements.txt -r fpga/requirements.txt -r host/requirements.txt
-# лаборатория GPU (CUDA ≥ 12.8): pip install -r host/requirements-lab.txt
+pip install -r host/requirements-torch.txt
+pip install -r host/requirements-lab.txt
+pip install -r host/requirements-trt.txt
+cd host && PYTHONPATH=. python -m legion_rx.reader.build && cd ..
 ```
 
-`numpy` обязателен для сканера эфира; `pyusb` — для агента шлюза FPGA;
-`scipy`/`pytest` — host PFB и `host/tests` (в т.ч. `test_rbf_timing`).
-GPU (CuPy/torch/TensorRT/PyQt6) — только `host/requirements-lab.txt`.
+`numpy` — сканер эфира. `pyusb` — агент шлюза FPGA. `scipy` и `pytest` — host и тесты.
+`requirements-torch.txt` — PyTorch с CUDA. `requirements-lab.txt` — CuPy и окно водопада (PyQt6).
+`requirements-trt.txt` — TensorRT с индекса NVIDIA, ставится последним.
+Окно (`python3-tk`), плата (`libbladeRF`) и SoapySDR через pip не ставятся: они в команде apt выше.
 
 ## 3. Приложение LEGION Control
 
