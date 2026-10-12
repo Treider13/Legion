@@ -1235,6 +1235,11 @@ class Radio:
         self._discard_left = 0
         self._discard_until = 0.0
         self._rx_gen = 0
+        # LO ставит поток захвата сразу после readStream. Чужой поток с
+        # setFrequency при полной очереди ждёт lock воркера libbladeRF.
+        self._tune_req_hz: float | None = None
+        self._tune_done = threading.Event()
+        self._tune_err: str | None = None
         self._tune_until = 0.0
         self._rx_io = threading.Lock()
         self._tone = None
@@ -1521,6 +1526,57 @@ class Radio:
         self._rx_bw = None
         self._rx_hz = None
 
+    def _request_lo(self, center_hz: float) -> int:
+        """Смена LO с потока захвата, сразу после вернувшегося readStream.
+
+        RPC-поток только публикует частоту и ждёт. setFrequency с другого
+        потока, пока sync_rx не читают, встаёт на lock libbladeRF: первое
+        окно уже нарисовано, следующий хоп висит, Rust убивает воркер на 15 с.
+        """
+        self._tune_err = None
+        self._tune_done.clear()
+        self._tune_req_hz = float(center_hz)
+        if not self._tune_done.wait(0.4):
+            self._tune_req_hz = None
+            raise RuntimeError("LO: захват не перестроился за 400 мс")
+        if self._tune_err:
+            raise RuntimeError(self._tune_err)
+        return self._rx_gen + (1 if self._discard_left > 0 else 0)
+
+    def _apply_pending_tune(self) -> bool:
+        """Вызывать только из потока захвата, после того как readStream вернулся."""
+        hz = self._tune_req_hz
+        if hz is None or self.dev is None:
+            return False
+        self._tune_req_hz = None
+        try:
+            self.dev.setFrequency(SOAPY_SDR_RX, 0, float(hz))
+            try:
+                got = float(self.dev.getFrequency(SOAPY_SDR_RX, 0))
+                if got > 0:
+                    hz = got
+            except Exception:
+                pass
+            self._rx_hz = float(hz)
+            if self._ring is not None:
+                self._ring.reset()
+            if self._attack_mem is not None:
+                self._attack_mem.reset()
+            if self._droneid_mem is not None:
+                self._droneid_mem.reset()
+            self._droneid_hold = None
+            self._droneid_hold_fs = 0.0
+            fs = float(self._rx_fs or 0.0)
+            nflush = hop_flush_samples(fs, self._rx_stream_samples)
+            self._discard_left = nflush
+            self._discard_until = time.monotonic() + max(0.05, (nflush / max(fs, 1.0)) * 3.0)
+            self._tune_err = None
+        except Exception as e:
+            self._tune_err = str(e)
+        finally:
+            self._tune_done.set()
+        return True
+
     def _expire_discard(self) -> None:
         """Потолок по времени: зависший счётчик не держит RPC до убийства на 15 с."""
         until = self._discard_until
@@ -1575,9 +1631,15 @@ class Radio:
                     if now - last_err_log >= 5.0:
                         last_err_log = now
                         _log(f"readStream исключение (ретрай): {e}")
+                    # readStream уже вернулся (исключением) — очередь не ждёт sync_rx.
+                    self._apply_pending_tune()
                     time.sleep(0.001)
                     continue
                 if self._rx_pause.is_set():
+                    continue
+                # Буфер только что отдан. Дальше setFrequency на ЭТОМ потоке,
+                # пока воркер libbladeRF не упёрся в полную очередь.
+                if self._apply_pending_tune():
                     continue
                 ret = stream_ret(sr)
                 kind = stream_kind(ret)
@@ -1666,6 +1728,22 @@ class Radio:
         parked = rx_is_parked(self._rx_on, self._rx_hz, self._rx_fs, center_hz, fs, self._discard_left, alive)
         if parked and self._rx_bw == want_bw:
             return self._rx_gen
+        # Живой хоп: частоту ставит поток захвата после readStream.
+        # Здесь setFrequency берёт lock, который воркер libbladeRF не отдаёт,
+        # пока sync_rx не читают — скан замирает на первом окне.
+        lo_live = (
+            alive
+            and self.rx is not None
+            and self._rx_on
+            and self._rx_fs is not None
+            and abs(float(self._rx_fs) - float(fs)) <= 1.0
+            and self._rx_bw is not None
+            and abs(float(self._rx_bw) - float(want_bw)) <= 1.0
+            and not tx_holds
+            and (self._rx_hz is None or abs(float(self._rx_hz) - float(center_hz)) > 1.0)
+        )
+        if lo_live:
+            return self._request_lo(center_hz)
         retuned = self._rx_hz != center_hz or self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
         # Пауза только когда поток гасим (смена часов / поток ещё не жив).
         # На живом LO пауза останавливает sync_rx при полной очереди.
