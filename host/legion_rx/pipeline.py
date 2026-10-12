@@ -523,10 +523,22 @@ def run_bench(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
 
 # ---------------------------------------------------------------- когнитив
 
+def _mix_lo_retune(iq: np.ndarray, fs: float, old_lo: float,
+                   new_lo: float) -> np.ndarray:
+    """Смена LO как у радио: RF = IF + LO не двигается, IF сдвигается на
+    (old_lo − new_lo). Не регенерация hops (фаза сетки сохранится)."""
+    df = float(old_lo) - float(new_lo)
+    if abs(df) < 1.0 or iq.size == 0:
+        return iq
+    n = np.arange(iq.shape[0], dtype=np.float64)
+    rot = np.exp(1j * (2.0 * np.pi * df / float(fs)) * n)
+    return (iq * rot).astype(np.complex64)
+
+
 def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
     """Когнитивный контур (ТЗ п.8): LISTENING→…→JAMMING→MONITORING→…
-    bench: синтез FHSS на фиксированном LO (CLASS_LO_HZ). Смена fsm.lo_hz
-    меняет подписи freqs, waveform не перестраивается. --live: FIFO+USB."""
+    bench: синтез FHSS на CLASS_LO_HZ; смена fsm.lo_hz — mixer-retune IQ.
+    --live: FIFO+USB."""
     from .cognitive import CognitiveFSM
     from .cognitive import LISTENING, MONITORING, TARGET_SILENT
     from .pattern_store import PatternStore
@@ -564,19 +576,23 @@ def run_cognitive(args, log: JsonLog, pub: "UdpPublisher | None") -> int:
                        scan_corridor=scan, frame_samples=args.frame_samples)
     FRAME = args.frame_samples
     rebuilt = {"done": False}
-    lo_mismatch = {"done": False}
+    synth_lo = float(lo)
     n_fr = len(iq) // FRAME
     for i in range(n_fr):
+        if abs(fsm.lo_hz - synth_lo) > 1.0:
+            start = i * FRAME
+            iq[start:] = _mix_lo_retune(iq[start:], fs, synth_lo, fsm.lo_hz)
+            log.write({"kind": "bench_lo_retune", "old_lo_hz": synth_lo,
+                       "new_lo_hz": fsm.lo_hz,
+                       "mix_df_hz": synth_lo - fsm.lo_hz,
+                       "tick": i, "sample": start})
+            synth_lo = float(fsm.lo_hz)
+            lo = synth_lo
         seg = iq[i * FRAME: (i + 1) * FRAME]
         freqs = np.asarray([ch.channel_freq(k, fs) + fsm.lo_hz
                             for k in range(ch.m)])
         y = ch.channelize(seg)
         rec = fsm.tick(ch.ch_power(y), freqs, (i + 1) * FRAME / fs)
-        if (not lo_mismatch["done"]) and abs(fsm.lo_hz - lo) > 1.0:
-            log.write({"kind": "bench_lo_mismatch", "synth_lo_hz": lo,
-                       "fsm_lo_hz": fsm.lo_hz, "tick": i,
-                       "note": "IQ на synth_lo; смена LO не двигает waveform"})
-            lo_mismatch["done"] = True
         # адаптивная канализация (ТЗ п.12): n_chans = ширина sub / 200 кГц
         if (not rebuilt["done"]) and fsm.sub is not None:
             width = fsm.sub["f_end"] - fsm.sub["f_start"]
