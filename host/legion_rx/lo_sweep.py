@@ -4,8 +4,9 @@ IBW до 56 МГц [F11]. Перекрытие окон 15%. Полный retune
 кэш quick-tune ~500 мкс [F14], не более 256 профилей [F15]. Очередь
 schedule_retune ≤ 16 [F20]. При частых retune fs ≤ 20 Msps [F19].
 
-Без libbladeRF: кэш хранит частоты; tune идёт через radio.set_frequency_rx
-(bladeRF-cli). Аппаратный bladerf_get_quick_tune — лаборатория.
+Quick-tune: LRU-кэш на host + radio.set_frequency_rx (bladeRF-cli).
+bladerf_get_quick_tune недоступен через legion_fpga.py (PIO/FakeTransport,
+не libbladeRF). Аппаратный API — лаборатория, не этот модуль.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from collections import OrderedDict
 
 IBW_HZ = 56.0e6
 OVERLAP = 0.15          # доля перекрытия соседних окон
-SCAN_DWELL_S = 4.0e-3   # dwell окна [F13]
+SCAN_DWELL_S = 4.0e-3   # dwell окна; полный retune ~3.8 мс [F13]
 RETUNE_QUEUE = 16
 QUICK_TUNE_MAX = 256
 FS_RETUNE_MAX = 20.0e6
@@ -79,11 +80,14 @@ class LoSweeper:
         self.note = ""
 
     def setup(self, f_start: float, f_end: float) -> list[dict]:
+        self.note = ""
+        if self.fs_hz > FS_RETUNE_MAX:
+            self.note = (f"fs={self.fs_hz:.0f} > {FS_RETUNE_MAX:.0f}; "
+                         "частые retune — риск underrun [F19]")
         self.windows = plan_windows(f_start, f_end, self.ibw_hz)
         self.idx = 0
         self.hops = {w["index"]: [] for w in self.windows}
         self.work = None
-        self.note = ""
         return self.windows
 
     def current(self) -> "dict | None":
@@ -142,30 +146,32 @@ class LoSweeper:
 
     def stitch(self, hop_rate_hz: float = 1000.0) -> list[dict]:
         """Единый ряд по sample_count. Дубли перекрытия снимаются.
-        Разрыв ≥ 4 мс (retune) → hole=True (~4 hop при 1000 Гц)."""
+        hole только на границе окон при разрыве > полного retune (~3.8 мс)."""
         rows = []
         for i in sorted(self.hops):
             rows.extend(self.hops[i])
         rows.sort(key=lambda h: (int(h.get("sample_count", 0)),
                                  float(h.get("t_start", 0.0))))
-        gap_samples = int(round(SCAN_DWELL_S * self.fs_hz))
+        gap_samples = int(round(RETUNE_FULL_S * self.fs_hz))
         out = []
         seen = set()
         prev_sc = None
+        prev_win = None
         for h in rows:
             f = round(float(h.get("freq_mhz", 0.0)), 3)
             sc = int(h.get("sample_count", 0))
+            win = h.get("window")
             key = (sc // max(1, self.spf), f)
             if key in seen:
                 continue
             seen.add(key)
-            hole = False
-            if prev_sc is not None and sc - prev_sc > gap_samples:
-                hole = True
+            hole = (prev_sc is not None and win != prev_win
+                    and sc - prev_sc > gap_samples)
             rec = dict(h)
             rec["hole"] = hole
             out.append(rec)
             prev_sc = sc
+            prev_win = win
         return out
 
     def finish(self, hop_rate_hz: float = 1000.0) -> dict:

@@ -201,11 +201,15 @@ def apply_timer_cycle(rec: dict, energy=None, dt_s: float = 1e-3) -> dict:
         per = find_cycle_period(energy, dt_s)
         if per:
             out["period_us"] = per["period_us"]
-            est = int(round(per["period_us"] / dwell))
-            if 2 <= est <= 4096:
-                rec["cycle_length"] = est
-                rec["cycle"] = rec["hop_sequence"][:est]
-                out["cycle_length"] = est
+            rec["period_us"] = per["period_us"]
+            have = int(rec.get("cycle_length") or 0)
+            seq = rec.get("hop_sequence") or rec.get("cycle") or []
+            if have < 2:
+                est = int(round(per["period_us"] / dwell))
+                if 2 <= est <= min(4096, len(seq)):
+                    rec["cycle_length"] = est
+                    rec["cycle"] = seq[:est]
+                    out["cycle_length"] = est
     cyc = int(rec.get("cycle_length") or 0)
     if cyc > 255:
         rec["lut_n"] = 255
@@ -217,7 +221,10 @@ def apply_timer_cycle(rec: dict, energy=None, dt_s: float = 1e-3) -> dict:
         rec["visible_only"] = False
         out["lut_n"] = rec["lut_n"]
     rec["dwell_us"] = dwell
-    rec["period_us"] = out["period_us"]
+    if out["period_us"] is not None:
+        rec["period_us"] = out["period_us"]
+    else:
+        out["period_us"] = rec.get("period_us")
     return out
 
 
@@ -252,8 +259,7 @@ def find_period_tolerant(seq: list, tol: int = 1, m: "int | None" = None,
 def _align_score(a: list, b_cycle: list, m: "int | None" = None) -> tuple:
     """Лучшее циклическое выравнивание a по b_cycle, допуск ±1 канал
     ПО КРУГУ m (число каналов решётки — параметр, не константа [W1]).
-    Векторизовано: цикл 4096 × окно 256 ≈ 1 мс. Возвращает (score,
-    position последнего элемента a в цикле)."""
+    Возвращает (score, position последнего элемента a в цикле)."""
     import numpy as np
 
     if not a or not b_cycle:

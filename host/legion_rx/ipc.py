@@ -89,7 +89,8 @@ class UdpPublisher:
                           "confidence": rec.get("confidence"),
                           "sequence_type": rec.get("sequence_type"),
                           "jams_sent": rec.get("jams_sent"),
-                          "pdr_target": rec.get("pdr_target")})
+                          "pdr_target": rec.get("pdr_target"),
+                          "threat": rec.get("threat")})
 
     def close(self) -> None:
         self._sock.close()

@@ -363,12 +363,7 @@ def match_and_predict(store, live_hops, sub_corridor_id: str):
     next = цикл[(position+1) % cycle]. Нет матча — (None, None, 0.0):
     fallback — FallbackPredictor (Markov-1 HopTracker; DDPG [G3] —
     отдельный этап RL-обучения, см. RESOURCES.md)."""
-    from .pattern_store import match_need
-
-    recs = [r for r in store.patterns.values()
-            if r.get("sub_corridor_id") == sub_corridor_id]
-    base = match_need(int(recs[0]["cycle_length"]), 8) if recs else 8
-    m = store.find_match(live_hops, sub_corridor_id, min_match=base)
+    m = store.find_match(live_hops, sub_corridor_id, min_match=8)
     if m is None:
         return (None, None, 0.0)
     pid, pos, conf = m

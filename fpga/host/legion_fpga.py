@@ -140,7 +140,7 @@ GRID_FLAG_WINLIM = 1 << 0
 GRID_FLAG_F0UNC = 1 << 1
 GRID_FLAG_ZC = 1 << 2
 GRID_FLAG_FCORR = 1 << 3
-GRID_FLAG_AUTONOMOUS = 1 << 4  # host: LUT+таймер; HDL может игнорировать
+GRID_FLAG_AUTONOMOUS = 1 << 4  # host-бит. HDL GRID 0x51–0x57: when others => null
 GRID_F0_KHZ_GATE = 10_000_000
 C58_MHZ = 5100.0
 

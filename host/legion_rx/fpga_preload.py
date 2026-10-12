@@ -1,9 +1,10 @@
 """fpga_preload — LUT FHSS в FPGA (write_ch_lut + set_grid).
 
 Индекс LUT 8 бит: n_pre ≤ 255. Cycle > 255 — видимый префикс, без
-догрузки на ходу. Таймер хопа: REG_GRID_PRI_US (dwell), REG_PROTO_PERIOD
-(период в сэмплах), REG_GRID_FLAGS bit4 (autonomous), REG_GRID_RSV (phase).
-HDL может не шагать LUT по таймеру — требование к нетлисту, не host.
+догрузки на ходу. Host пишет REG_GRID_PRI_US / PROTO_PERIOD / FLAGS / RSV.
+GRID 0x51–0x57 в legion_regs.vhd — when others => null (NIOS-only).
+PROTO_PERIOD шагает DRFM walk (delay/FTW), не индекс CH_LUT.
+Автономный LUT-режим FPGA без таймера в HDL не работает.
 Задержка USB preload — замер в лаборатории.
 """
 from __future__ import annotations
@@ -12,7 +13,6 @@ import time
 
 from . import fpga_control as fc
 
-PRELOAD_N = 20
 LUT_CAP = 255
 
 

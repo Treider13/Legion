@@ -5,8 +5,6 @@ JAMMING (LUT) → MONITORING → (DRIFT | SILENT | RE_ACQUIRE).
 """
 from __future__ import annotations
 
-import time
-
 import numpy as np
 
 from .corridor import (CorridorDetector, extract_subcorridor, ibw_visibility,
@@ -15,7 +13,7 @@ from .drift_detector import DriftDetector
 from .effectiveness_monitor import EffectivenessMonitor
 from .hop_recorder import HopRecorder
 from .hopmap import FallbackPredictor, match_and_predict
-from .lo_sweep import LoSweeper, SCAN_DWELL_S
+from .lo_sweep import LoSweeper
 from .pattern_store import PatternStore, apply_timer_cycle, match_need
 
 LISTENING = "LISTENING"
@@ -77,6 +75,8 @@ class CognitiveFSM:
         self._lt_hops = 0
         self._lt_listen = False
         self._scan_t0 = 0.0
+        self._grid_step_hz = 200.0e3
+        self._fb: dict = {}
         if getattr(store, "n_chans", None) is None:
             store.n_chans = self.n_chans
         self._listen_freqs: list[float] = []
@@ -121,14 +121,19 @@ class CognitiveFSM:
         pat = self.store.get(self.pid)
         dwell = int(pat.get("dwell_us") or 1000)
         flags = fc.lf.GRID_FLAG_AUTONOMOUS if on else 0
-        self.fpga.set_grid(
+        ok = self.fpga.set_grid(
             meta=fc.lf.pack_grid_meta(n=int(pat.get("lut_n") or 0),
                                       n_used=int(pat.get("lut_n") or 0),
                                       conf=90, source=fc.lf.GRID_SRC_OPERATOR,
                                       kind=fc.lf.GRID_KIND_FHSS),
             f0_hz=fc.lf.pack_grid_f0(int(round(self.sub["f_start"]))),
-            step_hz=1, pri_us=dwell, flags=flags, rsv=int(self.position))
-        self._autonomous = on
+            step_hz=int(self._grid_step_hz), pri_us=dwell,
+            flags=flags, rsv=int(self.position))
+        if not ok:
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "action": "set_grid_fail", "autonomous": on})
+        self._autonomous = on if ok else self._autonomous
 
     def _jam_now(self, t_s: float, preload: bool = False) -> dict:
         from .fpga_control import apply_predictive_jam
@@ -146,20 +151,28 @@ class CognitiveFSM:
             auto = cyc <= LUT_CAP
             n_pre = min(cyc, LUT_CAP)
             step = max(1e3, (self.sub["f_end"] - self.sub["f_start"]) / 255.0)
+            self._grid_step_hz = step
             dwell = pat.get("dwell_us")
-            out = preload_hop_sequence(self.fpga, pat, self.sub,
-                                       position=self.position, next_n=n_pre,
-                                       chan_step_hz=step, dwell_us=dwell,
-                                       autonomous=auto, fs_hz=self.fs_hz)
-            pre_n = out["written"]
-            self._autonomous = bool(out["autonomous"])
-            pat["lut_n"] = pre_n
-            pat["visible_only"] = out["visible_only"]
-            if out["visible_only"]:
+            try:
+                out = preload_hop_sequence(self.fpga, pat, self.sub,
+                                           position=self.position, next_n=n_pre,
+                                           chan_step_hz=step, dwell_us=dwell,
+                                           autonomous=auto, fs_hz=self.fs_hz)
+                pre_n = out["written"]
+                self._autonomous = bool(out["autonomous"])
+                pat["lut_n"] = pre_n
+                pat["visible_only"] = out["visible_only"]
+                if out["visible_only"]:
+                    self.transitions.append({
+                        "tick": self._tick_i, "from": self.state, "to": self.state,
+                        "t_s": float(t_s), "action": "visible_part",
+                        "cycle": cyc, "lut_n": pre_n})
+            except (ValueError, RuntimeError) as e:
+                self._autonomous = False
                 self.transitions.append({
                     "tick": self._tick_i, "from": self.state, "to": self.state,
-                    "t_s": float(t_s), "action": "visible_part",
-                    "cycle": cyc, "lut_n": pre_n})
+                    "t_s": float(t_s), "action": "preload_fail",
+                    "why": str(e)})
         self.store.mark_jammed(self.pid)
         self.jams_sent += 1
         self.eff.mark_jam_applied()
@@ -177,10 +190,7 @@ class CognitiveFSM:
 
         self._autonomous = False
         if self.fpga is not None:
-            try:
-                self._set_lut_flag(False)
-            except Exception:
-                pass
+            self._set_lut_flag(False)
             stop_jam(self.fpga)
         self.transitions.append({"tick": self._tick_i, "from": self.state,
                                  "to": self.state, "t_s": round(float(t_s), 6),
@@ -190,7 +200,7 @@ class CognitiveFSM:
     def tick(self, ch_pwr, freqs_hz, t_s: float) -> dict:
         self._tick_i += 1
         self.sweeper.sample_count = int(round(float(t_s) * self.fs_hz))
-        self.fallback.update(ch_pwr, t_s)
+        self._fb = self.fallback.update(ch_pwr, t_s)
         st = self.state
         hop = None
         if st == LISTENING:
@@ -227,6 +237,7 @@ class CognitiveFSM:
 
     def _start_learning(self, t_s: float, hops, parent: dict) -> None:
         self.parent = parent
+        self._live = []
         self.sub = extract_subcorridor(hops, parent["corridor_id"])
         vis = ibw_visibility(self.sub, self.lo_hz, self.ibw_hz)
         if vis["wider_than_ibw"]:
@@ -345,6 +356,7 @@ class CognitiveFSM:
                 rec["dwell_us"] = self.rec.median_dwell_us()
                 rec["dwell_s"] = rec["dwell_us"] / 1e6
             self.drift.set_cycles(int(rec["cycle_length"]))
+            self.drift.reset()
             self._live = self._live[-self._live_cap():]
             self._confirm_base = self.rec.valid_count
             self._go(CONFIRMING, t_s, hops=self.rec.valid_count,
@@ -352,14 +364,15 @@ class CognitiveFSM:
                      visible_only=rec.get("visible_only"))
 
     def _tick_confirming(self, t_s: float) -> None:
+        if self.rec is None or self.sub is None or not self.pid:
+            return
         rec = self.store.get(self.pid)
         cyc = max(1, int(rec["cycle_length"]))
         if self.rec.valid_count < self._confirm_base + cyc:
             return
-        need = match_need(cyc, 8)
         m = self.store.find_match(self._live[-2 * cyc:],
                                   self.sub["sub_corridor_id"],
-                                  min_match=need)
+                                  min_match=8)
         self._confirm_base = self.rec.valid_count
         if m is None or m[2] < MATCH_GO:
             return
@@ -376,9 +389,8 @@ class CognitiveFSM:
                                           self.sub["sub_corridor_id"])
         lp_score = lp if pid2 == self.pid else 0.0
         if nxt is None:
-            fb = self.fallback._tr.predict_next()
-            nxt = fb.get("next_channel")
-            lp_score = float(fb.get("conf") or 0.0)
+            nxt = self._fb.get("next_channel")
+            lp_score = float(self._fb.get("conf") or 0.0)
         d = self.drift.update(lp_score)
         dwell_s = max(self.dt, float(self.store.get(self.pid)
                                      .get("dwell_s", self.dt)))
@@ -396,19 +408,16 @@ class CognitiveFSM:
             self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
             self._lt_hops += 1
             if self._lt_listen:
-                exp = rec["cycle"][self.position % len(rec["cycle"])]
-                obs = hop["channel_idx"]
                 self._lt_listen = False
-                if self.fpga is not None:
-                    try:
-                        self.fpga.set_look_through(False)
-                    except Exception:
-                        pass
-                    if rec.get("lut_n") and not rec.get("visible_only"):
-                        self._set_lut_flag(True)
-                if abs(int(obs) - int(exp)) > 1:
+                cyc = rec.get("cycle") or []
+                if rec.get("lut_n") and not rec.get("visible_only"):
+                    self._set_lut_flag(True)
+                if cyc and abs(int(hop["channel_idx"])
+                               - int(cyc[self.position % len(cyc)])) > 1:
+                    exp = cyc[self.position % len(cyc)]
                     self._stop_jam(t_s, "lookthrough")
-                    self._go(DRIFT_DETECTED, t_s, observed=obs, expected=exp)
+                    self._go(DRIFT_DETECTED, t_s, observed=hop["channel_idx"],
+                             expected=exp)
                     self.rec.reset()
                     self._live = []
                     self._go(RE_LEARNING, t_s)
@@ -417,11 +426,6 @@ class CognitiveFSM:
                 self._lt_hops = 0
                 self._lt_listen = True
                 self._set_lut_flag(False)
-                if self.fpga is not None:
-                    try:
-                        self.fpga.set_look_through(True, period=1, width=1)
-                    except Exception:
-                        pass
             elif not self._autonomous and nxt is not None and lp_score >= 0.7:
                 if nxt != self._last_jam_ch:
                     self._jam_now(t_s)
@@ -432,6 +436,7 @@ class CognitiveFSM:
             self._stop_jam(t_s, "target_silent")
             self._live = []
             self._reacquire_hops = 0
+            self.drift.reset()
             self._go(TARGET_SILENT, t_s)
 
     def _tick_target_silent(self, t_s: float) -> None:
@@ -440,9 +445,12 @@ class CognitiveFSM:
         need = match_need(int(rec.get("cycle_length") or 8), 8)
         if self._reacquire_hops < need:
             return
+        if self.sub is None or self.rec is None:
+            self._go(LISTENING, t_s, note="нет sub/rec")
+            return
         self._go(RE_ACQUIRE, t_s, live_hops=self._reacquire_hops, need=need)
         m = self.store.find_match(self._live[-need:],
-                                  self.sub["sub_corridor_id"], min_match=need)
+                                  self.sub["sub_corridor_id"], min_match=8)
         if m is not None and m[0] == self.pid and m[2] >= MATCH_GO:
             self.position = m[1]
             rec["confidence"] = m[2]
@@ -453,10 +461,17 @@ class CognitiveFSM:
             self.rec.reset()
             self._live = []
             self.pid = None
+            self.drift.reset()
             self._go(LEARNING, t_s, note="новый паттерн")
 
     def _tick_relearning(self, t_s: float) -> None:
-        if self.rec.ready() is not None:
+        from .hop_recorder import MAX_CYCLE
+
+        if self.rec is None or not self.pid:
+            return
+        afh = (self.rec._period is None
+               and self.rec.valid_count >= 2 * MAX_CYCLE)
+        if self.rec.ready() is not None or afh:
             self.store.update_pattern(self.pid, self.rec.hops)
             rec = self.store.get(self.pid)
             apply_timer_cycle(rec, energy=self.rec._energy, dt_s=self.dt)
