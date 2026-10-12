@@ -12,7 +12,7 @@
 |---|---|---|---|
 | `bladerf`, `libbladerf-dev` | без пина (архив Ubuntu) | bladeRF-cli, драйвер платы | [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=bladerf) · [Nuand/bladeRF](https://github.com/Nuand/bladeRF) |
 | `bladerf-firmware-fx3` | без пина | прошивка FX3 (USB) | архив Ubuntu |
-| `bladerf-fpga-hostedxA4` | без пина | стоковый hosted-образ (откат) | архив Ubuntu |
+| `bladerf-fpga-hostedxa4` | без пина | стоковый hosted-образ (откат) | архив Ubuntu |
 | `python3-soapysdr`, `soapysdr-tools` | без пина | сканер/стримы; **pip не подходит** — нужен системный биндинг | [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=soapysdr) · [pothosware/SoapySDR](https://github.com/pothosware/SoapySDR) |
 | `soapysdr-module-bladerf` | без пина | модуль Soapy для bladeRF | [Nuand/SoapyBladeRF](https://github.com/Nuand/SoapyBladeRF) |
 | `python3-usb` (pyusb системный) | ≥ 1.2 | шлюз FPGA под systemd (`/usr/bin/python3`) | архив Ubuntu · [pyusb](https://github.com/pyusb/pyusb) |

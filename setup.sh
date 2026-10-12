@@ -59,7 +59,7 @@ fi
 if [ "$INSTALL" = "1" ]; then
   echo "  … apt: плата, SoapySDR, окно, компилятор"
   sudo apt install -y python3-tk python3-dev build-essential gcc \
-    bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxA4 \
+    bladerf libbladerf-dev bladerf-firmware-fx3 bladerf-fpga-hostedxa4 \
     python3-soapysdr soapysdr-tools soapysdr-module-bladerf \
     python3-numpy python3-usb libusb-1.0-0 || true
   echo "  … pip: tools + fpga + host + лабораторный GPU"
