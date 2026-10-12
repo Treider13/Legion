@@ -17,6 +17,15 @@ LAYOUT_TX_X1 = 1
 CH_RX = 0
 CH_TX = 1
 QUEUE_SLOTS = 16
+MAX_PAIRS = 8
+# Коды libbladeRF.h. Отдельного кода «PLL» в API нет.
+BLADERF_ERR_UNEXPECTED = -1
+BLADERF_ERR_IO = -5
+BLADERF_ERR_TIMEOUT = -6
+BLADERF_ERR_NODEV = -7
+BLADERF_ERR_QUEUE_FULL = -15
+BLADERF_ERR_FPGA_OP = -16
+USB_FAULT = (BLADERF_ERR_IO, BLADERF_ERR_TIMEOUT, BLADERF_ERR_NODEV)
 
 
 class _QuickTune(ctypes.Structure):
@@ -79,6 +88,9 @@ class UsbOwner:
         self.last_timestamp = 0
         self.last_status = 0
         self.overruns = 0
+        self.last_rc = 0
+        self.last_fallback = False
+        self.tune_fails = 0
 
     def acquire(self, ident: str = "") -> int:
         rc = _LIB.bladerf_open(ctypes.byref(self.dev), ident.encode() or None)
@@ -144,35 +156,77 @@ class UsbOwner:
                 return int(rc)
         return 0
 
+    def _set_frequency(self, ch: int, lo_hz: int, tries: int = 3) -> int:
+        """Три попытки. В libbladeRF нет отдельного кода отказа PLL."""
+        last = 0
+        for _ in range(max(1, tries)):
+            last = int(_LIB.bladerf_set_frequency(
+                self.dev, ch, c_uint64(int(lo_hz))))
+            self.last_rc = last
+            if last == 0:
+                self.tune_fails = 0
+                return 0
+            self.tune_fails += 1
+        return last
+
     def capture_pair(self, slot: int, lo_hz: int) -> int:
-        """Полная установка, затем снимок пары. Вызов до старта удара."""
+        """Снимок пары. get_quick_tune на xA4 сам кладёт профиль в NIOS.
+
+        Публичного «сохрани в слот N» в libbladeRF нет (Nuand #1033, 2025).
+        Номер профиля возвращается в nios_profile. Повтор того же номера
+        на другом слоте — это alias, не восемь профилей.
+        """
+        slot = int(slot)
+        if not 0 <= slot < MAX_PAIRS:
+            return BLADERF_ERR_UNEXPECTED
         qt_rx, qt_tx = _QuickTune(), _QuickTune()
-        rc = _LIB.bladerf_set_frequency(self.dev, CH_RX, c_uint64(int(lo_hz)))
+        rc = self._set_frequency(CH_RX, lo_hz)
         if rc != 0:
-            return int(rc)
-        rc = _LIB.bladerf_set_frequency(self.dev, CH_TX, c_uint64(int(lo_hz)))
+            return rc
+        rc = self._set_frequency(CH_TX, lo_hz)
         if rc != 0:
-            return int(rc)
-        rc = _LIB.bladerf_get_quick_tune(self.dev, CH_RX, ctypes.byref(qt_rx))
+            return rc
+        rc = int(_LIB.bladerf_get_quick_tune(
+            self.dev, CH_RX, ctypes.byref(qt_rx)))
         if rc != 0:
-            return int(rc)
-        rc = _LIB.bladerf_get_quick_tune(self.dev, CH_TX, ctypes.byref(qt_tx))
+            return rc
+        rc = int(_LIB.bladerf_get_quick_tune(
+            self.dev, CH_TX, ctypes.byref(qt_tx)))
         if rc != 0:
-            return int(rc)
-        self.tunes[(int(slot), CH_RX)] = qt_rx
-        self.tunes[(int(slot), CH_TX)] = qt_tx
+            return rc
+        for (other, ch), prev in self.tunes.items():
+            if other == slot:
+                continue
+            got = qt_rx if ch == CH_RX else qt_tx
+            if int(prev.nios_profile) == int(got.nios_profile):
+                return BLADERF_ERR_UNEXPECTED
+        self.tunes[(slot, CH_RX)] = qt_rx
+        self.tunes[(slot, CH_TX)] = qt_tx
         return 0
 
     def schedule_pair(self, slot: int, lo_hz: int, timestamp: int) -> int:
-        """Оба профиля на одну метку. NULL quick_tune на xA4 не передаём."""
+        """Оба профиля на одну метку. NULL quick_tune на xA4 не передаём.
+
+        Нет снимка — полный set_frequency сразу, не в метку.
+        BLADERF_ERR_QUEUE_FULL (−15) возвращается вызывающему.
+        """
         ts = c_uint64(int(timestamp))
         freq = c_uint64(int(lo_hz))
+        self.last_fallback = False
+        missing = any(self.tunes.get((int(slot), ch)) is None
+                      for ch in (CH_RX, CH_TX))
+        if missing:
+            self.last_fallback = True
+            for ch in (CH_RX, CH_TX):
+                rc = self._set_frequency(ch, lo_hz)
+                if rc != 0:
+                    return rc
+            return 0
         for ch in (CH_RX, CH_TX):
-            qt = self.tunes.get((int(slot), ch))
-            if qt is None:
-                return -1
-            rc = _LIB.bladerf_schedule_retune(
-                self.dev, ch, ts, freq, ctypes.byref(qt))
+            qt = self.tunes[(int(slot), ch)]
+            rc = int(_LIB.bladerf_schedule_retune(
+                self.dev, ch, ts, freq, ctypes.byref(qt)))
+            self.last_rc = rc
             if rc != 0:
-                return int(rc)
+                return rc
         return 0

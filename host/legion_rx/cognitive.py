@@ -87,13 +87,26 @@ class CognitiveFSM:
         self.jam_duration_s = 15.0
         self._jam_until: "float | None" = None
         self._paused = False
+        self._state_since = 0.0
 
     def _go(self, to: str, t_s: float, **extra) -> None:
+        if to != self.state:
+            self._state_since = float(t_s)
         rec = {"tick": self._tick_i, "from": self.state, "to": to,
                "t_s": round(float(t_s), 6), "pattern_id": self.pid,
                "jams_sent": self.jams_sent, **extra}
         self.transitions.append(rec)
         self.state = to
+
+    def _watch(self, t_s: float) -> None:
+        age = float(t_s) - float(self._state_since)
+        if self.state == CONFIRMING and age > 300.0:
+            self._rescan_origin(t_s, "watchdog_confirming")
+        elif self.state == LEARNING and age > 120.0:
+            self._rescan_origin(t_s, "watchdog_learning")
+        elif self.state == MONITORING and age > 10.0:
+            self._stop_jam(t_s, "watchdog_monitoring")
+            self._go("TARGET_SILENT", t_s, note="watchdog")
 
     def _spec_axis(self) -> tuple:
         half = 0.5 * self.fs_hz
@@ -144,7 +157,10 @@ class CognitiveFSM:
 
     def _arm_look_through(self, dwell_us) -> None:
         """Один раз после автономного LUT: 1 слушающий прыжок из 100.
-        Автономный флаг не снимается, поток не останавливается."""
+        Автономный флаг не снимается. Запись 0x57 идёт через периферийный
+        USB: libbladeRF держит устройство монопольно, поэтому этот тик
+        отпускает поток и забирает его обратно.
+        """
         if self.fpga is None or self._lt_armed or not self._autonomous:
             return
         from .fpga_control import AIR_FS_HZ
@@ -210,18 +226,38 @@ class CognitiveFSM:
                 self.fpga.yield_usb()
             usb = getattr(self, "usb", None)
             if usb is not None and getattr(usb, "open", False):
+                from .libbladerf_owner import BLADERF_ERR_QUEUE_FULL
+                tune_fail = False
+                queue_full = False
                 for i, pair in enumerate(cache.pairs):
-                    usb.capture_pair(i, int(pair["lo_hz"]))
+                    if usb.capture_pair(i, int(pair["lo_hz"])) != 0:
+                        tune_fail = True
+                        break
                 dwell = float(pat.get("dwell_s") or 1e-3)
                 lead = int(getattr(usb, "last_timestamp", 0)) + int(fs_hop * 0.05)
                 marks = cache.batch_marks(scenario, dwell, lead, fs_hop)
                 for batch in cache.chunks(marks):
+                    if tune_fail or queue_full:
+                        break
                     for mark in batch:
                         if mark["full_cal"] or mark["lo_hz"] is None:
                             continue
-                        usb.schedule_pair(int(mark["window"]),
-                                          int(mark["lo_hz"]),
-                                          int(mark["sample"]))
+                        rc = usb.schedule_pair(int(mark["window"]),
+                                               int(mark["lo_hz"]),
+                                               int(mark["sample"]))
+                        if rc == BLADERF_ERR_QUEUE_FULL:
+                            queue_full = True
+                            break
+                        if rc != 0:
+                            tune_fail = True
+                            break
+                if queue_full:
+                    self.transitions.append({
+                        "tick": self._tick_i, "from": self.state,
+                        "to": self.state, "t_s": float(t_s),
+                        "action": "queue_full"})
+                if tune_fail:
+                    self._rescan_origin(t_s, "tune_fail")
             self._lo_plan = plan
             self._lo_scenario = scenario
             jam = {"f_jam_hz": hops[0] if hops else 0.0,
@@ -279,6 +315,7 @@ class CognitiveFSM:
 
     def tick(self, ch_pwr, freqs_hz, t_s: float) -> dict:
         self._tick_i += 1
+        self._watch(float(t_s))
         self.sweeper.sample_count = int(round(float(t_s) * self.fs_hz))
         self._fb = self.fallback.update(ch_pwr, t_s)
         st = self.state
@@ -520,6 +557,7 @@ class CognitiveFSM:
                     heard = float(np.asarray(freqs_hz)[int(np.argmax(ch_pwr))])
                     half = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz) / 2.0
                     if centers and any(abs(heard - float(c)) <= half for c in centers):
+                        # Монопольный libbladeRF: запись регистра отпускает поток.
                         self.fpga.write_reg(0x57, int(self.position) & 0xFF)
             # Listen-hop глушит HDL (REG_LT_*). FLAGS bit4 не снимаем:
             # иначе idx замирает и при повторном AUTO грузится из rsv.
