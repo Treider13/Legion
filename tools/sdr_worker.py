@@ -460,11 +460,13 @@ def rx_is_parked(
 SETTLE_TIME_S = 5e-3
 # soapy_power setup(tune_delay=...): у нас то же 5 мс, что уже обоснованы PLL.
 TUNE_DELAY_S = SETTLE_TIME_S
-# soapy_power --tune-delay (релиз: flush читает и выбрасывает, не sleep).
-# Снимает хвост прошлого хопа. --reset-stream (LimeSDR, deactivate) не
-# используем: на живом readStream это зависание скана.
-# 10 мс > полный retune AD9361 ~3.8 мс плюс очередь USB.
-HOP_FLUSH_S = 10e-3
+# soapy_power --tune-delay: читать и выбрасывать, не sleep и не
+# --reset-stream (LimeSDR deactivate на живом readStream вешает скан).
+# Очередь libbladeRF — buffers×buflen потока, не константа 32×4096.
+# На 61.44 buflen=30720 → 32×30720 = 983040 отсчётов = 16 мс старого LO.
+# Сброс 10 мс (614400) короче этой очереди: FFT так и остаётся первым окном.
+# Плюс полный retune AD9361 ~3.8 мс (lo_sweep.py).
+PLL_FLUSH_S = 4e-3
 
 
 def settle_samples(fs: float = 0.0) -> int:
@@ -477,16 +479,18 @@ def settle_samples(fs: float = 0.0) -> int:
     return min(usb_depth, math.ceil(SETTLE_TIME_S * fs))
 
 
-def hop_flush_samples(fs: float) -> int:
+def hop_flush_samples(fs: float, buflen: int | None = None) -> int:
     """Сколько отсчётов выкинуть после смены LO, не останавливая поток.
 
-    soapy_power tune-delay: читать, пока не пройдёт задержка. Потолок в одну
-    очередь USB (settle_samples) короче retune, и спектр остаётся от первого окна.
+    Nuand: в буферах libbladeRF ещё предыдущая частота. Глубина —
+    buffers×buflen, с которым открыт поток (на 61.44 это 30720, не 4096).
+    Поверх очереди — время retune, пока в неё дописывается хвост.
     """
-    usb_depth = USB_RX_BUFFERS * TRANSFER_SAMPLES
+    one = int(buflen) if buflen and int(buflen) > 0 else TRANSFER_SAMPLES
+    queued = USB_RX_BUFFERS * one
     if not fs or fs <= 0:
-        return usb_depth
-    return max(usb_depth, math.ceil(HOP_FLUSH_S * fs))
+        return queued
+    return queued + math.ceil(PLL_FLUSH_S * fs)
 
 
 class IqRing:
@@ -1229,6 +1233,7 @@ class Radio:
         self._droneid_hold = None
         self._droneid_hold_fs = 0.0
         self._discard_left = 0
+        self._discard_until = 0.0
         self._rx_gen = 0
         self._tune_until = 0.0
         self._rx_io = threading.Lock()
@@ -1285,6 +1290,7 @@ class Radio:
         self._rx_fs = None
         self._rx_bw = None
         self._discard_left = 0
+        self._discard_until = 0.0
         with self._lock:
             if self.dev is not None and SOAPY:
                 try:
@@ -1515,6 +1521,14 @@ class Radio:
         self._rx_bw = None
         self._rx_hz = None
 
+    def _expire_discard(self) -> None:
+        """Потолок по времени: зависший счётчик не держит RPC до убийства на 15 с."""
+        until = self._discard_until
+        if until and self._discard_left > 0 and time.monotonic() >= until:
+            self._discard_left = 0
+            self._discard_until = 0.0
+            self._rx_gen += 1
+
     def _start_rx_capture(self) -> None:
         if self.fake or not NUMPY:
             return
@@ -1567,18 +1581,26 @@ class Radio:
                     continue
                 ret = stream_ret(sr)
                 kind = stream_kind(ret)
-                if kind in ("error", "overflow"):
-                    # overflow: этот блок дырявый, следующий уже из живого USB.
-                    continue
-                if ret <= 0:
+                self._expire_discard()
+                if kind in ("error", "overflow") or ret <= 0:
+                    # overflow/таймаут не уменьшают счётчик. Без потолка по
+                    # времени _wait_psd крутит 2.5 с, а Rust убивает воркер на 15.
                     continue
                 if ret > nreq:
                     ret = nreq
+                left = self._discard_left
+                # Целый буфер в хвосте прошлого LO: не конвертировать в float.
+                # На 61.44 конвертация CF32/CS16 не успевает за USB и даёт overflow.
+                if left >= ret:
+                    self._discard_left = left - ret
+                    if self._discard_left <= 0:
+                        self._discard_until = 0.0
+                        self._rx_gen += 1
+                    continue
                 if self._rx_cs16:
                     chunk = cs16_q11_to_cf32(buf_cs16, ret)
                 else:
                     chunk = buf_cf32[:ret]
-                left = self._discard_left
                 if left > 0:
                     take = min(left, ret)
                     self._discard_left = left - take
@@ -1590,6 +1612,7 @@ class Radio:
                             self._attack_mem.push_block(rest)
                         self._feed_droneid_ring(rest, fs)
                     if self._discard_left <= 0:
+                        self._discard_until = 0.0
                         self._rx_gen += 1
                     continue
                 if self._ring is not None:
@@ -1644,7 +1667,17 @@ class Radio:
         if parked and self._rx_bw == want_bw:
             return self._rx_gen
         retuned = self._rx_hz != center_hz or self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
-        self._rx_pause.set()
+        # Пауза только когда поток гасим (смена часов / поток ещё не жив).
+        # На живом LO пауза останавливает sync_rx при полной очереди.
+        # bladerf_set_frequency ждёт тот же lock, что воркер libbladeRF:
+        # первое окно успевает, следующий хоп висит, Rust убивает воркер на 15 с.
+        quench = (
+            not (self._rx_on and self.rx is not None and alive)
+            or self._rx_fs != fs
+            or (not tx_holds and self._rx_bw != want_bw)
+        )
+        if quench:
+            self._rx_pause.set()
         try:
             with self._rx_io, self._lock:
                 rate_changed = self._rx_fs != fs or self._rx_bw != want_bw or not self._rx_on
@@ -1699,11 +1732,15 @@ class Radio:
                         self._droneid_mem.reset()
                     self._droneid_hold = None
                     self._droneid_hold_fs = 0.0
-                    # Смена только LO: поток жив, вычитываем хвост прошлого окна.
-                    # Смена часов: поток уже перезапущен, хватает короткого settle.
-                    self._discard_left = (
-                        hop_flush_samples(fs) if lo_changed and not rate_changed else settle_samples(fs)
-                    )
+                    # Смена только LO: поток жив, вычитываем всю очередь потока
+                    # плюс retune. Смена часов: поток уже перезапущен, короткий settle.
+                    if lo_changed and not rate_changed:
+                        nflush = hop_flush_samples(fs, self._rx_stream_samples)
+                        self._discard_left = nflush
+                        self._discard_until = time.monotonic() + max(0.05, (nflush / max(fs, 1.0)) * 3.0)
+                    else:
+                        self._discard_left = settle_samples(fs)
+                        self._discard_until = 0.0
                     self._tune_until = time.monotonic() + TUNE_DELAY_S
                     pending = self._rx_gen + 1
                 else:

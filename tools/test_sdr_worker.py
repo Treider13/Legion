@@ -717,7 +717,18 @@ def main() -> int:
     check("смена center: setFrequency снова", md.dev.calls["freq"] == 2)
     check("смена center: rate не тронут", md.dev.calls["rate"] == 1)
     check("смена center: поток не останавливался", md.dev.calls["deact"] == 0)
-    check("hop flush 61.44 = 10 мс", w.hop_flush_samples(61.44e6) == 614_400)
+    # 32×30720 = 983040 отсчётов = 16 мс. Старый сброс 10 мс (614400) короче.
+    queued_6144 = 32 * 30720
+    flush_6144 = w.hop_flush_samples(61.44e6, 30720)
+    check("10 мс короче живой очереди 61.44", queued_6144 > int(0.010 * 61.44e6))
+    check(
+        "hop flush 61.44 покрывает очередь и retune",
+        flush_6144 >= queued_6144 + int(0.004 * 61.44e6),
+    )
+    check(
+        "смена center: дискард покрывает очередь потока",
+        md._discard_left >= 32 * int(md._rx_stream_samples or 1),
+    )
     check("hop flush не короче очереди USB", w.hop_flush_samples(4e6) >= 32 * 4096)
     md._ensure_rx(1e6, 2455e6)  # смена fs — deactivate → перестройка → activate
     check("смена fs: deactivate перед перестройкой", md.dev.calls["deact"] == 1)
