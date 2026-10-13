@@ -37,9 +37,6 @@ MATCH_GO = 0.9
 SILENT_S = 0.100
 P_HOPPING_GO = 0.6
 LOOKTHROUGH_HOPS = 100
-# Бюджет отзыва профиля на границе стоянки. Таймер mute_ns сюда не ставим:
-# молчание держит HDL, пока NIOS отзывает профиль, и снимается стробом.
-STATION_MUTE_NS = 600_000
 NFFT_SPEC = 1024
 
 
@@ -80,8 +77,6 @@ class CognitiveFSM:
         self._tick_i = 0
         self._last_jam_ch: "int | None" = None
         self._autonomous = False
-        self._lo_pending: list = []
-        self._lo_fs = float(fs_hz)
         self.usb_io = None
         self._lt_armed = False
         self._scan_t0 = 0.0
@@ -207,7 +202,7 @@ class CognitiveFSM:
         self._go(LISTENING, t_s, note="rescan_origin",
                  corridor=self.scan_corridor)
 
-    def _jam_now(self, t_s: float, preload: bool = False) -> dict:
+    def _jam_now(self, t_s: float, preload: bool = True) -> dict:
         from .fpga_preload import LUT_CAP
 
         if self.fpga is None:
@@ -309,9 +304,6 @@ class CognitiveFSM:
                 self.fpga.write_reg(lf.REG_CH_LO_KHZ,
                                     int(round(float(slices[0]["lo_hz"]) / 1000.0))
                                     & 0x0FFFFFFF)
-            self._lo_slices = slices
-            self._lo_pending = []
-            self._lo_fs = float(fs_hop)
             # Взгляд — в этой сессии, FLAGS ещё 0. После старта таймера
             # запись снова делает standby, а end_tick кадра перестраивает LO.
             if not tune_fail:
@@ -347,16 +339,10 @@ class CognitiveFSM:
             plan = dict(plan)
             plan["n"] = max(1, len(slices))
             self._lo_plan = plan
-            self._lo_scenario = [(int(sl["start"]), int(sl["slot"])) for sl in slices]
             jam = {"f_jam_hz": hops[0] if hops else 0.0,
                    "shelf": shelf, "stations": len(slices) or 1,
                    "outside_hz": plan.get("outside_hz", 0.0),
                    "slices": len(slices)}
-        else:
-            from .fpga_control import apply_predictive_jam
-            jam = apply_predictive_jam(self.fpga, self.sub, pat,
-                                       position=self.position, lo_hz=self.lo_hz,
-                                       fs_hz=fs_hop, horizon=1)
         pre_n = 0
         if preload:
             cyc = max(1, len(pat.get("cycle") or pat.get("freqs_mhz") or []))
@@ -367,7 +353,6 @@ class CognitiveFSM:
             self.transitions.append({
                 "tick": self._tick_i, "from": self.state, "to": self.state,
                 "t_s": float(t_s), "action": "drfm_shelf",
-                "recall_budget_ns": STATION_MUTE_NS,
                 "stations": jam.get("stations"),
                 "outside_hz": jam.get("outside_hz"),
                 "until": self._jam_until})
@@ -702,38 +687,7 @@ class CognitiveFSM:
             nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
             self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count)
 
-    def _feed_lo_queue(self, t_s: float) -> None:
-        """Очередь retune — 16 мест. Хвост дописывается, когда место освободилось."""
-        pending = list(getattr(self, "_lo_pending", None) or [])
-        if not pending:
-            return
-        usb = getattr(self, "usb", None)
-        if usb is None or not getattr(usb, "open", False):
-            return
-        from .libbladerf_owner import BLADERF_ERR_QUEUE_FULL
-        fs = float(getattr(self, "_lo_fs", None) or self.fs_hz)
-        now = int(getattr(usb, "last_timestamp", 0))
-        guard = max(1, int(fs * 0.002))
-        left: list = []
-        for i, mark in enumerate(pending):
-            ts = int(mark["sample"])
-            if ts <= now:
-                ts = now + guard
-                now = ts
-            rc = usb.schedule_pair(int(mark["window"]), int(mark["lo_hz"]), ts)
-            if rc == BLADERF_ERR_QUEUE_FULL:
-                left = pending[i:]
-                break
-            if rc != 0:
-                self._lo_pending = []
-                self._rescan_origin(t_s, "tune_fail")
-                return
-        else:
-            left = []
-        self._lo_pending = left
-
     def _tick_monitoring(self, ch_pwr, freqs_hz, t_s: float, hop) -> None:
-        self._feed_lo_queue(t_s)
         if self._jam_until is not None and float(t_s) >= float(self._jam_until):
             self._go(RE_SCAN, t_s, note="jam_timer")
             self._rescan_origin(t_s, "jam_timer")
@@ -762,16 +716,8 @@ class CognitiveFSM:
         if hop is not None:
             rec = self.store.get(self.pid)
             self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
-            # Look-through 1/100 уже в HDL. Запись 0x57 с хоста отпускает USB
-            # и добавляет потери в удар — на автономном пути её нет.
-            # Listen-hop глушит HDL (REG_LT_*). FLAGS bit4 не снимаем:
-            # иначе idx замирает и при повторном AUTO грузится из rsv.
-            # LP совпал — идём дальше. Drift уже ушёл в RE_LEARNING выше.
             if nxt is not None and lp_score >= 0.7:
-                if nxt != self._last_jam_ch:
-                    if not self._autonomous:
-                        self._jam_now(t_s)
-                    self._last_jam_ch = nxt
+                self._last_jam_ch = nxt
                 self._go(MONITORING, t_s, keep=True)
         if (self._last_hop_t is not None
                 and float(t_s) - self._last_hop_t > SILENT_S):

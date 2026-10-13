@@ -84,13 +84,11 @@ python3 -m legion_rx.pipeline bench --protocol elrs_24 --duration-s 0.5 --cpu
 ```bash
 pytest host/tests -q   # регрессия + RBF/FHSS
 
-# RBF 72 МГц / 36 MSPS (лаборатория, нужен bladeRF):
-#   flash legionxA4-2026-10-11_23.08.28/legionxA4.rbf
-#   md5 bd0316396c32bb6e615061f3bdf413fe
-#   bladeRF-cli -e "set samplerate rx 36M"
-#   bladeRF-cli -e "print samplerate rx"   # 36000000
-#   rx start 60с; rx status → rx_overruns=0
-#   DATA_CLK=144 МГц. overruns>0 → AD9361 0x006.
+# Образ не пересобирать. Прошивка уже собранного файла:
+#   timing_close_2026-10-12/hop-lt-68mhz-frozen/legionxA4.rbf
+#   md5 4db61f199a08b8e6f3ed1e67caed5ed5
+#   bladeRF-cli -l <этот rbf>
+# Окно приёма этой сборки — 34 МГц. Коридор удара берётся из config.json.
 # FSM (без железа): python3 -m legion_rx.pipeline cognitive --cpu
 ```
 
