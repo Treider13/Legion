@@ -10,7 +10,7 @@ import { normalizePaint } from "../sense/attackPaint";
 import { focusAdvisorTrack, trackUnderMhz } from "./graphite/advisorFocus";
 import { angelRgb } from "../sense/angelPalette";
 import { SDRANGEL_TRACE, sdrangelAutoscale, sdrangelColorIndex } from "../sense/waterfall";
-import { useLegion } from "../state/store";
+import { useLegion, visibleDetectMhz } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
 function yOf(dbm: number, lo: number, hi: number, top: number, h: number): number {
@@ -270,6 +270,25 @@ export function SpectrumScope() {
         strokeBins(base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
       }
       strokeBins(live, SDRANGEL_TRACE, 1.4);
+      const detectMhz = visibleDetectMhz(st.smartGridAccepted, st.attackTracks);
+      if (detectMhz.length > 0) {
+        ctx.lineWidth = 1;
+        ctx.font = "10px ui-monospace, JetBrains Mono, monospace";
+        ctx.textAlign = "center";
+        for (const mhz of detectMhz) {
+          if (mhz < loF || mhz > hiF) continue;
+          const x = xOf(mhz);
+          ctx.strokeStyle = SDRANGEL_TRACE;
+          ctx.beginPath();
+          ctx.moveTo(x, padT);
+          ctx.lineTo(x, padT + plotH);
+          ctx.stroke();
+          if (detectMhz.length <= 12) {
+            ctx.fillStyle = SDRANGEL_TRACE;
+            ctx.fillText(mhz.toFixed(3), x, padT + 11);
+          }
+        }
+      }
       if (st.labShowPeak && peak.length) strokeBins(peak, "#f5c16c", 1.25);
 
       const peakBin = strongestFinite(live);

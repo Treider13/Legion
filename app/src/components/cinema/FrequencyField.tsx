@@ -15,7 +15,7 @@ import {
   shouldPushWaterfallRow,
   waterfallBandChanged,
 } from "../../sense/waterfall";
-import { useLegion } from "../../state/store";
+import { useLegion, visibleDetectMhz } from "../../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "../displayRange";
 
 export function FrequencyField() {
@@ -246,20 +246,36 @@ export function FrequencyField() {
       };
 
       const latest = rows.length > 0 ? rows[rows.length - 1] : null;
-      if (latest && receivedSpectrum) {
+      const traceBins = st.scanSweepBins.length ? st.scanSweepBins : st.scanBins;
+      if (hostPicture && receivedSpectrum && traceBins.length) {
+        strokeDbm(traceBins, SDRANGEL_TRACE, 1.2);
+      } else if (latest && receivedSpectrum) {
         ctx.beginPath();
         for (let c = 0; c < latest.length; c++) {
           const sample = latest[c] ?? Number.NaN;
           if (!Number.isFinite(sample)) continue;
           const mhz = lo + ((c + 0.5) / latest.length) * span;
-          const y = hostPicture ? yOfPower(sample) : baseY - Math.min(1, Math.max(0, sample)) * specH;
+          const y = baseY - Math.min(1, Math.max(0, sample)) * specH;
           const x = xOf(mhz);
           if (c === 0 || !Number.isFinite(latest[c - 1] ?? Number.NaN)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = hostPicture ? SDRANGEL_TRACE : "rgba(236, 230, 218, 0.7)";
+        ctx.strokeStyle = "rgba(236, 230, 218, 0.7)";
         ctx.lineWidth = 1.2;
         ctx.stroke();
+      }
+      const detectMhz = visibleDetectMhz(st.smartGridAccepted, st.attackTracks);
+      if (detectMhz.length > 0 && receivedSpectrum) {
+        ctx.strokeStyle = SDRANGEL_TRACE;
+        ctx.lineWidth = 1;
+        for (const mhz of detectMhz) {
+          if (mhz < lo || mhz > hi) continue;
+          const x = xOf(mhz);
+          ctx.beginPath();
+          ctx.moveTo(x, 8);
+          ctx.lineTo(x, baseY);
+          ctx.stroke();
+        }
       }
       if (st.labShowPeak && st.labPsd.peakHold.length) {
         strokeDbm(st.labPsd.peakHold, "rgba(245, 193, 108, 0.85)", 1.1);

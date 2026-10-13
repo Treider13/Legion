@@ -1010,6 +1010,28 @@ export function peekAcceptedHopsMhz(): number[] {
   return [...gAcceptedHopsMhz];
 }
 
+/** Частоты, которые уже посчитал слух: после «Принять» — каналы коридора,
+ *  иначе живые треки. Остывшие следы на спектр не выводятся. */
+export function visibleDetectMhz(
+  accepted: boolean,
+  tracks: readonly { freqMhz: number; state: string }[],
+): number[] {
+  if (accepted) {
+    const hops = peekAcceptedHopsMhz();
+    if (hops.length > 0) return hops;
+  }
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const track of tracks) {
+    if (track.state === "cooled" || !(track.freqMhz > 0)) continue;
+    const key = Math.round(track.freqMhz * 1000);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key / 1000);
+  }
+  return out;
+}
+
 /** Тест: подложить FHSS look в слух умной атаки. */
 export function seedSmartListenForTest(look: AttackLook, hopsMhz: readonly number[]): void {
   gAttackMemory.reset();

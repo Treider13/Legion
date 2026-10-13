@@ -36,7 +36,7 @@ import {
   waveAmpQ15,
 } from "../src/sdr/waveforms";
 import { defaultFlashName, defaultEthHost, imagesFor, planEthernet, sdrOpenArgs } from "../src/sdr/official";
-import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, peekSmartAccepted, peekSmartListen, pokeLastKickOkMs, seedSmartListenForTest, useLegion, walkoffArmOpts } from "../src/state/store";
+import { fpgaBoardPlan, fpgaGatewayRefused, fpgaLegionMissing, fpgaPlayerReady, peekFpgaAirGen, peekFpgaArmGen, peekFpgaSoloGen, peekSmartAccepted, peekSmartListen, pokeLastKickOkMs, seedSmartListenForTest, useLegion, visibleDetectMhz, walkoffArmOpts } from "../src/state/store";
 import { firmwareDoesTask, firmwareFileDoesTask, rejectAlienFirmware } from "../src/sdr/task";
 import { HandoffGate, planHandoff } from "../src/sense/fastpath";
 import {
@@ -2123,6 +2123,15 @@ async function main(): Promise<void> {
     const [lr, lg, lb] = angelRgb(0);
     const [hr, hg, hb] = angelRgb(239);
     check("Angel: пол темнее пика", hr + hg + hb > lr + lg + lb + 80);
+  }
+  {
+    const marks = visibleDetectMhz(false, [
+      { freqMhz: 2440.0002, state: "confirmed" },
+      { freqMhz: 2440.0004, state: "held" },
+      { freqMhz: 2451, state: "cooled" },
+      { freqMhz: 2462.5, state: "new" },
+    ]);
+    check("спектр: найденные частоты, без остывшего следа", marks.length === 2 && marks[0] === 2440 && marks[1] === 2462.5);
   }
   const wr = rowFromBins(
     [
