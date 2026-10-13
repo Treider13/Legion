@@ -47,66 +47,103 @@ class HopRecorder:
         self._grid_f0: "float | None" = None
         self._grid_step: "float | None" = None
         self._cur_mhz: "float | None" = None
+        self._cur_pwr = 0.0
+        self._lock_floor = 1.0
+        self._hold_k: "int | None" = None
+        self._hold_n = 0
         self.hole_count = 0
 
+    def _emit_open(self, t_s: float, freqs) -> "dict | None":
+        """Закрыть открытый скачок. Тишина и смена окна тоже закрывают."""
+        if self._cur is None:
+            return None
+        dwell_us = (float(t_s) - self._cur_t0) * 1e6
+        if self._grid_f0 is not None and self._cur_mhz is not None:
+            freq_mhz = self._cur_mhz
+        elif 0 <= int(self._cur) < len(freqs):
+            freq_mhz = float(freqs[int(self._cur)]) / 1e6
+        else:
+            freq_mhz = float(self._cur_mhz or 0.0)
+        hop = {
+            "seq_num": self._seq,
+            "channel_idx": int(self._cur),
+            "freq_mhz": freq_mhz,
+            "hole": False,
+            "dwell_us": dwell_us,
+            "t_start": self._cur_t0,
+            "sample_count": self._frames * self.spf,
+            "confidence": float(min(
+                1.0, self._cur_pwr / (self._lock_floor + 1e-12) / 3.0)),
+        }
+        self._seq += 1
+        if len(self._dwells) < 4:
+            valid = True
+        else:
+            med = float(np.median(self._dwells[-16:]))
+            valid = abs(dwell_us - med) <= FHSDT_TOL * med
+        hop["fhsdt_valid"] = bool(valid)
+        self._dwells.append(dwell_us)
+        self.hops.append(hop)
+        self.valid_count += 1
+        self._cur = None
+        self._cur_mhz = None
+        return hop
+
+    def flush(self, t_s: float, freqs_hz) -> "dict | None":
+        """Сбросить открытый скачок в ряд до смены окна.
+        Только что открытый (длительность ещё ноль) — не скачок."""
+        self._hold_k = None
+        self._hold_n = 0
+        if self._cur is None or float(t_s) <= float(self._cur_t0):
+            self._cur = None
+            self._cur_mhz = None
+            return None
+        return self._emit_open(t_s, np.asarray(freqs_hz, dtype=np.float64))
+
     def update(self, ch_pwr, freqs_hz, t_s: float) -> "dict | None":
-        """Тик. Возвращает запись скачка при смене доминантного канала."""
+        """Тик. Скачок пишется, когда громкий канал сменился или погас.
+        Бин выше своего пола два кадра подряд. Один кадр — не вспышка."""
         p = np.asarray(ch_pwr, dtype=np.float64)
         f = np.asarray(freqs_hz, dtype=np.float64)
         self._frames += 1
         self._energy.append(float(np.max(p)) if p.size else 0.0)
-        # маска sub-corridor: вне границ — нули
         mask = np.array([in_subcorridor(x, self.sub) for x in f])
         if not mask.any():
-            return None
+            return self.flush(t_s, f)
         p_sub = np.where(mask, p, 0.0)
         floor = float(np.median(p_sub[mask]))
-        mad = float(np.median(np.abs(p_sub[mask] - floor))) + 1e-12
-        thr = floor + 6.0 * 1.4826 * mad
         k = int(np.argmax(p_sub))
-        dom = k if p_sub[k] > thr else None
-        if dom is not None:
+        above = bool(p_sub[k] > floor)
+        if above and k == self._hold_k:
+            self._hold_n += 1
+        elif above:
+            self._hold_k = k
+            self._hold_n = 1
+        else:
+            self._hold_k = None
+            self._hold_n = 0
+        if above:
             self._active += 1
-        self.duty_cycle = self._active / max(1, self._frames)  # FHSDC [G6]
+        self.duty_cycle = self._active / max(1, self._frames)
+        if not above or self._hold_n < 2:
+            if not above:
+                return self._emit_open(t_s, f)
+            return None
+        dom = k
         dom_ch = dom
         dom_mhz = None
-        if dom is not None and self._grid_f0 is not None:
+        if self._grid_f0 is not None:
             dom_mhz = float(f[dom]) / 1e6
             dom_ch = self._grid_ch(float(f[dom]))
-        if dom is None or dom_ch == self._cur:
+        if dom_ch == self._cur:
+            self._cur_pwr = float(p_sub[k])
             return None
-        # смена канала → закрываем предыдущий скачок
-        hop = None
-        if self._cur is not None:
-            dwell_us = (float(t_s) - self._cur_t0) * 1e6
-            if self._grid_f0 is not None and self._cur_mhz is not None:
-                freq_mhz = self._cur_mhz
-            else:
-                freq_mhz = float(f[self._cur]) / 1e6
-            hop = {
-                "seq_num": self._seq,
-                "channel_idx": self._cur,
-                "freq_mhz": freq_mhz,
-                "hole": False,
-                "dwell_us": dwell_us,
-                "t_start": self._cur_t0,
-                "sample_count": self._frames * self.spf,
-                "confidence": float(min(1.0, p_sub[k] / (thr + 1e-12) / 3.0)),
-            }
-            self._seq += 1
-            # FHSDT: dwell в ±20% от медианы предыдущих [G6]
-            if len(self._dwells) < 4:
-                valid = True  # bootstrap первых скачков
-            else:
-                med = float(np.median(self._dwells[-16:]))
-                valid = abs(dwell_us - med) <= FHSDT_TOL * med
-            hop["fhsdt_valid"] = bool(valid)
-            self._dwells.append(dwell_us)
-            self.hops.append(hop)
-            self.valid_count += 1
-        self._cur = dom_ch
+        hop = self._emit_open(t_s, f)
+        self._cur = int(dom_ch)
         self._cur_mhz = dom_mhz
         self._cur_t0 = float(t_s)
+        self._cur_pwr = float(p_sub[k])
+        self._lock_floor = floor
         return hop
 
     def _grid_ch(self, freq_hz: float) -> int:
@@ -166,11 +203,11 @@ class HopRecorder:
             if hole:
                 self.hole_count += 1
             self.valid_count += 1
-        if self.hops:
-            last = self.hops[-1]
-            self._cur = last["channel_idx"]
-            self._cur_mhz = last["freq_mhz"]
-            self._cur_t0 = last["t_start"] + last["dwell_us"] * 1e-6
+        # Ряд уже закрыт. Открытый канал заставил бы записать последний скачок ещё раз.
+        self._cur = None
+        self._cur_mhz = None
+        self._hold_k = None
+        self._hold_n = 0
         return len(self.hops)
 
     def append_stitched(self, rows: list) -> int:
@@ -226,11 +263,10 @@ class HopRecorder:
             self._period = None
             self._checked = 0
             self.valid_count = len(self.hops)
-        if self.hops:
-            last = self.hops[-1]
-            self._cur = last["channel_idx"]
-            self._cur_mhz = last["freq_mhz"]
-            self._cur_t0 = last["t_start"] + float(last["dwell_us"]) * 1e-6
+        self._cur = None
+        self._cur_mhz = None
+        self._hold_k = None
+        self._hold_n = 0
         return added
 
     def median_dwell_us(self) -> "float | None":
@@ -239,7 +275,8 @@ class HopRecorder:
         return float(np.median(self._dwells))
 
     def ready(self) -> "tuple | None":
-        """Период найден и записано ≥ 2 полных цикла."""
+        """Период найден и записано ≥ 2 полных цикла.
+        Дырка переезда — пометка, ряд из-за неё не рвётся: бьём по всему коридору."""
         from .pattern_store import find_period_tolerant
 
         if self._period is None:

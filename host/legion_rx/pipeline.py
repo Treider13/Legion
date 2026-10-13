@@ -968,8 +968,8 @@ class _UsbHandoff:
 def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                         fsm=None, stop_event=None) -> int:
     """Живой IQ: UsbOwner → FIFO → C-читатель → PFB → FSM."""
-    from .cognitive import CognitiveFSM
-    from .lo_sweep import plan_windows, window_hz
+    from .cognitive import CONFIRMING, CognitiveFSM, INITIAL_SCAN, LEARNING
+    from .lo_sweep import plan_windows, stitch_power, window_hz
     from .pattern_store import PatternStore
     from .pfb import Channelizer, chans_for_corridor
     from . import fpga_control as fc
@@ -1024,6 +1024,8 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     paint_q: queue.Queue = queue.Queue(maxsize=1)
     log_q: queue.Queue = queue.Queue(maxsize=64)
     side_stop = threading.Event()
+    pass_snap: dict = {}
+    prev_win = None
 
     def _paint_log() -> None:
         while not side_stop.is_set() or not paint_q.empty() or not log_q.empty():
@@ -1033,16 +1035,33 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
             except queue.Empty:
                 item = None
             if item is not None and pub is not None:
-                snap, lo_hz, pwr_row = item
-                spec = np.asarray(spectrum_db(snap, 1024, 512, np))
-                half = 0.5 * float(fs)
-                pub.send_wf_row(
-                    spec,
-                    f_start_hz=float(lo_hz) - half,
-                    f_end_hz=float(lo_hz) + half)
-                pub.send_spec(spec)
-                if pwr_row is not None:
-                    pub.send_ch_pwr(pwr_row)
+                kind = item[0]
+                if kind == "pass":
+                    _tag, snaps, wins, pwr_row = item
+                    segments = {}
+                    for idx, (snap, lo_hz) in snaps.items():
+                        spec = np.asarray(
+                            spectrum_db(snap, 1024, 512, np), dtype=np.float64)
+                        segments[int(idx)] = (
+                            float(lo_hz), np.power(10.0, spec / 10.0))
+                    stitched = stitch_power(segments, wins, fs)
+                    if stitched is not None:
+                        row, f_a, f_b = stitched
+                        pub.send_wf_row(row, f_start_hz=f_a, f_end_hz=f_b)
+                        pub.send_spec(row)
+                    if pwr_row is not None:
+                        pub.send_ch_pwr(pwr_row)
+                else:
+                    _tag, snap, lo_hz, pwr_row = item
+                    spec = np.asarray(spectrum_db(snap, 1024, 512, np))
+                    half = 0.5 * float(fs)
+                    pub.send_wf_row(
+                        spec,
+                        f_start_hz=float(lo_hz) - half,
+                        f_end_hz=float(lo_hz) + half)
+                    pub.send_spec(spec)
+                    if pwr_row is not None:
+                        pub.send_ch_pwr(pwr_row)
             try:
                 rec_line = log_q.get_nowait()
             except queue.Empty:
@@ -1105,15 +1124,42 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                 if int(iq.size) >= 1024:
                     snap = np.array(iq[:1024], copy=True)
                     pwr_row = np.array(pwr, copy=True) if frames % 20 == 0 else None
-                    if paint_q.full():
+                    nwin = len(fsm.sweeper.windows)
+                    scanning = (nwin > 1 and fsm.state in
+                                (INITIAL_SCAN, LEARNING, CONFIRMING))
+                    idx = int(fsm.sweeper.idx)
+                    item = None
+                    if scanning and prev_win is not None and idx < prev_win and pass_snap:
+                        wins = [{
+                            "index": int(w["index"]),
+                            "f_start": float(w["f_start"]),
+                            "f_end": float(w["f_end"]),
+                            "f_center": float(w["f_center"]),
+                        } for w in fsm.sweeper.windows]
+                        # Свой снимок для потока картинки: радио его больше не трогает.
+                        snaps = {
+                            int(i): (np.array(s, copy=True), float(lo_i))
+                            for i, (s, lo_i) in pass_snap.items()
+                        }
+                        item = ("pass", snaps, wins, pwr_row)
+                        pass_snap.clear()
+                    if scanning:
+                        pass_snap[idx] = (snap, float(fsm.lo_hz))
+                        prev_win = idx
+                    else:
+                        item = ("live", snap, float(fsm.lo_hz), pwr_row)
+                        prev_win = None
+                        pass_snap.clear()
+                    if item is not None:
+                        if paint_q.full():
+                            try:
+                                paint_q.get_nowait()
+                            except queue.Empty:
+                                pass
                         try:
-                            paint_q.get_nowait()
-                        except queue.Empty:
+                            paint_q.put_nowait(item)
+                        except queue.Full:
                             pass
-                    try:
-                        paint_q.put_nowait((snap, float(fsm.lo_hz), pwr_row))
-                    except queue.Full:
-                        pass
             if frames % 20 == 0:
                 try:
                     log_q.put_nowait({

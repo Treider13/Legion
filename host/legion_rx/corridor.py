@@ -2,7 +2,7 @@
 
 Вход на тик: вектор мощности по бинам (CH_PWR PFB или спектр) + freqs.
 Порог — ДИНАМИЧЕСКИЙ на бин [G1]: EMA-оценка шумового пола каждого бина,
-активность = power > floor·k_sigma. Всплески тегируются start/end/freq.
+активность = бин выше своего пола два кадра подряд. Всплески тегируются start/end/freq.
 
 P(hopping|data) [G2]: лог-шансы обновляются признаками окна (регулярность
 интервалов CV, duty cycle, число всплесков); hop rate = mean ± 95% CI по
@@ -39,6 +39,7 @@ class CorridorDetector:
         self._frames = 0
         self._log_odds = 0.0        # байесовские лог-шансы P(hopping) [G2]
         self._evals = 0
+        self._hold = None
 
     # ---- [G1] FFT Burst Detector: динамический порог на бин ----
 
@@ -53,7 +54,12 @@ class CorridorDetector:
             self._prev_active = np.zeros(p.size, dtype=bool)
             self._recent = np.zeros(p.size, dtype=np.int32)
         floor = self._floor
-        active = p > floor * self.k
+        # Выше своего пола, два кадра подряд. Один отсчёт на уровне пола — не вспышка.
+        raw = p > floor
+        if self._hold is None or self._hold.shape != p.shape:
+            self._hold = np.zeros(p.size, dtype=np.int32)
+        self._hold = np.where(raw, np.minimum(self._hold + 1, 2), 0)
+        active = self._hold >= 2
         # EMA-пол обновляем ТОЛЬКО неактивными бинами: сигнал себя не топит
         mask = ~active
         floor[mask] = (1 - self.ema_a) * floor[mask] + self.ema_a * p[mask]

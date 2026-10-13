@@ -394,7 +394,7 @@ class CognitiveFSM:
         hop = None
         wide = self._wide()
         if st == LISTENING:
-            self._tick_listening(ch_pwr, freqs_hz, t_s)
+            hop = self._tick_listening(ch_pwr, freqs_hz, t_s)
         elif st == INITIAL_SCAN or (wide and st in (LEARNING, CONFIRMING)):
             hop = self._tick_scan(ch_pwr, freqs_hz, t_s)
         else:
@@ -403,7 +403,7 @@ class CognitiveFSM:
                 p = np.asarray(ch_pwr, dtype=float)
                 k = int(np.argmax(p))
                 med = float(np.median(p)) + 1e-12
-                if p[k] > 6.0 * med:
+                if p[k] > med:
                     self._listen_freqs.append(float(np.asarray(freqs_hz)[k]))
                     self._expand_sub()
             hop = self.rec.update(ch_pwr, freqs_hz, t_s) if self.rec else None
@@ -483,18 +483,31 @@ class CognitiveFSM:
                 "tick": self._tick_i, "from": self.state, "to": self.state,
                 "t_s": float(t_s), "action": "replay_fail", "error": str(exc)})
 
-    def _tick_listening(self, ch_pwr, freqs_hz, t_s: float) -> None:
+    def _note_hop(self, hop, t_s: float) -> None:
+        if hop is None:
+            return
+        self._live.append(int(hop["channel_idx"]))
+        self._live = self._live[-self._live_cap():]
+        self._last_hop_t = float(t_s)
+
+    def _flush_open(self, freqs_hz, t_s: float):
+        """Открытый скачок в ряд до замены окна. С окном его не выбрасываем."""
+        if self.rec is None:
+            return None
+        hop = self.rec.flush(t_s, freqs_hz)
+        if hop is None:
+            return None
+        hop["sample_count"] = self.sweeper.sample_count
+        self.sweeper.on_hop(hop)
+        self._note_hop(hop, t_s)
+        return hop
+
+    def _tick_listening(self, ch_pwr, freqs_hz, t_s: float):
         replay = getattr(self, "replay_pattern", None)
         if replay:
             self.replay_pattern = None
             self._replay(replay, t_s)
-            return
-        out = self.det.update(ch_pwr, freqs_hz, t_s)
-        for b in out["bursts"]:
-            self._listen_freqs.append(float(b["f_center"]))
-        self._listen_freqs = self._listen_freqs[-64:]
-        post = self.det.posterior()
-        hops = self._listen_freqs
+            return None
         pair = self._corridor_hz()
         if pair:
             a, b = pair
@@ -506,7 +519,20 @@ class CognitiveFSM:
                     self.lo_hz = w["f_center"]
                 self._scan_t0 = float(t_s)
                 self._go(INITIAL_SCAN, t_s, windows=len(self.sweeper.windows))
-                return
+                return None
+            self.lo_hz = 0.5 * (float(a) + float(b))
+            parent = {"corridor_id": "operator",
+                      "f_start": float(a), "f_end": float(b)}
+            self._start_learning(t_s, [float(a), float(b)], parent)
+            hop = self.rec.update(ch_pwr, freqs_hz, t_s) if self.rec else None
+            self._note_hop(hop, t_s)
+            return hop
+        out = self.det.update(ch_pwr, freqs_hz, t_s)
+        for b in out["bursts"]:
+            self._listen_freqs.append(float(b["f_center"]))
+        self._listen_freqs = self._listen_freqs[-64:]
+        post = self.det.posterior()
+        hops = self._listen_freqs
         if post["p_hopping"] >= P_HOPPING_GO and hops:
             parent = max(out["corridors"], key=lambda c: c["power"]) if out["corridors"] else {
                 "corridor_id": "listen",
@@ -522,8 +548,9 @@ class CognitiveFSM:
                 self.parent = parent
                 self._scan_t0 = float(t_s)
                 self._go(INITIAL_SCAN, t_s, windows=len(self.sweeper.windows))
-                return
+                return None
             self._start_learning(t_s, hops, parent)
+        return None
 
     def _wide(self) -> bool:
         """Коридор шире одного окна 34 МГц — обход не останавливается на первом круге."""
@@ -584,6 +611,9 @@ class CognitiveFSM:
             self._live = self._live[-self._live_cap():]
             self._last_hop_t = float(t_s)
         if self.sweeper.dwell_done(t_s, self._scan_t0):
+            flushed = self._flush_open(freqs_hz, t_s)
+            if hop is None:
+                hop = flushed
             if self.sweeper.advance(self.sweeper.sample_count):
                 w = self.sweeper.current()
                 if w:
@@ -592,6 +622,7 @@ class CognitiveFSM:
                     self.rec = HopRecorder(
                         extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
                         n_chans=self.n_chans, samples_per_frame=self.spf)
+                self._live = []
                 self._scan_t0 = float(t_s)
             elif self._wide():
                 self._absorb_lap(t_s)
@@ -605,6 +636,7 @@ class CognitiveFSM:
                     self.rec = HopRecorder(
                         extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
                         n_chans=self.n_chans, samples_per_frame=self.spf)
+                self._live = []
                 self._scan_t0 = float(t_s)
             else:
                 fin = self.sweeper.finish()

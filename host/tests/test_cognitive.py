@@ -6,8 +6,8 @@ import pytest
 import legion_fpga as lf
 from legion_gateway import FakeTransport
 from legion_rx import fpga_control as fc
-from legion_rx.cognitive import (CONFIRMING, DRIFT_DETECTED, JAMMING,
-                                 LEARNING, LISTENING, MONITORING,
+from legion_rx.cognitive import (CONFIRMING, DRIFT_DETECTED, INITIAL_SCAN,
+                                 JAMMING, LEARNING, LISTENING, MONITORING,
                                  RE_ACQUIRE, RE_LEARNING, TARGET_SILENT,
                                  CognitiveFSM)
 from legion_rx.corridor import CorridorDetector, extract_subcorridor
@@ -79,8 +79,11 @@ def test_corridor_two_found():
 def test_corridor_fhss_vs_narrowband():
     f = _freqs()
     det_fhss = CorridorDetector()
-    for i, v in enumerate(air_cycle(20)):
-        det_fhss.update(v, f, (i + 1) * 1e-3)
+    t = 0.0
+    for v in air_cycle(20):
+        for _rep in range(2):
+            t += 1e-3
+            det_fhss.update(v, f, t)
     p_fhss = det_fhss.posterior()
     det_nb = CorridorDetector()
     for i in range(20):
@@ -88,7 +91,7 @@ def test_corridor_fhss_vs_narrowband():
     p_nb = det_nb.posterior()
     assert p_fhss["p_hopping"] > 0.6, p_fhss
     assert p_nb["p_hopping"] <= 0.6, p_nb
-    assert p_fhss["hop_rate_hz"] == pytest.approx(1000.0, rel=0.3)
+    assert p_fhss["hop_rate_hz"] == pytest.approx(500.0, rel=0.3)
 
 
 def test_extract_subcorridor_exact():
@@ -106,8 +109,12 @@ def test_hop_recorder_commits_at_16():
     при ≥2 циклах. 16 кадров период ещё не закрывают."""
     sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
     rec = HopRecorder(sub)
-    for i, v in enumerate(air_cycle(40)):
-        rec.update(v, _freqs(), (i + 1) * 1e-3)
+    t = 0.0
+    f = _freqs()
+    for v in air_cycle(40):
+        for _rep in range(2):
+            t += 1e-3
+            rec.update(v, f, t)
     assert rec.valid_count >= 2 * len(CYCLE)
     store = PatternStore()
     pid = rec.maybe_commit(store)
@@ -241,6 +248,7 @@ def _run_fsm(frames, shift_at=None, shift=20):
     fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
     fsm = CognitiveFSM(store, M, FS, LO, fpga=fpga, frame_dt_s=1e-3)
     f = _freqs()
+    step = 0
     for i, v in enumerate(frames):
         if shift_at is not None and i >= shift_at:
             vv = v.copy()
@@ -249,7 +257,10 @@ def _run_fsm(frames, shift_at=None, shift=20):
                 vv[peak] = 1.0
                 vv[(peak + shift) % 64] = 100.0
             v = vv
-        fsm.tick(v, f, (i + 1) * 1e-3)
+        # Вспышка — два кадра выше пола. Один кадр в ряд не пишется.
+        for _rep in range(2):
+            step += 1
+            fsm.tick(v, f, step * 1e-3)
     return fsm, store, fpga
 
 
@@ -293,3 +304,180 @@ def test_no_jam_without_confirmed():
     fsm, store, fpga = _run_fsm(frames)
     assert fsm.jams_sent == 0
     assert fsm.state in (LEARNING, CONFIRMING, LISTENING)
+
+
+def test_one_frame_is_not_a_hop_and_silence_closes():
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    rec = HopRecorder(sub)
+    f = _freqs()
+    assert rec.update(air_frame(28), f, 1e-3) is None
+    assert rec.hops == []
+    assert rec.update(air_frame(28), f, 2e-3) is None
+    hop = rec.update(air_frame(None), f, 3e-3)
+    assert hop is not None and hop["channel_idx"] == 28
+    assert len(rec.hops) == 1
+    # Слабее старого порога ×6, но выше пола — тоже вспышка, если держится два кадра.
+    weak = HopRecorder(sub)
+    soft = air_frame(30, peak=2.0, noise=1.0)
+    assert weak.update(soft, f, 1e-3) is None
+    assert weak.hops == []
+    assert weak.update(soft, f, 2e-3) is None
+    hop2 = weak.update(air_frame(None), f, 3e-3)
+    assert hop2 is not None and hop2["channel_idx"] == 30
+
+
+def test_flush_keeps_open_hop():
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    rec = HopRecorder(sub)
+    f = _freqs()
+    rec.update(air_frame(28), f, 1e-3)
+    rec.update(air_frame(28), f, 2e-3)
+    hop = rec.flush(3e-3, f)
+    assert hop is not None and hop["channel_idx"] == 28
+    assert rec.hops[-1]["channel_idx"] == 28
+
+
+def test_operator_window_starts_row_without_score():
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2417e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2434e6), ibw_hz=34e6)
+    fsm.tick(air_frame(None), _freqs(), 1e-3)
+    assert fsm.state == LEARNING
+    wide = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                        scan_corridor=(2400e6, 2480e6), ibw_hz=34e6)
+    wide.tick(air_frame(None), _freqs(), 1e-3)
+    assert wide.state == INITIAL_SCAN
+    assert len(wide.sweeper.windows) == 3
+    hundred = CognitiveFSM(store, M, 34e6, 2450e6, fpga=fpga,
+                           scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    hundred.tick(air_frame(None), _freqs(), 1e-3)
+    assert len(hundred.sweeper.windows) == 4
+
+
+def test_stitch_drops_skirt_and_keeps_both_visits():
+    from legion_rx.lo_sweep import EDGE_GUARD, LoSweeper
+
+    sw = LoSweeper(ibw_hz=34e6, fs_hz=34e6)
+    sw.setup(2400e6, 2480e6)
+    assert len(sw.windows) == 3
+    w0, w1 = sw.windows[0], sw.windows[1]
+    span0 = w0["f_end"] - w0["f_start"]
+    span1 = w1["f_end"] - w1["f_start"]
+    edge = w0["f_start"] + 0.02 * span0
+    a = max(w0["f_start"] + EDGE_GUARD * span0,
+            w1["f_start"] + EDGE_GUARD * span1)
+    b = min(w0["f_end"] - EDGE_GUARD * span0,
+            w1["f_end"] - EDGE_GUARD * span1)
+    assert b > a
+    mid = 0.5 * (a + b)
+    gap = int(round(0.01 * 34e6))
+    sw.hops[0].append({
+        "freq_mhz": edge / 1e6, "sample_count": 1000, "t_start": 0.0,
+        "window": 0, "dwell_us": 500.0, "channel_idx": 1,
+    })
+    sw.hops[0].append({
+        "freq_mhz": mid / 1e6, "sample_count": 2000, "t_start": 0.001,
+        "window": 0, "dwell_us": 500.0, "channel_idx": 2,
+    })
+    sw.hops[1].append({
+        "freq_mhz": mid / 1e6, "sample_count": 2000 + gap, "t_start": 0.02,
+        "window": 1, "dwell_us": 500.0, "channel_idx": 2,
+    })
+    out = sw.stitch()
+    freqs = [round(h["freq_mhz"], 3) for h in out]
+    assert round(edge / 1e6, 3) not in freqs
+    # Два разных момента одной частоты — два скачка. Картинка клеит шов отдельно.
+    assert freqs.count(round(mid / 1e6, 3)) == 2
+    assert out[-1]["hole"] is True
+
+
+def test_corridor_middles_cover_band():
+    from legion_rx.lo_sweep import EDGE_GUARD, plan_windows
+
+    wins = plan_windows(2300e6, 2500e6, ibw_hz=34e6)
+    assert len(wins) >= 2
+    covered = []
+    for w in wins:
+        span = w["f_end"] - w["f_start"]
+        g = EDGE_GUARD * span
+        covered.append((w["f_start"] + g, w["f_end"] - g))
+    assert covered[0][0] == pytest.approx(2300e6)
+    assert covered[-1][1] == pytest.approx(2500e6)
+    for (a0, b0), (a1, _b1) in zip(covered, covered[1:]):
+        assert a1 <= b0 + 1.0
+    # 2350–2440 целиком в серединах, без щели
+    cursor = 2350e6
+    for a, b in covered:
+        if b < cursor or a > 2440e6:
+            continue
+        if a <= cursor:
+            cursor = max(cursor, b)
+    assert cursor >= 2440e6
+
+
+def test_stitched_row_does_not_reopen():
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    rec = HopRecorder(sub)
+    freq = float(_freqs()[28]) / 1e6
+    rec.load_stitched([{
+        "freq_mhz": freq, "sample_count": 1000, "dwell_us": 500.0,
+        "t_start": 0.0, "hole": False,
+    }])
+    n = len(rec.hops)
+    rec.update(air_frame(None), _freqs(), 1.0)
+    assert len(rec.hops) == n
+
+
+def test_hole_stays_in_the_jam_row():
+    sub = extract_subcorridor([2400e6, 2480e6], "p")
+    rec = HopRecorder(sub, n_chans=64)
+    seq = [0, 1, 2, 3] * 6
+    rec.hops = [{
+        "channel_idx": c, "freq_mhz": 2400.0 + 0.2 * c,
+        "dwell_us": 1000.0, "hole": i == 8,
+    } for i, c in enumerate(seq)]
+    rec.valid_count = len(rec.hops)
+    store = PatternStore()
+    pid = rec.maybe_commit(store)
+    assert pid
+    assert store.patterns[pid]["hop_sequence"] == seq
+    assert rec.hops[8]["hole"] is True
+
+
+def test_seam_blends_linear_power():
+    from legion_rx.lo_sweep import stitch_power
+
+    w0 = {"index": 0, "f_start": 2400e6, "f_end": 2434e6, "f_center": 2417e6}
+    db, f0, f1 = stitch_power(
+        {0: (2417e6, np.full(128, 100.0))}, [w0], 34e6, n_out=64)
+    # На картинке коридор — середина окна, юбка фильтра в ось не входит.
+    assert f0 == pytest.approx(2403.4e6, rel=1e-6)
+    assert f1 == pytest.approx(2430.6e6, rel=1e-6)
+    assert db[0] == pytest.approx(20.0, abs=1.0)
+    assert db[len(db) // 2] == pytest.approx(20.0, abs=1.0)
+    w1 = {"index": 1, "f_start": 2423e6, "f_end": 2457e6, "f_center": 2440e6}
+    span0 = w0["f_end"] - w0["f_start"]
+    span1 = w1["f_end"] - w1["f_start"]
+    a = max(w0["f_start"] + 0.10 * span0, w1["f_start"] + 0.10 * span1)
+    b = min(w0["f_end"] - 0.10 * span0, w1["f_end"] - 0.10 * span1)
+    mid_f = 0.5 * (a + b)
+    mixed, fa, fb = stitch_power(
+        {0: (w0["f_center"], np.full(128, 100.0)),
+         1: (w1["f_center"], np.full(128, 10.0))},
+        [w0, w1], 34e6, n_out=256)
+    axis = np.linspace(fa, fb, mixed.size)
+    i = int(np.argmin(np.abs(axis - mid_f)))
+    # 50/50 по мощности: 55 → ~17.4 дБ. Среднее децибел было бы 15.
+    assert mixed[i] == pytest.approx(17.4, abs=1.5)
+    # Стык без нахлёста не проваливается в −120.
+    left = {"index": 0, "f_start": 2400e6, "f_end": 2434e6, "f_center": 2417e6}
+    right = {"index": 1, "f_start": 2427.2e6, "f_end": 2461.2e6,
+             "f_center": 2444.2e6}
+    joined, ja, jb = stitch_power(
+        {0: (left["f_center"], np.full(128, 100.0)),
+         1: (right["f_center"], np.full(128, 100.0))},
+        [left, right], 34e6, n_out=128)
+    seam = np.linspace(ja, jb, joined.size)
+    k = int(np.argmin(np.abs(seam - 2430.6e6)))
+    assert joined[k] == pytest.approx(20.0, abs=1.5)
