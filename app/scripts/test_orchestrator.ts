@@ -153,6 +153,7 @@ import {
 import { cinemaIsLive, runCinemaStop, runSmartAccept, runSmartStart } from "../src/components/cinema/run";
 import { shelfFsHz } from "../src/sense/txShelf";
 import { angelRgb } from "../src/sense/angelPalette";
+import { columnMaxDbm, SDRANGEL_FRAME_MS } from "../src/sense/spectrumPaint";
 import {
   applyLook,
   colOfMhz,
@@ -2125,6 +2126,13 @@ async function main(): Promise<void> {
     check("Angel: пол темнее пика", hr + hg + hb > lr + lg + lb + 80);
   }
   {
+    const cols = columnMaxDbm([2400, 2440, 2480], [-90, -20, -90], 2400, 2500, 10);
+    check("спектр: пик остаётся в своей колонке", cols[4] === -20 && cols[0] === -90 && cols[8] === -90);
+    const narrow = columnMaxDbm([2400, 2400.01], [-90, -15], 2400, 2500, 100);
+    check("спектр: узкий пик не теряется в колонке", narrow[0] === -15);
+    check("SDRangel: кадр 50 мс, не каждый кадр окна", SDRANGEL_FRAME_MS === 50);
+  }
+  {
     const marks = visibleDetectMhz(false, [
       { freqMhz: 2440.0002, state: "confirmed" },
       { freqMhz: 2440.0004, state: "held" },
@@ -2763,6 +2771,13 @@ async function main(): Promise<void> {
     gateSrc.includes("airTractParams(parseLocaleNumber(windowMhz), analogMax, detShift)"));
   const navSrc = readFileSync(join(here, "../src/components/WorkspaceNav.tsx"), "utf8");
   const fieldSrc = readFileSync(join(here, "../src/components/cinema/FrequencyField.tsx"), "utf8");
+  const scopeSrc = readFileSync(join(here, "../src/components/SpectrumScope.tsx"), "utf8");
+  check("спектр считает шкалу в потоке картинки, не на каждом кадре",
+    scopeSrc.includes("requestSpectrumPaint") && !scopeSrc.includes("sdrangelAutoscale("));
+  check("водопад считает шкалу в потоке картинки, не на каждом кадре",
+    fieldSrc.includes("requestSpectrumPaint") && !fieldSrc.includes("sdrangelAutoscale("));
+  check("холсты рисуют готовые колонки",
+    scopeSrc.includes("SDRANGEL_FRAME_MS") && fieldSrc.includes("strokeCols"));
   check("V1: водопад FPGA подписан как взгляд+гейт, не спектр",
     fieldSrc.includes("взгляд+гейт, не спектр") && !fieldSrc.includes("водопад · эфир→усилитель"));
   const scanSrc = readFileSync(join(here, "../src/components/ScanPanel.tsx"), "utf8");

@@ -2,16 +2,15 @@ import { useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
 import { angelRgb } from "../../sense/angelPalette";
-import { finiteDbm } from "../../sense/labPsd";
+import { requestSpectrumPaint } from "../../sense/spectrumPaintClient";
+import { SDRANGEL_FRAME_MS } from "../../sense/spectrumPaint";
+import type { SdrangelScale } from "../../sense/waterfall";
 import {
   WATERFALL_COLS,
   WATERFALL_ROWS,
   heatRgb,
   nextWaterfallRow,
-  rowDbmFromBins,
   SDRANGEL_TRACE,
-  sdrangelAutoscale,
-  sdrangelColorIndex,
   shouldPushWaterfallRow,
   waterfallBandChanged,
 } from "../../sense/waterfall";
@@ -53,8 +52,29 @@ export function FrequencyField() {
     let lastHi = Number.NaN;
     let heatDirty = true;
     let pictureHost = false;
-    let raf = 0;
+    let timer = 0;
     let alive = true;
+    const hold: {
+      job: number;
+      trace: readonly { freqMhz: number; powerDbm: number }[] | null;
+      peak: readonly { freqMhz: number; powerDbm: number }[] | null;
+      base: readonly { freqMhz: number; powerDbm: number }[] | null;
+      geom: string;
+      scale: SdrangelScale;
+      live: Float32Array | null;
+      peakCols: Float32Array | null;
+      baseCols: Float32Array | null;
+    } = {
+      job: 0,
+      trace: null,
+      peak: null,
+      base: null,
+      geom: "",
+      scale: { refDb: 0, rangeDb: 100, floorDb: -100 },
+      live: null,
+      peakCols: null,
+      baseCols: null,
+    };
     const off = document.createElement("canvas");
     off.width = WATERFALL_COLS;
     off.height = WATERFALL_ROWS;
@@ -86,7 +106,6 @@ export function FrequencyField() {
         ctx.font = "11px ui-monospace, monospace";
         ctx.textAlign = "center";
         ctx.fillText(notice ?? "Укажите корректные F1 и F2", cssW / 2, cssH / 2);
-        raf = requestAnimationFrame(draw);
         return;
       }
       const { f1: lo, f2: hi } = range;
@@ -114,6 +133,11 @@ export function FrequencyField() {
         lastKey = "";
         lastPush = 0;
         heatDirty = true;
+        hold.trace = null;
+        hold.geom = "";
+        hold.live = null;
+        hold.peakCols = null;
+        hold.baseCols = null;
       }
 
       const hostPicture = !st.fpgaArmed;
@@ -130,6 +154,11 @@ export function FrequencyField() {
         lastKey = "";
         lastPush = 0;
         heatDirty = true;
+        hold.trace = null;
+        hold.geom = "";
+        hold.live = null;
+        hold.peakCols = null;
+        hold.baseCols = null;
       }
 
       const lookMhz = Math.max(parseFloat(st.fpgaAirBwMhz) || 2, 0.2);
@@ -143,34 +172,20 @@ export function FrequencyField() {
       const useSweep = !st.fpgaArmed && sweepReady;
       const useLive = !st.fpgaArmed && st.scanSweepBins.length === 0;
       // QSpectrumAnalyzer: пока проход не закрыт — живое окно, затем одна строка на коридор.
-      if (pushLive && (st.fpgaArmed || useSweep || useLive)) {
-        const srcBins = useSweep ? st.scanSweepBins : st.scanBins;
-        const dbmRow = hostPicture ? rowDbmFromBins(srcBins, lo, hi, WATERFALL_COLS) : null;
-        const row = dbmRow
-          ? (() => {
-              const scale = sdrangelAutoscale(srcBins.map((b) => b.powerDbm));
-              const idx = new Float32Array(dbmRow.length);
-              idx.fill(Number.NaN);
-              for (let c = 0; c < dbmRow.length; c++) {
-                const db = dbmRow[c]!;
-                if (Number.isFinite(db)) idx[c] = sdrangelColorIndex(db, scale.refDb, scale.rangeDb);
-              }
-              return idx;
-            })()
-          : nextWaterfallRow(
-              composite,
-              {
-                bins: [],
-                fpgaArmed: true,
-                fpgaFreqMhz: fpgaMhz,
-                lookMhz,
-                detActive: det,
-              },
-              lo,
-              hi,
-              WATERFALL_COLS,
-            );
-        if (useSweep) lastSweepSeq = st.scanSweepSeq;
+      if (pushLive && st.fpgaArmed) {
+        const row = nextWaterfallRow(
+          composite,
+          {
+            bins: [],
+            fpgaArmed: true,
+            fpgaFreqMhz: fpgaMhz,
+            lookMhz,
+            detActive: det,
+          },
+          lo,
+          hi,
+          WATERFALL_COLS,
+        );
         composite = row;
         if (!quiet) {
           history.push(row);
@@ -182,9 +197,74 @@ export function FrequencyField() {
         lastKey = key;
         lastPush = t;
         heatDirty = true;
+        receivedSpectrum = true;
       }
-
-      if (st.scanBins.some(b => finiteDbm(b.powerDbm)) || st.scanSweepBins.some(b => finiteDbm(b.powerDbm))) receivedSpectrum = true;
+      if (hostPicture) {
+        const traceBins = st.scanSweepBins.length ? st.scanSweepBins : st.scanBins;
+        const cols = Math.max(64, Math.min(1600, Math.round(plotW)));
+        const geom = `${lo}:${hi}:${cols}`;
+        const peak = st.labPsd.peakHold;
+        const base = st.labPsd.baseline;
+        const wantWf = pushLive && (useSweep || useLive);
+        const traceSame = traceBins === hold.trace && peak === hold.peak && base === hold.base && geom === hold.geom;
+        if (!traceSame || wantWf) {
+          const prevPush = lastPush;
+          const prevSeq = lastSweepSeq;
+          const prevKey = lastKey;
+          if (wantWf) {
+            lastPush = t;
+            lastKey = key;
+            if (useSweep) lastSweepSeq = st.scanSweepSeq;
+          }
+          const wfBins = useSweep ? st.scanSweepBins : st.scanBins;
+          hold.trace = traceBins;
+          hold.peak = peak;
+          hold.base = base;
+          hold.geom = geom;
+          const id = requestSpectrumPaint(
+            {
+              f1: lo,
+              f2: hi,
+              cols,
+              traces: [traceBins, peak, base],
+              waterfall: wantWf ? { bins: wfBins, cols: WATERFALL_COLS } : null,
+            },
+            (result) => {
+              if (!alive || hold.job !== id) return;
+              if (!result) {
+                if (hold.trace === traceBins && hold.geom === geom) {
+                  hold.trace = null;
+                  hold.geom = "";
+                }
+                if (wantWf) {
+                  lastPush = prevPush;
+                  lastSweepSeq = prevSeq;
+                  lastKey = prevKey;
+                }
+                return;
+              }
+              if (result.scales[0]) hold.scale = result.scales[0];
+              hold.live = result.columns[0] ?? null;
+              hold.peakCols = result.columns[1] ?? null;
+              hold.baseCols = result.columns[2] ?? null;
+              receivedSpectrum = true;
+              if (result.waterfall) {
+                const row = result.waterfall;
+                composite = row;
+                if (!quiet) {
+                  history.push(row);
+                  while (history.length > WATERFALL_ROWS) history.shift();
+                } else {
+                  history.length = 0;
+                  history.push(row);
+                }
+                heatDirty = true;
+              }
+            },
+          );
+          hold.job = id;
+        }
+      }
       const rows = history.length > 0 ? history : [];
       if (receivedSpectrum && rows.length > 0 && offCtx) {
         if (off.height !== rows.length) {
@@ -214,28 +294,29 @@ export function FrequencyField() {
         ctx.drawImage(off, pad, 8, plotW, wfH);
       }
 
-      const hostScale = hostPicture
-        ? sdrangelAutoscale((st.scanSweepBins.length ? st.scanSweepBins : st.scanBins).map((b) => b.powerDbm))
-        : null;
+      const hostScale = hostPicture ? hold.scale : null;
       const yOfPower = (dbm: number) => {
         if (!hostScale) return baseY - Math.min(1, Math.max(0, (dbm + 110) / 70)) * specH;
-        const t = (hostScale.refDb - dbm) / hostScale.rangeDb;
-        return specTop + Math.min(1, Math.max(0, t)) * specH;
+        const tPow = (hostScale.refDb - dbm) / hostScale.rangeDb;
+        return specTop + Math.min(1, Math.max(0, tPow)) * specH;
       };
 
-      const strokeDbm = (bins: { freqMhz: number; powerDbm: number }[], color: string, width: number, dash: number[] = []) => {
+      const strokeCols = (col: Float32Array | null, color: string, width: number, dash: number[] = []) => {
+        if (!col) return;
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
         ctx.setLineDash(dash);
         ctx.beginPath();
         let started = false;
-        for (const b of bins) {
-          if (!finiteDbm(b.powerDbm)) {
+        const n = col.length;
+        for (let i = 0; i < n; i++) {
+          const db = col[i]!;
+          if (!Number.isFinite(db)) {
             started = false;
             continue;
           }
-          const x = xOf(b.freqMhz);
-          const y = yOfPower(b.powerDbm);
+          const x = pad + ((i + 0.5) / n) * plotW;
+          const y = yOfPower(db);
           if (!started) {
             ctx.moveTo(x, y);
             started = true;
@@ -246,9 +327,8 @@ export function FrequencyField() {
       };
 
       const latest = rows.length > 0 ? rows[rows.length - 1] : null;
-      const traceBins = st.scanSweepBins.length ? st.scanSweepBins : st.scanBins;
-      if (hostPicture && receivedSpectrum && traceBins.length) {
-        strokeDbm(traceBins, SDRANGEL_TRACE, 1.2);
+      if (hostPicture && receivedSpectrum && hold.live) {
+        strokeCols(hold.live, SDRANGEL_TRACE, 1.2);
       } else if (latest && receivedSpectrum) {
         ctx.beginPath();
         for (let c = 0; c < latest.length; c++) {
@@ -277,12 +357,8 @@ export function FrequencyField() {
           ctx.stroke();
         }
       }
-      if (st.labShowPeak && st.labPsd.peakHold.length) {
-        strokeDbm(st.labPsd.peakHold, "rgba(245, 193, 108, 0.85)", 1.1);
-      }
-      if (st.labShowBaseline && st.labPsd.baseline.some((b) => finiteDbm(b.powerDbm))) {
-        strokeDbm(st.labPsd.baseline, "rgba(232, 228, 220, 0.4)", 1, [3, 3]);
-      }
+      if (hostPicture && st.labShowPeak) strokeCols(hold.peakCols, "rgba(245, 193, 108, 0.85)", 1.1);
+      if (hostPicture && st.labShowBaseline) strokeCols(hold.baseCols, "rgba(232, 228, 220, 0.4)", 1, [3, 3]);
 
       if (st.fpgaArmed && fpgaMhz != null) {
         const half = lookMhz / 2;
@@ -345,13 +421,17 @@ export function FrequencyField() {
         ctx.textAlign = "start";
       }
 
-      raf = requestAnimationFrame(draw);
     };
 
-    raf = requestAnimationFrame(draw);
+    const frame = (now: number) => {
+      if (!alive) return;
+      draw(now);
+      if (alive) timer = window.setTimeout(() => frame(performance.now()), SDRANGEL_FRAME_MS);
+    };
+    timer = window.setTimeout(() => frame(performance.now()), 0);
     return () => {
       alive = false;
-      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
     };
   }, []);
 

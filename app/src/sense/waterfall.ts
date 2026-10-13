@@ -20,7 +20,7 @@ export const SDRANGEL_TRACE = "#ffff3f";
  *  Сортировка, среднее нижних fft/32, уровни обрезаются к int как в C++.
  *  Обычный логарифм: reference −120…0, диапазон 1…120 (maxSignal = 120).
  *  Длины FFT у нас нет отдельно: ряд бинов и есть спектр, поэтому fft/32 = длина/32. */
-export function sdrangelAutoscale(dbm: readonly number[]): SdrangelScale {
+export function sdrangelAutoscale(dbm: ArrayLike<number>): SdrangelScale {
   const vals: number[] = [];
   for (let i = 0; i < dbm.length; i++) {
     const x = dbm[i]!;

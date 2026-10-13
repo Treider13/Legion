@@ -9,7 +9,9 @@ import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../se
 import { normalizePaint } from "../sense/attackPaint";
 import { focusAdvisorTrack, trackUnderMhz } from "./graphite/advisorFocus";
 import { angelRgb } from "../sense/angelPalette";
-import { SDRANGEL_TRACE, sdrangelAutoscale, sdrangelColorIndex } from "../sense/waterfall";
+import { requestSpectrumPaint } from "../sense/spectrumPaintClient";
+import { SDRANGEL_FRAME_MS } from "../sense/spectrumPaint";
+import { SDRANGEL_TRACE, sdrangelColorIndex, type SdrangelScale } from "../sense/waterfall";
 import { useLegion, visibleDetectMhz } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
@@ -31,7 +33,7 @@ export function SpectrumScope() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    let raf = 0;
+    let timer = 0;
     let alive = true;
     let cursorX = -1;
     const rtsa = new PersistentDisplay(320, 140);
@@ -44,8 +46,47 @@ export function SpectrumScope() {
     let lastAxisKey = "";
     const persistCanvas = document.createElement("canvas");
     const persistCtx = persistCanvas.getContext("2d");
-    let lastPersist: readonly { freqMhz: number; powerDbm: number }[] | null = null;
     let lastPersistGeom = "";
+    const emptyScale: SdrangelScale = { refDb: 0, rangeDb: 100, floorDb: -100 };
+    const cache: {
+      gen: number;
+      scale: SdrangelScale;
+      live: Float32Array | null;
+      peak: Float32Array | null;
+      min: Float32Array | null;
+      base: Float32Array | null;
+      persist: Float32Array | null;
+      peakBin: { freqMhz: number; powerDbm: number } | null;
+      w3: number;
+      range: string;
+    } = {
+      gen: 0,
+      scale: emptyScale,
+      live: null,
+      peak: null,
+      min: null,
+      base: null,
+      persist: null,
+      peakBin: null,
+      w3: 0,
+      range: "",
+    };
+    const none: readonly { freqMhz: number; powerDbm: number }[] = [];
+    let postedLive = none;
+    let postedPeak = none;
+    let postedMin = none;
+    let postedBase = none;
+    let postedPersist = none;
+    let postedGeom = "";
+    let inflightLive = none;
+    let inflightPeak = none;
+    let inflightMin = none;
+    let inflightBase = none;
+    let inflightPersist = none;
+    let inflightGeom = "";
+    let subSrc: readonly { freqMhz: number; powerDbm: number }[] | null = null;
+    let subBase: readonly { freqMhz: number; powerDbm: number }[] | null = null;
+    let subLive: readonly { freqMhz: number; powerDbm: number }[] = none;
 
     const draw = () => {
       if (!alive) return;
@@ -75,7 +116,6 @@ export function SpectrumScope() {
         ctx.textAlign = "center";
         ctx.fillText(notice ?? "Укажите корректные F1 и F2", cssW / 2, cssH / 2);
         if (readoutRef.current !== "Коридор не задан") setReadout("Коридор не задан");
-        raf = requestAnimationFrame(draw);
         return;
       }
       const { f1: loF, f2: hiF } = range;
@@ -91,20 +131,82 @@ export function SpectrumScope() {
       const xOf = (mhz: number) => padL + ((mhz - loF) / span) * plotW;
       geomRef.current = { padL, plotW, loF, span };
 
-      const live = st.labSubtractBaseline
-        ? subtractBaseline(st.labPsd.composite, st.labPsd.baseline)
-        : st.labPsd.composite.length
-          ? st.labPsd.composite
-          : st.scanBins;
+      const liveSrc = st.labPsd.composite.length ? st.labPsd.composite : st.scanBins;
       const peak = st.labPsd.peakHold;
       const minH = st.labPsd.minHold;
       const persist = st.labPsd.persistence;
       const base = st.labPsd.baseline;
-
-      const scaleTrace = live.some((b) => finiteDbm(b.powerDbm)) ? live : [...peak, ...minH, ...base];
-      const samples: number[] = [];
-      for (const b of scaleTrace) if (finiteDbm(b.powerDbm)) samples.push(b.powerDbm);
-      const scale = sdrangelAutoscale(samples);
+      let live: readonly { freqMhz: number; powerDbm: number }[] = liveSrc;
+      if (st.labSubtractBaseline) {
+        if (liveSrc !== subSrc || base !== subBase) {
+          subLive = subtractBaseline(liveSrc, base);
+          subSrc = liveSrc;
+          subBase = base;
+        }
+        live = subLive;
+      }
+      const cols = Math.max(64, Math.min(1600, Math.round(plotW)));
+      const geomToken = `${loF}:${hiF}:${cols}:${st.labSubtractBaseline ? 1 : 0}`;
+      const isPosted =
+        live === postedLive &&
+        peak === postedPeak &&
+        minH === postedMin &&
+        base === postedBase &&
+        persist === postedPersist &&
+        geomToken === postedGeom;
+      const isInflight =
+        live === inflightLive &&
+        peak === inflightPeak &&
+        minH === inflightMin &&
+        base === inflightBase &&
+        persist === inflightPersist &&
+        geomToken === inflightGeom;
+      if (!isPosted && !isInflight) {
+        inflightLive = live;
+        inflightPeak = peak;
+        inflightMin = minH;
+        inflightBase = base;
+        inflightPersist = persist;
+        inflightGeom = geomToken;
+        const liveHas = live.some((b) => finiteDbm(b.powerDbm));
+        const scaleSrc = liveHas ? live : [...peak, ...minH, ...base];
+        const traces = liveHas ? [live, peak, minH, base, persist] : [scaleSrc, live, peak, minH, base, persist];
+        const liveAt = liveHas ? 0 : 1;
+        const sentLive = live;
+        const sentPeak = strongestFinite(sentLive);
+        const sentW3 = sentPeak && sentLive.length >= 3 ? width3dbMhz(sentLive, sentPeak.freqMhz) : 0;
+        requestSpectrumPaint({ f1: loF, f2: hiF, cols, traces, waterfall: null }, (result) => {
+          if (!alive || inflightGeom !== geomToken || inflightLive !== sentLive) return;
+          if (!result || !result.scales[0]) {
+            inflightGeom = "";
+            return;
+          }
+          postedLive = sentLive;
+          postedPeak = peak;
+          postedMin = minH;
+          postedBase = base;
+          postedPersist = persist;
+          postedGeom = geomToken;
+          cache.gen += 1;
+          cache.scale = result.scales[0];
+          cache.live = result.columns[liveAt] ?? null;
+          cache.peak = result.columns[liveAt + 1] ?? null;
+          cache.min = result.columns[liveAt + 2] ?? null;
+          cache.base = result.columns[liveAt + 3] ?? null;
+          cache.persist = result.columns[liveAt + 4] ?? null;
+          cache.peakBin = sentPeak;
+          cache.w3 = sentW3;
+          cache.range = `${loF}:${hiF}`;
+        });
+      }
+      if (cache.range !== `${loF}:${hiF}`) {
+        cache.live = null;
+        cache.peak = null;
+        cache.min = null;
+        cache.base = null;
+        cache.persist = null;
+      }
+      const scale = cache.scale;
       let dbLo = scale.floorDb;
       let dbHi = scale.refDb;
 
@@ -115,47 +217,47 @@ export function SpectrumScope() {
         lastRtsaSrc = null;
       }
       const rtsaSrc = st.labPsd.composite.length ? st.labPsd.composite : live;
-      if (st.labShowRtsa && rtsaImg && rtsaCtx && rtsaSrc.some((b) => finiteDbm(b.powerDbm))) {
+      if (st.labShowRtsa && rtsaImg && rtsaCtx) {
         // pavsa: PersistentDisplay.drawSpectrumFloat на каждый новый DatasetSpectrum,
         // не «только если пик сменился» — иначе EMA не гаснет на стоянке.
         if (rtsaSrc !== lastRtsaSrc) {
-          const y0 = st.labSubtractBaseline ? -120 : dbLo;
-          const y1 = st.labSubtractBaseline ? -20 : dbHi;
-          rtsa.push(rtsaSrc, y0, y1, Date.now());
-          rtsa.renderRgba(rtsaImg.data);
-          rtsaCtx.putImageData(rtsaImg, 0, 0);
           lastRtsaSrc = rtsaSrc;
+          if (rtsaSrc.some((b) => finiteDbm(b.powerDbm))) {
+            const y0 = st.labSubtractBaseline ? -120 : dbLo;
+            const y1 = st.labSubtractBaseline ? -20 : dbHi;
+            rtsa.push(rtsaSrc, y0, y1, Date.now());
+            rtsa.renderRgba(rtsaImg.data);
+            rtsaCtx.putImageData(rtsaImg, 0, 0);
+          }
         }
         ctx.globalAlpha = 0.88;
         ctx.drawImage(rtsaCanvas, padL, padT, plotW, plotH);
         ctx.globalAlpha = 1;
       }
 
-      if (st.labShowPersistence && persist.length && persistCtx) {
+      const persistCols = cache.persist;
+      if (st.labShowPersistence && persistCols && persistCtx) {
         const pw = Math.max(1, Math.floor(plotW * dpr));
         const ph = Math.max(1, Math.floor(plotH * dpr));
-        const geom = `${loF}:${hiF}:${pw}:${ph}:${dbLo}:${dbHi}`;
-        if (persist !== lastPersist || geom !== lastPersistGeom) {
+        const geom = `${cache.gen}:${loF}:${hiF}:${pw}:${ph}:${dbLo}:${dbHi}`;
+        if (geom !== lastPersistGeom) {
           if (persistCanvas.width !== pw || persistCanvas.height !== ph) {
             persistCanvas.width = pw;
             persistCanvas.height = ph;
           }
           persistCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
           persistCtx.clearRect(0, 0, plotW, plotH);
-          const xLocal = (mhz: number) => ((mhz - loF) / span) * plotW;
-          for (let i = 0; i < persist.length; i++) {
-            if (!finiteDbm(persist[i].powerDbm)) continue;
-            const x0 = i === 0 ? xLocal(persist[i].freqMhz) : xLocal((persist[i - 1].freqMhz + persist[i].freqMhz) / 2);
-            const x1 =
-              i + 1 < persist.length
-                ? xLocal((persist[i].freqMhz + persist[i + 1].freqMhz) / 2)
-                : xLocal(persist[i].freqMhz);
-            const [cr, cg, cb] = angelRgb(sdrangelColorIndex(persist[i].powerDbm, dbHi, dbHi - dbLo));
+          const n = persistCols.length;
+          for (let i = 0; i < n; i++) {
+            const db = persistCols[i]!;
+            if (!Number.isFinite(db)) continue;
+            const x0 = (i / n) * plotW;
+            const x1 = ((i + 1) / n) * plotW;
+            const [cr, cg, cb] = angelRgb(sdrangelColorIndex(db, dbHi, dbHi - dbLo));
             persistCtx.fillStyle = `rgba(${cr},${cg},${cb},0.38)`;
-            const y = yOf(persist[i].powerDbm, dbLo, dbHi, 0, plotH);
+            const y = yOf(db, dbLo, dbHi, 0, plotH);
             persistCtx.fillRect(x0, y, Math.max(x1 - x0, 1), Math.max(plotH - y, 0));
           }
-          lastPersist = persist;
           lastPersistGeom = geom;
         }
         ctx.drawImage(persistCanvas, padL, padT, plotW, plotH);
@@ -243,19 +345,22 @@ export function SpectrumScope() {
         ctx.globalAlpha = 1;
       }
 
-      const strokeBins = (bins: typeof live, color: string, width: number, dash: number[] = []) => {
+      const strokeCols = (col: Float32Array | null, color: string, width: number, dash: number[] = []) => {
+        if (!col) return;
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
         ctx.setLineDash(dash);
         ctx.beginPath();
         let started = false;
-        for (const b of bins) {
-          if (!finiteDbm(b.powerDbm)) {
+        const n = col.length;
+        for (let i = 0; i < n; i++) {
+          const db = col[i]!;
+          if (!Number.isFinite(db)) {
             started = false;
             continue;
           }
-          const x = xOf(b.freqMhz);
-          const y = yOf(b.powerDbm, dbLo, dbHi, padT, plotH);
+          const x = padL + ((i + 0.5) / n) * plotW;
+          const y = yOf(db, dbLo, dbHi, padT, plotH);
           if (!started) {
             ctx.moveTo(x, y);
             started = true;
@@ -265,11 +370,9 @@ export function SpectrumScope() {
         ctx.setLineDash([]);
       };
 
-      if (st.labShowMin && minH.length) strokeBins(minH, "rgba(45,212,191,0.35)", 1);
-      if (st.labShowBaseline && base.some((b) => finiteDbm(b.powerDbm))) {
-        strokeBins(base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
-      }
-      strokeBins(live, SDRANGEL_TRACE, 1.4);
+      if (st.labShowMin) strokeCols(cache.min, "rgba(45,212,191,0.35)", 1);
+      if (st.labShowBaseline) strokeCols(cache.base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
+      strokeCols(cache.live, SDRANGEL_TRACE, 1.4);
       const detectMhz = visibleDetectMhz(st.smartGridAccepted, st.attackTracks);
       if (detectMhz.length > 0) {
         ctx.lineWidth = 1;
@@ -289,11 +392,11 @@ export function SpectrumScope() {
           }
         }
       }
-      if (st.labShowPeak && peak.length) strokeBins(peak, "#f5c16c", 1.25);
+      if (st.labShowPeak) strokeCols(cache.peak, "#f5c16c", 1.25);
 
-      const peakBin = strongestFinite(live);
-      if (peakBin && live.length >= 3) {
-        const w3 = width3dbMhz(live, peakBin.freqMhz);
+      const peakBin = cache.peakBin;
+      if (peakBin && cache.w3 > 0) {
+        const w3 = cache.w3;
         if (w3 > 0) {
           const x0 = xOf(peakBin.freqMhz - w3 / 2);
           const x1 = xOf(peakBin.freqMhz + w3 / 2);
@@ -380,12 +483,13 @@ export function SpectrumScope() {
         ctx.moveTo(cursorX, padT);
         ctx.lineTo(cursorX, padT + plotH);
         ctx.stroke();
-        let nearest = live.reduce<{ freqMhz: number; powerDbm: number } | null>((acc, b) => {
-          if (!finiteDbm(b.powerDbm)) return acc;
-          if (!acc || Math.abs(b.freqMhz - mhz) < Math.abs(acc.freqMhz - mhz)) return b;
-          return acc;
-        }, null);
-        const dbm = nearest && Math.abs(nearest.freqMhz - mhz) < span / Math.max(live.length, 8) ? nearest.powerDbm : null;
+        const liveCols = cache.live;
+        let dbm: number | null = null;
+        if (liveCols && liveCols.length > 0) {
+          const i = Math.min(liveCols.length - 1, Math.max(0, Math.floor(((mhz - loF) / span) * liveCols.length)));
+          const sample = liveCols[i]!;
+          if (Number.isFinite(sample)) dbm = sample;
+        }
         const alloc = st.labShowAlloc ? allocAtMhz(mhz) : null;
         const text =
           dbm != null
@@ -398,7 +502,7 @@ export function SpectrumScope() {
       ctx.strokeStyle = "rgba(232,228,220,0.12)";
       ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
 
-      if (!live.some((b) => finiteDbm(b.powerDbm))) {
+      if (!cache.live || !cache.live.some((db) => Number.isFinite(db))) {
         ctx.fillStyle = "rgba(232,228,220,0.62)";
         ctx.font = "12px ui-monospace, JetBrains Mono, monospace";
         ctx.textAlign = "center";
@@ -407,8 +511,6 @@ export function SpectrumScope() {
           : "Ожидание данных";
         ctx.fillText(msg, padL + plotW / 2, padT + plotH / 2);
       }
-
-      raf = requestAnimationFrame(draw);
     };
 
     const mhzAt = (clientX: number): number => {
@@ -468,10 +570,15 @@ export function SpectrumScope() {
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
     canvas.addEventListener("pointerleave", onLeave);
-    raf = requestAnimationFrame(draw);
+    const frame = () => {
+      if (!alive) return;
+      draw();
+      if (alive) timer = window.setTimeout(frame, SDRANGEL_FRAME_MS);
+    };
+    timer = window.setTimeout(frame, 0);
     return () => {
       alive = false;
-      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
