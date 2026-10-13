@@ -130,7 +130,7 @@ import {
   SMART_ARM_NEED_UNIQUE_RU,
   fhssArmGate,
 } from "../src/sense/fhssArmGate";
-import { evalFhssConfirm, fhssCorridorFromLook } from "../src/sense/fhssCorridor";
+import { collapseHopTape, evalFhssConfirm, fhssCorridorFromLook } from "../src/sense/fhssCorridor";
 import { maskOwnTxOccupancy, occupancyHopCount } from "../src/sense/chHitsMask";
 import { FHSS_PERSIST_DIV_PENALTY, fhssPersistOf } from "../src/sense/fhssPersist";
 import {
@@ -1702,6 +1702,21 @@ async function main(): Promise<void> {
     }), hops);
     return !!g && g.n === 53 && g.n !== 3 && ((g.meta >> 8) & 0xff) === 3
       && g.f0Hz === 2_400_400_000;
+  })());
+  check("лента ELRS: 80 каналов, не потолок 256, юбка 2499 отрезана", (() => {
+    const chans = Array.from({ length: 80 }, (_, i) => 2400.4 + i);
+    const tape: number[] = [];
+    for (let n = 0; n < 8; n++) tape.push(...chans);
+    tape.splice(10, 0, 2400.183);
+    tape.splice(40, 0, 2499.893);
+    for (let n = 0; n < 6; n++) {
+      tape.push(2400.183);
+      tape.push(2499.893);
+    }
+    const got = collapseHopTape(tape);
+    const hi = Math.max(...got);
+    const lo = Math.min(...got);
+    return got.length === 80 && lo === 2400.4 && hi === 2479.4 && !got.includes(2499.893);
   })());
   check("GRID подряд unique=4 → n=4", (() => {
     const hops = [2400.4, 2401.4, 2402.4, 2403.4];

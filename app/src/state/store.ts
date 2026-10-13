@@ -127,7 +127,7 @@ import {
   fhssArmGate,
   pickFhssLook,
 } from "../sense/fhssArmGate";
-import { evalFhssConfirm } from "../sense/fhssCorridor";
+import { collapseHopTape, evalFhssConfirm, fhssCorridorBand } from "../sense/fhssCorridor";
 import { maskOwnTxOccupancy, occupancyHopCount } from "../sense/chHitsMask";
 import { fhssPersistOf, listenPersistHops } from "../sense/fhssPersist";
 import { openLoopShelfTxPlan } from "../sense/txShelf";
@@ -911,7 +911,7 @@ const gAttackMemory = new AttackSessionMemory();
 /** Слух умной атаки: живые hop/look до Подтвердить коридор, затем заморозка. */
 let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
 let gSmartAccepted: SmartGridCard | null = null;
-/** Прыжки принятого участка, порядок появления, не больше 256. */
+/** Каналы принятого участка, без повторов вспышек. 256 — потолок LUT. */
 let gAcceptedHopsMhz: number[] = [];
 /** Сколько окон коридора уже снято в этом обходе и склейка спектра. */
 let gListenSteps = 0;
@@ -2989,13 +2989,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         return false;
       }
       captureSmartSurvey(s);
-      const seen: number[] = [];
-      for (const raw of gSmartListen.hopsMhz) {
-        if (!Number.isFinite(raw) || raw <= 0) continue;
-        const mhz = Math.round(raw * 1000) / 1000;
-        if (seen.length === 0 || seen[seen.length - 1] !== mhz) seen.push(mhz);
-        if (seen.length >= 256) break;
-      }
+      const seen = collapseHopTape(gSmartListen.hopsMhz);
       if (seen.length < 1) {
         pushLog("sys", `${FPGA_AIR_MODE_RU}: участок пуст — принять нечего`);
         return false;
@@ -3014,7 +3008,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       const spanLo = seen.length === 1 ? lo - 0.5 : lo;
       const spanHi = seen.length === 1 ? hi + 0.5 : hi;
       gAcceptedHopsMhz = seen;
-      const narrowed = { f1Mhz: spanLo, f2Mhz: spanHi };
+      const narrowed = fhssCorridorBand({
+        f1Mhz: spanLo,
+        f2Mhz: spanHi,
+        lookMhz: ev.corridor.lookMhz,
+        windowLimited: spanHi - spanLo > analog + 0.5,
+      });
       set({
         sdrBands: [narrowed],
         sdrF1: String(Math.round(spanLo * 1000) / 1000),
