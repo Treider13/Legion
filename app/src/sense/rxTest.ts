@@ -1,5 +1,5 @@
 // Разбор ELRS из основного окна. Отдельный экран не открывается.
-import { useLegion } from "../state/store";
+import { bindDesignStop, useLegion } from "../state/store";
 import { hostClose } from "../sdr/hostClient";
 import { isTauriRuntime } from "../transport/types";
 
@@ -49,17 +49,30 @@ function corridorHz(): { fStartHz: number; fEndHz: number } | string {
   return { fStartHz: a * 1e6, fEndHz: b * 1e6 };
 }
 
-export async function primeAccepted(fStartHz: number, fEndHz: number, hopsMhz: number[]): Promise<void> {
+export async function primeAccepted(
+  fStartHz: number,
+  fEndHz: number,
+  hopsMhz: number[],
+  dwellUs = 1000,
+): Promise<void> {
   if (!rxAvailable()) throw new Error("это основное приложение, не браузер");
-  await invoke("legion_rx_prime", { fStartHz, fEndHz, hopsMhz });
+  const dwell = Math.max(1, Math.min(1_000_000, Math.round(dwellUs)));
+  await invoke("legion_rx_prime", { fStartHz, fEndHz, hopsMhz, dwellUs: dwell });
 }
 
 export async function startLive(): Promise<string> {
   if (!rxAvailable()) return "это основное приложение, не браузер";
   const band = corridorHz();
   if (typeof band === "string") return band;
+  bindDesignStop(stopDesignWatch);
+  stopDesignWatch();
   useLegion.getState().stopScan();
   await hostClose();
+  try {
+    await invoke("legion_rx_test_stop");
+  } catch {
+    /* прошлого разбора нет */
+  }
   await invoke("legion_rx_test_start", {
     fStartHz: band.fStartHz,
     fEndHz: band.fEndHz,
@@ -91,7 +104,31 @@ export async function startRx(fromLog: boolean): Promise<string> {
   return fromLog ? "удар по загруженному логу" : "тест идёт — включи ELRS рядом";
 }
 
+let designTimer: ReturnType<typeof setInterval> | null = null;
+
+export function watchDesignRx(): void {
+  if (designTimer) return;
+  designTimer = setInterval(() => {
+    void pullDesignRx();
+  }, 50);
+}
+
+export function stopDesignWatch(): void {
+  if (designTimer) clearInterval(designTimer);
+  designTimer = null;
+}
+
+async function pullDesignRx(): Promise<void> {
+  const st = await rxStatus();
+  if (!st?.running) {
+    stopDesignWatch();
+    return;
+  }
+  if (st.line) useLegion.getState().applyDesignRx(st.line);
+}
+
 export async function stopRx(): Promise<void> {
+  stopDesignWatch();
   if (!rxAvailable()) return;
   await invoke("legion_rx_test_stop");
 }

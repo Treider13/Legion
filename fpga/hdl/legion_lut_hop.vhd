@@ -5,7 +5,8 @@
 -- diff — 40 бит. Знак отделяется до цикла ftw_bit (31→0), цикл не шире 40.
 -- shift_hz — регистр 0x55, знаковое, один раз. Старого сумматора ch·step нет.
 -- LUT не инициализируется в reset: одна запись за такт, чтение в регистр.
--- Индекс: 9-битное сравнение с end_idx, переход в start_idx.
+-- Индекс: 9-битное сравнение с end_idx. Без FLAGS bit5 — заворот в start.
+-- FLAGS bit5: idx стал бы больше end → стоп, tx_mute, slice_done. Сброс — строб apply.
 -- start>end или n_eff=0 → tx_mute. Молчание метки — счётчик тактов tx_clock
 -- (34 МГц): ticks = mute_ns × 34 / 1000 = mute_ns × 34e6 / 1e9.
 -- Домен: только tx_clock. Строб записи LUT уже снят в legion_regs.
@@ -41,7 +42,8 @@ entity legion_lut_hop is
         hop_ch       : out unsigned(7 downto 0);
         hop_ftw      : out unsigned(31 downto 0);
         hop_tick     : out std_logic;
-        tx_mute      : out std_logic
+        tx_mute      : out std_logic;
+        slice_done   : out std_logic
     );
 end entity;
 
@@ -115,6 +117,7 @@ architecture rtl of legion_lut_hop is
     signal mute_cnt    : unsigned(31 downto 0);
     signal mute_run    : std_logic;
     signal tx_mute_r   : std_logic;
+    signal slice_hold  : std_logic;
 begin
     n_eff <= unsigned(meta(15 downto 8)) when unsigned(meta(15 downto 8)) /= 0
              else unsigned(meta(7 downto 0));
@@ -123,8 +126,9 @@ begin
     hop_ch   <= idx;
     hop_ftw  <= ftw_r;
     -- Один такт между импульсом индекса и look_through.
-    hop_tick <= hop_tick_d;
-    tx_mute  <= tx_mute_r;
+    hop_tick   <= hop_tick_d;
+    tx_mute    <= tx_mute_r;
+    slice_done <= slice_hold;
 
     -- Память: нет сброса массива, одна запись и чтение в регистр за такт.
     ram_p : process(clk)
@@ -237,6 +241,7 @@ begin
             mute_cnt     <= (others => '0');
             mute_run     <= '0';
             tx_mute_r    <= '0';
+            slice_hold   <= '0';
         elsif rising_edge(clk) then
             samp_ph    <= not samp_ph;
             start_div  <= '0';
@@ -248,8 +253,11 @@ begin
             ch_r       <= lut_q;
 
             if apply_we = '1' then
-                start_q <= start_idx;
-                end_q   <= end_idx;
+                start_q    <= start_idx;
+                end_q      <= end_idx;
+                idx        <= start_idx;
+                slice_hold <= '0';
+                cnt        <= (others => '0');
             end if;
             if start_q > end_q then
                 bounds_r <= '1';
@@ -293,14 +301,21 @@ begin
                     pend_mod <= '1';
                 end if;
             elsif samp_ph = '1' and auto_v = '1' and n_eff /= 0 and
-                  period /= 0 and bounds_r = '0' then
+                  period /= 0 and bounds_r = '0' and slice_hold = '0' then
                 if cnt + 1 >= period then
                     cnt <= (others => '0');
-                    hop_tick_r <= '1';
                     nxt := resize(idx, 9) + 1;
                     if nxt > resize(end_q, 9) then
-                        idx <= start_q;
+                        -- Конец стоянки. bit5: стоп и молчание, пока NIOS
+                        -- не отзовёт следующий профиль и не даст строб.
+                        if flags(LEGION_GRID_FLAG_HOLD_END) = '1' then
+                            slice_hold <= '1';
+                        else
+                            hop_tick_r <= '1';
+                            idx <= start_q;
+                        end if;
                     else
+                        hop_tick_r <= '1';
                         idx <= nxt(7 downto 0);
                     end if;
                 else
@@ -328,7 +343,8 @@ begin
                 need_ftw <= '1';
             end if;
 
-            if auto_v = '1' and (mute_now = '1' or bounds_r = '1' or n_eff = 0) then
+            if auto_v = '1' and (mute_now = '1' or bounds_r = '1' or n_eff = 0
+                                 or slice_hold = '1') then
                 tx_mute_r <= '1';
             else
                 tx_mute_r <= '0';

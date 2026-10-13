@@ -37,6 +37,9 @@ MATCH_GO = 0.9
 SILENT_S = 0.100
 P_HOPPING_GO = 0.6
 LOOKTHROUGH_HOPS = 100
+# Бюджет отзыва профиля на границе стоянки. Таймер mute_ns сюда не ставим:
+# молчание держит HDL, пока NIOS отзывает профиль, и снимается стробом.
+STATION_MUTE_NS = 600_000
 NFFT_SPEC = 1024
 
 
@@ -77,6 +80,9 @@ class CognitiveFSM:
         self._tick_i = 0
         self._last_jam_ch: "int | None" = None
         self._autonomous = False
+        self._lo_pending: list = []
+        self._lo_fs = float(fs_hz)
+        self.usb_io = None
         self._lt_armed = False
         self._scan_t0 = 0.0
         self._grid_step_hz = 200.0e3
@@ -156,10 +162,9 @@ class CognitiveFSM:
         self._autonomous = on if ok else self._autonomous
 
     def _arm_look_through(self, dwell_us) -> None:
-        """Один раз после автономного LUT: 1 слушающий прыжок из 100.
-        Автономный флаг не снимается. Запись 0x57 идёт через периферийный
-        USB: libbladeRF держит устройство монопольно, поэтому этот тик
-        отпускает поток и забирает его обратно.
+        """Один раз, пока таймер ещё выключен: 1 слушающий прыжок из 100.
+        Автономный флаг не снимается. После FLAGS запись регистра снова
+        закрывает USB, а следующий кадр делает set_frequency по живому ряду.
         """
         if self.fpga is None or self._lt_armed or not self._autonomous:
             return
@@ -198,6 +203,7 @@ class CognitiveFSM:
         self.pid = None
         self._live = []
         self._listen_freqs = []
+        self._stitched = None
         self._go(LISTENING, t_s, note="rescan_origin",
                  corridor=self.scan_corridor)
 
@@ -211,58 +217,141 @@ class CognitiveFSM:
         # Автономный удар не вызывает apply_predictive_jam: тот пишет amp 0.90.
         if preload:
             from .fpga_preload import preload_drfm_shelf
-            from .lo_window_planner import plan_stations, assign_windows
-            from .profile_cache import ProfileCache
-            shelf = preload_drfm_shelf(
-                self.fpga, pat, self.sub, fs_hz=fs_hop,
-                shift_hz=15000, mute_ns=int(getattr(self, "mute_ns", 0)))
-            hops = [float(x) * 1e6 for x in (pat.get("freqs_mhz") or [])]
-            plan = plan_stations(self.sub["f_start"], self.sub["f_end"],
-                                 fs_hop, hops)
-            cache = ProfileCache()
-            cache.store_after_narrow(self.fpga, plan["centers_hz"])
-            scenario = assign_windows(hops, plan["centers_hz"], fs_hop)
-            if hasattr(self.fpga, "yield_usb"):
-                self.fpga.yield_usb()
+            from .lo_window_planner import plan_stations, station_groups
+            from . import fpga_control as fc
+            raw = list(pat.get("freqs_mhz") or [])
+            cyc_n = int(pat.get("cycle_length") or len(raw) or 1)
+            cycle_freqs = raw[:max(1, min(cyc_n, LUT_CAP, len(raw)))]
+            hops = [float(x) * 1e6 for x in cycle_freqs]
+            plan = plan_stations(
+                min(hops) if hops else self.sub["f_start"],
+                max(hops) if hops else self.sub["f_end"],
+                fs_hop, hops)
+            grouped, slices = station_groups(
+                cycle_freqs, plan["centers_hz"], fs_hop)
+            if not grouped:
+                grouped = list(cycle_freqs)
+                slices = [{"slot": 0, "start": 0, "end": max(0, len(grouped) - 1),
+                           "lo_hz": float(plan["centers_hz"][0]),
+                           "n": len(grouped)}] if grouped and plan["centers_hz"] else []
+            jam_pat = dict(pat)
+            jam_pat["freqs_mhz"] = grouped or cycle_freqs
+            first = slices[0] if slices else {
+                "start": 0, "end": max(0, len(jam_pat["freqs_mhz"]) - 1)}
+            lf = fc.lf
+
+            def _stage(sl, key: int, tx_nios: int = 0, rx_nios: int = 0,
+                       tx_port: int = 0, tx_spdt: int = 0,
+                       rx_port: int = 0, rx_spdt: int = 0) -> None:
+                # HDL читает [7:0]. Старшие байты — номер ячейки fastlock и
+                # порт/ключ, их забирает NIOS до проброса в плату.
+                self.fpga.write_reg(
+                    lf.REG_HOP_START_IDX,
+                    (int(tx_spdt) & 0xFF) << 24 | (int(tx_port) & 0xFF) << 16 |
+                    (int(tx_nios) & 0xFF) << 8 | (int(sl["start"]) & 0xFF))
+                self.fpga.write_reg(
+                    lf.REG_HOP_END_IDX,
+                    (int(rx_spdt) & 0xFF) << 24 | (int(rx_port) & 0xFF) << 16 |
+                    (int(rx_nios) & 0xFF) << 8 | (int(sl["end"]) & 0xFF))
+                lo_khz = int(round(float(sl["lo_hz"]) / 1000.0))
+                self.fpga.store_profile_lo_khz(int(key) & 7, lo_khz)
+
             usb = getattr(self, "usb", None)
-            if usb is not None and getattr(usb, "open", False):
-                from .libbladerf_owner import BLADERF_ERR_QUEUE_FULL
-                tune_fail = False
-                queue_full = False
-                for i, pair in enumerate(cache.pairs):
-                    if usb.capture_pair(i, int(pair["lo_hz"])) != 0:
+            io = getattr(self, "usb_io", None)
+            hold = len(slices) > 1
+            staged = False
+            tune_fail = False
+            saved: list = []
+            # Все снимки — пока поток ещё держит плату. Первая запись регистра
+            # закрывает handle и стирает слоты AD9361; байты уже лежат в NIOS.
+            if (usb is not None and getattr(usb, "open", False) and hold):
+                from .libbladerf_owner import CH_RX, CH_TX
+                cap = io.capture_locked if io is not None else usb.capture_pair
+                for sl in slices:
+                    if cap(int(sl["slot"]), int(sl["lo_hz"])) != 0:
                         tune_fail = True
                         break
-                dwell = float(pat.get("dwell_s") or 1e-3)
-                lead = int(getattr(usb, "last_timestamp", 0)) + int(fs_hop * 0.05)
-                marks = cache.batch_marks(scenario, dwell, lead, fs_hop)
-                for batch in cache.chunks(marks):
-                    if tune_fail or queue_full:
-                        break
-                    for mark in batch:
-                        if mark["full_cal"] or mark["lo_hz"] is None:
-                            continue
-                        rc = usb.schedule_pair(int(mark["window"]),
-                                               int(mark["lo_hz"]),
-                                               int(mark["sample"]))
-                        if rc == BLADERF_ERR_QUEUE_FULL:
-                            queue_full = True
-                            break
-                        if rc != 0:
-                            tune_fail = True
-                            break
-                if queue_full:
-                    self.transitions.append({
-                        "tick": self._tick_i, "from": self.state,
-                        "to": self.state, "t_s": float(t_s),
-                        "action": "queue_full"})
+                    saved.append((
+                        sl,
+                        usb.tunes.get((int(sl["slot"]), CH_TX)),
+                        usb.tunes.get((int(sl["slot"]), CH_RX)),
+                    ))
                 if tune_fail:
-                    self._rescan_origin(t_s, "tune_fail")
+                    hold = False
+                    saved = []
+            if io is not None and slices and not tune_fail:
+                if hasattr(io, "park_locked"):
+                    io.park_locked(int(slices[0]["lo_hz"]))
+                else:
+                    io.lo = float(slices[0]["lo_hz"])
+            for sl, qt_tx, qt_rx in saved:
+                _stage(sl, int(sl["slot"]),
+                       int(getattr(qt_tx, "nios_profile", 0) or 0),
+                       int(getattr(qt_rx, "nios_profile", 0) or 0),
+                       int(getattr(qt_tx, "port", 0) or 0),
+                       int(getattr(qt_tx, "spdt", 0) or 0),
+                       int(getattr(qt_rx, "port", 0) or 0),
+                       int(getattr(qt_rx, "spdt", 0) or 0))
+            staged = bool(saved)
+            shelf = preload_drfm_shelf(
+                self.fpga, jam_pat, self.sub, fs_hz=fs_hop,
+                shift_hz=15000, mute_ns=0,
+                hop_start=int(first["start"]), hop_end=int(first["end"]),
+                hold_end=hold, arm=False)
+            if not staged:
+                for sl in slices:
+                    _stage(sl, int(sl["slot"]))
+            if slices:
+                self.fpga.apply_hop_range(int(slices[0]["start"]),
+                                          int(slices[0]["end"]))
+                # Живая несущая первой стоянки. mute_ns = 0 — старт не молчит.
+                # На границе молчит HDL, NIOS отзывает профиль и даёт новый диапазон.
+                self.fpga.write_reg(lf.REG_CH_LO_KHZ,
+                                    int(round(float(slices[0]["lo_hz"]) / 1000.0))
+                                    & 0x0FFFFFFF)
+            self._lo_slices = slices
+            self._lo_pending = []
+            self._lo_fs = float(fs_hop)
+            # Взгляд — в этой сессии, FLAGS ещё 0. После старта таймера
+            # запись снова делает standby, а end_tick кадра перестраивает LO.
+            if not tune_fail:
+                cyc_lt = max(1, len(pat.get("cycle") or pat.get("freqs_mhz") or []))
+                self._autonomous = cyc_lt <= LUT_CAP
+                if self._autonomous:
+                    self._arm_look_through(int(pat.get("dwell_us") or 1000))
+            if hasattr(self.fpga, "yield_usb"):
+                self.fpga.yield_usb()
+            # Таймер — только когда configure уже поставил несущую первой
+            # стоянки. Иначе первая стоянка кончается во время set_frequency.
+            if not tune_fail and slices:
+                dwell = int(pat.get("dwell_us") or 1000)
+                n_written = int(shelf.get("written") or 1)
+                f0 = int(round(float(self.sub["f_start"])))
+                flags = lf.GRID_FLAG_AUTONOMOUS | (
+                    lf.GRID_FLAG_HOLD_END if hold else 0)
+                self.fpga.set_grid(
+                    meta=lf.pack_grid_meta(
+                        n=min(n_written, 255), n_used=min(n_written, 255),
+                        conf=90, source=lf.GRID_SRC_OPERATOR,
+                        kind=lf.GRID_KIND_FHSS),
+                    f0_hz=lf.pack_grid_f0(f0),
+                    step_hz=0,
+                    pri_us=max(1, dwell),
+                    shift_hz=15000,
+                    flags=flags,
+                    rsv=0)
+                if hasattr(self.fpga, "yield_usb"):
+                    self.fpga.yield_usb(reconfigure=False)
+            if tune_fail:
+                self._rescan_origin(t_s, "tune_fail")
+            plan = dict(plan)
+            plan["n"] = max(1, len(slices))
             self._lo_plan = plan
-            self._lo_scenario = scenario
+            self._lo_scenario = [(int(sl["start"]), int(sl["slot"])) for sl in slices]
             jam = {"f_jam_hz": hops[0] if hops else 0.0,
-                   "shelf": shelf, "stations": plan["n"],
-                   "outside_hz": plan["outside_hz"]}
+                   "shelf": shelf, "stations": len(slices) or 1,
+                   "outside_hz": plan.get("outside_hz", 0.0),
+                   "slices": len(slices)}
         else:
             from .fpga_control import apply_predictive_jam
             jam = apply_predictive_jam(self.fpga, self.sub, pat,
@@ -274,13 +363,11 @@ class CognitiveFSM:
             self._autonomous = cyc <= LUT_CAP
             pre_n = int(jam.get("shelf", {}).get("written") or 0)
             pat["lut_n"] = pre_n
-            dwell = pat.get("dwell_us") or 1000
-            if self._autonomous:
-                self._arm_look_through(dwell)
             self._jam_until = float(t_s) + float(self.jam_duration_s)
             self.transitions.append({
                 "tick": self._tick_i, "from": self.state, "to": self.state,
                 "t_s": float(t_s), "action": "drfm_shelf",
+                "recall_budget_ns": STATION_MUTE_NS,
                 "stations": jam.get("stations"),
                 "outside_hz": jam.get("outside_hz"),
                 "until": self._jam_until})
@@ -320,9 +407,10 @@ class CognitiveFSM:
         self._fb = self.fallback.update(ch_pwr, t_s)
         st = self.state
         hop = None
+        wide = self._wide()
         if st == LISTENING:
             self._tick_listening(ch_pwr, freqs_hz, t_s)
-        elif st == INITIAL_SCAN:
+        elif st == INITIAL_SCAN or (wide and st in (LEARNING, CONFIRMING)):
             hop = self._tick_scan(ch_pwr, freqs_hz, t_s)
         else:
             if (st in (LEARNING, CONFIRMING, RE_LEARNING)
@@ -452,6 +540,49 @@ class CognitiveFSM:
                 return
             self._start_learning(t_s, hops, parent)
 
+    def _wide(self) -> bool:
+        """Коридор шире одного окна 34 МГц — обход не останавливается на первом круге."""
+        pair = self._corridor_hz()
+        if pair and (pair[1] - pair[0]) > self.ibw_hz + 1.0:
+            return True
+        return len(self.sweeper.windows) > 1
+
+    def _absorb_lap(self, t_s: float) -> None:
+        """stitch() всех окон → один ряд. Коммит и подтверждение по нему, не по первому окну."""
+        seed = self.sweeper.stitch()
+        if len(seed) > 8192:
+            seed = seed[-8192:]
+        if not seed:
+            return
+        learn = getattr(self, "_stitched", None)
+        if learn is None:
+            pair = self._corridor_hz()
+            span = [pair[0], pair[1]] if pair else [
+                min(float(h["freq_mhz"]) * 1e6 for h in seed),
+                max(float(h["freq_mhz"]) * 1e6 for h in seed),
+            ]
+            self.sub = extract_subcorridor(span, "scan")
+            learn = HopRecorder(self.sub, n_chans=self.n_chans,
+                                samples_per_frame=self.spf)
+            learn.load_stitched(seed)
+            self._stitched = learn
+        else:
+            learn.append_stitched(seed)
+        self._live = [int(h["channel_idx"]) for h in learn.hops]
+        self._live = self._live[-self._live_cap():]
+        window_rec = self.rec
+        self.rec = learn
+        if self.state == INITIAL_SCAN:
+            self._go(LEARNING, t_s, stitched=len(learn.hops), wide=True)
+        if self.state == LEARNING:
+            self._tick_learning(t_s)
+        elif self.state == CONFIRMING:
+            self._tick_confirming(t_s)
+        if self.state in (INITIAL_SCAN, LEARNING, CONFIRMING):
+            self.rec = window_rec
+        else:
+            self.rec = learn
+
     def _tick_scan(self, ch_pwr, freqs_hz, t_s: float):
         if self.rec is None:
             w = self.sweeper.current() or {"f_start": self.lo_hz - 8e6,
@@ -472,8 +603,20 @@ class CognitiveFSM:
                 w = self.sweeper.current()
                 if w:
                     self.lo_hz = w["f_center"]
-                    # Сборщик одного окна. Ряд всех окон — в sweeper.hops,
-                    # в обучающий recorder он попадёт из stitch на finish.
+                    # Сборщик одного окна. Ряд всех окон — в sweeper.hops.
+                    self.rec = HopRecorder(
+                        extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
+                        n_chans=self.n_chans, samples_per_frame=self.spf)
+                self._scan_t0 = float(t_s)
+            elif self._wide():
+                self._absorb_lap(t_s)
+                if self.state not in (INITIAL_SCAN, LEARNING, CONFIRMING):
+                    return hop
+                self.sweeper.idx = 0
+                self.sweeper.tune_current(self.sweeper.sample_count)
+                w = self.sweeper.current()
+                if w:
+                    self.lo_hz = w["f_center"]
                     self.rec = HopRecorder(
                         extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
                         n_chans=self.n_chans, samples_per_frame=self.spf)
@@ -517,7 +660,10 @@ class CognitiveFSM:
             self.store.patterns[self.pid]["sub"] = dict(self.sub)
 
     def _tick_learning(self, t_s: float) -> None:
-        self._expand_sub()
+        # Широкий коридор держит одну сетку от F1. Сужение по первым вспышкам
+        # отрезало бы хвост ряда — в LUT оставалось только начало.
+        if not self._wide():
+            self._expand_sub()
         pid = self.rec.maybe_commit(self.store) if self.rec else None
         if pid is not None:
             self.pid = pid
@@ -556,7 +702,38 @@ class CognitiveFSM:
             nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
             self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count)
 
+    def _feed_lo_queue(self, t_s: float) -> None:
+        """Очередь retune — 16 мест. Хвост дописывается, когда место освободилось."""
+        pending = list(getattr(self, "_lo_pending", None) or [])
+        if not pending:
+            return
+        usb = getattr(self, "usb", None)
+        if usb is None or not getattr(usb, "open", False):
+            return
+        from .libbladerf_owner import BLADERF_ERR_QUEUE_FULL
+        fs = float(getattr(self, "_lo_fs", None) or self.fs_hz)
+        now = int(getattr(usb, "last_timestamp", 0))
+        guard = max(1, int(fs * 0.002))
+        left: list = []
+        for i, mark in enumerate(pending):
+            ts = int(mark["sample"])
+            if ts <= now:
+                ts = now + guard
+                now = ts
+            rc = usb.schedule_pair(int(mark["window"]), int(mark["lo_hz"]), ts)
+            if rc == BLADERF_ERR_QUEUE_FULL:
+                left = pending[i:]
+                break
+            if rc != 0:
+                self._lo_pending = []
+                self._rescan_origin(t_s, "tune_fail")
+                return
+        else:
+            left = []
+        self._lo_pending = left
+
     def _tick_monitoring(self, ch_pwr, freqs_hz, t_s: float, hop) -> None:
+        self._feed_lo_queue(t_s)
         if self._jam_until is not None and float(t_s) >= float(self._jam_until):
             self._go(RE_SCAN, t_s, note="jam_timer")
             self._rescan_origin(t_s, "jam_timer")
@@ -585,16 +762,8 @@ class CognitiveFSM:
         if hop is not None:
             rec = self.store.get(self.pid)
             self.position = (self.position + 1) % max(1, int(rec["cycle_length"]))
-            if self._autonomous and self.fpga is not None:
-                self._lt_i = int(getattr(self, "_lt_i", 0)) + 1
-                if self._lt_i % LOOKTHROUGH_HOPS == 0:
-                    plan = getattr(self, "_lo_plan", None) or {}
-                    centers = plan.get("centers_hz") or []
-                    heard = float(np.asarray(freqs_hz)[int(np.argmax(ch_pwr))])
-                    half = float(getattr(self, "fpga_fs_hz", None) or self.fs_hz) / 2.0
-                    if centers and any(abs(heard - float(c)) <= half for c in centers):
-                        # Монопольный libbladeRF: запись регистра отпускает поток.
-                        self.fpga.write_reg(0x57, int(self.position) & 0xFF)
+            # Look-through 1/100 уже в HDL. Запись 0x57 с хоста отпускает USB
+            # и добавляет потери в удар — на автономном пути её нет.
             # Listen-hop глушит HDL (REG_LT_*). FLAGS bit4 не снимаем:
             # иначе idx замирает и при повторном AUTO грузится из rsv.
             # LP совпал — идём дальше. Drift уже ушёл в RE_LEARNING выше.

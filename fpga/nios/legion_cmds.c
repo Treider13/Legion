@@ -153,6 +153,23 @@ static uint32_t legion_ch_active3;
 static uint32_t legion_ch_fs_hz;
 static uint32_t legion_ch_lo_shadow;
 static uint32_t legion_hop_lo_tab[8];
+static uint8_t legion_hop_start_tab[8];
+static uint8_t legion_hop_end_tab[8];
+static uint8_t legion_hop_range_ok[8];
+static uint8_t legion_hop_tx_nios[8];
+static uint8_t legion_hop_rx_nios[8];
+static uint8_t legion_hop_tx_port[8];
+static uint8_t legion_hop_tx_spdt[8];
+static uint8_t legion_hop_rx_port[8];
+static uint8_t legion_hop_rx_spdt[8];
+static uint8_t legion_hop_stage_start;
+static uint8_t legion_hop_stage_end;
+static uint8_t legion_hop_stage_tx_nios;
+static uint8_t legion_hop_stage_rx_nios;
+static uint8_t legion_hop_stage_tx_port;
+static uint8_t legion_hop_stage_tx_spdt;
+static uint8_t legion_hop_stage_rx_port;
+static uint8_t legion_hop_stage_rx_spdt;
 static uint32_t legion_grid_meta;
 static uint32_t legion_grid_f0_hz;
 static uint32_t legion_grid_step_hz;
@@ -892,12 +909,19 @@ void legion_hop_mute_arm(void)
 
 void legion_hop_commit_lo(uint8_t profile_num)
 {
-    uint32_t lo = legion_hop_lo_tab[profile_num & 7u];
+    uint8_t slot = profile_num & 7u;
+    uint32_t lo = legion_hop_lo_tab[slot];
     if (lo == 0u) {
         return;
     }
     legion_ch_lo_shadow = lo;
+    /* Запись 0x50 включает mute_ns. Диапазон LUT — тот, что лежит в этой стоянке. */
     legion_pio_poke(LEGION_REG_CH_LO_KHZ, lo);
+    if (legion_hop_range_ok[slot]) {
+        legion_pio_poke(LEGION_REG_HOP_START_IDX, legion_hop_start_tab[slot]);
+        legion_pio_poke(LEGION_REG_HOP_END_IDX, legion_hop_end_tab[slot]);
+        legion_pio_poke(LEGION_REG_HOP_STROBE_APPLY, 1u);
+    }
 }
 
 static void legion_ch_push_lo_fs(void)
@@ -3438,6 +3462,15 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             if ((data & 0x80000000u) != 0u) {
                 unsigned slot = (data >> 28) & 7u;
                 legion_hop_lo_tab[slot] = data & 0x0fffffffu;
+                legion_hop_start_tab[slot] = legion_hop_stage_start;
+                legion_hop_end_tab[slot] = legion_hop_stage_end;
+                legion_hop_tx_nios[slot] = legion_hop_stage_tx_nios;
+                legion_hop_rx_nios[slot] = legion_hop_stage_rx_nios;
+                legion_hop_tx_port[slot] = legion_hop_stage_tx_port;
+                legion_hop_tx_spdt[slot] = legion_hop_stage_tx_spdt;
+                legion_hop_rx_port[slot] = legion_hop_stage_rx_port;
+                legion_hop_rx_spdt[slot] = legion_hop_stage_rx_spdt;
+                legion_hop_range_ok[slot] = 1u;
                 return true;
             }
             legion_ch_lo_shadow = data;
@@ -3564,6 +3597,23 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 }
                 return true;
             }
+            break;
+
+        case LEGION_REG_HOP_START_IDX:
+            /* [7:0] индекс LUT. [15:8] nios_profile TX, [23:16] port, [31:24] spdt.
+             * HDL берёт только [7:0]. adi_fastlock_save profile_num не пишет —
+             * номер ячейки fastlocks[] приходит отсюда. */
+            legion_hop_stage_start = (uint8_t)(data & 0xffu);
+            legion_hop_stage_tx_nios = (uint8_t)((data >> 8) & 0xffu);
+            legion_hop_stage_tx_port = (uint8_t)((data >> 16) & 0xffu);
+            legion_hop_stage_tx_spdt = (uint8_t)((data >> 24) & 0xffu);
+            break;
+
+        case LEGION_REG_HOP_END_IDX:
+            legion_hop_stage_end = (uint8_t)(data & 0xffu);
+            legion_hop_stage_rx_nios = (uint8_t)((data >> 8) & 0xffu);
+            legion_hop_stage_rx_port = (uint8_t)((data >> 16) & 0xffu);
+            legion_hop_stage_rx_spdt = (uint8_t)((data >> 24) & 0xffu);
             break;
 
         default:
@@ -3807,8 +3857,181 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
     return true;
 }
 
+#ifdef BOARD_BLADERF_MICRO
+/* Закрытие USB-handle гасит AD9361 и стирает слоты RFFE. Байты профиля
+ * остаются в ОЗУ NIOS. Поэтому перед отзывом их надо записать заново:
+ * состояние BBP_RFFE заставило бы adi_fastlock_load выйти сразу. */
+static void legion_hop_recall(bladerf_module module, fastlock_profile *p,
+                              uint8_t rffe, uint8_t port, uint8_t spdt)
+{
+    if (p->state == FASTLOCK_STATE_INVALID) {
+        return;
+    }
+    p->profile_num = rffe & 7u;
+    p->port = port;
+    p->spdt = spdt;
+    if (p->state == FASTLOCK_STATE_BBP_RFFE ||
+        p->state == FASTLOCK_STATE_RFFE) {
+        p->state = FASTLOCK_STATE_BBP;
+    }
+#ifdef LEGION_HAVE_RFIC
+    rfic_invalidate_frequency(module);
+#endif
+    adi_fastlock_load(module, p);
+    adi_fastlock_recall(module, p);
+    if (module == (bladerf_module)1) {
+        adi_rfport_select(p);
+    }
+    adi_rfspdt_select(module, p);
+}
+#endif
+
+#ifdef LEGION_HAVE_RFIC
+/* Закрытие USB для записи регистров уводит AD9361 в standby и снимает
+ * ключи SPDT. Таймер к этому моменту ещё выключен. Когда хост пишет FLAGS,
+ * здесь возвращаем тракт и первую стоянку — до enable_rx, без второго
+ * set_frequency, который съел бы начало ряда. 1 — удар начат. */
+static int legion_hop_wake(void)
+{
+    uint8_t n, i, j, slot;
+    uint8_t order[8];
+    uint64_t st = 0;
+
+    if (!rfic_command_read_immed(BLADERF_RFIC_COMMAND_INIT,
+                                 RFIC_SYSTEM_CHANNEL, &st)) {
+        return 0;
+    }
+    if (st == BLADERF_RFIC_INIT_STATE_STANDBY) {
+        if (!rfic_command_write_immed(BLADERF_RFIC_COMMAND_INIT,
+                                      RFIC_SYSTEM_CHANNEL,
+                                      BLADERF_RFIC_INIT_STATE_ON)) {
+            return 0;
+        }
+    } else if (st != BLADERF_RFIC_INIT_STATE_ON) {
+        return 0;
+    }
+    n = 0;
+    for (i = 0; i < 8; i++) {
+        if (legion_hop_range_ok[i]) {
+            order[n++] = i;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        for (j = (uint8_t)(i + 1u); j < n; j++) {
+            if (legion_hop_start_tab[order[j]] < legion_hop_start_tab[order[i]]) {
+                uint8_t t = order[i];
+                order[i] = order[j];
+                order[j] = t;
+            }
+        }
+    }
+    if (n == 0) {
+        return 0;
+    }
+    slot = order[0];
+#ifdef BOARD_BLADERF_MICRO
+    legion_hop_recall((bladerf_module)0,
+                      &fastlocks_rx[legion_hop_rx_nios[slot]],
+                      slot, legion_hop_rx_port[slot], legion_hop_rx_spdt[slot]);
+    legion_hop_recall((bladerf_module)1,
+                      &fastlocks_tx[legion_hop_tx_nios[slot]],
+                      slot, legion_hop_tx_port[slot], legion_hop_tx_spdt[slot]);
+#endif
+    legion_hop_commit_lo(slot);
+    return 1;
+}
+#endif
+
+/* Конец подпаттерна: HDL встал и замолчал. Здесь отзыв профиля (~600 мкс)
+ * и строб нового диапазона. Хост в этот зазор не входит — USB не успевает. */
+static void legion_hop_on_slice_end(void)
+{
+    static uint8_t busy;
+#ifdef LEGION_HAVE_RFIC
+    static uint8_t awake;
+#endif
+    uint32_t w;
+    uint8_t hop, n, i, j, cur, nxt;
+    uint8_t order[8];
+    int found;
+
+    if ((legion_grid_flags & LEGION_GRID_FLAG_AUTONOMOUS) == 0) {
+        busy = 0;
+#ifdef LEGION_HAVE_RFIC
+        awake = 0;
+#endif
+        return;
+    }
+#ifdef LEGION_HAVE_RFIC
+    if (!awake) {
+        if (legion_hop_wake()) {
+            awake = 1;
+        }
+        return;
+    }
+#endif
+    if ((legion_grid_flags & LEGION_GRID_FLAG_HOLD_END) == 0) {
+        busy = 0;
+        return;
+    }
+    w = legion_mux_word(LEGION_REG_GRID_RSV);
+    if ((w & LEGION_HOP_SLICE_DONE) == 0) {
+        busy = 0;
+        return;
+    }
+    if (busy) {
+        return;
+    }
+    hop = (uint8_t)((w >> 8) & 0xffu);
+    n = 0;
+    for (i = 0; i < 8; i++) {
+        if (legion_hop_range_ok[i]) {
+            order[n++] = i;
+        }
+    }
+    if (n < 2) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        for (j = (uint8_t)(i + 1u); j < n; j++) {
+            if (legion_hop_start_tab[order[j]] < legion_hop_start_tab[order[i]]) {
+                uint8_t t = order[i];
+                order[i] = order[j];
+                order[j] = t;
+            }
+        }
+    }
+    found = 0;
+    cur = 0;
+    for (i = 0; i < n; i++) {
+        if (legion_hop_end_tab[order[i]] == hop) {
+            cur = i;
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+    nxt = order[(uint8_t)((cur + 1u) % n)];
+    busy = 1;
+#ifdef BOARD_BLADERF_MICRO
+    legion_hop_recall((bladerf_module)0,
+                      &fastlocks_rx[legion_hop_rx_nios[nxt]],
+                      nxt, legion_hop_rx_port[nxt], legion_hop_rx_spdt[nxt]);
+    legion_hop_recall((bladerf_module)1,
+                      &fastlocks_tx[legion_hop_tx_nios[nxt]],
+                      nxt, legion_hop_tx_port[nxt], legion_hop_tx_spdt[nxt]);
+#endif
+    /* CH_LO + START/END + строб. mute_ns = 0, поэтому вторая пауза не
+     * добавляется: молчание кончается вместе со стробом. */
+    legion_hop_commit_lo(nxt);
+}
+
 void legion_work(void)
 {
+    /* Граница стоянки не ждёт CTRL.ARM: удар идёт по FLAGS bit4. */
+    legion_hop_on_slice_end();
     /* Deadman без хоста: watchdog в FPGA сработал (heartbeat пропал), а ARM
      * жив → сам DISARM. Цифру mux уже заглушил (нули с каденсом); здесь
      * гасим остальное: CTRL=0 снимает ARM (expired липкий — без этого

@@ -197,6 +197,9 @@
 #define LEGION_GRID_FLAG_ZC       (1u << 2)
 #define LEGION_GRID_FLAG_FCORR    (1u << 3)
 #define LEGION_GRID_FLAG_AUTONOMOUS (1u << 4) /* HDL: шагать HOP_LUT 0x5E */
+#define LEGION_GRID_FLAG_HOLD_END   (1u << 5) /* HDL: idx>end стоп, не заворот */
+/* Чтение 0x57: [16] стоянка кончилась. Бит 4 STATUS не трогаем — там wd_latch. */
+#define LEGION_HOP_SLICE_DONE       (1u << 16)
 #define LEGION_C58_KHZ            5100000u
 #define LEGION_CH_PWR_VALID(w)    (((w) & 0x80000000u) != 0)
 #define LEGION_CH_PWR_FRAME(w)    (((w) >> 24) & LEGION_FRAME_MASK)

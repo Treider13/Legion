@@ -5,7 +5,7 @@
 Работает ТОЛЬКО в границах sub-corridor (каналы вне f_start..f_end не
 рассматриваются — запрещено ТЗ).
 
-Валидация [G6]: FHSDT (dwell в ±20% от скользящей медианы), FHSDC.
+Dwell пишется как метрика (FHSDT), ряд из-за него не режется.
 Коммит: период найден и записано ≥ 2 полных цикла (поиск 2..4096).
 AFH без периода — после 2×4096 скачков.
 """
@@ -103,8 +103,7 @@ class HopRecorder:
             hop["fhsdt_valid"] = bool(valid)
             self._dwells.append(dwell_us)
             self.hops.append(hop)
-            if valid:
-                self.valid_count += 1
+            self.valid_count += 1
         self._cur = dom_ch
         self._cur_mhz = dom_mhz
         self._cur_t0 = float(t_s)
@@ -166,14 +165,73 @@ class HopRecorder:
             self.hops.append(rec)
             if hole:
                 self.hole_count += 1
-            if valid:
-                self.valid_count += 1
+            self.valid_count += 1
         if self.hops:
             last = self.hops[-1]
             self._cur = last["channel_idx"]
             self._cur_mhz = last["freq_mhz"]
             self._cur_t0 = last["t_start"] + last["dwell_us"] * 1e-6
         return len(self.hops)
+
+    def append_stitched(self, rows: list) -> int:
+        """Хвост нового круга. Уже найденный период не сбрасывается."""
+        if not self.hops:
+            return self.load_stitched(rows)
+        seen = {
+            (int(h.get("sample_count") or 0) // max(1, self.spf),
+             round(float(h["freq_mhz"]), 3))
+            for h in self.hops
+        }
+        last_sc = max(int(h.get("sample_count") or 0) for h in self.hops)
+        added = 0
+        for h in rows:
+            freq_hz = float(h["freq_mhz"]) * 1e6
+            if not in_subcorridor(freq_hz, self.sub):
+                continue
+            sc = int(h.get("sample_count") or 0)
+            if sc < last_sc:
+                continue
+            key = (sc // max(1, self.spf), round(float(h["freq_mhz"]), 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            dwell = float(h.get("dwell_us") or 0.0)
+            if len(self._dwells) < 4 or dwell <= 0:
+                metric = True
+            else:
+                med = float(np.median(self._dwells[-16:]))
+                metric = (abs(dwell - med) <= FHSDT_TOL * med) if med > 0 else True
+            hole = bool(h.get("hole"))
+            rec = {
+                "seq_num": self._seq,
+                "channel_idx": self._grid_ch(freq_hz),
+                "freq_mhz": float(h["freq_mhz"]),
+                "dwell_us": dwell,
+                "t_start": float(h.get("t_start") or 0.0),
+                "sample_count": sc,
+                "confidence": float(h.get("confidence") or 0.0),
+                "hole": hole,
+                "window": h.get("window"),
+                "fhsdt_valid": bool(metric),
+            }
+            self._seq += 1
+            self._dwells.append(dwell)
+            self.hops.append(rec)
+            if hole:
+                self.hole_count += 1
+            self.valid_count += 1
+            added += 1
+        if len(self.hops) > 8192:
+            self.hops = self.hops[-8192:]
+            self._period = None
+            self._checked = 0
+            self.valid_count = len(self.hops)
+        if self.hops:
+            last = self.hops[-1]
+            self._cur = last["channel_idx"]
+            self._cur_mhz = last["freq_mhz"]
+            self._cur_t0 = last["t_start"] + float(last["dwell_us"]) * 1e-6
+        return added
 
     def median_dwell_us(self) -> "float | None":
         if not self._dwells:

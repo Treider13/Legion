@@ -61,6 +61,75 @@ def plan_stations(f_min: float, f_max: float, fs_hz: float = FS_HZ,
     }
 
 
+def station_groups(freqs_mhz: list, centers_hz: list[float],
+                   fs_hz: float = FS_HZ) -> tuple[list[float], list[dict]]:
+    """Частоты одного цикла, сложенные блоками по стоянкам.
+
+    Блок LUT — непрерывный START..END. LO меняется только между блоками,
+    не на каждом прыжке. Пустая стоянка в таблицу не входит.
+    """
+    half = float(fs_hz) / 2.0
+    centers = [float(c) for c in centers_hz][:8]
+    buckets: list[list[float]] = [[] for _ in centers]
+    for raw in freqs_mhz:
+        f_mhz = float(raw)
+        f = f_mhz * 1e6
+        inside = [k for k, c in enumerate(centers) if abs(f - c) <= half]
+        if inside:
+            k = inside[0]
+        elif centers:
+            k = min(range(len(centers)), key=lambda i: abs(f - centers[i]))
+        else:
+            continue
+        buckets[k].append(f_mhz)
+    grouped: list[float] = []
+    slices: list[dict] = []
+    slot = 0
+    for k, bucket in enumerate(buckets):
+        if not bucket or slot >= 8:
+            continue
+        start = len(grouped)
+        room = 256 - start
+        take = bucket[:room]
+        if not take:
+            break
+        grouped.extend(take)
+        end = len(grouped) - 1
+        slices.append({
+            "slot": slot,
+            "start": start,
+            "end": end,
+            "lo_hz": centers[k],
+            "n": end - start + 1,
+        })
+        slot += 1
+        if len(grouped) >= 256:
+            break
+    return grouped, slices
+
+
+def boundary_marks(slices: list[dict], dwell_s: float, t0_sample: int,
+                   fs_hz: float, cycles: int = 6) -> list[dict]:
+    """Метки только на границе стоянки. Первая стоянка уже стоит."""
+    if not slices:
+        return []
+    cycle_n = int(slices[-1]["end"]) + 1
+    step = max(1, int(round(float(dwell_s) * float(fs_hz))))
+    out: list[dict] = []
+    for cyc in range(max(1, int(cycles))):
+        for sl in slices:
+            if cyc == 0 and int(sl["start"]) == 0:
+                continue
+            hop_i = cyc * cycle_n + int(sl["start"])
+            out.append({
+                "window": int(sl["slot"]),
+                "lo_hz": float(sl["lo_hz"]),
+                "sample": int(t0_sample) + hop_i * step,
+                "full_cal": False,
+            })
+    return out
+
+
 def assign_windows(hop_hz: list[float], centers_hz: list[float],
                    fs_hz: float = FS_HZ) -> list[tuple[int, int]]:
     """(индекс прыжка, номер стоянки) по времени.

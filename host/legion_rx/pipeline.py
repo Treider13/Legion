@@ -747,11 +747,40 @@ class _UsbLive:
         self.streaming = False
         self.fault = ""
         self.usb_errors = 0
+        self._tune_req = 0
+        self._tune_done = 0
+
+    def park_locked(self, lo_hz: int) -> int:
+        """Обе несущие на центр стоянки, между кадрами, до закрытия handle."""
+        with self._io:
+            if self._paused or not self.usb.open:
+                return -1
+            rc = self.usb._set_frequency(0, int(lo_hz))
+            if rc != 0:
+                return rc
+            rc = self.usb._set_frequency(1, int(lo_hz))
+            if rc == 0:
+                self.lo = float(lo_hz)
+            return rc
+
+    def capture_locked(self, slot: int, lo_hz: int) -> int:
+        """Снимок профиля между кадрами. set_frequency поверх sync_rx ждёт буфер до 1 с."""
+        with self._io:
+            if self._paused or not self.usb.open:
+                return -1
+            return self.usb.capture_pair(int(slot), int(lo_hz))
 
     def tune(self, hz: float) -> None:
-        self.lo = float(hz)
-        if self.usb.open and not self._paused:
-            self.usb.set_frequency(int(self.lo))
+        """LO между кадрами. set_frequency поверх sync_rx ждёт буфер до 1 с."""
+        target = int(hz)
+        self.lo = float(target)
+        self._tune_req = target
+        if not self.usb.open or self._paused:
+            self._tune_done = target
+            return
+        deadline = time.perf_counter() + 0.008
+        while self._tune_done != target and time.perf_counter() < deadline:
+            time.sleep(0.0002)
 
     def _prime_cli(self) -> None:
         sess = BladerfCliSession(device=self.device)
@@ -796,6 +825,7 @@ class _UsbLive:
 
     def _pump(self) -> None:
         fd = self._fd
+        applied = 0
         try:
             while not self._stop.is_set():
                 with self._io:
@@ -803,6 +833,12 @@ class _UsbLive:
                         raw = b""
                         rc = 0
                     else:
+                        req = int(self._tune_req)
+                        if req and req != applied:
+                            self.usb.set_frequency(req)
+                            applied = req
+                            self._tune_done = req
+                            self.lo = float(req)
                         rc, raw, _ts = self.usb.read_frame_bytes(
                             self.frame_samples)
                 if rc in (-5, -6, -7):
@@ -845,14 +881,17 @@ class _UsbLive:
                 self.usb.enable_rx(False)
                 self.usb.release()
 
-    def resume_after_pio(self) -> None:
+    def resume_after_pio(self, reconfigure: bool = True) -> None:
         with self._io:
             if not self.usb.open:
                 rc = self.usb.acquire(self.device or "")
                 if rc != 0:
                     return
-                self.usb.configure(int(self.lo), int(self.fs), int(self.bw),
-                                   self.lna)
+                # Повторный set_sample_rate/set_frequency после старта таймера
+                # съедает первую стоянку: NIOS в эту же паузу отзывает профиль.
+                if reconfigure:
+                    self.usb.configure(int(self.lo), int(self.fs), int(self.bw),
+                                       self.lna)
                 self.usb.arm_meta_stream()
                 self.usb.enable_rx(True)
             self._paused = False
@@ -903,17 +942,17 @@ class _UsbHandoff:
         self._br = br
         return br.fpga
 
-    def yield_usb(self) -> None:
-        self.end_tick()
+    def yield_usb(self, reconfigure: bool = True) -> None:
+        self.end_tick(reconfigure=reconfigure)
 
-    def end_tick(self) -> None:
+    def end_tick(self, reconfigure: bool = True) -> None:
         if self._br is None:
             return
         try:
             self._br.__exit__(None, None, None)
         finally:
             self._br = None
-        self._radio.resume_after_pio()
+        self._radio.resume_after_pio(reconfigure=reconfigure)
 
     def close(self) -> None:
         if self._br is not None:
@@ -943,6 +982,8 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     f1, f2 = span
     fs = float(fc.AIR_FS_HZ)
     ibw = window_hz(fc.AIR_FS_HZ)
+    # Фильтр платы = окно обхода. 20 МГц здесь оставляло дыры между стоянками.
+    args.bw = ibw
     windows = plan_windows(f1, f2, ibw)
     lo = float(windows[0]["f_center"])
     log.write({"kind": "live", "f_start": f1, "f_end": f2,
@@ -964,10 +1005,15 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     else:
         store = fsm.store
         fsm.lo_hz = lo
+        fsm.fs_hz = fs
+        fsm.ibw_hz = ibw
         fsm.fpga = fpga
         fsm.pub = pub
+        fsm.sweeper.ibw_hz = ibw
+        fsm.sweeper.fs_hz = fs
         fsm.sweeper.radio = _RxProxy(radio)
     fsm.usb = radio.usb
+    fsm.usb_io = radio
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
     fsm.lna_gain_db = float(getattr(args, "lna", 20))
     ch = Channelizer(args.n_chans, args.taps, xp=np)
@@ -975,6 +1021,39 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     frames = 0
     _LIVE["fsm"] = fsm
     _LIVE["radio"] = radio
+    paint_q: queue.Queue = queue.Queue(maxsize=1)
+    log_q: queue.Queue = queue.Queue(maxsize=64)
+    side_stop = threading.Event()
+
+    def _paint_log() -> None:
+        while not side_stop.is_set() or not paint_q.empty() or not log_q.empty():
+            item = None
+            try:
+                item = paint_q.get(timeout=0.05)
+            except queue.Empty:
+                item = None
+            if item is not None and pub is not None:
+                snap, lo_hz, pwr_row = item
+                spec = np.asarray(spectrum_db(snap, 1024, 512, np))
+                half = 0.5 * float(fs)
+                pub.send_wf_row(
+                    spec,
+                    f_start_hz=float(lo_hz) - half,
+                    f_end_hz=float(lo_hz) + half)
+                pub.send_spec(spec)
+                if pwr_row is not None:
+                    pub.send_ch_pwr(pwr_row)
+            try:
+                rec_line = log_q.get_nowait()
+            except queue.Empty:
+                rec_line = None
+            if rec_line is not None:
+                log.write(rec_line)
+            if side_stop.is_set() and paint_q.empty() and log_q.empty():
+                break
+
+    side = threading.Thread(target=_paint_log, daemon=True, name="live-paint")
+    side.start()
     try:
         radio.start()
         t0 = time.perf_counter()
@@ -1021,22 +1100,28 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                                "f_start": fsm.sub["f_start"],
                                "f_end": fsm.sub["f_end"]})
                 rebuilt["done"] = True
-            if pub is not None:
+            if pub is not None and frames % 2 == 0:
                 iq = np.asarray(fr.complex64())
-                n = min(int(iq.size), 8 * 1024)
-                if n >= 1024:
-                    spec = np.asarray(spectrum_db(iq[:n], 1024, 512, np))
-                    half = 0.5 * float(fs)
-                    pub.send_wf_row(
-                        spec,
-                        f_start_hz=float(fsm.lo_hz) - half,
-                        f_end_hz=float(fsm.lo_hz) + half)
-                    pub.send_spec(spec)
-                if frames % 20 == 0:
-                    pub.send_ch_pwr(pwr)
-            log.write({"kind": "tick", "i": frames, "state": rec["state"],
-                       "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
-                       "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
+                if int(iq.size) >= 1024:
+                    snap = np.array(iq[:1024], copy=True)
+                    pwr_row = np.array(pwr, copy=True) if frames % 20 == 0 else None
+                    if paint_q.full():
+                        try:
+                            paint_q.get_nowait()
+                        except queue.Empty:
+                            pass
+                    try:
+                        paint_q.put_nowait((snap, float(fsm.lo_hz), pwr_row))
+                    except queue.Full:
+                        pass
+            if frames % 20 == 0:
+                try:
+                    log_q.put_nowait({
+                        "kind": "tick", "i": frames, "state": rec["state"],
+                        "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
+                        "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
+                except queue.Full:
+                    pass
         verdict = {
             "live": True, "frames": frames,
             "f_start": f1, "f_end": f2, "lo_hz": fsm.lo_hz,
@@ -1051,6 +1136,8 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
         print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
         return 0
     finally:
+        side_stop.set()
+        side.join(timeout=0.3)
         try:
             fsm._stop_jam(time.time(), "shutdown")
         except Exception:

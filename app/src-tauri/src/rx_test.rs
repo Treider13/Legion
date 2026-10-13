@@ -143,13 +143,20 @@ pub fn legion_rx_test_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub fn legion_rx_prime(f_start_hz: f64, f_end_hz: f64, hops_mhz: Vec<f64>) -> Result<(), String> {
+pub fn legion_rx_prime(
+    f_start_hz: f64,
+    f_end_hz: f64,
+    hops_mhz: Vec<f64>,
+    dwell_us: Option<u32>,
+) -> Result<(), String> {
     if !f_start_hz.is_finite() || !f_end_hz.is_finite() || f_end_hz <= f_start_hz {
         return Err("коридор участка пуст".into());
     }
     if hops_mhz.is_empty() || hops_mhz.len() > 256 {
         return Err("прыжков должно быть от 1 до 256".into());
     }
+    let dwell = dwell_us.unwrap_or(1000).clamp(1, 1_000_000);
+    let dwell_s = f64::from(dwell) / 1e6;
     let freqs: Vec<f64> = hops_mhz.into_iter().take(256).collect();
     let n = freqs.len();
     let cycle: Vec<u32> = (0..n as u32).collect();
@@ -165,8 +172,8 @@ pub fn legion_rx_prime(f_start_hz: f64, f_end_hz: f64, hops_mhz: Vec<f64>) -> Re
         "hop_sequence": cycle,
         "cycle": cycle,
         "cycle_length": n,
-        "dwell_us": 1000,
-        "dwell_s": 0.001
+        "dwell_us": dwell,
+        "dwell_s": dwell_s
     });
     let body = serde_json::json!({
         "record": record,

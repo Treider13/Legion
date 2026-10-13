@@ -54,9 +54,11 @@ class App:
         self.cfg = cfg
         self.headless = headless
         self.bus = InProcessBus()
+        from .lo_sweep import window_hz
+        air = window_hz(34.0e6)
         self.fsm = CognitiveFSM(
             PatternStore(), n_chans=256, fs_hz=34.0e6,
-            lo_hz=float(cfg["f_start_hz"]))
+            lo_hz=float(cfg["f_start_hz"]), ibw_hz=air)
         self.fsm.jam_duration_s = float(cfg["jam_duration_s"])
         self.fsm.mute_ns = int(cfg["mute_ns"])
         self.fsm.scan_corridor = {
@@ -441,6 +443,32 @@ def _cfg_from_args(args) -> dict:
     return cfg
 
 
+def _design_hops(fsm) -> list:
+    """Ряд, который уже склеил обход. Не список вспышек с экрана."""
+    pid = getattr(fsm, "pid", None)
+    store = getattr(fsm, "store", None)
+    if pid and store is not None:
+        try:
+            pat = store.get(pid)
+        except Exception:
+            pat = None
+        if isinstance(pat, dict) and pat.get("freqs_mhz"):
+            return [float(x) for x in list(pat["freqs_mhz"])[:256]]
+    sweeper = getattr(fsm, "sweeper", None)
+    if sweeper is None:
+        return []
+    try:
+        rows = sweeper.stitch()
+    except Exception:
+        return []
+    out = []
+    for hop in rows:
+        freq = hop.get("freq_mhz")
+        if freq:
+            out.append(round(float(freq), 3))
+    return out[:256]
+
+
 def _emit_rx(app: App, running: bool) -> None:
     from .test_capture import _down
 
@@ -449,6 +477,7 @@ def _emit_rx(app: App, running: bool) -> None:
     left = None
     if getattr(app.fsm, "test_on", False):
         left = max(0.0, float(app.fsm.test_deadline) - time.time())
+    sweeper = getattr(app.fsm, "sweeper", None)
     line = {
         "kind": "rx",
         "running": running,
@@ -460,6 +489,9 @@ def _emit_rx(app: App, running: bool) -> None:
         "f0_hz": viz.get("f0"),
         "f1_hz": viz.get("f1"),
         "db": _down(spec, 96) if spec is not None else [],
+        "hops_mhz": _design_hops(app.fsm),
+        "window_i": int(getattr(sweeper, "idx", 0) or 0),
+        "windows": len(getattr(sweeper, "windows", []) or []),
     }
     print(json.dumps(line, ensure_ascii=False), flush=True)
 
@@ -492,7 +524,7 @@ def _stream(app: App, until_file: bool) -> None:
             if not getattr(app.fsm, "test_note", ""):
                 app.fsm.test_note = "радио остановилось"
             break
-        time.sleep(0.4)
+        time.sleep(0.05)
     if until_file and getattr(app.fsm, "test_on", False):
         app.fsm.test_finish_now = True
         maybe_save_test(app.fsm, app.bus.viz)

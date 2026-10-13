@@ -136,7 +136,10 @@ class LoSweeper:
         rec["window"] = w["index"]
         rec["lo_hz"] = w["f_center"]
         rec.setdefault("sample_count", self.sample_count)
-        self.hops[w["index"]].append(rec)
+        bucket = self.hops[w["index"]]
+        bucket.append(rec)
+        if len(bucket) > 8192:
+            del bucket[:4096]
 
     def dwell_done(self, t_s: float, win_t0_s: float) -> bool:
         return (float(t_s) - float(win_t0_s)) >= SCAN_DWELL_S

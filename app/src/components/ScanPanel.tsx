@@ -18,6 +18,7 @@ import {
 } from "../sense/modes";
 import { airTractParams, FPGA_SURVEY_GONE_MS, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
+import { stopRx } from "../sense/rxTest";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, clampParams, waveMeta, type WaveKind } from "../sdr/waveforms";
@@ -559,7 +560,7 @@ export function ScanPanel() {
             </button>
           ) : listenLive ? (
             <>
-              <button className="btn-danger" onClick={() => s.stopScan()}>
+              <button className="btn-danger" onClick={() => { s.stopScan(); void stopRx(); }}>
                 СТОП СЛУХ
               </button>
               <button
@@ -607,7 +608,7 @@ export function ScanPanel() {
           <>
             {classLive && (auto || !s.transmitArmed) &&
               (s.scanRunning ? (
-                <button className="btn-danger" onClick={() => s.stopScan()}>
+                <button className="btn-danger" onClick={() => { s.stopScan(); void stopRx(); }}>
                   СТОП СКАН
                 </button>
               ) : (

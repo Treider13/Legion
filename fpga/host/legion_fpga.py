@@ -149,6 +149,7 @@ GRID_FLAG_F0UNC = 1 << 1
 GRID_FLAG_ZC = 1 << 2
 GRID_FLAG_FCORR = 1 << 3
 GRID_FLAG_AUTONOMOUS = 1 << 4  # FLAGS bit4: HDL legion_lut_hop шагает LUT
+GRID_FLAG_HOLD_END = 1 << 5  # FLAGS bit5: idx>end стоп и mute, не заворот
 GRID_F0_KHZ_GATE = 10_000_000
 C58_MHZ = 5100.0
 

@@ -3,8 +3,8 @@
 import { WAVE_AMP_MAX, type WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
-import { primeAccepted, setReplayArmed, startRx, stopRx } from "../../sense/rxTest";
-import { peekAcceptedHopsMhz, useLegion } from "../../state/store";
+import { rxStatus, stopRx } from "../../sense/rxTest";
+import { useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
 export type FpgaStartPath = "solo" | "air" | "auto";
@@ -81,16 +81,11 @@ export async function runSmartAccept(opts?: { peak?: boolean; acceptO4?: boolean
 }
 
 export async function runAcceptedTransmit(): Promise<string> {
-  const s = useLegion.getState();
-  const hops = peekAcceptedHopsMhz();
-  const a = parseFloat(String(s.sdrF1).replace(",", "."));
-  const b = parseFloat(String(s.sdrF2).replace(",", "."));
-  if (!hops.length || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
-    return "сначала Принять коридор";
+  const live = await rxStatus();
+  if (live?.running) {
+    return "плата бьёт по найденному ряду сама";
   }
-  await primeAccepted(a * 1e6, b * 1e6, hops);
-  setReplayArmed(true);
-  return startRx(true);
+  return "сначала Запустить: ряд клеится по отсчётам, плата бьёт сама после трёх совпадений";
 }
 
 export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boolean }): Promise<void> {

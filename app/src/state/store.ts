@@ -542,6 +542,7 @@ interface LegionStore {
   injectDemoTone(): void;
   startScan(): void;
   stopScan(): void;
+  applyDesignRx(line: string): void;
   startTransmit(): Promise<void>;
   stopTransmit(): Promise<void>;
   forwardTo(mhz: number): Promise<void>;
@@ -908,6 +909,14 @@ let gTxGen = 0;
 /** Хост-Атака: трекер и выдержка рамки. Не трогает FPGA / ESP32 / sweep. */
 const gAttackTracker = new AttackTracker();
 const gAttackMemory = new AttackSessionMemory();
+/** Стоп обхода по замыслу гасит опрос статуса, не второй сканер. */
+let gDesignStop: (() => void) | null = null;
+let gDesignState = "";
+/** Ряд stitch() из обхода по замыслу. Не лента вспышек старого слуха. */
+let gDesignHopsMhz: number[] = [];
+export function bindDesignStop(fn: (() => void) | null): void {
+  gDesignStop = fn;
+}
 /** Слух умной атаки: живые hop/look до Подтвердить коридор, затем заморозка. */
 let gSmartListen: { hopsMhz: number[]; looks: AttackLook[] } = { hopsMhz: [], looks: [] };
 let gSmartAccepted: SmartGridCard | null = null;
@@ -1864,6 +1873,22 @@ export const useLegion = create<LegionStore>((set, get) => {
     }, holdMs);
   };
 
+  const noteQueuedThink = (
+    r: { ok?: boolean; pending?: boolean; looks?: Array<{ freqMhz?: number; fhss?: unknown }>; fhss?: unknown },
+    spanMhz: number,
+  ): void => {
+    if (!r.ok || r.pending || !r.looks?.length) return;
+    const snap = gAttackTracker.snapshot();
+    for (const row of r.looks) {
+      const tr = matchAttackLook(snap, row.freqMhz ?? Number.NaN);
+      if (!tr) continue;
+      const raw = { ...(row as unknown as Record<string, unknown>), fhss: row.fhss ?? r.fhss };
+      gAttackMemory.noteLook(tr.id, parseWorkerLook(raw, row.freqMhz ?? 0));
+    }
+    const st = get();
+    set(attackBrainPatch(st, snap, st.scanBins, spanMhz));
+  };
+
   const thinkAttackLooks = async (
     tracks: readonly AttackTrack[],
     fsHz: number,
@@ -1909,6 +1934,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       const r = await hostAttackThink(centerMhz, fsHz, looks, residual);
       if (thinkGen !== gAttackThinkGen || !hostListenActive(get().scanPattern as SdrWalkPattern, get().smartListenLive)) return;
       if (r.memoryCap) gAttackMemory.noteWorker(r.memorySamples ?? 0, r.memoryCap, r.memoryMs ?? 0);
+      if (r.pending) return;
       if (!r.ok) return;
       for (const row of r.looks) {
         const tr = matchAttackLook(live, row.freqMhz ?? Number.NaN);
@@ -2958,6 +2984,36 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending) {
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ARM уже идёт или плата занята`);
         return false;
+      }
+      const seenDesign = gDesignHopsMhz.filter((hz) => hz > 0).slice(0, 256);
+      if (s.smartListenLive && s.scanRunning && seenDesign.length > 0) {
+        const seen = seenDesign;
+        const lo = Math.min(...seen);
+        const hi = Math.max(...seen);
+        const spanLo = seen.length === 1 ? lo - 0.5 : lo;
+        const spanHi = seen.length === 1 ? hi + 0.5 : hi;
+        gAcceptedHopsMhz = seen;
+        const analogLive = catalogCaps(s.sdrId).analogBwMhz;
+        const narrowedLive = fhssCorridorBand({
+          f1Mhz: spanLo,
+          f2Mhz: spanHi,
+          lookMhz: Math.max(0.2, spanHi - spanLo),
+          windowLimited: spanHi - spanLo > analogLive + 0.5,
+        });
+        set({
+          sdrBands: [narrowedLive],
+          sdrF1: String(Math.round(spanLo * 1000) / 1000),
+          sdrF2: String(Math.round(spanHi * 1000) / 1000),
+          smartGridAccepted: true,
+          fhssCorridorReady: true,
+          smartListenLive: true,
+          scanRunning: true,
+        });
+        pushLog(
+          "sys",
+          `${FPGA_AIR_MODE_RU}: коридор на экране ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Обход не останавливаю: плата бьёт сама после трёх совпадений.`,
+        );
+        return true;
       }
       if (opts?.peak || s.smartPeakOverride) {
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_PEAK_CLOSED_RU}`);
@@ -5482,6 +5538,19 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", txClock);
           return;
         }
+        if (isFpgaAirPattern(get().scanPattern) && !s.sdrEmulation) {
+          try {
+            const rx = await import("../sense/rxTest");
+            const note = await rx.startLive();
+            set({ scanRunning: true, smartListenLive: true, scanSweepBins: [] });
+            pushLog("sys", `${note}. Окна 34 МГц, стоянка 4 мс, ряд клеится по отсчётам.`);
+            rx.watchDesignRx();
+          } catch (err) {
+            set({ scanRunning: false, smartListenLive: false });
+            pushLog("sys", err instanceof Error ? err.message : String(err));
+          }
+          return;
+        }
         if (!s.sdrEmulation) {
           if (!get().sdrOpened) {
             await get().openSdr();
@@ -5625,6 +5694,7 @@ export const useLegion = create<LegionStore>((set, get) => {
               return;
             }
             bins = win.bins;
+            if (listen && win.think) noteQueuedThink(win.think, listen.spanMhz);
             if (listen && win.memoryCap) {
               gAttackMemory.noteWorker(win.memorySamples ?? 0, win.memoryCap, win.memoryMs ?? 0);
             }
@@ -5767,7 +5837,73 @@ export const useLegion = create<LegionStore>((set, get) => {
       })();
     },
 
+    applyDesignRx: (line: string) => {
+      let msg: {
+        db?: number[];
+        f0_hz?: number | null;
+        f1_hz?: number | null;
+        hops_mhz?: number[];
+        state?: string;
+        windows?: number;
+        window_i?: number;
+      };
+      try {
+        msg = JSON.parse(line) as typeof msg;
+      } catch {
+        return;
+      }
+      const patch: Partial<LegionStore> = {};
+      const db = msg.db;
+      const f0 = msg.f0_hz;
+      const f1 = msg.f1_hz;
+      if (db && db.length >= 2 && f0 != null && f1 != null && f1 > f0) {
+        const lo = f0 / 1e6;
+        const hi = f1 / 1e6;
+        patch.scanBins = db.map((powerDbm, i) => ({
+          freqMhz: lo + ((hi - lo) * (i / (db.length - 1))),
+          powerDbm,
+        }));
+        patch.scanCenterMhz = (lo + hi) / 2;
+      }
+      const hops = (msg.hops_mhz ?? []).filter((hz) => hz > 0);
+      if (hops.length > 0) {
+        gDesignHopsMhz = hops.slice(0, 256);
+        patch.fhssCorridorReady = true;
+        const now = Date.now();
+        patch.attackTracks = hops.map((freqMhz, id) => ({
+          id,
+          freqMhz,
+          fLowMhz: freqMhz,
+          fHighMhz: freqMhz,
+          widthMhz: 0.2,
+          powerDbm: -40,
+          noiseDbm: -90,
+          snrDb: 20,
+          hits: 2,
+          streak: 2,
+          maxStreak: 2,
+          firstSweep: 1,
+          lastSweep: 1,
+          gap: 0,
+          duty: 0.2,
+          state: "held" as const,
+          lastSeenTs: now,
+        }));
+      }
+      const state = msg.state ?? "";
+      if (state && state !== gDesignState) {
+        gDesignState = state;
+        const n = msg.windows ?? 0;
+        const i = (msg.window_i ?? 0) + 1;
+        pushLog("sys", n > 0 ? `коридор ${i}/${n} · ${state}` : `коридор · ${state}`);
+      }
+      if (Object.keys(patch).length > 0) set(patch);
+    },
+
     stopScan: () => {
+      gDesignStop?.();
+      gDesignState = "";
+      gDesignHopsMhz = [];
       gScanGen += 1;
       if (gScanTimer) {
         clearInterval(gScanTimer);
@@ -5790,7 +5926,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (isFpgaAirPattern(s.scanPattern)) {
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не участвует: Старт — слух Soapy, ARM после Подтвердить коридор; ноутбук только Стоп`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не эта кнопка: Запустить ведёт коридор окнами 34 МГц, плата бьёт после трёх совпадений`,
         );
         return;
       }

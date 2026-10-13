@@ -199,6 +199,8 @@ architecture rtl of legion_regs is
     signal hop_ftw              : unsigned(31 downto 0);
     signal hop_ch               : unsigned(7 downto 0);
     signal hopch_meta, hopch_nios : unsigned(7 downto 0);
+    signal slice_done_s           : std_logic;
+    signal slice_meta, slice_nios : std_logic;
 
     -- CDC статуса обратно в 80 МГц
     signal st_meta, st_nios     : std_logic_vector(31 downto 0);
@@ -529,7 +531,8 @@ begin
             tx_mute      => tx_mute_s,
             hop_ch       => hop_ch,
             hop_ftw      => hop_ftw,
-            hop_tick     => hop_tick_s
+            hop_tick     => hop_tick_s,
+            slice_done   => slice_done_s
         );
     tx_lb_delay1  <= unsigned(lbd1_tx);
     tx_lb_ftw1    <= unsigned(lbf1_tx);
@@ -570,11 +573,15 @@ begin
             st_nios    <= (others => '0');
             hopch_meta <= (others => '0');
             hopch_nios <= (others => '0');
+            slice_meta <= '0';
+            slice_nios <= '0';
         elsif rising_edge(nios_clk) then
             st_meta    <= status_tx;
             st_nios    <= st_meta;
             hopch_meta <= hop_ch;
             hopch_nios <= hopch_meta;
+            slice_meta <= slice_done_s;
+            slice_nios <= slice_meta;
         end if;
     end process;
 
@@ -726,7 +733,7 @@ begin
     status_mux : process(pio_we, pio_addr, pk_nios, pk1_nios, pk2_nios, pk3_nios,
                          ch_nios, wcur_nios, act_nios, e_nios, bins_nios,
                          det_gray_nios, st_nios, lts_nios, hopch_nios,
-                         r_grid_rsv)
+                         r_grid_rsv, slice_nios)
         variable a : integer;
     begin
         a := to_integer(unsigned(pio_addr));
@@ -755,7 +762,9 @@ begin
             pio_status <= lts_nios;
         elsif pio_we = '0' and a = LEGION_REG_GRID_RSV then
             -- [7:0] фаза RSV, [15:8] текущий hop_ch (монитор).
-            pio_status <= x"0000" & std_logic_vector(hopch_nios) & r_grid_rsv;
+            -- [7:0] фаза, [15:8] hop_ch, [16] стоянка кончилась (стоп, не заворот).
+            pio_status <= x"000" & "000" & slice_nios
+                          & std_logic_vector(hopch_nios) & r_grid_rsv;
         else
             pio_status <= gray2bin(det_gray_nios) & st_nios(15 downto 0);
         end if;

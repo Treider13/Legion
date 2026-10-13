@@ -161,6 +161,7 @@ package legion_pkg is
     constant LEGION_REG_GRID_FLAGS     : natural := 16#56#;
     constant LEGION_REG_GRID_RSV       : natural := 16#57#; -- фаза; STATUS: hop_ch
     constant LEGION_GRID_FLAG_AUTONOMOUS : natural := 4; -- FLAGS bit4
+    constant LEGION_GRID_FLAG_HOLD_END   : natural := 5; -- FLAGS bit5: idx>end стоп, не заворот
     constant LEGION_GRID_F0_KHZ_GATE    : natural := 10000000;
     constant LEGION_REG_CH_PWR_THR     : natural := 16#58#; -- [15:0] канал
     constant LEGION_REG_AIM_CH         : natural := 16#59#; -- [7:0] или 0xFF

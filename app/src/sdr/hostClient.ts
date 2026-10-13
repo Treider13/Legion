@@ -26,6 +26,7 @@ export interface HostScanResult {
   memoryCap?: number;
   memoryMs?: number;
   flatness?: number;
+  think?: HostAttackThinkResult;
 }
 
 export interface HostAttackLook {
@@ -63,6 +64,7 @@ export interface HostAttackThinkResult {
   memorySamples?: number;
   memoryCap?: number;
   memoryMs?: number;
+  pending?: boolean;
 }
 
 async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -224,6 +226,7 @@ export async function hostAttackScan(
     memoryCap: r.memoryCap,
     memoryMs: r.memoryMs,
     flatness: r.flatness,
+    think: r.think,
   };
 }
 

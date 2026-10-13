@@ -64,6 +64,7 @@ export function FrequencyField() {
       live: Float32Array | null;
       peakCols: Float32Array | null;
       baseCols: Float32Array | null;
+      stitch: Float32Array | null;
     } = {
       job: 0,
       trace: null,
@@ -74,6 +75,7 @@ export function FrequencyField() {
       live: null,
       peakCols: null,
       baseCols: null,
+      stitch: null,
     };
     const off = document.createElement("canvas");
     off.width = WATERFALL_COLS;
@@ -138,6 +140,7 @@ export function FrequencyField() {
         hold.live = null;
         hold.peakCols = null;
         hold.baseCols = null;
+        hold.stitch = null;
       }
 
       const hostPicture = !st.fpgaArmed;
@@ -159,6 +162,7 @@ export function FrequencyField() {
         hold.live = null;
         hold.peakCols = null;
         hold.baseCols = null;
+        hold.stitch = null;
       }
 
       const lookMhz = Math.max(parseFloat(st.fpgaAirBwMhz) || 2, 0.2);
@@ -205,7 +209,7 @@ export function FrequencyField() {
         const geom = `${lo}:${hi}:${cols}`;
         const peak = st.labPsd.peakHold;
         const base = st.labPsd.baseline;
-        const wantWf = pushLive && (useSweep || useLive);
+        const wantWf = pushLive && (useSweep || useLive || st.scanRunning);
         const traceSame = traceBins === hold.trace && peak === hold.peak && base === hold.base && geom === hold.geom;
         if (!traceSame || wantWf) {
           const prevPush = lastPush;
@@ -250,13 +254,22 @@ export function FrequencyField() {
               receivedSpectrum = true;
               if (result.waterfall) {
                 const row = result.waterfall;
-                composite = row;
+                if (!hold.stitch || hold.stitch.length !== row.length) {
+                  hold.stitch = new Float32Array(row.length);
+                  hold.stitch.fill(Number.NaN);
+                }
+                for (let c = 0; c < row.length; c++) {
+                  const sample = row[c];
+                  if (sample != null && Number.isFinite(sample)) hold.stitch[c] = sample;
+                }
+                const rowPaint = hold.stitch.slice();
+                composite = rowPaint;
                 if (!quiet) {
-                  history.push(row);
+                  history.push(rowPaint);
                   while (history.length > WATERFALL_ROWS) history.shift();
                 } else {
                   history.length = 0;
-                  history.push(row);
+                  history.push(rowPaint);
                 }
                 heatDirty = true;
               }

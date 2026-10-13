@@ -1228,6 +1228,13 @@ class Radio:
         self._ring: IqRing | None = None
         self._attack_mem: IqRing | None = None
         self._attack_mem_live = False
+        # Разбор IQ не держит замок шага: копия уходит в поток, RPC отвечает сразу.
+        self._think_mu = threading.Lock()
+        self._think_thread: threading.Thread | None = None
+        self._think_ready: dict[str, Any] | None = None
+        self._think_snap: dict[str, Any] | None = None
+        self._think_cap_rc = False
+        self._think_capture_only = False
         self._droneid_mem: IqRing | None = None
         self._droneid_mem_live = False
         self._droneid_hold = None
@@ -2051,6 +2058,68 @@ class Radio:
             time.sleep(0.0005)
         raise RuntimeError("RX: нет полного кадра FFT после настройки LO (шлюз/кабель/прошивка?)")
 
+    def take_think(self) -> dict[str, Any] | None:
+        """Готовый разбор, если поток уже закончил. Иначе None."""
+        with self._think_mu:
+            ready = self._think_ready
+            self._think_ready = None
+            return ready
+
+    def queue_attack_think(
+        self,
+        center_mhz: float,
+        fs_hz: float,
+        looks: list[dict[str, Any]],
+        residual: bool,
+    ) -> dict[str, Any]:
+        """Копия IQ на замке, спектр прыжков — в соседнем потоке.
+
+        Пока идёт спектр, следующий attack_scan может перестроить LO.
+        Прямой attack_think() для тестов остаётся синхронным.
+        На эмуляции ответ тоже сразу: там нет замка платы.
+        """
+        if self.fake:
+            return self.attack_think(center_mhz, fs_hz, looks, residual)
+        with self._think_mu:
+            if self._think_ready is not None:
+                ready = self._think_ready
+                self._think_ready = None
+                return ready
+            busy = self._think_thread is not None and self._think_thread.is_alive()
+        if busy:
+            return {"ok": True, "pending": True, "looks": [], "attack": True}
+        self._think_cap_rc = True
+        self._think_capture_only = True
+        try:
+            loaded = self.attack_think(center_mhz, fs_hz, looks, residual)
+        finally:
+            self._think_cap_rc = False
+            self._think_capture_only = False
+        if not isinstance(loaded, dict) or not loaded.get("_snap"):
+            return loaded if isinstance(loaded, dict) else {
+                "ok": False, "reason": "разбор не собрал копию", "looks": [], "attack": True,
+            }
+        snap = loaded
+
+        def run() -> None:
+            self._think_snap = snap
+            try:
+                result = self.attack_think(center_mhz, fs_hz, looks, residual)
+            except Exception as exc:
+                result = {"ok": False, "reason": str(exc), "looks": [], "attack": True}
+            finally:
+                self._think_snap = None
+            if isinstance(result, dict):
+                result.pop("_snap", None)
+            with self._think_mu:
+                self._think_ready = result
+
+        thread = threading.Thread(target=run, name="attack-think", daemon=True)
+        with self._think_mu:
+            self._think_thread = thread
+        thread.start()
+        return {"ok": True, "pending": True, "looks": [], "attack": True}
+
     def attack_think(
         self,
         center_mhz: float,
@@ -2074,60 +2143,87 @@ class Radio:
         extra = {"attack": True, **self._attack_memory_fields(work_fs)}
         if not NUMPY:
             return {"ok": False, "reason": "нужен numpy для разбора Атаки", "looks": [], **extra}
-        iq = None
-        src = None
-        if self.fake:
-            n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
-            if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
-                ref = np.asarray(self._tone_bb, dtype=np.complex64)
-                if len(ref) < n:
-                    ref = np.tile(ref, int(math.ceil(n / max(len(ref), 1))))[:n]
+        snap = self._think_snap if isinstance(self._think_snap, dict) else None
+        if snap is not None:
+            work_fs = float(snap["work_fs"])
+            extra = dict(snap["extra"])
+            iq = snap["iq"]
+            work = snap["work"]
+            leftover = snap["leftover"]
+            clip_all = bool(snap["clip_all"])
+            iq_rc = snap["iq_rc"]
+            iq_long = snap["iq_long"]
+        if snap is None:
+            iq = None
+            src = None
+            if self.fake:
+                n = 4096 if work_fs <= 5e6 else min(ATTACK_THINK_N, 16384)
+                if residual and self._tone_bb is not None and _same_attack_clock(float(self._tx_fs or 0.0), work_fs):
+                    ref = np.asarray(self._tone_bb, dtype=np.complex64)
+                    if len(ref) < n:
+                        ref = np.tile(ref, int(math.ceil(n / max(len(ref), 1))))[:n]
+                    else:
+                        ref = ref[:n]
+                    layer = synth_look_iq("ofdm", n, work_fs)
+                    iq = (0.7 * ref + 0.18 * layer).astype(np.complex64)
                 else:
-                    ref = ref[:n]
-                layer = synth_look_iq("ofdm", n, work_fs)
-                iq = (0.7 * ref + 0.18 * layer).astype(np.complex64)
+                    iq = synth_look_iq("tone", n, work_fs)
             else:
-                iq = synth_look_iq("tone", n, work_fs)
-        else:
-            src = self._attack_mem if self._attack_mem is not None else self._ring
-            if src is not None:
-                want = min(max(src.available(), 0), ATTACK_THINK_N)
-                iq = src.latest(want) if want >= 256 else None
-        if iq is None or len(iq) < 64:
-            return {"ok": False, "reason": "память IQ ещё копится", "looks": [], **extra}
-        work = iq
-        leftover = None
-        clip_all = False
-        replica = self._tone_bb if self._tone_bb is not None else None
-        same_clock = (
-            residual
-            and replica is not None
-            and len(replica) >= 16
-            and _same_attack_clock(float(self._tx_fs or 0.0), work_fs)
-        )
-        if same_clock:
-            ref = np.asarray(replica, dtype=np.complex64)
-            # Adaptive_SIC / gr-fullduplex: опора на IF = TX RF − RX LO,
-            # не всегда DC (цифровой hop держит analog LO, RF ≠ центр слуха).
-            if self.tx_mhz is not None:
-                mix_hz = (float(self.tx_mhz) - float(center_mhz)) * 1e6
-                if abs(mix_hz) >= 1.0:
-                    ref = rotator_shift(ref, mix_hz, work_fs)
-            work, clip_all = cancel_own(iq, ref)
-            leftover = leftover_ratio(iq, work)
-        iq_rc = None
-        iq_long = None
-        if not self.fake and src is not None:
-            have = int(src.available())
-            want_d = min(have, ATTACK_MEM_CAP)
-            want_rc = min(have, int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
-            if want_d >= int(work_fs * ATTACK_DRONEID_S):
-                iq_long = src.latest(want_d)
-            if want_rc >= int(work_fs * ATTACK_FHSS_S):
-                iq_rc = iq_long if want_rc == want_d else src.latest(want_rc)
-        elif self.fake:
-            iq_rc = work
-            iq_long = work
+                src = self._attack_mem if self._attack_mem is not None else self._ring
+                if src is not None:
+                    want = min(max(src.available(), 0), ATTACK_THINK_N)
+                    iq = src.latest(want) if want >= 256 else None
+            if iq is None or len(iq) < 64:
+                return {"ok": False, "reason": "память IQ ещё копится", "looks": [], **extra}
+            work = iq
+            leftover = None
+            clip_all = False
+            replica = self._tone_bb if self._tone_bb is not None else None
+            same_clock = (
+                residual
+                and replica is not None
+                and len(replica) >= 16
+                and _same_attack_clock(float(self._tx_fs or 0.0), work_fs)
+            )
+            if same_clock:
+                ref = np.asarray(replica, dtype=np.complex64)
+                # Adaptive_SIC / gr-fullduplex: опора на IF = TX RF − RX LO,
+                # не всегда DC (цифровой hop держит analog LO, RF ≠ центр слуха).
+                if self.tx_mhz is not None:
+                    mix_hz = (float(self.tx_mhz) - float(center_mhz)) * 1e6
+                    if abs(mix_hz) >= 1.0:
+                        ref = rotator_shift(ref, mix_hz, work_fs)
+                work, clip_all = cancel_own(iq, ref)
+                leftover = leftover_ratio(iq, work)
+            iq_rc = None
+            iq_long = None
+            if not self.fake and src is not None:
+                have = int(src.available())
+                want_d = min(have, ATTACK_MEM_CAP)
+                want_rc = min(have, int(work_fs * ATTACK_RC_S), ATTACK_MEM_CAP)
+                # На замке шага не копируем всё кольцо 2^24: хватает 160 мс FHSS.
+                if self._think_cap_rc:
+                    want_d = want_rc
+                if want_d >= int(work_fs * ATTACK_DRONEID_S):
+                    iq_long = src.latest(want_d)
+                if want_rc >= int(work_fs * ATTACK_FHSS_S):
+                    iq_rc = iq_long if want_rc == want_d else src.latest(want_rc)
+            elif self.fake:
+                iq_rc = work
+                iq_long = work
+            if self._think_capture_only:
+                self._think_capture_only = False
+                return {
+                    "_snap": True,
+                    "work_fs": work_fs,
+                    "extra": extra,
+                    "iq": iq,
+                    "work": work,
+                    "leftover": leftover,
+                    "clip_all": clip_all,
+                    "iq_rc": iq_rc,
+                    "iq_long": iq_long,
+                }
         # FHSS только на широком IQ. Канализатор 2 МГц hop-set убивает.
         # 65k think (~1 мс @ 61.44) мало: то же кольцо, что RC (160 мс).
         fhss_src = iq_rc if iq_rc is not None else work
@@ -3677,7 +3773,7 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
     if op == "scan":
         return radio.scan(float(msg["centerMhz"]), float(msg["bwMhz"]), int(msg.get("bins") or 64))
     if op == "attack_scan":
-        return radio.attack_scan(
+        out = radio.attack_scan(
             float(msg["centerMhz"]),
             float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
             float(msg.get("bwMhz") or (ATTACK_LISTEN_BW_HZ / 1e6)),
@@ -3687,10 +3783,14 @@ def handle(msg: dict[str, Any], radio: Radio) -> dict[str, Any]:
                 float(msg.get("bwMhz") or (ATTACK_LISTEN_BW_HZ / 1e6)) * 1e6,
             ),
         )
+        ready = radio.take_think()
+        if ready and isinstance(out, dict):
+            out["think"] = ready
+        return out
     if op == "attack_think":
         raw_looks = msg.get("looks")
         looks = raw_looks if isinstance(raw_looks, list) else []
-        return radio.attack_think(
+        return radio.queue_attack_think(
             float(msg.get("centerMhz") or 0),
             float(msg.get("fsHz") or ATTACK_LISTEN_FS_HZ),
             [x for x in looks if isinstance(x, dict)],

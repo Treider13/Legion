@@ -106,7 +106,10 @@ def preload_hop_sequence(fpga, pattern: dict, sub_corridor: dict,
 
 def preload_drfm_shelf(fpga, pattern: dict, sub_corridor: dict,
                        fs_hz: float = 34e6, shift_hz: int = 15000,
-                       mute_ns: int = 0) -> dict:
+                       mute_ns: int = 0, hop_start: int = 0,
+                       hop_end: "int | None" = None,
+                       hold_end: bool = False,
+                       arm: bool = True) -> dict:
     """Килогерцы ряда, границы, задержки 0/64, амплитуда 32767.
 
     apply_predictive_jam при этом не вызывается: он затирает амплитуду.
@@ -122,7 +125,10 @@ def preload_drfm_shelf(fpga, pattern: dict, sub_corridor: dict,
         khz = int(round(float(freqs[i]) * 1000.0))
         if not fpga.write_hop_khz(i, khz):
             raise RuntimeError(f"preload_drfm_shelf: ячейка {i}")
-    if not fpga.apply_hop_range(0, n - 1):
+    end = n - 1 if hop_end is None else int(hop_end)
+    start = max(0, min(int(hop_start), end))
+    end = max(start, min(end, n - 1))
+    if not fpga.apply_hop_range(start, end):
         raise RuntimeError("preload_drfm_shelf: границы ряда")
     # 32767 в регистре, ЦАП уже умножает на 0.90.
     amp = (32767 & 0xFFFF)
@@ -140,7 +146,8 @@ def preload_drfm_shelf(fpga, pattern: dict, sub_corridor: dict,
         step_hz=0,
         pri_us=max(1, dwell),
         shift_hz=int(shift_hz),
-        flags=lf.GRID_FLAG_AUTONOMOUS,
+        flags=(lf.GRID_FLAG_AUTONOMOUS | (
+            lf.GRID_FLAG_HOLD_END if hold_end else 0)) if arm else 0,
         rsv=0) and ok
     ok = fpga.write_reg(lf.REG_CH_FS_HZ, int(round(float(fs_hz))) & 0xFFFFFFFF) and ok
     if not ok:
