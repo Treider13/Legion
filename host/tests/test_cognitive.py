@@ -14,7 +14,8 @@ from legion_rx.corridor import CorridorDetector, extract_subcorridor
 from legion_rx.drift_detector import DriftDetector
 from legion_rx.effectiveness_monitor import EffectivenessMonitor
 from legion_rx.fpga_preload import preload_hop_sequence
-from legion_rx.hop_recorder import HopRecorder
+from legion_rx.hop_recorder import HopRecorder, isolate_bursts
+from legion_rx.spectrogram import stft_db
 from legion_rx.hopmap import (check_pattern_drift, match_and_predict)
 from legion_rx.pattern_store import (PatternStore, classify_sequence_type)
 
@@ -493,3 +494,239 @@ def test_seam_blends_linear_power():
     seam = np.linspace(ja, jb, joined.size)
     k = int(np.argmin(np.abs(seam - 2430.6e6)))
     assert joined[k] == pytest.approx(20.0, abs=1.5)
+
+
+def test_dwell_uses_samples_not_wall_clock():
+    """Скачок часов компьютера не заканчивает стоянку. Её заканчивают отсчёты."""
+    from legion_rx.lo_sweep import LoSweeper
+
+    sw = LoSweeper(ibw_hz=34e6, fs_hz=34e6)
+    sw.arm_sample_dwell()
+    sw.add_samples(int(0.003 * 34e6))
+    assert sw.dwell_done(100.0, 0.0) is False
+    sw.add_samples(int(0.002 * 34e6))
+    assert sw.dwell_done(100.0, 0.0) is True
+    sw.reset_dwell_samples()
+    assert sw.dwell_done(100.0, 0.0) is False
+    plain = LoSweeper(ibw_hz=34e6, fs_hz=34e6)
+    assert plain.dwell_done(0.001, 0.0) is False
+    assert plain.dwell_done(0.005, 0.0) is True
+
+
+def test_weak_peak_just_above_its_floor_is_a_hop():
+    """Дрон едва выше своего пола — это вспышка, если она держится два кадра."""
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    rec = HopRecorder(sub)
+    f = _freqs()
+    soft = air_frame(12, peak=1.02, noise=1.0)
+    assert rec.update(soft, f, 1e-3) is None
+    assert rec.hops == []
+    assert rec.update(soft, f, 2e-3) is None
+    hop = rec.update(air_frame(None), f, 3e-3)
+    assert hop is not None and hop["channel_idx"] == 12
+
+
+def test_minimal_burst_survives_neighbor_bin_and_a_weaker_second_frame():
+    """Минимальная вспышка не гаснет: соседний бин и более тихий второй кадр."""
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    f = _freqs()
+    wander = HopRecorder(sub)
+    assert wander.update(air_frame(20, peak=1.01, noise=1.0), f, 1e-3) is None
+    assert wander.update(air_frame(21, peak=1.01, noise=1.0), f, 2e-3) is None
+    hop = wander.update(air_frame(None), f, 3e-3)
+    assert hop is not None
+    assert hop["channel_idx"] in (20, 21)
+    weaker = HopRecorder(sub)
+    assert weaker.update(air_frame(8, peak=1.02, noise=1.0), f, 1e-3) is None
+    assert weaker.update(air_frame(8, peak=1.001, noise=1.0), f, 2e-3) is None
+    hop2 = weaker.update(air_frame(None), f, 3e-3)
+    assert hop2 is not None and hop2["channel_idx"] == 8
+    lone = HopRecorder(sub)
+    assert lone.update(air_frame(8, peak=1.02, noise=1.0), f, 1e-3) is None
+    assert lone.update(air_frame(None), f, 2e-3) is None
+    assert lone.hops == []
+
+
+def test_frequency_set_opens_tx_when_order_changes():
+    """Порядок другой, список тот же — три совпадения открывают передатчик.
+    Сдвиг на 20 кГц (слабый бин гуляет) остаётся той же частотой."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.sub = extract_subcorridor([2400e6, 2500e6], "scan")
+    fsm.state = LEARNING
+    a = [2410.0, 2420.0, 2430.0, 2440.0]
+    fsm.finish_pass(a, 1.0)
+    assert fsm.state == LEARNING and fsm.jams_sent == 0
+    fsm.finish_pass([2470.0, 2480.0, 2490.0, 2460.0], 1.5)
+    assert fsm.state == LEARNING and fsm.jams_sent == 0
+    wandered = [x + 0.02 for x in reversed(a)]
+    fsm.finish_pass(a, 2.0)
+    fsm.finish_pass(wandered, 2.5)
+    assert fsm.state == CONFIRMING and fsm.jams_sent == 0
+    fsm.finish_pass(a, 3.0)
+    fsm.finish_pass(wandered, 4.0)
+    fsm.finish_pass(list(reversed(a)), 5.0)
+    assert fsm.jams_sent >= 1
+    # Три из четырёх частот — не совпадение 0.9, удар не копится заранее.
+    late = CognitiveFSM(PatternStore(), M, 34e6, 2440e6,
+                        fpga=lf.LegionFpga(FakeTransport(board="bladerf2")),
+                        scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    late.sub = extract_subcorridor([2400e6, 2500e6], "scan")
+    late.state = LEARNING
+    late.finish_pass(a, 1.0)
+    late.finish_pass(a[:3], 2.0)
+    assert late.state == LEARNING and late.pid is None
+    late.finish_pass(a, 3.0)
+    assert late.state == CONFIRMING and late.jams_sent == 0
+
+
+def test_hold_releases_exactly_one_window():
+    """Пока блок ещё считается, стоянка не кончается. После — ровно одно окно."""
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(PatternStore(), M, 34e6, 2450e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.tick(air_frame(None), _freqs(), 1e-3)
+    assert fsm.state == INITIAL_SCAN and len(fsm.sweeper.windows) == 4
+    fsm.sweeper.arm_sample_dwell()
+    fsm.sweeper._hold_dwell = True
+    fsm.sweeper.add_samples(fsm.sweeper.dwell_need())
+    assert fsm.sweeper.dwell_done(50.0, 0.0) is False
+    fsm.sweeper._hold_dwell = False
+    assert fsm.sweeper.dwell_done(50.0, 0.0) is True
+    before = fsm.sweeper.idx
+    fsm._advance_scan(_freqs(), 2.0)
+    assert fsm.sweeper.idx == before + 1
+    assert fsm.sweeper.dwell_done(50.0, 0.0) is False
+    assert fsm.sweeper._dwell_samples == 0
+
+
+def test_stale_hops_do_not_confirm_and_fresh_lap_does():
+    """Старые скачки в окнах не считаются новым кругом. Новый круг — да."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.sub = extract_subcorridor([2400e6, 2500e6], "scan")
+    fsm.sweeper.setup(2400e6, 2500e6)
+    fsm.sweeper.idx = 0
+    freqs = [2405.0, 2412.0, 2418.0, 2424.0]
+    for n, mhz in enumerate(freqs):
+        fsm.sweeper.on_hop({
+            "freq_mhz": mhz, "sample_count": 1000 + n, "t_start": 0.0,
+            "dwell_us": 200.0, "channel_idx": n,
+        })
+    fsm.state = INITIAL_SCAN
+    fsm._absorb_lap(1.0)
+    assert fsm.state == LEARNING and fsm.pid is None and fsm.jams_sent == 0
+    fsm._absorb_lap(2.0)
+    assert fsm.state == LEARNING and fsm.pid is None and fsm.jams_sent == 0
+    for n, mhz in enumerate(freqs):
+        fsm.sweeper.on_hop({
+            "freq_mhz": mhz, "sample_count": 5_000_000 + n, "t_start": 1.0,
+            "dwell_us": 200.0, "channel_idx": n,
+        })
+    fsm._absorb_lap(3.0)
+    assert fsm.state == CONFIRMING and fsm.jams_sent == 0
+    for lap, base in enumerate((6_000_000, 7_000_000, 8_000_000)):
+        for n, mhz in enumerate(freqs):
+            fsm.sweeper.on_hop({
+                "freq_mhz": mhz, "sample_count": base + n, "t_start": 2.0 + lap,
+                "dwell_us": 200.0, "channel_idx": n,
+            })
+        fsm._absorb_lap(4.0 + lap)
+    assert fsm.jams_sent >= 1
+
+
+def test_narrow_cycle_closes_on_repeat_and_partial_does_not_count():
+    """Узкий коридор: повтор частоты закрывает круг. Куцый круг удар не двигает."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2420e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2434e6), ibw_hz=34e6)
+    fsm.sub = extract_subcorridor([2400e6, 2434e6], "scan")
+    fsm.state = LEARNING
+    cycle = [2410.0, 2420.0, 2430.0, 2440.0]
+    fsm.feed_freqs(cycle, 1.0)
+    assert fsm.state == LEARNING and fsm._prev_bins is None
+    fsm.feed_freqs([cycle[0]], 2.0)
+    assert fsm.state == LEARNING and fsm.pid is None and fsm._prev_bins
+    fsm.feed_freqs(cycle[1:], 2.5)
+    fsm.feed_freqs([cycle[0]], 3.0)
+    assert fsm.state == CONFIRMING and fsm.jams_sent == 0
+    pid = fsm.pid
+    marks = store.get(pid)["confirm_count"]
+    fsm.feed_freqs(cycle[:3] + [cycle[0]], 4.0)
+    assert store.get(pid)["confirm_count"] == marks
+    assert fsm.jams_sent == 0
+    for t in (5.0, 6.0, 7.0):
+        fsm.feed_freqs(cycle + [cycle[0]], t)
+    assert fsm.jams_sent >= 1
+
+
+def test_weak_burst_beside_loud_one_is_kept_and_one_frame_is_not():
+    """Громкая вспышка не съедает тихую рядом. Один кадр по-прежнему не скачок."""
+    sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
+    f = _freqs()
+    both = HopRecorder(sub)
+    loud = air_frame(4, peak=100.0, noise=1.0).copy()
+    loud[16] = 1.02
+    assert both.update(loud, f, 1e-3) is None
+    assert both.hops == []
+    assert both.update(loud, f, 2e-3) is None
+    both.update(air_frame(None), f, 3e-3)
+    chans = {h["channel_idx"] for h in both.hops}
+    assert chans == {4, 16}
+
+
+def test_both_bursts_are_handed_to_the_sweep():
+    """Обе вспышки попадают в ряд окна, а не только та, что вернул update."""
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(PatternStore(), M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.tick(air_frame(None), _freqs(), 1e-3)
+    assert fsm.state == INITIAL_SCAN
+    f = _freqs()
+    loud = air_frame(4, peak=100.0, noise=1.0).copy()
+    loud[16] = 1.02
+    fsm._hear_scan(loud, f, 1e-3)
+    fsm._hear_scan(loud, f, 2e-3)
+    fsm._hear_scan(air_frame(None), f, 3e-3)
+    chans = {int(h["channel_idx"]) for h in fsm.sweeper.hops[0]}
+    assert 4 in chans and 16 in chans
+
+
+def test_stft_noise_is_not_a_hop_and_a_weak_tone_beside_a_loud_one_is():
+    """Шум БПФ не пишется. Слабый тон рядом с громким — пишется."""
+    rng = np.random.default_rng(1)
+    nfft = 1024
+    fs = 34e6
+    lo = 2440e6
+    n = nfft * 4
+    noise = (rng.normal(size=n) + 1j * rng.normal(size=n)) * 0.02
+    t = np.arange(n)
+    weak_bin, loud_bin = 200, 700
+
+    def tone(bin_, amp):
+        return amp * np.exp(2j * np.pi * (bin_ - nfft / 2) * t / nfft)
+
+    def run(iq):
+        spec = np.asarray(stft_db(iq, nfft, nfft, np), dtype=np.float64)
+        lin = np.power(10.0, np.maximum(spec, -120.0) / 10.0)
+        freqs = lo + (np.arange(nfft) - nfft / 2.0) * (fs / nfft)
+        sub = extract_subcorridor(
+            [float(freqs.min()), float(freqs.max())], "stft")
+        rec = HopRecorder(sub)
+        for col in range(lin.shape[1]):
+            rec.update(isolate_bursts(lin[:, col]), freqs, (col + 1) * 1e-3)
+        rec.update(np.full(nfft, 1e-30), freqs, (lin.shape[1] + 1) * 1e-3)
+        return rec
+
+    quiet = run(noise)
+    assert quiet.hops == []
+    heard = run(noise + tone(weak_bin, 0.008) + tone(loud_bin, 0.5))
+    got = {int(h["channel_idx"]) for h in heard.hops}
+    assert any(abs(c - weak_bin) <= 4 for c in got)
+    assert any(abs(c - loud_bin) <= 4 for c in got)
+    assert all(abs(c - weak_bin) <= 4 or abs(c - loud_bin) <= 4 for c in got)

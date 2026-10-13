@@ -181,6 +181,28 @@ class PatternStore:
 
 # ---- анализ ----
 
+# Сетка списка частот. Бин FFT ~33 кГц гуляет у слабого сигнала,
+# канал 312.5 кГц держит одну и ту же вспышку.
+SET_BIN_HZ = 312.5e3
+
+
+def freq_bin_mhz(mhz: float, step_hz: float = SET_BIN_HZ) -> float:
+    step = float(step_hz)
+    if step <= 0:
+        return round(float(mhz), 3)
+    hz = float(mhz) * 1e6
+    return round(round(hz / step) * step / 1e6, 6)
+
+
+def set_similarity(a, b) -> float:
+    """Доля общего списка. Порядок не важен: через переезд окон его нет."""
+    aa = set(a)
+    bb = set(b)
+    if not aa or not bb:
+        return 0.0
+    return len(aa & bb) / float(max(len(aa), len(bb)))
+
+
 def match_need(cycle_len: int, base: int = 8) -> int:
     """cycle≤64: min(base, cycle); cycle>64: max(8, cycle//8)."""
     c = max(1, int(cycle_len))

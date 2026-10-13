@@ -18,10 +18,47 @@ from .corridor import in_subcorridor
 FHSDT_TOL = 0.20  # ±20% (ТЗ/[G6])
 MIN_OBS_HOPS = 8    # минимум наблюдений до поиска периода (не сетка!)
 MAX_CYCLE = 4096    # потолок поиска периода (ТЗ: сетка ЛЮБАЯ до 4096)
+# Столбец БПФ: шум одного бина доходит до ~10 медиан, но на следующем
+# столбце это уже другой бин (0 из 150 пар). Тон в четверть шума по
+# времени остаётся на своём бине. Ворота только для спектра, не для
+# ровного вектора каналов, где вспышка — это 1.02 своего пола.
+BURST_OVER_MEDIAN = 10.0
+BURST_MERGE_BINS = 4
 # Контрольные точки поиска периода (удвоение): покрывают любую сетку
 # с перерасходом ≤ 2×, стоимость поиска не чаще чем в 2 раза от цикла.
 _CHECKPOINTS = (8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288)
+
+
+def isolate_bursts(col) -> np.ndarray:
+    """Столбец БПФ → ровный пол и только настоящие вспышки.
+
+    Шумовой пик выше медианы, но не держится два столбца на том же бине.
+    Боковые лепестки громкого тона гаснут: остаётся максимум в окне
+    BURST_MERGE_BINS. Картинку спектра эта функция не меняет — она
+    возвращает новый вектор для записи ряда.
+    """
+    p = np.asarray(col, dtype=np.float64)
+    if p.size == 0:
+        return p.copy()
+    med = float(np.median(p))
+    if not np.isfinite(med) or med <= 0.0:
+        med = 1e-30
+    # Тихие бины — ровно 1, не медиана этого столбца. Иначе следующий
+    # столбец чуть выше прежнего пола выглядит как вспышка на всех бинах.
+    out = np.ones(p.shape, dtype=np.float64)
+    above = np.isfinite(p) & (p > (BURST_OVER_MEDIAN * med))
+    if not np.any(above):
+        return out
+    neigh = p
+    for _ in range(BURST_MERGE_BINS):
+        nxt = neigh.copy()
+        nxt[1:] = np.maximum(nxt[1:], neigh[:-1])
+        nxt[:-1] = np.maximum(nxt[:-1], neigh[1:])
+        neigh = nxt
+    keep = above & (p >= neigh)
+    out[keep] = p[keep] / med
+    return out
 
 
 class HopRecorder:
@@ -36,8 +73,6 @@ class HopRecorder:
         self.valid_count = 0
         self.duty_cycle = 0.0
         self._seq = 0
-        self._cur: "int | None" = None
-        self._cur_t0 = 0.0
         self._frames = 0
         self._active = 0
         self._dwells: list[float] = []
@@ -46,36 +81,26 @@ class HopRecorder:
         self._checked = 0
         self._grid_f0: "float | None" = None
         self._grid_step: "float | None" = None
-        self._cur_mhz: "float | None" = None
-        self._cur_pwr = 0.0
-        self._lock_floor = 1.0
-        self._hold_k: "int | None" = None
-        self._hold_n = 0
+        self._open: list[dict] = []
         self._floor = None
         self._hold = None
         self.hole_count = 0
 
-    def _emit_open(self, t_s: float, freqs) -> "dict | None":
-        """Закрыть открытый скачок. Тишина и смена окна тоже закрывают."""
-        if self._cur is None:
+    def _emit_one(self, op: dict, t_s: float) -> "dict | None":
+        """Закрыть одну открытую вспышку. Нулевая длительность — не скачок."""
+        if float(t_s) <= float(op["t0"]):
             return None
-        dwell_us = (float(t_s) - self._cur_t0) * 1e6
-        if self._grid_f0 is not None and self._cur_mhz is not None:
-            freq_mhz = self._cur_mhz
-        elif 0 <= int(self._cur) < len(freqs):
-            freq_mhz = float(freqs[int(self._cur)]) / 1e6
-        else:
-            freq_mhz = float(self._cur_mhz or 0.0)
+        dwell_us = (float(t_s) - float(op["t0"])) * 1e6
         hop = {
             "seq_num": self._seq,
-            "channel_idx": int(self._cur),
-            "freq_mhz": freq_mhz,
+            "channel_idx": int(op["ch"]),
+            "freq_mhz": float(op["mhz"]),
             "hole": False,
             "dwell_us": dwell_us,
-            "t_start": self._cur_t0,
+            "t_start": float(op["t0"]),
             "sample_count": self._frames * self.spf,
             "confidence": float(min(
-                1.0, self._cur_pwr / (self._lock_floor + 1e-12) / 3.0)),
+                1.0, float(op["pwr"]) / (float(op["floor"]) + 1e-12) / 3.0)),
         }
         self._seq += 1
         if len(self._dwells) < 4:
@@ -87,37 +112,47 @@ class HopRecorder:
         self._dwells.append(dwell_us)
         self.hops.append(hop)
         self.valid_count += 1
-        self._cur = None
-        self._cur_mhz = None
         return hop
 
-    def flush(self, t_s: float, freqs_hz) -> "dict | None":
-        """Сбросить открытый скачок в ряд до смены окна.
-        Только что открытый (длительность ещё ноль) — не скачок."""
-        self._hold_k = None
-        self._hold_n = 0
-        self._hold = None
-        if self._cur is None or float(t_s) <= float(self._cur_t0):
-            self._cur = None
-            self._cur_mhz = None
-            return None
-        return self._emit_open(t_s, np.asarray(freqs_hz, dtype=np.float64))
+    def _close_all(self, t_s: float) -> "dict | None":
+        last = None
+        for op in self._open:
+            hop = self._emit_one(op, t_s)
+            if hop is not None:
+                last = hop
+        self._open = []
+        return last
 
-    def _peak(self, p: np.ndarray):
-        """Самый громкий локальный пик выше своего пола два кадра подряд.
-        Один кадр и бин на своём полу — не вспышка."""
+    def flush(self, t_s: float, freqs_hz) -> "dict | None":
+        """Сбросить открытые вспышки в ряд до смены окна.
+        Только что открытая (длительность ещё ноль) — не скачок."""
+        self._hold = None
+        self._floor = None
+        return self._close_all(float(t_s))
+
+    def _peaks(self, p: np.ndarray) -> list[int]:
+        """Все локальные пики выше своего пола два кадра подряд.
+        Громкий сосед не отменяет слабый. Один кадр — не вспышка."""
         if (self._floor is None or self._hold is None
                 or self._floor.shape != p.shape):
             self._floor = np.full(p.size, float(np.median(p)))
             self._hold = np.zeros(p.size, dtype=np.int32)
         raw = p > self._floor
-        self._hold = np.where(raw, np.minimum(self._hold + 1, 2), 0)
+        # Слабый пик часто сидит между бинами и на следующем кадре
+        # оказывается у соседа. Сосед продолжает ту же вспышку.
+        spread = raw.copy()
+        if p.size > 1:
+            spread[1:] |= raw[:-1]
+            spread[:-1] |= raw[1:]
+        self._hold = np.where(spread, np.minimum(self._hold + 1, 2), 0)
         active = self._hold >= 2
-        quiet = ~active
+        # Пол не поднимаем по самой вспышке, уже на первом кадре.
+        # Иначе минимальный пик на втором кадре оказывается ниже пола.
         a = float(0.05)
+        quiet = ~raw
         self._floor[quiet] = (1.0 - a) * self._floor[quiet] + a * p[quiet]
         if not np.any(active):
-            return None
+            return []
         left = np.empty(p.size, dtype=np.float64)
         right = np.empty(p.size, dtype=np.float64)
         left[0] = -np.inf
@@ -125,12 +160,65 @@ class HopRecorder:
         right[-1] = -np.inf
         right[:-1] = p[1:]
         peaks = active & (p >= left) & (p >= right)
-        if not np.any(peaks):
-            return None
-        return int(np.argmax(np.where(peaks, p, -np.inf)))
+        idx = np.flatnonzero(peaks)
+        if idx.size == 0:
+            return []
+        order = np.argsort(p[idx])[::-1]
+        return [int(i) for i in idx[order]]
+
+    def _describe(self, k: int, p: np.ndarray, f: np.ndarray) -> dict:
+        mhz = float(f[k]) / 1e6 if 0 <= int(k) < len(f) else 0.0
+        if self._grid_f0 is not None and 0 <= int(k) < len(f):
+            ch = self._grid_ch(float(f[k]))
+        else:
+            ch = int(k)
+        floor = float(self._floor[k]) if self._floor is not None else 1.0
+        return {"bin": int(k), "ch": int(ch), "mhz": mhz,
+                "t0": 0.0, "pwr": float(p[k]), "floor": floor}
+
+    def _sync(self, ks: list[int], p: np.ndarray, f: np.ndarray,
+              t_s: float) -> "dict | None":
+        """Каждый пик — своя вспышка. Соседний бин продолжает ту же."""
+        used: set[int] = set()
+        still: list[dict] = []
+        closed = None
+        for op in self._open:
+            match = None
+            best = 99
+            for i, k in enumerate(ks):
+                if i in used:
+                    continue
+                dist = abs(int(k) - int(op["bin"]))
+                if dist <= 1 and dist < best:
+                    match = i
+                    best = dist
+            if match is None:
+                hop = self._emit_one(op, t_s)
+                if hop is not None:
+                    closed = hop
+                continue
+            used.add(match)
+            k = int(ks[match])
+            nxt = self._describe(k, p, f)
+            nxt["t0"] = op["t0"]
+            still.append(nxt)
+        for i, k in enumerate(ks):
+            if i in used:
+                continue
+            if any(abs(int(k) - int(ks[j])) <= 1 for j in used):
+                continue
+            if any(abs(int(k) - int(op["bin"])) <= 1 for op in still):
+                continue
+            nxt = self._describe(int(k), p, f)
+            nxt["t0"] = float(t_s)
+            still.append(nxt)
+            used.add(i)
+        self._open = still
+        return closed
 
     def update(self, ch_pwr, freqs_hz, t_s: float) -> "dict | None":
-        """Тик. Скачок пишется, когда пик сменился или погас.
+        """Тик. Вспышка пишется, когда её пик погас.
+        В кадре их может быть несколько: слабая рядом с громкой тоже.
         Бин выше своего пола два кадра подряд. Один кадр — не вспышка."""
         p = np.asarray(ch_pwr, dtype=np.float64)
         f = np.asarray(freqs_hz, dtype=np.float64)
@@ -140,27 +228,13 @@ class HopRecorder:
         if not mask.any():
             return self.flush(t_s, f)
         p = np.where(mask, p, 0.0)
-        k = self._peak(p)
+        ks = self._peaks(p)
         self.duty_cycle = self._active / max(1, self._frames)
-        if k is None:
-            return self._emit_open(t_s, f)
+        if not ks:
+            return self._close_all(float(t_s))
         self._active += 1
         self.duty_cycle = self._active / max(1, self._frames)
-        dom_ch = int(k)
-        dom_mhz = None
-        if self._grid_f0 is not None:
-            dom_mhz = float(f[k]) / 1e6
-            dom_ch = self._grid_ch(float(f[k]))
-        if dom_ch == self._cur:
-            self._cur_pwr = float(p[k])
-            return None
-        hop = self._emit_open(t_s, f)
-        self._cur = int(dom_ch)
-        self._cur_mhz = dom_mhz
-        self._cur_t0 = float(t_s)
-        self._cur_pwr = float(p[k])
-        self._lock_floor = float(self._floor[k]) if self._floor is not None else 1.0
-        return hop
+        return self._sync(ks, p, f, float(t_s))
 
     def _grid_ch(self, freq_hz: float) -> int:
         step = self._grid_step if self._grid_f0 is not None else self.chan_step
@@ -220,10 +294,7 @@ class HopRecorder:
                 self.hole_count += 1
             self.valid_count += 1
         # Ряд уже закрыт. Открытый канал заставил бы записать последний скачок ещё раз.
-        self._cur = None
-        self._cur_mhz = None
-        self._hold_k = None
-        self._hold_n = 0
+        self._open = []
         self._floor = None
         self._hold = None
         return len(self.hops)
@@ -281,10 +352,7 @@ class HopRecorder:
             self._period = None
             self._checked = 0
             self.valid_count = len(self.hops)
-        self._cur = None
-        self._cur_mhz = None
-        self._hold_k = None
-        self._hold_n = 0
+        self._open = []
         self._floor = None
         self._hold = None
         return added

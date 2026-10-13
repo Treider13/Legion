@@ -55,6 +55,7 @@ from .hopmap import HopTracker
 from .ipc import UdpPublisher
 from .overrun import OverrunMonitor
 from .pfb import Channelizer
+from .hop_recorder import isolate_bursts
 from .spectrogram import spectrum_db, stft_db
 from .synth import GENERATORS, CLASS_LO_HZ
 from .synth.dataset import spec_from_iq
@@ -1016,6 +1017,8 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     fsm.fpga_fs_hz = fc.AIR_FS_HZ
     fsm.lna_gain_db = float(getattr(args, "lna", 20))
     frames = 0
+    if (f2 - f1) > ibw:
+        fsm.sweeper.arm_sample_dwell()
     _LIVE["fsm"] = fsm
     _LIVE["radio"] = radio
     paint_q: queue.Queue = queue.Queue(maxsize=1)
@@ -1059,6 +1062,96 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
 
     side = threading.Thread(target=_paint_log, daemon=True, name="live-paint")
     side.start()
+    tail = {"freqs": None, "t": 0.0}
+
+    def _on_iq(iq, fr) -> None:
+        nonlocal frames
+        nfft = 1024
+        rec = {"state": fsm.state, "jams_sent": fsm.jams_sent, "pdr": fsm.eff.pdr}
+        if int(iq.size) >= nfft:
+            spec = np.asarray(stft_db(iq, nfft, nfft, np), dtype=np.float64)
+            lin = np.power(10.0, np.maximum(spec, -120.0) / 10.0)
+            n_bins, n_col = lin.shape
+            lo_cap = float(fsm.lo_hz)
+            freqs = lo_cap + (np.arange(n_bins) - n_bins / 2.0) * (fs / n_bins)
+            t_rf0 = float(fr.t_first)
+            t_rf1 = float(fr.t_done)
+            if t_rf1 <= t_rf0:
+                t_rf1 = t_rf0 + float(iq.size) / fs
+            tail["freqs"] = freqs
+            tail["t"] = t_rf1
+            idx_before = int(fsm.sweeper.idx)
+            try:
+                for col in range(n_col):
+                    t_col = t_rf0 + (col + 1) * (t_rf1 - t_rf0) / n_col
+                    # Ряд слышит вспышки. Картинка остаётся на полном спектре.
+                    heard = isolate_bursts(lin[:, col])
+                    if col + 1 == n_col:
+                        rec = fsm.tick(heard, freqs, t_col)
+                    else:
+                        fsm.hear(heard, freqs, t_col)
+            finally:
+                fpga.end_tick()
+            mean = lin.mean(axis=1)
+            slot = win_acc.get(idx_before)
+            if slot is None:
+                win_acc[idx_before] = [mean, 1, lo_cap]
+            else:
+                slot[0] = slot[0] + mean
+                slot[1] += 1
+                slot[2] = lo_cap
+            frames += 1
+            nwin = len(fsm.sweeper.windows)
+            scanning = (nwin > 1 and fsm.state in
+                        (INITIAL_SCAN, LEARNING, CONFIRMING))
+            idx = int(fsm.sweeper.idx)
+            if pub is not None:
+                segments = {
+                    int(i): (float(lo_i), np.array(s / c, copy=True))
+                    for i, (s, c, lo_i) in win_acc.items() if c
+                }
+                wins = [{
+                    "index": int(w["index"]),
+                    "f_start": float(w["f_start"]),
+                    "f_end": float(w["f_end"]),
+                    "f_center": float(w["f_center"]),
+                } for w in fsm.sweeper.windows]
+                item = None
+                if scanning and idx < idx_before and segments:
+                    item = ("pass", segments, wins)
+                    win_acc.clear()
+                elif scanning and (idx != idx_before or frames % 4 == 0):
+                    item = ("pass", segments, wins)
+                elif not scanning:
+                    db = 10.0 * np.log10(np.maximum(mean, 1e-12))
+                    item = ("live", db, lo_cap)
+                    win_acc.clear()
+                if item is not None:
+                    if paint_q.full():
+                        try:
+                            paint_q.get_nowait()
+                        except queue.Empty:
+                            pass
+                    try:
+                        paint_q.put_nowait(item)
+                    except queue.Full:
+                        pass
+        else:
+            fpga.end_tick()
+        try:
+            from .test_capture import maybe_save_test
+            maybe_save_test(fsm, pub)
+        except Exception:
+            pass
+        if frames % 20 == 0:
+            try:
+                log_q.put_nowait({
+                    "kind": "tick", "i": frames, "state": rec["state"],
+                    "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
+                    "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
+            except queue.Full:
+                pass
+
     try:
         radio.start()
         t0 = time.perf_counter()
@@ -1070,93 +1163,84 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                 fsm._rescan_origin(time.time(), "usb")
                 radio.fault = ""
                 break
-            fr = radio.read_frame()
-            if fr is None:
-                if radio.src is not None and radio.src.eof:
-                    break
-                continue
-            iq = np.asarray(fr.complex64())
-            nfft = 1024
-            rec = {"state": fsm.state, "jams_sent": fsm.jams_sent, "pdr": fsm.eff.pdr}
-            if int(iq.size) >= nfft:
-                spec = np.asarray(stft_db(iq, nfft, nfft, np), dtype=np.float64)
-                lin = np.power(10.0, np.maximum(spec, -120.0) / 10.0)
-                n_bins, n_col = lin.shape
-                lo_cap = float(fsm.lo_hz)
-                freqs = lo_cap + (np.arange(n_bins) - n_bins / 2.0) * (fs / n_bins)
-                t0 = float(fr.t_first)
-                t1 = float(fr.t_done)
-                if t1 <= t0:
-                    t1 = t0 + float(iq.size) / fs
-                idx_before = int(fsm.sweeper.idx)
+            listen = fsm.state in (LISTENING, INITIAL_SCAN, LEARNING, CONFIRMING)
+            if listen:
+                # Сначала забираем 4 мс эфира подряд, спектр — после.
+                # Иначе стоянка кончается по часам компьютера, а не по отсчётам.
+                need = fsm.sweeper.dwell_need()
+                block = []
+                got = 0
+                while got < need:
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    fr = radio.read_frame()
+                    if fr is None:
+                        if radio.src is not None and radio.src.eof:
+                            break
+                        continue
+                    iq = np.asarray(fr.complex64())
+                    if int(iq.size) < 1:
+                        continue
+                    block.append((iq, fr))
+                    got += int(iq.size)
+                if not block:
+                    if radio.src is not None and radio.src.eof:
+                        break
+                    continue
+                n_before = len(fsm.rec.hops) if fsm.rec is not None else 0
+                fsm.sweeper._hold_dwell = True
                 try:
-                    for col in range(n_col):
-                        t_col = t0 + (col + 1) * (t1 - t0) / n_col
-                        if col + 1 == n_col:
-                            rec = fsm.tick(lin[:, col], freqs, t_col)
-                        else:
-                            fsm.hear(lin[:, col], freqs, t_col)
+                    for iq, fr in block:
+                        if fsm.sweeper._count_samples:
+                            fsm.sweeper.add_samples(int(iq.size))
+                        _on_iq(iq, fr)
                 finally:
-                    fpga.end_tick()
-                mean = lin.mean(axis=1)
-                slot = win_acc.get(idx_before)
-                if slot is None:
-                    win_acc[idx_before] = [mean, 1, lo_cap]
-                else:
-                    slot[0] = slot[0] + mean
-                    slot[1] += 1
-                    slot[2] = lo_cap
-                frames += 1
-                nwin = len(fsm.sweeper.windows)
-                scanning = (nwin > 1 and fsm.state in
-                            (INITIAL_SCAN, LEARNING, CONFIRMING))
-                idx = int(fsm.sweeper.idx)
-                if pub is not None:
-                    segments = {
-                        int(i): (float(lo_i), np.array(s / c, copy=True))
-                        for i, (s, c, lo_i) in win_acc.items() if c
-                    }
-                    wins = [{
-                        "index": int(w["index"]),
-                        "f_start": float(w["f_start"]),
-                        "f_end": float(w["f_end"]),
-                        "f_center": float(w["f_center"]),
-                    } for w in fsm.sweeper.windows]
-                    item = None
-                    if scanning and idx < idx_before and segments:
-                        item = ("pass", segments, wins)
-                        win_acc.clear()
-                    elif scanning and (idx != idx_before or frames % 4 == 0):
-                        item = ("pass", segments, wins)
-                    elif not scanning:
-                        db = 10.0 * np.log10(np.maximum(mean, 1e-12))
-                        item = ("live", db, lo_cap)
-                        win_acc.clear()
-                    if item is not None:
-                        if paint_q.full():
+                    fsm.sweeper._hold_dwell = False
+                if (fsm.sweeper._count_samples
+                        and fsm.state in (INITIAL_SCAN, LEARNING, CONFIRMING)
+                        and fsm.sweeper.dwell_done(0.0, 0.0)):
+                    freqs = tail["freqs"]
+                    if freqs is None:
+                        freqs = np.asarray([fsm.lo_hz], dtype=np.float64)
+                    fsm._advance_scan(freqs, float(tail["t"]))
+                    # Круг кончился уже после спектра кадра. Старые суммы
+                    # окна не смешиваем со следующим кругом.
+                    if (pub is not None and win_acc
+                            and int(fsm.sweeper.idx) == 0):
+                        segments = {
+                            int(i): (float(lo_i), np.array(s / c, copy=True))
+                            for i, (s, c, lo_i) in win_acc.items() if c
+                        }
+                        wins = [{
+                            "index": int(w["index"]),
+                            "f_start": float(w["f_start"]),
+                            "f_end": float(w["f_end"]),
+                            "f_center": float(w["f_center"]),
+                        } for w in fsm.sweeper.windows]
+                        if segments and paint_q.full():
                             try:
                                 paint_q.get_nowait()
                             except queue.Empty:
                                 pass
-                        try:
-                            paint_q.put_nowait(item)
-                        except queue.Full:
-                            pass
+                        if segments:
+                            try:
+                                paint_q.put_nowait(("pass", segments, wins))
+                            except queue.Full:
+                                pass
+                        win_acc.clear()
+                elif (not fsm._wide() and fsm.rec is not None
+                      and fsm.state in (LEARNING, CONFIRMING)):
+                    fresh = [float(h["freq_mhz"])
+                             for h in fsm.rec.hops[n_before:]]
+                    if fresh:
+                        fsm.feed_freqs(fresh, float(tail["t"]))
             else:
-                fpga.end_tick()
-            try:
-                from .test_capture import maybe_save_test
-                maybe_save_test(fsm, pub)
-            except Exception:
-                pass
-            if frames % 20 == 0:
-                try:
-                    log_q.put_nowait({
-                        "kind": "tick", "i": frames, "state": rec["state"],
-                        "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
-                        "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
-                except queue.Full:
-                    pass
+                fr = radio.read_frame()
+                if fr is None:
+                    if radio.src is not None and radio.src.eof:
+                        break
+                    continue
+                _on_iq(np.asarray(fr.complex64()), fr)
         verdict = {
             "live": True, "frames": frames,
             "f_start": f1, "f_end": f2, "lo_hz": fsm.lo_hz,

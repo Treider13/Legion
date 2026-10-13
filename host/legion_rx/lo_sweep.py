@@ -159,6 +159,10 @@ class LoSweeper:
         self.coverage_frac = 0.0
         self.work: "dict | None" = None
         self.note = ""
+        # Стоянка — число принятых отсчётов, не скачок настенных часов.
+        self._count_samples = False
+        self._dwell_samples = 0
+        self._hold_dwell = False
 
     def setup(self, f_start: float, f_end: float) -> list[dict]:
         self.note = ""
@@ -217,7 +221,26 @@ class LoSweeper:
         if len(bucket) > 8192:
             del bucket[:4096]
 
+    def dwell_need(self) -> int:
+        """Сколько отсчётов сидеть на одном окне. 4 мс × fs."""
+        return max(1, int(round(SCAN_DWELL_S * float(self.fs_hz))))
+
+    def arm_sample_dwell(self) -> None:
+        """Живой обход: окно не кончается, пока не набраны отсчёты эфира."""
+        self._count_samples = True
+        self._dwell_samples = 0
+
+    def add_samples(self, n: int) -> None:
+        self._dwell_samples += max(0, int(n))
+
+    def reset_dwell_samples(self) -> None:
+        self._dwell_samples = 0
+
     def dwell_done(self, t_s: float, win_t0_s: float) -> bool:
+        if self._hold_dwell:
+            return False
+        if self._count_samples:
+            return self._dwell_samples >= self.dwell_need()
         return (float(t_s) - float(win_t0_s)) >= SCAN_DWELL_S
 
     def advance(self, sample_count: int) -> bool:

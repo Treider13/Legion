@@ -15,8 +15,9 @@ from .drift_detector import DriftDetector
 from .effectiveness_monitor import EffectivenessMonitor
 from .hop_recorder import HopRecorder
 from .hopmap import FallbackPredictor, match_and_predict
-from .lo_sweep import LoSweeper
-from .pattern_store import PatternStore, apply_timer_cycle, match_need
+from .lo_sweep import SCAN_DWELL_S, LoSweeper
+from .pattern_store import (PatternStore, apply_timer_cycle, freq_bin_mhz,
+                           match_need, set_similarity)
 
 LISTENING = "LISTENING"
 INITIAL_SCAN = "INITIAL_SCAN"
@@ -85,6 +86,11 @@ class CognitiveFSM:
         if getattr(store, "n_chans", None) is None:
             store.n_chans = self.n_chans
         self._listen_freqs: list[float] = []
+        self._prev_bins: "set | None" = None
+        self._open_bins: set = set()
+        self._open_order: list = []
+        self._set_handled = False
+        self._lap_sc = -1
         self.jam_duration_s = 15.0
         self._jam_until: "float | None" = None
         self._paused = False
@@ -197,6 +203,11 @@ class CognitiveFSM:
         self._live = []
         self._listen_freqs = []
         self._stitched = None
+        self._prev_bins = None
+        self._open_bins = set()
+        self._open_order = []
+        self._set_handled = False
+        self._lap_sc = -1
         self._go(LISTENING, t_s, note="rescan_origin",
                  corridor=self.scan_corridor)
 
@@ -404,11 +415,13 @@ class CognitiveFSM:
                 if p[k] > med:
                     self._listen_freqs.append(float(np.asarray(freqs_hz)[k]))
                     self._expand_sub()
+            n_before = len(self.rec.hops) if self.rec is not None else 0
             hop = self.rec.update(ch_pwr, freqs_hz, t_s) if self.rec else None
-            if hop is not None:
-                self._live.append(hop["channel_idx"])
-                self._live = self._live[-self._live_cap():]
-                self._last_hop_t = float(t_s)
+            if self.rec is not None:
+                for seen in self.rec.hops[n_before:]:
+                    self._note_hop(seen, t_s)
+                if self.rec.hops[n_before:]:
+                    hop = self.rec.hops[-1]
             if st == LEARNING:
                 self._tick_learning(t_s)
             elif st == CONFIRMING:
@@ -492,13 +505,15 @@ class CognitiveFSM:
         """Открытый скачок в ряд до замены окна. С окном его не выбрасываем."""
         if self.rec is None:
             return None
-        hop = self.rec.flush(t_s, freqs_hz)
-        if hop is None:
-            return None
-        hop["sample_count"] = self.sweeper.sample_count
-        self.sweeper.on_hop(hop)
-        self._note_hop(hop, t_s)
-        return hop
+        n_before = len(self.rec.hops)
+        self.rec.flush(t_s, freqs_hz)
+        published = None
+        for hop in self.rec.hops[n_before:]:
+            hop["sample_count"] = self.sweeper.sample_count
+            self.sweeper.on_hop(hop)
+            self._note_hop(hop, t_s)
+            published = hop
+        return published
 
     def _tick_listening(self, ch_pwr, freqs_hz, t_s: float):
         replay = getattr(self, "replay_pattern", None)
@@ -522,8 +537,11 @@ class CognitiveFSM:
             parent = {"corridor_id": "operator",
                       "f_start": float(a), "f_end": float(b)}
             self._start_learning(t_s, [float(a), float(b)], parent)
+            n_before = len(self.rec.hops) if self.rec is not None else 0
             hop = self.rec.update(ch_pwr, freqs_hz, t_s) if self.rec else None
-            self._note_hop(hop, t_s)
+            if self.rec is not None:
+                for seen in self.rec.hops[n_before:]:
+                    self._note_hop(seen, t_s)
             return hop
         out = self.det.update(ch_pwr, freqs_hz, t_s)
         for b in out["bursts"]:
@@ -588,11 +606,17 @@ class CognitiveFSM:
         self._live = self._live[-self._live_cap():]
         window_rec = self.rec
         self.rec = learn
-        if self.state == INITIAL_SCAN:
+        was = self.state
+        fresh = [h for h in seed
+                 if int(h.get("sample_count") or 0) > self._lap_sc]
+        if fresh:
+            self._lap_sc = max(int(h.get("sample_count") or 0) for h in fresh)
+            self.finish_pass([float(h["freq_mhz"]) for h in fresh], t_s)
+        if was == INITIAL_SCAN and self.state == INITIAL_SCAN:
             self._go(LEARNING, t_s, stitched=len(learn.hops), wide=True)
         if self.state == LEARNING:
             self._tick_learning(t_s)
-        elif self.state == CONFIRMING:
+        elif was == CONFIRMING and self.state == CONFIRMING:
             self._tick_confirming(t_s)
         if self.state in (INITIAL_SCAN, LEARNING, CONFIRMING):
             self.rec = window_rec
@@ -616,73 +640,188 @@ class CognitiveFSM:
             self._hear_scan(ch_pwr, freqs_hz, t_s)
         elif (st in (LEARNING, CONFIRMING, RE_LEARNING)
               and self.rec is not None):
-            hop = self.rec.update(ch_pwr, freqs_hz, t_s)
-            self._note_hop(hop, t_s)
+            n_before = len(self.rec.hops)
+            self.rec.update(ch_pwr, freqs_hz, t_s)
+            for seen in self.rec.hops[n_before:]:
+                self._note_hop(seen, t_s)
 
     def _hear_scan(self, ch_pwr, freqs_hz, t_s: float):
         self._window_recorder()
-        hop = self.rec.update(ch_pwr, freqs_hz, t_s)
-        if hop is not None:
-            hop["sample_count"] = int(round(float(t_s) * self.fs_hz))
+        n_before = len(self.rec.hops)
+        self.rec.update(ch_pwr, freqs_hz, t_s)
+        published = None
+        sc = int(round(float(t_s) * self.fs_hz))
+        for hop in self.rec.hops[n_before:]:
+            hop["sample_count"] = sc
             self.sweeper.on_hop(hop)
-            self._live.append(hop["channel_idx"])
-            self._live = self._live[-self._live_cap():]
-            self._last_hop_t = float(t_s)
-        return hop
+            self._note_hop(hop, t_s)
+            published = hop
+        return published
 
     def _tick_scan(self, ch_pwr, freqs_hz, t_s: float):
         hop = self._hear_scan(ch_pwr, freqs_hz, t_s)
         if self.sweeper.dwell_done(t_s, self._scan_t0):
-            flushed = self._flush_open(freqs_hz, t_s)
-            if hop is None:
-                hop = flushed
-            if self.sweeper.advance(self.sweeper.sample_count):
-                w = self.sweeper.current()
-                if w:
-                    self.lo_hz = w["f_center"]
-                    # Сборщик одного окна. Ряд всех окон — в sweeper.hops.
-                    self.rec = HopRecorder(
-                        extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
-                        n_chans=self.n_chans, samples_per_frame=self.spf)
-                self._live = []
-                self._scan_t0 = float(t_s)
-            elif self._wide():
-                self._absorb_lap(t_s)
-                if self.state not in (INITIAL_SCAN, LEARNING, CONFIRMING):
-                    return hop
-                self.sweeper.idx = 0
-                self.sweeper.tune_current(self.sweeper.sample_count)
-                w = self.sweeper.current()
-                if w:
-                    self.lo_hz = w["f_center"]
-                    self.rec = HopRecorder(
-                        extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
-                        n_chans=self.n_chans, samples_per_frame=self.spf)
-                self._live = []
-                self._scan_t0 = float(t_s)
-            else:
-                fin = self.sweeper.finish()
-                work = fin["work"]
-                if work:
-                    self.lo_hz = work["f_center"]
-                seed = list(fin.get("stitched") or [])
-                hops = [float(h["freq_mhz"]) * 1e6 for h in seed]
-                if not hops:
-                    hops = list(self._listen_freqs) or [self.lo_hz]
-                if seed:
-                    f1 = min(hops)
-                    f2 = max(hops)
-                elif work:
-                    f1, f2 = work["f_start"], work["f_end"]
-                else:
-                    f1, f2 = min(hops), max(hops)
-                parent = {"corridor_id": "scan", "f_start": f1, "f_end": f2}
-                self._start_learning(t_s, hops, parent,
-                                     seed=seed if seed else None)
-                if self.transitions:
-                    self.transitions[-1]["coverage"] = fin["coverage"]
-                    self.transitions[-1]["note"] = fin["note"]
+            hop = self._advance_scan(freqs_hz, t_s, hop)
         return hop
+
+    def _advance_scan(self, freqs_hz, t_s: float, hop=None):
+        """Окно собрало стоянку. Следующее окно или склейка круга."""
+        flushed = self._flush_open(freqs_hz, t_s)
+        if hop is None:
+            hop = flushed
+        if self.sweeper.advance(self.sweeper.sample_count):
+            w = self.sweeper.current()
+            if w:
+                self.lo_hz = w["f_center"]
+                # Сборщик одного окна. Ряд всех окон — в sweeper.hops.
+                self.rec = HopRecorder(
+                    extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
+                    n_chans=self.n_chans, samples_per_frame=self.spf)
+            self._live = []
+            self._scan_t0 = float(t_s)
+            self.sweeper.reset_dwell_samples()
+        elif self._wide():
+            self._absorb_lap(t_s)
+            if self.state not in (INITIAL_SCAN, LEARNING, CONFIRMING):
+                self.sweeper.reset_dwell_samples()
+                return hop
+            self.sweeper.idx = 0
+            self.sweeper.tune_current(self.sweeper.sample_count)
+            w = self.sweeper.current()
+            if w:
+                self.lo_hz = w["f_center"]
+                self.rec = HopRecorder(
+                    extract_subcorridor([w["f_start"], w["f_end"]], "scan"),
+                    n_chans=self.n_chans, samples_per_frame=self.spf)
+            self._live = []
+            self._scan_t0 = float(t_s)
+            self.sweeper.reset_dwell_samples()
+        else:
+            fin = self.sweeper.finish()
+            work = fin["work"]
+            if work:
+                self.lo_hz = work["f_center"]
+            seed = list(fin.get("stitched") or [])
+            hops = [float(h["freq_mhz"]) * 1e6 for h in seed]
+            if not hops:
+                hops = list(self._listen_freqs) or [self.lo_hz]
+            if seed:
+                f1 = min(hops)
+                f2 = max(hops)
+            elif work:
+                f1, f2 = work["f_start"], work["f_end"]
+            else:
+                f1, f2 = min(hops), max(hops)
+            parent = {"corridor_id": "scan", "f_start": f1, "f_end": f2}
+            self._start_learning(t_s, hops, parent,
+                                 seed=seed if seed else None)
+            if self.transitions:
+                self.transitions[-1]["coverage"] = fin["coverage"]
+                self.transitions[-1]["note"] = fin["note"]
+            self.sweeper.reset_dwell_samples()
+        return hop
+
+    def feed_freqs(self, freqs, t_s: float) -> None:
+        """Узкий коридор. Повтор той же частоты закрывает проход."""
+        for mhz in freqs:
+            b = freq_bin_mhz(float(mhz))
+            if b in self._open_bins and self._open_order:
+                self.finish_pass(list(self._open_order), t_s)
+                self._open_bins = {b}
+                self._open_order = [float(mhz)]
+                continue
+            if b not in self._open_bins:
+                self._open_bins.add(b)
+                self._open_order.append(float(mhz))
+
+    def finish_pass(self, freq_mhz, t_s: float) -> None:
+        """Один проход. Совпадение списка частот, не порядка прыжков."""
+        uniq = []
+        bins = []
+        seen = set()
+        for mhz in freq_mhz:
+            b = freq_bin_mhz(float(mhz))
+            if b in seen:
+                continue
+            seen.add(b)
+            uniq.append(float(mhz))
+            bins.append(b)
+        if not bins:
+            return
+        cur = set(bins)
+        was = self.state
+        self._set_handled = False
+        if was == CONFIRMING and self.pid:
+            # Сверяем с запомненным списком. Чужой проход его не подменяет.
+            score = set_similarity(cur, self._stored_bins())
+            if score >= MATCH_GO:
+                self._set_confirm(float(t_s), score)
+                if self.state == CONFIRMING:
+                    self._set_handled = True
+            return
+        if self.pid or was not in (LEARNING, INITIAL_SCAN):
+            return
+        if self._prev_bins is None:
+            self._prev_bins = cur
+            return
+        if (was == LEARNING
+                and set_similarity(cur, self._prev_bins) >= MATCH_GO):
+            self._commit_freqs(uniq, t_s)
+            self._prev_bins = cur
+
+    def _stored_bins(self) -> set:
+        if not self.pid:
+            return set()
+        rec = self.store.get(self.pid)
+        return {freq_bin_mhz(float(x)) for x in (rec.get("freqs_mhz") or [])}
+
+    def _commit_freqs(self, uniq_mhz: list, t_s: float) -> None:
+        """Список частот в порядке появления внутри окон. Цикл — весь список."""
+        if self.sub is None:
+            pair = self._corridor_hz()
+            if pair:
+                span = [pair[0], pair[1]]
+            else:
+                hz = [float(x) * 1e6 for x in uniq_mhz]
+                span = [min(hz), max(hz)]
+            self.sub = extract_subcorridor(span, "scan")
+        hops = [{
+            "channel_idx": i,
+            "freq_mhz": float(mhz),
+            "dwell_us": SCAN_DWELL_S * 1e6,
+            "t_start": float(t_s),
+            "sample_count": i,
+            "confidence": 1.0,
+            "hole": False,
+            "fhsdt_valid": True,
+        } for i, mhz in enumerate(uniq_mhz)]
+        rows = hops if len(hops) >= 2 else hops * 2
+        pid = self.store.add_pattern(self.sub, rows)
+        rec = self.store.get(pid)
+        rec["cycle_length"] = len(hops)
+        rec["cycle"] = [h["channel_idx"] for h in hops]
+        rec["hop_sequence"] = list(rec["cycle"])
+        rec["freqs_mhz"] = [h["freq_mhz"] for h in hops]
+        rec["freq_khz"] = [int(round(h["freq_mhz"] * 1000.0)) for h in hops]
+        self.pid = pid
+        apply_timer_cycle(rec, energy=[], dt_s=self.dt)
+        rec["dwell_us"] = SCAN_DWELL_S * 1e6
+        rec["dwell_s"] = SCAN_DWELL_S
+        self.drift.set_cycles(len(hops))
+        self.drift.reset()
+        self._confirm_base = 0
+        self._go(CONFIRMING, t_s, hops=len(hops), cycle=len(hops), by="freq_set")
+
+    def _set_confirm(self, t_s: float, score: float) -> None:
+        rec = self.store.get(self.pid)
+        rec["confidence"] = float(score)
+        count = self.store.mark_confirmed(self.pid)
+        if count >= MIN_CONFIRMS and rec["confirmed"]:
+            self.store.classify_threat_type(self.pid)
+            self._jam_now(t_s, preload=True)
+            nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
+            self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count,
+                     by="freq_set")
 
     def _expand_sub(self) -> None:
         freqs = list(self._listen_freqs)
@@ -720,6 +859,9 @@ class CognitiveFSM:
                      visible_only=rec.get("visible_only"))
 
     def _tick_confirming(self, t_s: float) -> None:
+        if self._set_handled:
+            self._set_handled = False
+            return
         if self.rec is None or self.sub is None or not self.pid:
             return
         rec = self.store.get(self.pid)
