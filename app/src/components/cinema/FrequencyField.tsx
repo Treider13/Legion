@@ -1,13 +1,16 @@
 import { useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../../hooks/useDeviceTier";
+import { angelRgb } from "../../sense/angelPalette";
 import { finiteDbm } from "../../sense/labPsd";
 import {
   WATERFALL_COLS,
   WATERFALL_ROWS,
-  dbmToUnit,
   heatRgb,
   nextWaterfallRow,
+  rowDbmFromBins,
+  sdrangelAutoscale,
+  sdrangelColorIndex,
   shouldPushWaterfallRow,
   waterfallBandChanged,
 } from "../../sense/waterfall";
@@ -35,7 +38,11 @@ export function FrequencyField() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const quiet = prefersReducedMotion();
-    const history: Float32Array[] = Array.from({ length: WATERFALL_ROWS }, () => new Float32Array(WATERFALL_COLS));
+    const history: Float32Array[] = Array.from({ length: WATERFALL_ROWS }, () => {
+      const row = new Float32Array(WATERFALL_COLS);
+      row.fill(Number.NaN);
+      return row;
+    });
     let composite: Float32Array | null = null;
     let receivedSpectrum = false;
     let lastPush = 0;
@@ -44,6 +51,7 @@ export function FrequencyField() {
     let lastLo = Number.NaN;
     let lastHi = Number.NaN;
     let heatDirty = true;
+    let pictureHost = false;
     let raf = 0;
     let alive = true;
     const off = document.createElement("canvas");
@@ -95,7 +103,27 @@ export function FrequencyField() {
         lastLo = lo;
         lastHi = hi;
         history.length = 0;
-        for (let i = 0; i < WATERFALL_ROWS; i++) history.push(new Float32Array(WATERFALL_COLS));
+        for (let i = 0; i < WATERFALL_ROWS; i++) {
+          const row = new Float32Array(WATERFALL_COLS);
+          row.fill(Number.NaN);
+          history.push(row);
+        }
+        composite = null;
+        receivedSpectrum = false;
+        lastKey = "";
+        lastPush = 0;
+        heatDirty = true;
+      }
+
+      const hostPicture = !st.fpgaArmed;
+      if (hostPicture !== pictureHost) {
+        pictureHost = hostPicture;
+        history.length = 0;
+        for (let i = 0; i < WATERFALL_ROWS; i++) {
+          const row = new Float32Array(WATERFALL_COLS);
+          row.fill(Number.NaN);
+          history.push(row);
+        }
         composite = null;
         receivedSpectrum = false;
         lastKey = "";
@@ -115,19 +143,21 @@ export function FrequencyField() {
       const useLive = !st.fpgaArmed && st.scanSweepBins.length === 0;
       // QSpectrumAnalyzer: пока проход не закрыт — живое окно, затем одна строка на коридор.
       if (pushLive && (st.fpgaArmed || useSweep || useLive)) {
-        const row = nextWaterfallRow(
-          composite,
-          {
-            bins: useSweep ? st.scanSweepBins : st.fpgaArmed ? [] : st.scanBins,
-            fpgaArmed: st.fpgaArmed,
-            fpgaFreqMhz: fpgaMhz,
-            lookMhz,
-            detActive: det,
-          },
-          lo,
-          hi,
-          WATERFALL_COLS,
-        );
+        const row = hostPicture
+          ? rowDbmFromBins(useSweep ? st.scanSweepBins : st.scanBins, lo, hi, WATERFALL_COLS)
+          : nextWaterfallRow(
+              composite,
+              {
+                bins: [],
+                fpgaArmed: true,
+                fpgaFreqMhz: fpgaMhz,
+                lookMhz,
+                detActive: det,
+              },
+              lo,
+              hi,
+              WATERFALL_COLS,
+            );
         if (useSweep) lastSweepSeq = st.scanSweepSeq;
         composite = row;
         if (!quiet) {
@@ -149,12 +179,20 @@ export function FrequencyField() {
           off.height = rows.length;
           heatDirty = true;
         }
-        if (heatDirty) {
+        const hostScale = hostPicture
+          ? sdrangelAutoscale(
+              (st.scanSweepBins.length ? st.scanSweepBins : st.scanBins).map((b) => b.powerDbm),
+            )
+          : null;
+        if (heatDirty || hostPicture) {
           const img = offCtx.createImageData(WATERFALL_COLS, rows.length);
           for (let r = 0; r < rows.length; r++) {
             const src = rows[r];
             for (let c = 0; c < WATERFALL_COLS; c++) {
-              const [cr, cg, cb] = heatRgb(src[c] ?? 0);
+              const sample = src[c] ?? Number.NaN;
+              const [cr, cg, cb] = hostScale
+                ? angelRgb(Number.isFinite(sample) ? sdrangelColorIndex(sample, hostScale.refDb, hostScale.rangeDb) : 0)
+                : heatRgb(sample);
               const o = (r * WATERFALL_COLS + c) * 4;
               img.data[o] = cr;
               img.data[o + 1] = cg;
@@ -169,6 +207,15 @@ export function FrequencyField() {
         ctx.drawImage(off, pad, 8, plotW, wfH);
       }
 
+      const hostScale = hostPicture
+        ? sdrangelAutoscale((st.scanSweepBins.length ? st.scanSweepBins : st.scanBins).map((b) => b.powerDbm))
+        : null;
+      const yOfPower = (dbm: number) => {
+        if (!hostScale) return baseY - Math.min(1, Math.max(0, (dbm + 110) / 70)) * specH;
+        const t = (hostScale.refDb - dbm) / hostScale.rangeDb;
+        return specTop + Math.min(1, Math.max(0, t)) * specH;
+      };
+
       const strokeDbm = (bins: { freqMhz: number; powerDbm: number }[], color: string, width: number, dash: number[] = []) => {
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
@@ -181,7 +228,7 @@ export function FrequencyField() {
             continue;
           }
           const x = xOf(b.freqMhz);
-          const y = baseY - dbmToUnit(b.powerDbm) * specH;
+          const y = yOfPower(b.powerDbm);
           if (!started) {
             ctx.moveTo(x, y);
             started = true;
@@ -195,13 +242,15 @@ export function FrequencyField() {
       if (latest && receivedSpectrum) {
         ctx.beginPath();
         for (let c = 0; c < latest.length; c++) {
+          const sample = latest[c] ?? Number.NaN;
+          if (!Number.isFinite(sample)) continue;
           const mhz = lo + ((c + 0.5) / latest.length) * span;
-          const y = baseY - latest[c] * specH;
+          const y = hostPicture ? yOfPower(sample) : baseY - Math.min(1, Math.max(0, sample)) * specH;
           const x = xOf(mhz);
-          if (c === 0) ctx.moveTo(x, y);
+          if (c === 0 || !Number.isFinite(latest[c - 1] ?? Number.NaN)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = "rgba(236, 230, 218, 0.7)";
+        ctx.strokeStyle = hostPicture ? "#ffff00" : "rgba(236, 230, 218, 0.7)";
         ctx.lineWidth = 1.2;
         ctx.stroke();
       }

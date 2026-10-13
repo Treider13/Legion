@@ -2664,7 +2664,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     labShowBaseline: true,
     labSubtractBaseline: false,
     labShowPersistence: true,
-    labShowRtsa: true,
+    labShowRtsa: false,
     labShowAlloc: true,
     labSpurOn: true,
     labSpurReady: false,

@@ -152,6 +152,7 @@ import {
 } from "../src/sense/fpgaSoloWalk";
 import { cinemaIsLive, runCinemaStop, runSmartAccept, runSmartStart } from "../src/components/cinema/run";
 import { shelfFsHz } from "../src/sense/txShelf";
+import { angelRgb } from "../src/sense/angelPalette";
 import {
   applyLook,
   colOfMhz,
@@ -159,7 +160,10 @@ import {
   fpgaLookEnergy,
   heatRgb,
   nextWaterfallRow,
+  rowDbmFromBins,
   rowFromBins,
+  sdrangelAutoscale,
+  sdrangelColorIndex,
   shouldPushWaterfallRow,
   waterfallBandChanged,
 } from "../src/sense/waterfall";
@@ -2085,6 +2089,33 @@ async function main(): Promise<void> {
   check("опрос водопада 80 мс", FPGA_OBSERVE_MS === 80);
   check("стагнация — 1.2 с, не 3 тика × 80 мс", FPGA_AIR_GONE_MS === 1200);
   check("dBm −110 → 0, −40 → 1", dbmToUnit(-110) === 0 && dbmToUnit(-40) === 1);
+  check("SDRangel: верх шкалы 0 дБ / 100 → индекс 239", sdrangelColorIndex(0, 0, 100) === 239);
+  check("SDRangel: низ шкалы −100 дБ → индекс 0", sdrangelColorIndex(-100, 0, 100) === 0);
+  check("SDRangel: середина 100 дБ → индекс 120", sdrangelColorIndex(-50, 0, 100) === 120);
+  {
+    const sc = sdrangelAutoscale([-90, -90, -90, -40]);
+    check("SDRangel авто: верх = пик+10", sc.refDb === -30);
+    check("SDRangel авто: низ = тихий бин+3", sc.floorDb === -87 && sc.rangeDb === 57);
+  }
+  {
+    const row = rowDbmFromBins(
+      [
+        { freqMhz: 2420, powerDbm: -80 },
+        { freqMhz: 2440, powerDbm: -40 },
+        { freqMhz: 2460, powerDbm: -80 },
+      ],
+      2400,
+      2500,
+      20,
+    );
+    check("SDRangel строка: вне окна NaN, не 0 дБм", Number.isNaN(row[0]) && Number.isNaN(row[19]));
+    check("SDRangel строка: пик в дБм", row[8] < -30 && row[8] > -70);
+  }
+  {
+    const [lr, lg, lb] = angelRgb(0);
+    const [hr, hg, hb] = angelRgb(239);
+    check("Angel: пол темнее пика", hr + hg + hb > lr + lg + lb + 80);
+  }
   const wr = rowFromBins(
     [
       { freqMhz: 2400, powerDbm: -110 },

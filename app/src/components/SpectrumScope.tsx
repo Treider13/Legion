@@ -8,7 +8,8 @@ import { PersistentDisplay } from "../sense/labPersist2d";
 import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../sense/labPsd";
 import { normalizePaint } from "../sense/attackPaint";
 import { focusAdvisorTrack, trackUnderMhz } from "./graphite/advisorFocus";
-import { dbmToUnit, heatRgb } from "../sense/waterfall";
+import { angelRgb } from "../sense/angelPalette";
+import { sdrangelAutoscale, sdrangelColorIndex } from "../sense/waterfall";
 import { useLegion } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
@@ -100,17 +101,12 @@ export function SpectrumScope() {
       const persist = st.labPsd.persistence;
       const base = st.labPsd.baseline;
 
+      const scaleTrace = live.some((b) => finiteDbm(b.powerDbm)) ? live : [...peak, ...minH, ...base];
       const samples: number[] = [];
-      for (const row of [live, peak, minH, base]) {
-        for (const b of row) if (finiteDbm(b.powerDbm)) samples.push(b.powerDbm);
-      }
-      let dbLo = st.labSubtractBaseline ? -20 : -120;
-      let dbHi = st.labSubtractBaseline ? 40 : -20;
-      if (samples.length) {
-        dbLo = Math.min(...samples) - 6;
-        dbHi = Math.max(...samples) + 4;
-        if (dbHi - dbLo < 20) dbHi = dbLo + 20;
-      }
+      for (const b of scaleTrace) if (finiteDbm(b.powerDbm)) samples.push(b.powerDbm);
+      const scale = sdrangelAutoscale(samples);
+      let dbLo = scale.floorDb;
+      let dbHi = scale.refDb;
 
       const axisKey = `${loF}:${hiF}:${live.length}`;
       if (axisKey !== lastAxisKey) {
@@ -154,7 +150,7 @@ export function SpectrumScope() {
               i + 1 < persist.length
                 ? xLocal((persist[i].freqMhz + persist[i + 1].freqMhz) / 2)
                 : xLocal(persist[i].freqMhz);
-            const [cr, cg, cb] = heatRgb(dbmToUnit(persist[i].powerDbm));
+            const [cr, cg, cb] = angelRgb(sdrangelColorIndex(persist[i].powerDbm, dbHi, dbHi - dbLo));
             persistCtx.fillStyle = `rgba(${cr},${cg},${cb},0.38)`;
             const y = yOf(persist[i].powerDbm, dbLo, dbHi, 0, plotH);
             persistCtx.fillRect(x0, y, Math.max(x1 - x0, 1), Math.max(plotH - y, 0));
@@ -273,40 +269,15 @@ export function SpectrumScope() {
       if (st.labShowBaseline && base.some((b) => finiteDbm(b.powerDbm))) {
         strokeBins(base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
       }
-      ctx.fillStyle = "rgba(45,212,191,0.14)";
-      ctx.beginPath();
-      let fillStarted = false;
-      let fillX = padL;
       for (const b of live) {
-        if (!finiteDbm(b.powerDbm)) {
-          if (fillStarted) {
-            ctx.lineTo(fillX, padT + plotH);
-            ctx.lineTo(padL, padT + plotH);
-            ctx.closePath();
-            ctx.fill();
-            ctx.beginPath();
-            fillStarted = false;
-          }
-          continue;
-        }
-        const x = xOf(b.freqMhz);
+        if (!finiteDbm(b.powerDbm)) continue;
+        const x0 = xOf(b.freqMhz);
         const y = yOf(b.powerDbm, dbLo, dbHi, padT, plotH);
-        if (!fillStarted) {
-          ctx.moveTo(x, padT + plotH);
-          ctx.lineTo(x, y);
-          fillStarted = true;
-          fillX = x;
-        } else {
-          ctx.lineTo(x, y);
-          fillX = x;
-        }
+        const [cr, cg, cb] = angelRgb(sdrangelColorIndex(b.powerDbm, dbHi, dbHi - dbLo));
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},0.55)`;
+        ctx.fillRect(x0, y, 2, Math.max(padT + plotH - y, 0));
       }
-      if (fillStarted) {
-        ctx.lineTo(fillX, padT + plotH);
-        ctx.closePath();
-        ctx.fill();
-      }
-      strokeBins(live, "#2dd4bf", 1.6);
+      strokeBins(live, "#ffff00", 1.4);
       if (st.labShowPeak && peak.length) strokeBins(peak, "#f5c16c", 1.25);
 
       const peakBin = strongestFinite(live);
