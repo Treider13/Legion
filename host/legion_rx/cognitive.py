@@ -103,8 +103,6 @@ class CognitiveFSM:
         age = float(t_s) - float(self._state_since)
         if self.state == CONFIRMING and age > 300.0:
             self._rescan_origin(t_s, "watchdog_confirming")
-        elif self.state == LEARNING and age > 120.0:
-            self._rescan_origin(t_s, "watchdog_learning")
         elif self.state == MONITORING and age > 10.0:
             self._stop_jam(t_s, "watchdog_monitoring")
             self._go("TARGET_SILENT", t_s, note="watchdog")
@@ -574,8 +572,14 @@ class CognitiveFSM:
                 max(float(h["freq_mhz"]) * 1e6 for h in seed),
             ]
             self.sub = extract_subcorridor(span, "scan")
+            width = float(self.sub["f_end"]) - float(self.sub["f_start"])
             learn = HopRecorder(self.sub, n_chans=self.n_chans,
                                 samples_per_frame=self.spf)
+            step = float(learn.chan_step)
+            grid_n = max(self.n_chans, int(width / step) + 1)
+            learn.n_chans = grid_n
+            self.n_chans = grid_n
+            self.store.n_chans = grid_n
             learn.load_stitched(seed)
             self._stitched = learn
         else:
@@ -595,21 +599,39 @@ class CognitiveFSM:
         else:
             self.rec = learn
 
-    def _tick_scan(self, ch_pwr, freqs_hz, t_s: float):
-        if self.rec is None:
-            w = self.sweeper.current() or {"f_start": self.lo_hz - 8e6,
-                                           "f_end": self.lo_hz + 8e6,
-                                           "index": 0}
-            sub = extract_subcorridor([w["f_start"], w["f_end"]], "scan")
-            self.rec = HopRecorder(sub, n_chans=self.n_chans,
-                                   samples_per_frame=self.spf)
+    def _window_recorder(self) -> None:
+        if self.rec is not None:
+            return
+        w = self.sweeper.current() or {"f_start": self.lo_hz - 8e6,
+                                       "f_end": self.lo_hz + 8e6,
+                                       "index": 0}
+        sub = extract_subcorridor([w["f_start"], w["f_end"]], "scan")
+        self.rec = HopRecorder(sub, n_chans=self.n_chans,
+                               samples_per_frame=self.spf)
+
+    def hear(self, ch_pwr, freqs_hz, t_s: float) -> None:
+        """Короткий кадр спектра в ряд. Стоянку не сдвигает."""
+        st = self.state
+        if st == INITIAL_SCAN or (self._wide() and st in (LEARNING, CONFIRMING)):
+            self._hear_scan(ch_pwr, freqs_hz, t_s)
+        elif (st in (LEARNING, CONFIRMING, RE_LEARNING)
+              and self.rec is not None):
+            hop = self.rec.update(ch_pwr, freqs_hz, t_s)
+            self._note_hop(hop, t_s)
+
+    def _hear_scan(self, ch_pwr, freqs_hz, t_s: float):
+        self._window_recorder()
         hop = self.rec.update(ch_pwr, freqs_hz, t_s)
         if hop is not None:
-            hop["sample_count"] = self.sweeper.sample_count
+            hop["sample_count"] = int(round(float(t_s) * self.fs_hz))
             self.sweeper.on_hop(hop)
             self._live.append(hop["channel_idx"])
             self._live = self._live[-self._live_cap():]
             self._last_hop_t = float(t_s)
+        return hop
+
+    def _tick_scan(self, ch_pwr, freqs_hz, t_s: float):
+        hop = self._hear_scan(ch_pwr, freqs_hz, t_s)
         if self.sweeper.dwell_done(t_s, self._scan_t0):
             flushed = self._flush_open(freqs_hz, t_s)
             if hop is None:

@@ -306,6 +306,18 @@ def test_no_jam_without_confirmed():
     assert fsm.state in (LEARNING, CONFIRMING, LISTENING)
 
 
+def test_learning_row_is_not_wiped_at_two_minutes():
+    """Ряд копится, пока не повторится. Две минуты учения его не стирают."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2417e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2434e6), ibw_hz=34e6)
+    fsm.state = LEARNING
+    fsm._state_since = 0.0
+    fsm._watch(121.0)
+    assert fsm.state == LEARNING
+
+
 def test_one_frame_is_not_a_hop_and_silence_closes():
     sub = extract_subcorridor([float(_freqs()[c]) for c in CYCLE], "p")
     rec = HopRecorder(sub)
