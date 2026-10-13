@@ -2098,6 +2098,14 @@ async function main(): Promise<void> {
     check("SDRangel авто: низ = тихий бин+3", sc.floorDb === -87 && sc.rangeDb === 57);
   }
   {
+    const sc = sdrangelAutoscale([-90.7, -40.2]);
+    check("SDRangel авто: уровни режутся к int, как C++", sc.refDb === -30 && sc.floorDb === -87);
+  }
+  {
+    const sc = sdrangelAutoscale([-200, 50]);
+    check("SDRangel авто: reference не выше 0, диапазон не шире 120", sc.refDb === 0 && sc.rangeDb === 120);
+  }
+  {
     const row = rowDbmFromBins(
       [
         { freqMhz: 2420, powerDbm: -80 },

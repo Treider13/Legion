@@ -9,7 +9,7 @@ import { finiteDbm, strongestFinite, subtractBaseline, width3dbMhz } from "../se
 import { normalizePaint } from "../sense/attackPaint";
 import { focusAdvisorTrack, trackUnderMhz } from "./graphite/advisorFocus";
 import { angelRgb } from "../sense/angelPalette";
-import { sdrangelAutoscale, sdrangelColorIndex } from "../sense/waterfall";
+import { SDRANGEL_TRACE, sdrangelAutoscale, sdrangelColorIndex } from "../sense/waterfall";
 import { useLegion } from "../state/store";
 import { displayRange, displayRangeNotice, formatDisplayRange, formatFrequency, frequencyTicks } from "./displayRange";
 
@@ -269,15 +269,7 @@ export function SpectrumScope() {
       if (st.labShowBaseline && base.some((b) => finiteDbm(b.powerDbm))) {
         strokeBins(base, "rgba(232,228,220,0.45)", 1.1, [4, 3]);
       }
-      for (const b of live) {
-        if (!finiteDbm(b.powerDbm)) continue;
-        const x0 = xOf(b.freqMhz);
-        const y = yOf(b.powerDbm, dbLo, dbHi, padT, plotH);
-        const [cr, cg, cb] = angelRgb(sdrangelColorIndex(b.powerDbm, dbHi, dbHi - dbLo));
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},0.55)`;
-        ctx.fillRect(x0, y, 2, Math.max(padT + plotH - y, 0));
-      }
-      strokeBins(live, "#ffff00", 1.4);
+      strokeBins(live, SDRANGEL_TRACE, 1.4);
       if (st.labShowPeak && peak.length) strokeBins(peak, "#f5c16c", 1.25);
 
       const peakBin = strongestFinite(live);

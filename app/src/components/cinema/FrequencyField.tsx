@@ -9,6 +9,7 @@ import {
   heatRgb,
   nextWaterfallRow,
   rowDbmFromBins,
+  SDRANGEL_TRACE,
   sdrangelAutoscale,
   sdrangelColorIndex,
   shouldPushWaterfallRow,
@@ -143,8 +144,19 @@ export function FrequencyField() {
       const useLive = !st.fpgaArmed && st.scanSweepBins.length === 0;
       // QSpectrumAnalyzer: пока проход не закрыт — живое окно, затем одна строка на коридор.
       if (pushLive && (st.fpgaArmed || useSweep || useLive)) {
-        const row = hostPicture
-          ? rowDbmFromBins(useSweep ? st.scanSweepBins : st.scanBins, lo, hi, WATERFALL_COLS)
+        const srcBins = useSweep ? st.scanSweepBins : st.scanBins;
+        const dbmRow = hostPicture ? rowDbmFromBins(srcBins, lo, hi, WATERFALL_COLS) : null;
+        const row = dbmRow
+          ? (() => {
+              const scale = sdrangelAutoscale(srcBins.map((b) => b.powerDbm));
+              const idx = new Float32Array(dbmRow.length);
+              idx.fill(Number.NaN);
+              for (let c = 0; c < dbmRow.length; c++) {
+                const db = dbmRow[c]!;
+                if (Number.isFinite(db)) idx[c] = sdrangelColorIndex(db, scale.refDb, scale.rangeDb);
+              }
+              return idx;
+            })()
           : nextWaterfallRow(
               composite,
               {
@@ -179,19 +191,14 @@ export function FrequencyField() {
           off.height = rows.length;
           heatDirty = true;
         }
-        const hostScale = hostPicture
-          ? sdrangelAutoscale(
-              (st.scanSweepBins.length ? st.scanSweepBins : st.scanBins).map((b) => b.powerDbm),
-            )
-          : null;
-        if (heatDirty || hostPicture) {
+        if (heatDirty) {
           const img = offCtx.createImageData(WATERFALL_COLS, rows.length);
           for (let r = 0; r < rows.length; r++) {
             const src = rows[r];
             for (let c = 0; c < WATERFALL_COLS; c++) {
               const sample = src[c] ?? Number.NaN;
-              const [cr, cg, cb] = hostScale
-                ? angelRgb(Number.isFinite(sample) ? sdrangelColorIndex(sample, hostScale.refDb, hostScale.rangeDb) : 0)
+              const [cr, cg, cb] = hostPicture
+                ? angelRgb(Number.isFinite(sample) ? sample : 0)
                 : heatRgb(sample);
               const o = (r * WATERFALL_COLS + c) * 4;
               img.data[o] = cr;
@@ -250,7 +257,7 @@ export function FrequencyField() {
           if (c === 0 || !Number.isFinite(latest[c - 1] ?? Number.NaN)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = hostPicture ? "#ffff00" : "rgba(236, 230, 218, 0.7)";
+        ctx.strokeStyle = hostPicture ? SDRANGEL_TRACE : "rgba(236, 230, 218, 0.7)";
         ctx.lineWidth = 1.2;
         ctx.stroke();
       }

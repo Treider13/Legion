@@ -13,9 +13,13 @@ export const WATERFALL_RANGE_DB = 50;
 
 export type SdrangelScale = { refDb: number; rangeDb: number; floorDb: number };
 
-/** GLSpectrumGUI::on_autoscale, логарифм.
- *  Низ = среднее самых тихих fft/32 бинов + 3 дБ.
- *  Верх (reference) = пик + 10 дБ. Диапазон ограничен 1…100, как спинбокс. */
+/** Цвет линии по умолчанию: spectrumsettings.cpp, qRgb(255, 255, 63), стиль Line. */
+export const SDRANGEL_TRACE = "#ffff3f";
+
+/** GLSpectrumGUI::on_autoscale, логарифм, затем спинбокс setPowerAndRefRange.
+ *  Сортировка, среднее нижних fft/32, уровни обрезаются к int как в C++.
+ *  Обычный логарифм: reference −120…0, диапазон 1…120 (maxSignal = 120).
+ *  Длины FFT у нас нет отдельно: ряд бинов и есть спектр, поэтому fft/32 = длина/32. */
 export function sdrangelAutoscale(dbm: readonly number[]): SdrangelScale {
   const vals: number[] = [];
   for (let i = 0; i < dbm.length; i++) {
@@ -27,14 +31,13 @@ export function sdrangelAutoscale(dbm: readonly number[]): SdrangelScale {
   const avgRange = Math.max(1, Math.min(vals.length, Math.floor(vals.length / 32) || 1));
   let minSum = 0;
   for (let i = 0; i < avgRange; i++) minSum += vals[i]!;
-  const minLvl = minSum / avgRange + 3;
-  let maxLvl = vals[vals.length - 1]! + 10;
+  let maxLvl = Math.trunc(vals[vals.length - 1]! + 10);
+  const minLvl = Math.trunc(minSum / avgRange + 3);
   let range = maxLvl - minLvl;
-  if (range < 1) {
-    range = 1;
-    maxLvl = minLvl + 1;
-  }
-  if (range > 100) range = 100;
+  if (range < 1) range = 1;
+  if (range > 120) range = 120;
+  if (maxLvl > 0) maxLvl = 0;
+  if (maxLvl < -120) maxLvl = -120;
   return { refDb: maxLvl, rangeDb: range, floorDb: maxLvl - range };
 }
 
