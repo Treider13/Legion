@@ -7,9 +7,9 @@ import legion_fpga as lf
 from legion_gateway import FakeTransport
 from legion_rx import fpga_control as fc
 from legion_rx.cognitive import (CONFIRMING, DRIFT_DETECTED, INITIAL_SCAN,
-                                 JAMMING, LEARNING, LISTENING, MONITORING,
-                                 RE_ACQUIRE, RE_LEARNING, TARGET_SILENT,
-                                 CognitiveFSM)
+                                 JAMMING, LEARNING, LISTENING, MIN_CONFIRMS,
+                                 MONITORING, RE_ACQUIRE, RE_LEARNING,
+                                 TARGET_SILENT, CognitiveFSM)
 from legion_rx.corridor import CorridorDetector, extract_subcorridor
 from legion_rx.drift_detector import DriftDetector
 from legion_rx.effectiveness_monitor import EffectivenessMonitor
@@ -569,16 +569,16 @@ def test_frequency_set_opens_tx_when_order_changes():
     fsm.finish_pass(wandered, 4.0)
     fsm.finish_pass(list(reversed(a)), 5.0)
     assert fsm.jams_sent >= 1
-    # Три из четырёх частот — не совпадение 0.9, удар не копится заранее.
+    # Половина списка (0.5) ниже порога 0.6. Три из четырёх (0.75) уже совпадение.
     late = CognitiveFSM(PatternStore(), M, 34e6, 2440e6,
                         fpga=lf.LegionFpga(FakeTransport(board="bladerf2")),
                         scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
     late.sub = extract_subcorridor([2400e6, 2500e6], "scan")
     late.state = LEARNING
     late.finish_pass(a, 1.0)
-    late.finish_pass(a[:3], 2.0)
+    late.finish_pass(a[:2], 2.0)
     assert late.state == LEARNING and late.pid is None
-    late.finish_pass(a, 3.0)
+    late.finish_pass(a[:3], 3.0)
     assert late.state == CONFIRMING and late.jams_sent == 0
 
 
@@ -603,7 +603,7 @@ def test_hold_releases_exactly_one_window():
 
 
 def test_stale_hops_do_not_confirm_and_fresh_lap_does():
-    """Старые скачки в окнах не считаются новым кругом. Новый круг — да."""
+    """Старые скачки в окнах не считаются новым кругом. Свежий круг — да."""
     store = PatternStore()
     fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
     fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
@@ -620,7 +620,9 @@ def test_stale_hops_do_not_confirm_and_fresh_lap_does():
     fsm.state = INITIAL_SCAN
     fsm._absorb_lap(1.0)
     assert fsm.state == LEARNING and fsm.pid is None and fsm.jams_sent == 0
+    after_first = dict(fsm._bin_hits)
     fsm._absorb_lap(2.0)
+    assert fsm._bin_hits == after_first
     assert fsm.state == LEARNING and fsm.pid is None and fsm.jams_sent == 0
     for n, mhz in enumerate(freqs):
         fsm.sweeper.on_hop({
@@ -628,15 +630,164 @@ def test_stale_hops_do_not_confirm_and_fresh_lap_does():
             "dwell_us": 200.0, "channel_idx": n,
         })
     fsm._absorb_lap(3.0)
-    assert fsm.state == CONFIRMING and fsm.jams_sent == 0
-    for lap, base in enumerate((6_000_000, 7_000_000, 8_000_000)):
+    assert fsm.jams_sent == 0
+    for lap in range(3, 30):
         for n, mhz in enumerate(freqs):
             fsm.sweeper.on_hop({
-                "freq_mhz": mhz, "sample_count": base + n, "t_start": 2.0 + lap,
-                "dwell_us": 200.0, "channel_idx": n,
+                "freq_mhz": mhz, "sample_count": 10_000_000 * (lap + 1) + n,
+                "t_start": 2.0 + lap, "dwell_us": 200.0, "channel_idx": n,
             })
         fsm._absorb_lap(4.0 + lap)
+    assert fsm.jams_sent == 0
+    assert fsm.release_heard(40.0)
     assert fsm.jams_sent >= 1
+    heard = {round(x, 3) for x in store.get(fsm.pid)["freqs_mhz"]}
+    assert heard == {2405.0, 2412.0, 2418.0, 2424.0}
+
+
+def _park(fsm, mhz):
+    hz = float(mhz) * 1e6
+    for i, w in enumerate(fsm.sweeper.windows):
+        span = float(w["f_end"]) - float(w["f_start"])
+        guard = 0.10 * span
+        if float(w["f_start"]) + guard <= hz <= float(w["f_end"]) - guard:
+            fsm.sweeper.idx = i
+            return
+    fsm.sweeper.idx = 0
+
+
+def _push_lap(fsm, mhz_list, lap_i, t_step=1.0):
+    base = 10_000_000 * (lap_i + 1)
+    for n, mhz in enumerate(mhz_list):
+        _park(fsm, mhz)
+        fsm.sweeper.on_hop({
+            "freq_mhz": mhz, "sample_count": base + n,
+            "t_start": lap_i * t_step + n * 0.001,
+            "dwell_us": 70.0, "channel_idx": n,
+        })
+    fsm._absorb_lap((lap_i + 1) * t_step)
+
+
+def test_three_sightings_open_tx_when_each_lap_hears_a_different_slice():
+    """Несколько частот, слышных трижды, удар не открывают."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2300e6, 2500e6), ibw_hz=34e6)
+    fsm.sub = extract_subcorridor([2300e6, 2500e6], "scan")
+    fsm.sweeper.setup(2300e6, 2500e6)
+    fsm.state = INITIAL_SCAN
+    wide = len(fsm.sweeper.windows)
+    laps = (
+        [2424.0, 2428.0, 2432.0],
+        [2424.0, 2428.0, 2436.0],
+        [2424.0, 2428.0, 2432.0],
+    )
+    for i, lap in enumerate(laps):
+        _push_lap(fsm, lap, i, t_step=0.02)
+    assert fsm.jams_sent == 0
+    assert len(fsm.sweeper.windows) == wide
+
+
+def _freqs_inside(fsm, n, start_mhz=2410.0, step=0.5):
+    """n частот, каждая попадает в середину какого-нибудь окна."""
+    out = []
+    mhz = start_mhz
+    while len(out) < n and mhz < 2490.0:
+        hz = mhz * 1e6
+        for w in fsm.sweeper.windows:
+            span = float(w["f_end"]) - float(w["f_start"])
+            guard = 0.10 * span
+            if float(w["f_start"]) + guard <= hz <= float(w["f_end"]) - guard:
+                out.append(mhz)
+                break
+        mhz += step
+    assert len(out) == n
+    return out
+
+
+def test_operator_replay_opens_tx_on_the_recorded_list():
+    """Пока кнопки нет, обход молчит. Передать открывает удар по записанному ряду.
+    В записи с кнопки нет sequence_type: из-за этого живое радио падало
+    сразу после первой стоянки."""
+
+    class Pub:
+        def send_fsm(self, *args, **kwargs):
+            return None
+
+        def send_pred(self, *args, **kwargs):
+            return None
+
+    fsm = CognitiveFSM(PatternStore(), M, 34e6, 2440e6, pub=Pub(),
+                       fpga=lf.LegionFpga(FakeTransport(board="bladerf2")),
+                       scan_corridor=(2300e6, 2500e6), ibw_hz=34e6)
+    fsm.state = INITIAL_SCAN
+    fsm.tick(np.ones(8), np.linspace(2400e6, 2410e6, 8), 1.0)
+    assert fsm.jams_sent == 0
+    fsm.arm_replay({
+        "pattern_id": "accepted-corridor",
+        "sub": {"f_start": 2300e6, "f_end": 2500e6, "sub_corridor_id": "accepted"},
+        "freqs_mhz": [2410.0, 2420.0, 2430.0],
+        "cycle_length": 3,
+        "cycle": [0, 1, 2],
+        "hop_sequence": [0, 1, 2],
+        "dwell_us": 1000,
+        "dwell_s": 0.001,
+    })
+    fsm.tick(np.ones(8), np.linspace(2400e6, 2410e6, 8), 2.0)
+    assert fsm.jams_sent >= 1
+    assert fsm._jam_until is None
+    heard = [round(float(x), 3) for x in fsm.store.get(fsm.pid)["freqs_mhz"]]
+    assert heard == [2410.0, 2420.0, 2430.0]
+    fsm._last_hop_t = 2.0
+    fsm.tick(np.ones(8), np.linspace(2400e6, 2410e6, 8), 40.0)
+    assert fsm.state == JAMMING
+    assert not any(tr.get("why") == "target_silent" for tr in fsm.transitions)
+
+
+def test_list_length_follows_the_protocol_not_a_fixed_count():
+    """10, 50 и 100 частот. На плату уходит весь список, когда нажали Передать."""
+    for n in (10, 50, 100):
+        store = PatternStore()
+        fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+        fsm = CognitiveFSM(store, M, 34e6, 2400e6, fpga=fpga,
+                           scan_corridor=(2300e6, 2500e6), ibw_hz=34e6)
+        fsm.sub = extract_subcorridor([2300e6, 2500e6], "scan")
+        fsm.sweeper.setup(2300e6, 2500e6)
+        fsm.state = INITIAL_SCAN
+        wide = len(fsm.sweeper.windows)
+        freqs = _freqs_inside(fsm, n)
+        for i in range(40):
+            _push_lap(fsm, freqs, i)
+        assert fsm.jams_sent == 0, n
+        assert fsm.release_heard(50.0), n
+        assert fsm.jams_sent >= 1, n
+        heard = [round(float(x), 3) for x in store.get(fsm.pid)["freqs_mhz"]]
+        assert len(heard) == n, (n, len(heard))
+        assert len(fsm.sweeper.windows) < wide
+        lo = min(w["f_start"] for w in fsm.sweeper.windows)
+        hi = max(w["f_end"] for w in fsm.sweeper.windows)
+        assert lo > 2300e6 and hi < 2500e6
+
+
+def test_two_sightings_do_not_open_tx():
+    """Два круга одной и той же пары — ещё не удар."""
+    store = PatternStore()
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.sub = extract_subcorridor([2400e6, 2500e6], "scan")
+    fsm.sweeper.setup(2400e6, 2500e6)
+    fsm.state = INITIAL_SCAN
+    for i in range(2):
+        base = 1_000_000 * (i + 1)
+        for n, mhz in enumerate((2410.0, 2420.0)):
+            fsm.sweeper.on_hop({
+                "freq_mhz": mhz, "sample_count": base + n, "t_start": float(i),
+                "dwell_us": 200.0, "channel_idx": n,
+            })
+        fsm._absorb_lap(float(i + 1))
+    assert fsm.jams_sent == 0
 
 
 def test_narrow_cycle_closes_on_repeat_and_partial_does_not_count():
@@ -657,12 +808,47 @@ def test_narrow_cycle_closes_on_repeat_and_partial_does_not_count():
     assert fsm.state == CONFIRMING and fsm.jams_sent == 0
     pid = fsm.pid
     marks = store.get(pid)["confirm_count"]
-    fsm.feed_freqs(cycle[:3] + [cycle[0]], 4.0)
+    fsm.feed_freqs(cycle[:2] + [cycle[0]], 4.0)
     assert store.get(pid)["confirm_count"] == marks
     assert fsm.jams_sent == 0
     for t in (5.0, 6.0, 7.0):
         fsm.feed_freqs(cycle + [cycle[0]], t)
     assert fsm.jams_sent >= 1
+
+
+def test_live_radio_loop_imports_listening():
+    """Живой цикл сравнивает состояние LISTENING. Имя обязано быть импортировано,
+    иначе поток радио падает и коридор остаётся на стартовой строке."""
+    import ast
+    import inspect
+    import textwrap
+
+    from legion_rx.pipeline import _run_cognitive_live
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_run_cognitive_live)))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "cognitive":
+            imported.update(alias.name for alias in node.names)
+    assert {"LISTENING", "INITIAL_SCAN", "LEARNING", "CONFIRMING"} <= imported
+
+
+def test_live_retune_keeps_rx_running():
+    """Смена окна не гасит приём. Иначе после первого окна кадров больше нет."""
+    from legion_rx.pipeline import retune_live_lo
+
+    order = []
+
+    class _Usb:
+        def enable_rx(self, on):
+            order.append(("rx", bool(on)))
+
+        def set_frequency(self, hz):
+            order.append(("lo", int(hz)))
+            return 0
+
+    assert retune_live_lo(_Usb(), 2412000000) == 0
+    assert order == [("lo", 2412000000)]
 
 
 def test_weak_burst_beside_loud_one_is_kept_and_one_frame_is_not():
@@ -730,3 +916,59 @@ def test_stft_noise_is_not_a_hop_and_a_weak_tone_beside_a_loud_one_is():
     assert any(abs(c - weak_bin) <= 4 for c in got)
     assert any(abs(c - loud_bin) <= 4 for c in got)
     assert all(abs(c - weak_bin) <= 4 or abs(c - loud_bin) <= 4 for c in got)
+
+
+def _jam_ready():
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    store = PatternStore()
+    fsm = CognitiveFSM(store, M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    sub = extract_subcorridor([2400e6, 2500e6], "jam")
+    fsm.sub = sub
+    fsm.rec = HopRecorder(sub)
+    fsm.pid = "jam"
+    store.patterns["jam"] = {
+        "cycle_length": 4,
+        "cycle": [1, 2, 3, 4],
+        "dwell_s": 0.004,
+        "sub_corridor_id": sub["sub_corridor_id"],
+    }
+    fsm.state = JAMMING
+    fsm._jam_until = 30.0
+    fsm._last_hop_t = 0.0
+    fsm._jam_by_set = True
+    return fsm
+
+
+def test_jam_hears_a_short_burst_that_is_not_the_last_column():
+    """Удар читает вспышку в середине кадра и не гаснет, пока она повторяется."""
+    fsm = _jam_ready()
+    f = _freqs()
+    peak = air_frame(12, peak=1.02)
+    t = 0.0
+    for _ in range(8):
+        t += 0.02
+        fsm.hear(peak, f, t)
+        fsm.hear(peak, f, t + 0.0005)
+        fsm.hear(air_frame(None), f, t + 0.001)
+        out = fsm.tick(air_frame(None), f, t + 0.002)
+    assert any(int(h["channel_idx"]) == 12 for h in fsm.rec.hops)
+    assert out["state"] != TARGET_SILENT
+    assert not any(tr["to"] == TARGET_SILENT for tr in fsm.transitions)
+    quiet = fsm.tick(air_frame(None), f, t + 0.2)
+    assert quiet["state"] == TARGET_SILENT
+
+
+def test_frequency_set_jam_is_not_stopped_by_hop_order():
+    """Порядок скачков по окнам не совпадает. Удар по списку частот от этого не гаснет."""
+    fsm = _jam_ready()
+    f = _freqs()
+    hop = {"channel_idx": 1, "freq_mhz": 2410.0}
+    for i in range(5):
+        fsm._tick_monitoring(air_frame(None), f, 0.01 + i * 0.001, hop)
+    assert not any(tr["to"] == DRIFT_DETECTED for tr in fsm.transitions)
+    bare = _jam_ready()
+    bare._jam_by_set = False
+    for i in range(5):
+        bare._tick_monitoring(air_frame(None), f, 0.01 + i * 0.001, hop)
+    assert any(tr["to"] == DRIFT_DETECTED for tr in bare.transitions)

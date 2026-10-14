@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from .corridor import (CorridorDetector, extract_subcorridor, ibw_visibility,
-                       IBW_HZ)
+from .corridor import (SUB_MARGIN_HZ, CorridorDetector, extract_subcorridor,
+                       ibw_visibility, IBW_HZ)
 from .drift_detector import DriftDetector
 from .effectiveness_monitor import EffectivenessMonitor
 from .hop_recorder import HopRecorder
@@ -34,7 +34,10 @@ RE_LEARNING = "RE_LEARNING"
 DRIFT_DETECTED = "DRIFT_DETECTED"
 
 MIN_CONFIRMS = 3
-MATCH_GO = 0.9
+# Края не двигались столько, сколько протоколу нужно, чтобы пройти свои частоты.
+# В списке тогда сколько он занял: 10, 50 или 100.
+EDGE_QUIET_S = 0.5
+MATCH_GO = 0.6
 SILENT_S = 0.100
 P_HOPPING_GO = 0.6
 LOOKTHROUGH_HOPS = 100
@@ -91,6 +94,18 @@ class CognitiveFSM:
         self._open_order: list = []
         self._set_handled = False
         self._lap_sc = -1
+        self._bin_hits: dict = {}
+        self._bin_mhz: dict = {}
+        self._bin_order: list = []
+        self._hop_gaps: list[float] = []
+        self._win_hop_t: dict = {}
+        self._span_key = None
+        self._last_edge_t = None
+        self._last_grow_t = None
+        self._sweep_on_cluster = False
+        self._heard_ready = None
+        self._jam_by_set = False
+        self._until_stop = False
         self.jam_duration_s = 15.0
         self._jam_until: "float | None" = None
         self._paused = False
@@ -126,7 +141,9 @@ class CognitiveFSM:
         return cyc
 
     def _publish(self, t_s: float, confidence: float = 0.0) -> None:
-        if self.pub:
+        if not self.pub:
+            return
+        try:
             rec = self.store.get(self.pid) if self.pid else {}
             threat = {}
             if self.pid:
@@ -138,6 +155,10 @@ class CognitiveFSM:
                 "jams_sent": self.jams_sent,
                 "pdr_target": self.eff.pdr,
                 "threat": threat})
+        except Exception as exc:
+            self.transitions.append({
+                "tick": self._tick_i, "from": self.state, "to": self.state,
+                "t_s": float(t_s), "action": "publish_fail", "error": str(exc)})
 
     def _set_lut_flag(self, on: bool) -> None:
         if self.fpga is None or self.sub is None or not self.pid:
@@ -208,6 +229,22 @@ class CognitiveFSM:
         self._open_order = []
         self._set_handled = False
         self._lap_sc = -1
+        self._bin_hits = {}
+        self._bin_mhz = {}
+        self._bin_order = []
+        self._hop_gaps = []
+        self._win_hop_t = {}
+        self._span_key = None
+        self._last_edge_t = None
+        self._last_grow_t = None
+        self._sweep_on_cluster = False
+        self._heard_ready = None
+        self._jam_by_set = False
+        self._until_stop = False
+        pair = self._corridor_hz()
+        if pair:
+            self.sweeper.setup(pair[0], pair[1])
+            self.sweeper.arm_sample_dwell()
         self._go(LISTENING, t_s, note="rescan_origin",
                  corridor=self.scan_corridor)
 
@@ -283,6 +320,12 @@ class CognitiveFSM:
                 if tune_fail:
                     hold = False
                     saved = []
+            if tune_fail:
+                if io is not None and hasattr(io, "resume_after_pio"):
+                    io.resume_after_pio(reconfigure=True)
+                self._rescan_origin(t_s, "tune_fail")
+                return {"f_jam_hz": 0.0, "shelf": {}, "stations": 0,
+                        "outside_hz": 0.0, "slices": 0}
             if io is not None and slices and not tune_fail:
                 if hasattr(io, "park_locked"):
                     io.park_locked(int(slices[0]["lo_hz"]))
@@ -358,7 +401,11 @@ class CognitiveFSM:
             self._autonomous = cyc <= LUT_CAP
             pre_n = int(jam.get("shelf", {}).get("written") or 0)
             pat["lut_n"] = pre_n
-            self._jam_until = float(t_s) + float(self.jam_duration_s)
+            # Кнопка Передать держит удар до Стоп. Сам по таймеру он не гаснет.
+            if getattr(self, "_until_stop", False):
+                self._jam_until = None
+            else:
+                self._jam_until = float(t_s) + float(self.jam_duration_s)
             self.transitions.append({
                 "tick": self._tick_i, "from": self.state, "to": self.state,
                 "t_s": float(t_s), "action": "drfm_shelf",
@@ -397,6 +444,10 @@ class CognitiveFSM:
     def tick(self, ch_pwr, freqs_hz, t_s: float) -> dict:
         self._tick_i += 1
         self._watch(float(t_s))
+        if self._take_replay(float(t_s)):
+            self._publish(t_s)
+            return {"state": self.state, "hop": None, "pid": self.pid,
+                    "jams_sent": self.jams_sent, "pdr": self.eff.pdr}
         self.sweeper.sample_count = int(round(float(t_s) * self.fs_hz))
         self._fb = self.fallback.update(ch_pwr, t_s)
         st = self.state
@@ -427,6 +478,8 @@ class CognitiveFSM:
             elif st == CONFIRMING:
                 self._tick_confirming(t_s)
             elif st in (MONITORING, JAMMING, MULTI_LO, TIMER):
+                if self.rec is not None and self.rec._open:
+                    self._last_hop_t = float(t_s)
                 self._tick_monitoring(ch_pwr, freqs_hz, t_s, hop)
             elif st == TARGET_SILENT:
                 self._tick_target_silent(t_s)
@@ -484,9 +537,22 @@ class CognitiveFSM:
                 "tick": self._tick_i, "from": self.state, "to": self.state,
                 "t_s": float(t_s), "action": "replay_skip"})
             return
+        from .pattern_store import classify_sequence_type
+        seq = [int(x) for x in (record.get("cycle") or record.get("hop_sequence") or [])]
+        record.setdefault("sequence_type", classify_sequence_type(seq, m=self.n_chans))
+        record.setdefault("sub_corridor_id", sub.get("sub_corridor_id"))
+        record.setdefault("legacy", [])
+        record.setdefault("hop_sequence", list(seq))
+        record.setdefault("cycle", list(seq))
+        record.setdefault("cycle_length", len(record.get("freqs_mhz") or seq))
+        record.setdefault("jammed_count", 0)
+        record.setdefault("confirmed", True)
+        record.setdefault("confirm_count", MIN_CONFIRMS)
         self.store.patterns[pid] = record
         self.pid = pid
         self.sub = sub
+        self._jam_by_set = True
+        self._until_stop = True
         try:
             self._jam_now(t_s, preload=True)
         except Exception as exc:
@@ -515,12 +581,18 @@ class CognitiveFSM:
             published = hop
         return published
 
-    def _tick_listening(self, ch_pwr, freqs_hz, t_s: float):
+    def _take_replay(self, t_s: float) -> bool:
+        """Кнопка Передать кладёт записанный ряд. Пока её нет, передатчик молчит."""
         replay = getattr(self, "replay_pattern", None)
-        if replay:
-            self.replay_pattern = None
-            self._replay(replay, t_s)
-            return None
+        if not replay:
+            return False
+        self.replay_pattern = None
+        if self.jams_sent or self.state in (JAMMING, MULTI_LO, TIMER, MONITORING):
+            return False
+        self._replay(replay, t_s)
+        return True
+
+    def _tick_listening(self, ch_pwr, freqs_hz, t_s: float):
         pair = self._corridor_hz()
         if pair:
             a, b = pair
@@ -611,13 +683,11 @@ class CognitiveFSM:
                  if int(h.get("sample_count") or 0) > self._lap_sc]
         if fresh:
             self._lap_sc = max(int(h.get("sample_count") or 0) for h in fresh)
-            self.finish_pass([float(h["freq_mhz"]) for h in fresh], t_s)
+            # Снимок круга на широком обходе — только кусок. Удар по нему
+            # открывался бы на первых частотах, пока остальные ещё не слышны.
+            self._count_repeated_freqs(fresh, t_s)
         if was == INITIAL_SCAN and self.state == INITIAL_SCAN:
             self._go(LEARNING, t_s, stitched=len(learn.hops), wide=True)
-        if self.state == LEARNING:
-            self._tick_learning(t_s)
-        elif was == CONFIRMING and self.state == CONFIRMING:
-            self._tick_confirming(t_s)
         if self.state in (INITIAL_SCAN, LEARNING, CONFIRMING):
             self.rec = window_rec
         else:
@@ -638,12 +708,18 @@ class CognitiveFSM:
         st = self.state
         if st == INITIAL_SCAN or (self._wide() and st in (LEARNING, CONFIRMING)):
             self._hear_scan(ch_pwr, freqs_hz, t_s)
-        elif (st in (LEARNING, CONFIRMING, RE_LEARNING)
+        elif (st in (LEARNING, CONFIRMING, RE_LEARNING,
+                     JAMMING, MULTI_LO, TIMER, MONITORING)
               and self.rec is not None):
             n_before = len(self.rec.hops)
             self.rec.update(ch_pwr, freqs_hz, t_s)
             for seen in self.rec.hops[n_before:]:
                 self._note_hop(seen, t_s)
+            # Вспышка ещё открыта — это не тишина. Иначе удар гаснет,
+            # пока короткий скачок сидит не в последнем столбце кадра.
+            if (st in (JAMMING, MULTI_LO, TIMER, MONITORING)
+                    and self.rec._open):
+                self._last_hop_t = float(t_s)
 
     def _hear_scan(self, ch_pwr, freqs_hz, t_s: float):
         self._window_recorder()
@@ -769,6 +845,160 @@ class CognitiveFSM:
             self._commit_freqs(uniq, t_s)
             self._prev_bins = cur
 
+    def _note_hop_gaps(self, hops) -> None:
+        """Задержка скачка. Переезд между окнами сюда не входит.
+
+        Пока окон несколько, берём только пары внутри одной стоянки (короче 4 мс).
+        Когда пятно уже в одном окне, пара может быть реже: до 50 мс.
+        """
+        one = len(self.sweeper.windows) <= 1
+        limit = 0.050 if one else float(SCAN_DWELL_S)
+        ordered = sorted(
+            (h for h in hops if not h.get("hole")),
+            key=lambda h: float(h.get("t_start") or 0.0))
+        for h in ordered:
+            win = h.get("window")
+            t = float(h.get("t_start") or 0.0)
+            prev = self._win_hop_t.get(win)
+            if prev is not None:
+                dt = t - prev
+                if 0.0 < dt < limit:
+                    self._hop_gaps.append(dt)
+            self._win_hop_t[win] = t
+        if len(self._hop_gaps) > 4000:
+            del self._hop_gaps[:-4000]
+
+    def _hop_period_s(self) -> float:
+        if not self._hop_gaps:
+            return float(SCAN_DWELL_S)
+        return float(np.median(np.asarray(self._hop_gaps, dtype=float)))
+
+    def _sweep_edges(self):
+        ws = self.sweeper.windows
+        if not ws:
+            return None
+        return (min(float(w["f_start"]) for w in ws),
+                max(float(w["f_end"]) for w in ws))
+
+    def _maybe_narrow(self, stable, t_s: float) -> None:
+        """Пятно уже видно. Пустые окна обхода больше не слушаем."""
+        lo = min(stable) * 1e6 - SUB_MARGIN_HZ
+        hi = max(stable) * 1e6 + SUB_MARGIN_HZ
+        pair = self._corridor_hz()
+        if pair:
+            lo = max(lo, pair[0])
+            hi = min(hi, pair[1])
+        edges = self._sweep_edges()
+        if edges is None or hi <= lo:
+            self._sweep_on_cluster = True
+            return
+        sweep = edges[1] - edges[0]
+        cluster = hi - lo
+        if (cluster < sweep - self.ibw_hz
+                and (lo > edges[0] + 1.0 or hi < edges[1] - 1.0)):
+            self.sweeper.setup(lo, hi)
+            self.sweeper.arm_sample_dwell()
+            self.sweeper.tune_current(self.sweeper.sample_count)
+            w = self.sweeper.current()
+            if w:
+                self.lo_hz = w["f_center"]
+            self._scan_t0 = float(t_s)
+            # Этот круг только сузил обход. Ряд дописывается на следующих.
+            self._sweep_on_cluster = False
+            return
+        self._sweep_on_cluster = True
+
+    def _arm_heard_list(self, stable, t_s: float) -> None:
+        """Весь услышанный список — один раз на плату."""
+        hz = [float(x) * 1e6 for x in stable]
+        old = self.sub.get("sub_corridor_id") if self.sub else None
+        self.sub = extract_subcorridor(hz, "scan")
+        if old:
+            self.sub["sub_corridor_id"] = old
+        if self.state != CONFIRMING or not self.pid:
+            self._commit_freqs(stable, t_s)
+        rec = self.store.get(self.pid)
+        rec["freqs_mhz"] = list(stable)
+        rec["cycle_length"] = len(stable)
+        rec["cycle"] = list(range(len(stable)))
+        rec["hop_sequence"] = list(rec["cycle"])
+        rec["freq_khz"] = [int(round(float(x) * 1000.0)) for x in stable]
+        rec["sub"] = dict(self.sub)
+        period = self._hop_period_s()
+        rec["dwell_s"] = period
+        rec["dwell_us"] = period * 1e6
+        if int(rec.get("confirm_count") or 0) < MIN_CONFIRMS - 1:
+            rec["confirm_count"] = MIN_CONFIRMS - 1
+        self._set_confirm(float(t_s), 1.0)
+
+    def _count_repeated_freqs(self, hops, t_s: float) -> None:
+        """Частота из трёх кругов входит в ряд. Удар — когда пятно больше не растёт.
+
+        В списке сколько есть: 10, 50 или 100. Первые две частоты удар не открывают,
+        пока снаружи ещё приходят новые.
+        """
+        if self.jams_sent or self.state in (JAMMING, MULTI_LO, TIMER, MONITORING):
+            return
+        self._note_hop_gaps(hops)
+        seen = set()
+        for h in hops:
+            mhz = float(h["freq_mhz"])
+            b = freq_bin_mhz(mhz)
+            if b in seen:
+                continue
+            seen.add(b)
+            if b not in self._bin_hits:
+                self._bin_hits[b] = 0
+                self._bin_order.append(b)
+            self._bin_hits[b] += 1
+            self._bin_mhz[b] = mhz
+        # Пятно — только частоты, слышанные трижды. Одиночный выброс шума
+        # на краю коридора не раздвигает ряд и не сбрасывает таймер.
+        stable = [self._bin_mhz[b] for b in self._bin_order
+                  if self._bin_hits.get(b, 0) >= MIN_CONFIRMS]
+        if len(stable) < 2:
+            return
+        now = float(t_s)
+        stable_key = (freq_bin_mhz(min(stable)), freq_bin_mhz(max(stable)))
+        # Края встали — середина дописывается за время тишины.
+        # Новый бин внутри пятна таймер не сбрасывает: шум окна иначе
+        # не даёт ряду закрыться.
+        if stable_key != self._span_key:
+            self._span_key = stable_key
+            self._last_edge_t = now
+            self._last_grow_t = now
+            self._heard_ready = None
+        if self._last_edge_t is None:
+            return
+        period = self._hop_period_s()
+        edge_need = max(EDGE_QUIET_S, 2.0 * period * len(stable))
+        if now - float(self._last_edge_t) < edge_need:
+            return
+        if not self._sweep_on_cluster:
+            self._maybe_narrow(stable, t_s)
+            if not self._sweep_on_cluster:
+                return
+        if self._last_grow_t is None:
+            return
+        grow_need = max(EDGE_QUIET_S, 3.0 * period * len(stable))
+        if now - float(self._last_grow_t) < grow_need and len(stable) < 256:
+            return
+        if not self._hop_gaps:
+            return
+        # Число прыжков и задержка посчитаны. TX откроет только кнопка Передать.
+        self._heard_ready = list(stable)
+
+    def release_heard(self, t_s: float) -> bool:
+        """Оператор нажал Передать: на плату уходит весь записанный список."""
+        stable = list(self._heard_ready or [])
+        if len(stable) < 2:
+            stable = [self._bin_mhz[b] for b in self._bin_order
+                      if self._bin_hits.get(b, 0) >= MIN_CONFIRMS]
+        if len(stable) < 2 or self.jams_sent:
+            return False
+        self._arm_heard_list(stable, t_s)
+        return self.jams_sent >= 1
+
     def _stored_bins(self) -> set:
         if not self.pid:
             return set()
@@ -818,6 +1048,7 @@ class CognitiveFSM:
         count = self.store.mark_confirmed(self.pid)
         if count >= MIN_CONFIRMS and rec["confirmed"]:
             self.store.classify_threat_type(self.pid)
+            self._jam_by_set = True
             self._jam_now(t_s, preload=True)
             nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
             self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count,
@@ -879,6 +1110,7 @@ class CognitiveFSM:
         count = self.store.mark_confirmed(self.pid)
         if count >= MIN_CONFIRMS and rec["confirmed"]:
             self.store.classify_threat_type(self.pid)
+            self._jam_by_set = False
             self._jam_now(t_s, preload=True)
             nwin = int((getattr(self, "_lo_plan", None) or {}).get("n") or 1)
             self._go(MULTI_LO if nwin > 1 else JAMMING, t_s, confirms=count)
@@ -902,7 +1134,9 @@ class CognitiveFSM:
                                      .get("dwell_s", self.dt)))
         self.eff.update(expected=self.dt / dwell_s,
                         observed=1.0 if hop is not None else 0.0)
-        if d["drift"]:
+        # Список частот не обязан повторить порядок. Сбой порядка
+        # гасил удар, пока скачки 2400–2480 ещё шли.
+        if d["drift"] and not self._jam_by_set:
             self._stop_jam(t_s, "drift")
             self._go(DRIFT_DETECTED, t_s, lp_score=round(lp_score, 3))
             self.rec.reset()
@@ -915,7 +1149,8 @@ class CognitiveFSM:
             if nxt is not None and lp_score >= 0.7:
                 self._last_jam_ch = nxt
                 self._go(MONITORING, t_s, keep=True)
-        if (self._last_hop_t is not None
+        if (not getattr(self, "_until_stop", False)
+                and self._last_hop_t is not None
                 and float(t_s) - self._last_hop_t > SILENT_S):
             self._stop_jam(t_s, "target_silent")
             self._live = []

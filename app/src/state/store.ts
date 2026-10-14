@@ -496,6 +496,7 @@ interface LegionStore {
   setSmartPeakOverride(v: boolean): void;
   /** Заморозить карточку и ARM. Старт сам не ARM'ит. */
   acceptSmartGridAndArm(opts?: { peak?: boolean; acceptO4?: boolean }): Promise<boolean>;
+  noteSys(text: string): void;
   setAutoDispatch(d: AutoDispatch): void;
   setScanWindowMhz(v: string): void;
   setTxShelfMhz(v: string): void;
@@ -912,8 +913,18 @@ const gAttackMemory = new AttackSessionMemory();
 /** Стоп обхода по замыслу гасит опрос статуса, не второй сканер. */
 let gDesignStop: (() => void) | null = null;
 let gDesignState = "";
-/** Ряд stitch() из обхода по замыслу. Не лента вспышек старого слуха. */
+/** Записанные частоты обхода. Передать бьёт по ним. */
 let gDesignHopsMhz: number[] = [];
+let gDesignDwellUs = 1000;
+let gDesignReady = false;
+let gDesignAnnounced = false;
+export function recordedDesign(): { hopsMhz: number[]; dwellUs: number; ready: boolean } {
+  return {
+    hopsMhz: gDesignHopsMhz.filter((hz) => hz > 0).slice(0, 256),
+    dwellUs: gDesignDwellUs,
+    ready: gDesignReady,
+  };
+}
 export function bindDesignStop(fn: (() => void) | null): void {
   gDesignStop = fn;
 }
@@ -2974,6 +2985,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       gAttackMemory.reset();
     },
     setSmartPeakOverride: (v) => set({ smartPeakOverride: !!v }),
+    noteSys: (text) => pushLog("sys", text),
     startLocalFpgaGateway: async () => ensureLocalFpgaGateway(),
     acceptSmartGridAndArm: async (opts) => {
       const s = get();
@@ -3011,7 +3023,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         });
         pushLog(
           "sys",
-          `${FPGA_AIR_MODE_RU}: коридор на экране ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Обход не останавливаю: плата бьёт сама после трёх совпадений.`,
+          `${FPGA_AIR_MODE_RU}: коридор на экране ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Обход пишет дальше. Передать — удар по записанным частотам.`,
         );
         return true;
       }
@@ -5843,6 +5855,8 @@ export const useLegion = create<LegionStore>((set, get) => {
         f0_hz?: number | null;
         f1_hz?: number | null;
         hops_mhz?: number[];
+        dwell_us?: number;
+        heard_ready?: boolean;
         state?: string;
         windows?: number;
         window_i?: number;
@@ -5866,9 +5880,16 @@ export const useLegion = create<LegionStore>((set, get) => {
         patch.scanCenterMhz = (lo + hi) / 2;
       }
       const hops = (msg.hops_mhz ?? []).filter((hz) => hz > 0);
+      const dwell = msg.dwell_us;
+      if (dwell != null && Number.isFinite(dwell) && dwell > 0) {
+        gDesignDwellUs = Math.max(1, Math.min(1_000_000, Math.round(dwell)));
+      }
+      const ready = msg.heard_ready === true && hops.length >= 2;
+      gDesignReady = ready;
+      if (!ready) gDesignAnnounced = false;
       if (hops.length > 0) {
         gDesignHopsMhz = hops.slice(0, 256);
-        patch.fhssCorridorReady = true;
+        patch.fhssCorridorReady = ready;
         const now = Date.now();
         patch.attackTracks = hops.map((freqMhz, id) => ({
           id,
@@ -5890,6 +5911,13 @@ export const useLegion = create<LegionStore>((set, get) => {
           lastSeenTs: now,
         }));
       }
+      if (ready && !gDesignAnnounced) {
+        gDesignAnnounced = true;
+        pushLog(
+          "sys",
+          `FHSS: ${hops.length} прыжков, задержка ${gDesignDwellUs} мкс. Передать открывает TX.`,
+        );
+      }
       const state = msg.state ?? "";
       if (state && state !== gDesignState) {
         gDesignState = state;
@@ -5904,6 +5932,9 @@ export const useLegion = create<LegionStore>((set, get) => {
       gDesignStop?.();
       gDesignState = "";
       gDesignHopsMhz = [];
+      gDesignDwellUs = 1000;
+      gDesignReady = false;
+      gDesignAnnounced = false;
       gScanGen += 1;
       if (gScanTimer) {
         clearInterval(gScanTimer);
@@ -5926,7 +5957,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (isFpgaAirPattern(s.scanPattern)) {
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}» не эта кнопка: Запустить ведёт коридор окнами 34 МГц, плата бьёт после трёх совпадений`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}»: нижняя кнопка Передать бьёт по частотам, которые коридор уже записал`,
         );
         return;
       }

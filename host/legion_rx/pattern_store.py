@@ -172,11 +172,11 @@ class PatternStore:
     def classify_threat_type(self, pattern_id: str) -> dict:
         rec = self.patterns[pattern_id]
         return {"pattern_id": pattern_id,
-                "sequence_type": rec["sequence_type"],
-                "cycle_length": rec["cycle_length"],
-                "sub_corridor_id": rec["sub_corridor_id"],
-                "confirmed": rec["confirmed"],
-                "jammed_count": rec["jammed_count"]}
+                "sequence_type": rec.get("sequence_type"),
+                "cycle_length": rec.get("cycle_length"),
+                "sub_corridor_id": rec.get("sub_corridor_id"),
+                "confirmed": rec.get("confirmed"),
+                "jammed_count": rec.get("jammed_count", 0)}
 
 
 # ---- анализ ----

@@ -162,7 +162,8 @@ class App:
         try:
             live_from_app(self, self._stop_live)
         except Exception as exc:
-            self._log(f"радио: {exc}")
+            import traceback
+            self._log(f"радио: {exc}\n{traceback.format_exc()}")
 
     def shutdown(self, signum, _frame) -> None:
         self._stop_live.set()
@@ -444,16 +445,17 @@ def _cfg_from_args(args) -> dict:
 
 
 def _design_hops(fsm) -> list:
-    """Ряд, который уже склеил обход. Не список вспышек с экрана."""
-    pid = getattr(fsm, "pid", None)
-    store = getattr(fsm, "store", None)
-    if pid and store is not None:
-        try:
-            pat = store.get(pid)
-        except Exception:
-            pat = None
-        if isinstance(pat, dict) and pat.get("freqs_mhz"):
-            return [float(x) for x in list(pat["freqs_mhz"])[:256]]
+    """Записанные частоты коридора. Кнопка Передать бьёт по этому списку."""
+    ready = getattr(fsm, "_heard_ready", None)
+    if ready:
+        return [round(float(x), 3) for x in list(ready)[:256]]
+    order = getattr(fsm, "_bin_order", None) or []
+    hits = getattr(fsm, "_bin_hits", None) or {}
+    mhz = getattr(fsm, "_bin_mhz", None) or {}
+    heard = [round(float(mhz[b]), 3) for b in order
+             if hits.get(b, 0) >= 1 and b in mhz]
+    if heard:
+        return heard[:256]
     sweeper = getattr(fsm, "sweeper", None)
     if sweeper is None:
         return []
@@ -490,6 +492,9 @@ def _emit_rx(app: App, running: bool) -> None:
         "f1_hz": viz.get("f1"),
         "db": _down(spec, 96) if spec is not None else [],
         "hops_mhz": _design_hops(app.fsm),
+        "dwell_us": int(round(float(app.fsm._hop_period_s()) * 1e6)),
+        "heard_ready": bool(getattr(app.fsm, "_heard_ready", None))
+        and bool(getattr(app.fsm, "_hop_gaps", None)),
         "window_i": int(getattr(sweeper, "idx", 0) or 0),
         "windows": len(getattr(sweeper, "windows", []) or []),
     }
@@ -508,10 +513,28 @@ def _arm_operator(app: App) -> None:
     }
 
 
+def _take_operator_go(app: App) -> None:
+    """Файл кнопки Передать. Пока его нет, обход только пишет частоты."""
+    from .cognitive import JAMMING, MONITORING, MULTI_LO, TIMER
+    from .test_capture import clear_replay, read_replay
+
+    if getattr(app.fsm, "replay_pattern", None):
+        return
+    if app.fsm.jams_sent or app.fsm.state in (JAMMING, MULTI_LO, TIMER, MONITORING):
+        return
+    pending = read_replay()
+    record = (pending or {}).get("record") if isinstance(pending, dict) else None
+    if not isinstance(record, dict) or not record.get("freqs_mhz"):
+        return
+    clear_replay()
+    app.fsm.arm_replay(record)
+
+
 def _stream(app: App, until_file: bool) -> None:
     from .test_capture import maybe_save_test
 
     while not app._stop_live.is_set():
+        _take_operator_go(app)
         _emit_rx(app, True)
         if until_file and getattr(app.fsm, "test_file", None):
             break

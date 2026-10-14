@@ -3,8 +3,8 @@
 import { WAVE_AMP_MAX, type WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
-import { rxStatus, stopRx } from "../../sense/rxTest";
-import { useLegion } from "../../state/store";
+import { primeAccepted, stopRx } from "../../sense/rxTest";
+import { recordedDesign, useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
 export type FpgaStartPath = "solo" | "air" | "auto";
@@ -81,11 +81,27 @@ export async function runSmartAccept(opts?: { peak?: boolean; acceptO4?: boolean
 }
 
 export async function runAcceptedTransmit(): Promise<string> {
-  const live = await rxStatus();
-  if (live?.running) {
-    return "плата бьёт по найденному ряду сама";
+  const s = useLegion.getState();
+  const { hopsMhz, dwellUs, ready } = recordedDesign();
+  if (!ready || hopsMhz.length < 2) {
+    s.noteSys("Передать: ещё считаю число прыжков и задержку");
+    return "ещё считаю";
   }
-  return "сначала Запустить: ряд клеится по отсчётам, плата бьёт сама после трёх совпадений";
+  const a = parseFloat(String(s.sdrF1).replace(",", "."));
+  const b = parseFloat(String(s.sdrF2).replace(",", "."));
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
+    s.noteSys("Передать: коридор от и до пуст");
+    return "коридор пуст";
+  }
+  try {
+    await primeAccepted(a * 1e6, b * 1e6, hopsMhz, dwellUs);
+  } catch (err) {
+    const text = err instanceof Error ? err.message : "не записал ряд";
+    s.noteSys(`Передать: ${text}`);
+    return text;
+  }
+  s.noteSys(`Передать: ${hopsMhz.length} прыжков, задержка ${dwellUs} мкс, TX открыт`);
+  return `удар по ${hopsMhz.length} прыжкам`;
 }
 
 export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boolean }): Promise<void> {

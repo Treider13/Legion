@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { catalogById } from "../../sdr/catalog";
 import { rxStatus } from "../../sense/rxTest";
 import { isFpgaAirPattern, modeOf } from "../../sense/modes";
-import { useLegion } from "../../state/store";
+import { recordedDesign, useLegion } from "../../state/store";
 import { connectionLabel } from "../graphite/connectionLabel";
 import { cinemaIsLive, type CinemaMode, runAcceptedTransmit, runCinemaStop, runSmartAccept } from "./run";
 
@@ -120,13 +120,15 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Принять коридор
           </button>
         ) : null}
-        {mode === "sdr" && isFpgaAirPattern(scanPattern) && smartGridAccepted && !fpgaArmed && !fpgaBusy ? (
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && (smartGridAccepted || scanRunning || smartListenLive) && !fpgaArmed && !fpgaBusy ? (
           <button
             type="button"
             className="cinema-go"
-            disabled={fpgaStopPending}
+            disabled={fpgaStopPending || !recordedDesign().ready}
             onClick={() => void runAcceptedTransmit()}
-            title="Удар по уже посчитанным прыжкам суженного коридора"
+            title={recordedDesign().ready
+              ? `${recordedDesign().hopsMhz.length} прыжков, задержка ${recordedDesign().dwellUs} мкс. Открыть TX`
+              : "Считаю число прыжков и задержку"}
           >
             Передать
           </button>
@@ -155,7 +157,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-            {message || "Запустить: компьютер сканирует коридор и сам подтверждает прыжки. Плата бьёт по таблице, умная атака, потом скан заново."}
+            {message || "Запустить пишет прыжки по коридору. Передать бьёт по записанным частотам, умная атака."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

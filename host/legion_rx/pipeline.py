@@ -750,26 +750,56 @@ class _UsbLive:
         self.usb_errors = 0
         self._tune_req = 0
         self._tune_done = 0
+        self._in_rx = False
+
+    def prepare_tune(self) -> bool:
+        """Сначала остановить чтение. set_frequency во время sync_rx ждёт кадр,
+        а кадр забирает насос, которому нужна та же блокировка: взаимный ступор."""
+        with self._io:
+            self._paused = True
+            if not self._in_rx:
+                return True
+        deadline = time.perf_counter() + 1.5
+        while time.perf_counter() < deadline:
+            with self._io:
+                if not self._in_rx:
+                    return True
+            time.sleep(0.001)
+        return False
 
     def park_locked(self, lo_hz: int) -> int:
-        """Обе несущие на центр стоянки, между кадрами, до закрытия handle."""
+        """Обе несущие на центр стоянки. Чтение к этому моменту уже стоит."""
+        if not self._paused and not self.prepare_tune():
+            return -1
         with self._io:
-            if self._paused or not self.usb.open:
+            if not self.usb.open:
                 return -1
-            rc = self.usb._set_frequency(0, int(lo_hz))
-            if rc != 0:
+            self.usb.enable_rx(False)
+            try:
+                rc = self.usb._set_frequency(0, int(lo_hz))
+                if rc != 0:
+                    return rc
+                rc = self.usb._set_frequency(1, int(lo_hz))
+                if rc == 0:
+                    self.lo = float(lo_hz)
                 return rc
-            rc = self.usb._set_frequency(1, int(lo_hz))
-            if rc == 0:
-                self.lo = float(lo_hz)
-            return rc
+            finally:
+                if self.usb.open:
+                    self.usb.enable_rx(True)
 
     def capture_locked(self, slot: int, lo_hz: int) -> int:
-        """Снимок профиля между кадрами. set_frequency поверх sync_rx ждёт буфер до 1 с."""
+        """Снимок профиля. Чтение стоит, поэтому set_frequency не ждёт чужой кадр."""
+        if not self._paused and not self.prepare_tune():
+            return -1
         with self._io:
-            if self._paused or not self.usb.open:
+            if not self.usb.open:
                 return -1
-            return self.usb.capture_pair(int(slot), int(lo_hz))
+            self.usb.enable_rx(False)
+            try:
+                return self.usb.capture_pair(int(slot), int(lo_hz))
+            finally:
+                if self.usb.open:
+                    self.usb.enable_rx(True)
 
     def tune(self, hz: float) -> None:
         """LO между кадрами. set_frequency поверх sync_rx ждёт буфер до 1 с."""
@@ -778,10 +808,20 @@ class _UsbLive:
         self._tune_req = target
         if not self.usb.open or self._paused:
             self._tune_done = target
+        else:
+            deadline = time.perf_counter() + 0.02
+            while self._tune_done != target and time.perf_counter() < deadline:
+                time.sleep(0.0002)
+        # В очереди ещё кадры старой несущей. Иначе стоянка нового окна
+        # считается по спектру предыдущего, и дальний прыжок не пишется.
+        src = self.src
+        if src is None:
             return
-        deadline = time.perf_counter() + 0.008
-        while self._tune_done != target and time.perf_counter() < deadline:
-            time.sleep(0.0002)
+        while True:
+            try:
+                src.frames.get_nowait()
+            except queue.Empty:
+                break
 
     def _prime_cli(self) -> None:
         sess = BladerfCliSession(device=self.device)
@@ -836,12 +876,19 @@ class _UsbLive:
                     else:
                         req = int(self._tune_req)
                         if req and req != applied:
-                            self.usb.set_frequency(req)
+                            # Между кадрами, модуль не гасим. enable_rx(False)
+                            # на каждом окне обрывает sync_rx: дальше кадров нет,
+                            # и коридор навсегда остаётся на первом окне.
+                            retune_live_lo(self.usb, req)
                             applied = req
                             self._tune_done = req
                             self.lo = float(req)
-                        rc, raw, _ts = self.usb.read_frame_bytes(
-                            self.frame_samples)
+                        self._in_rx = True
+                        try:
+                            rc, raw, _ts = self.usb.read_frame_bytes(
+                                self.frame_samples)
+                        finally:
+                            self._in_rx = False
                 if rc in (-5, -6, -7):
                     self.usb_errors += 1
                     if self.usb_errors >= 3:
@@ -966,10 +1013,30 @@ class _UsbHandoff:
         return getattr(self._ensure(), name)
 
 
+def frame_air_span(sample_count: int, n_samples: int, fs_hz: float):
+    """Время кадра по номеру отсчёта, не по длительности чтения USB.
+
+    Чтение пачки укладывается в микросекунды настенных часов, а в эфире
+    это сотни микросекунд. Задержка прыжка считается по отсчётам.
+    """
+    t0 = float(sample_count) / float(fs_hz)
+    return t0, t0 + float(n_samples) / float(fs_hz)
+
+
+def retune_live_lo(usb, lo_hz: int) -> int:
+    """Несущая между кадрами, в потоке приёма. Модуль остаётся включённым.
+
+    Выключение приёма на каждом окне обрывает sync_rx: следующие кадры
+    не приходят, водопад замирает на первом окне коридора.
+    """
+    return int(usb.set_frequency(int(lo_hz)))
+
+
 def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
-                        fsm=None, stop_event=None) -> int:
+                        fsm=None, stop_event=None, note=None) -> int:
     """Живой IQ: UsbOwner → FIFO → C-читатель → спектр кадра → FSM."""
-    from .cognitive import CONFIRMING, CognitiveFSM, INITIAL_SCAN, LEARNING
+    from .cognitive import (CONFIRMING, CognitiveFSM, INITIAL_SCAN, LEARNING,
+                             LISTENING)
     from .lo_sweep import plan_windows, stitch_power, window_hz
     from .pattern_store import PatternStore
     from . import fpga_control as fc
@@ -1063,6 +1130,48 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     side = threading.Thread(target=_paint_log, daemon=True, name="live-paint")
     side.start()
     tail = {"freqs": None, "t": 0.0}
+    glimpse_n = {"n": 0}
+
+    def _glimpse(iq, lo_hz: float) -> None:
+        """Короткий спектр кадра, пока ряд ещё считается. Водопад не ждёт БПФ стоянки."""
+        nfft = 1024
+        wins_now = fsm.sweeper.windows
+        if (pub is None or int(getattr(iq, "size", 0)) < nfft
+                or len(wins_now) < 2):
+            return
+        if fsm.state not in (INITIAL_SCAN, LEARNING, CONFIRMING):
+            return
+        window = np.hanning(nfft)
+        chunk = np.asarray(iq[:nfft], dtype=np.complex64)
+        spec = np.fft.fftshift(np.fft.fft(chunk * window))
+        lin = np.abs(spec).astype(np.float64) ** 2
+        idx = int(fsm.sweeper.idx)
+        slot = win_acc.get(idx)
+        if slot is None:
+            win_acc[idx] = [lin, 1, float(lo_hz)]
+        else:
+            slot[0] = slot[0] + lin
+            slot[1] += 1
+            slot[2] = float(lo_hz)
+        segments = {
+            int(i): (float(lo_i), np.array(s / c, copy=True))
+            for i, (s, c, lo_i) in win_acc.items() if c
+        }
+        wins = [{
+            "index": int(w["index"]),
+            "f_start": float(w["f_start"]),
+            "f_end": float(w["f_end"]),
+            "f_center": float(w["f_center"]),
+        } for w in wins_now]
+        if paint_q.full():
+            try:
+                paint_q.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            paint_q.put_nowait(("pass", segments, wins))
+        except queue.Full:
+            pass
 
     def _on_iq(iq, fr) -> None:
         nonlocal frames
@@ -1074,10 +1183,7 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
             n_bins, n_col = lin.shape
             lo_cap = float(fsm.lo_hz)
             freqs = lo_cap + (np.arange(n_bins) - n_bins / 2.0) * (fs / n_bins)
-            t_rf0 = float(fr.t_first)
-            t_rf1 = float(fr.t_done)
-            if t_rf1 <= t_rf0:
-                t_rf1 = t_rf0 + float(iq.size) / fs
+            t_rf0, t_rf1 = frame_air_span(int(fr.sample_count), int(iq.size), fs)
             tail["freqs"] = freqs
             tail["t"] = t_rf1
             idx_before = int(fsm.sweeper.idx)
@@ -1122,7 +1228,10 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                     win_acc.clear()
                 elif scanning and (idx != idx_before or frames % 4 == 0):
                     item = ("pass", segments, wins)
-                elif not scanning:
+                elif not scanning and fsm.state not in (
+                        "JAMMING", "MULTI_LO", "TIMER", "MONITORING"):
+                    # Во время удара узкое окно первой стоянки не подменяет
+                    # коридор: иначе водопад заливает только его начало.
                     db = 10.0 * np.log10(np.maximum(mean, 1e-12))
                     item = ("live", db, lo_cap)
                     win_acc.clear()
@@ -1155,6 +1264,7 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
     try:
         radio.start()
         t0 = time.perf_counter()
+        rx_miss = 0
         while stop_event is None or not stop_event.is_set():
             if stop_event is None and time.perf_counter() - t0 >= args.duration_s:
                 break
@@ -1177,10 +1287,26 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                     if fr is None:
                         if radio.src is not None and radio.src.eof:
                             break
+                        rx_miss += 1
+                        if rx_miss == 8:
+                            if note is not None:
+                                nwin = max(1, len(fsm.sweeper.windows))
+                                note(
+                                    "приём молчит, окно "
+                                    f"{int(fsm.sweeper.idx) + 1}/{nwin}")
+                            if getattr(radio, "_paused", False):
+                                radio.resume_after_pio(reconfigure=True)
+                        continue
+                    rx_miss = 0
+                    if (int(radio._tune_req)
+                            and int(radio._tune_done) != int(radio._tune_req)):
                         continue
                     iq = np.asarray(fr.complex64())
                     if int(iq.size) < 1:
                         continue
+                    glimpse_n["n"] += 1
+                    if glimpse_n["n"] % 2 == 0:
+                        _glimpse(iq, float(radio.lo))
                     block.append((iq, fr))
                     got += int(iq.size)
                 if not block:
@@ -1239,7 +1365,11 @@ def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
                 if fr is None:
                     if radio.src is not None and radio.src.eof:
                         break
+                    rx_miss += 1
+                    if rx_miss == 8 and note is not None:
+                        note("приём молчит во время удара")
                     continue
+                rx_miss = 0
                 _on_iq(np.asarray(fr.complex64()), fr)
         verdict = {
             "live": True, "frames": frames,
@@ -1292,7 +1422,8 @@ def live_from_app(app, stop_event) -> int:
     log = JsonLog("gui")
     try:
         return _run_cognitive_live(
-            args, log, app.bus.viz, fsm=app.fsm, stop_event=stop_event)
+            args, log, app.bus.viz, fsm=app.fsm, stop_event=stop_event,
+            note=app._log)
     finally:
         log.close()
 
