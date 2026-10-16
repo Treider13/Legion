@@ -2,9 +2,11 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WAVE_CATALOG, cssUiParams, waveMeta, type WaveKind } from "../../sdr/waveforms";
 import { catalogCaps } from "../../sdr/hostClient";
-import { FPGA_US_DET_SHIFT, FPGA_SURVEY_GONE_MS, LEGION_FPGA_FS_HZ, airTractParams, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, fpgaTurnDwellClamp, parseLocaleNumber } from "../../sense/fpgaFastpath";
+import { FPGA_US_DET_SHIFT, LEGION_FPGA_FS_HZ, clampAirBwMhz, detectorWindowUs, fpgaAirSupported, parseLocaleNumber } from "../../sense/fpgaFastpath";
 import { airHopBlockedReason, planFpgaSoloWalk, soloHopBlockedReason, standingWordRu, type FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
-import { autoDispatchOptionRu, FPGA_AI_OPTION_RU, FPGA_AIR_MODE_RU, fpgaInnerDispatch, type AutoDispatch } from "../../sense/modes";
+import { DIGITAL_MODE_RU, FPGA_AIR_MODE_RU, fpgaInnerDispatch, type AutoDispatch } from "../../sense/modes";
+import { DigitalFields } from "./DigitalStrip";
+import { SMART_CORRIDOR_MHZ, SMART_JAM_MHZ, SMART_LOOK_EVERY_MS, SMART_LOOK_FOR_MS, SMART_SHIFT_HZ } from "../../sense/rxTest";
 import { TxGainControl } from "../TxGainControl";
 import { useLegion } from "../../state/store";
 import { type CinemaMode, type FpgaStartPath, runSimpleStart, runSmartStart } from "./run";
@@ -43,7 +45,6 @@ export function StartGate({ mode, onClose }: Props) {
   const storedTurnDwell = useLegion((s) => s.fpgaTurnDwellMs);
   const storedDispatch = useLegion((s) => s.autoDispatch);
   const storedDetThr = useLegion((s) => s.fpgaDetThr);
-  const detShift = useLegion((s) => s.fpgaDetShift);
   const [step, setStep] = useState<"band" | "path" | "walk">("band");
   const [f1, setF1] = useState(mode === "sdr" ? sdrF1 : corrF1);
   const [f2, setF2] = useState(mode === "sdr" ? sdrF2 : corrF2);
@@ -55,7 +56,7 @@ export function StartGate({ mode, onClose }: Props) {
   const [cssBw, setCssBw] = useState(cssInit.bwKhz);
   const [ohm, setOhm] = useState(mode === "sdr" ? sdrLoadOk : loadOk);
   const [path, setPath] = useState<FpgaStartPath>("auto");
-  const [dispatch, setDispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
+  const [dispatch] = useState<AutoDispatch>(fpgaInnerDispatch(storedDispatch));
   // У эфира и перехвата окно шага = канал подавления — свои сохранённые значения.
   const storedSoloStep = useLegion((s) => s.fpgaSoloStepMhz);
   const txShelfMhz = useLegion((s) => s.txShelfMhz);
@@ -195,26 +196,21 @@ export function StartGate({ mode, onClose }: Props) {
       setStep("walk");
       return;
     }
+    if (path === "digital") {
+      if (!fpgaAirSupported(sdrId)) {
+        setErr(`${DIGITAL_MODE_RU}: нужен bladeRF 2.0 micro xA4/xA9.`);
+        return;
+      }
+      await startSmart();
+      return;
+    }
     if (path === "auto") {
       if (!fpgaAirSupported(sdrId)) {
         setErr(`${FPGA_AIR_MODE_RU}: нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 (вкладка SDR в Настройках).`);
         return;
       }
-      const ch = parseLocaleNumber(windowMhz);
-      if (!Number.isFinite(ch) || ch <= 0) {
-        setErr("Задайте ширину взгляда платы в мегагерцах.");
-        return;
-      }
-      const dwell = parseLocaleNumber(dwellMs);
-      if (!Number.isFinite(dwell) || dwell <= 0) {
-        setErr("Задайте выдержку числом (0,4 и 0.4 — 400 мкс).");
-        return;
-      }
-      const thr = parseFloat(detThr);
-      if (!Number.isFinite(thr) || thr <= 0) {
-        setErr("Задайте порог чувствительности больше нуля.");
-        return;
-      }
+      const startMhz = parseFloat(f1);
+      if (Number.isFinite(startMhz)) setF2(String(startMhz + SMART_CORRIDOR_MHZ));
       await startSmart();
       return;
     }
@@ -246,64 +242,30 @@ export function StartGate({ mode, onClose }: Props) {
   return (
     <div className="cinema-gate" role="presentation" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="cinema-gate-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        {mode === "sdr" && step === "walk" && path === "auto" ? (
+        {mode === "sdr" && step === "walk" && path === "digital" ? (
+          <>
+            <p className="cinema-kicker">{DIGITAL_MODE_RU}</p>
+            <h2 id={titleId}>Профиль подавления</h2>
+            <p className="cinema-gate-lead">
+              Коридоры любые, каждый не шире 56 МГц. Плата снимает профили и скачет по очереди.
+              На каждой частоте — выбранный сигнал. Смена сигнала только через стоп и старт.
+            </p>
+            <DigitalFields />
+          </>
+        ) : mode === "sdr" && step === "walk" && path === "auto" ? (
           <>
             <p className="cinema-kicker">Умный · {FPGA_AIR_MODE_RU}</p>
-            <h2 id={titleId}>Канал и стратегия</h2>
+            <h2 id={titleId}>Коридор 56 МГц</h2>
             <p className="cinema-gate-lead">
-              Старт — слух Soapy по F1…F2, TX выкл. Подтвердить коридор сжимает
-              hop-set и отдаёт один взгляд плате. Класс ≠ FHSS / аналог 5.8 / x40+C58 —
-              ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
-              Ноутбук задаёт коридор, выдержку, Старт, Подтвердить коридор и Стоп.
-              Живой канал last_live {FPGA_SURVEY_GONE_MS} мс, не таймер периода прохода.
-              USB не в круге «увидел → усилитель».
+              Коридор любой, ширина всегда {SMART_CORRIDOR_MHZ} МГц. Принять находит скачок,
+              оцифровывает его DRFM со сдвигом {SMART_SHIFT_HZ} Гц и бьёт полосой {SMART_JAM_MHZ} МГц,
+              пока не нажата Стоп. TX молчит каждые {SMART_LOOK_EVERY_MS} мс на {SMART_LOOK_FOR_MS} мс,
+              чтобы приём увидел, пропала ли энергия.
+              Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
             </p>
-            <div className="cinema-gate-row">
-              <label title="Ширина одного взгляда платы и шаг сетки LO (аналоговый фильтр). Уже — 2450 и 2465 как разные стоянки; шире потолка платы — урежется.">
-                Взгляд, МГц
-                <input ref={firstRef} value={windowMhz} onChange={(e) => setWindowMhz(e.target.value)} inputMode="decimal" />
-              </label>
-              <label title="Сколько миллисекунд держать усилитель на найденном сигнале внутри окна. Обычный и приоритет.">
-                Выдержка, мс
-                <input value={dwellMs} onChange={(e) => setDwellMs(e.target.value)} inputMode="decimal" />
-              </label>
-            </div>
-            <div className="cinema-gate-row">
-              <label title="Порог средней энергии I²+Q². Полка USB-IQ в круге перехвата больше не меряется.">
-                Порог чувствительности
-                <input value={detThr} onChange={(e) => setDetThr(e.target.value)} inputMode="numeric" />
-              </label>
-            </div>
-            <p className="cinema-gate-lead">{FPGA_AI_OPTION_RU} · живой канал last_live {FPGA_SURVEY_GONE_MS} мс · не таймер периода прохода.</p>
-            <div className="cinema-paths" role="radiogroup" aria-label="Стратегия внутри окна">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={dispatch === "priority"}
-                className={dispatch === "priority" ? "cinema-path on" : "cinema-path"}
-                onClick={() => setDispatch("priority")}
-                title="Сильнее в окне — перескок и новая выдержка. Слабее не сбивает."
-              >
-                <strong>Приоритет</strong>
-                <span>{autoDispatchOptionRu("priority")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={dispatch === "turn"}
-                className={dispatch === "turn" ? "cinema-path on" : "cinema-path"}
-                onClick={() => setDispatch("turn")}
-                title="Найденный сигнал: усилитель на выдержке, затем текущий пик."
-              >
-                <strong>Обычный</strong>
-                <span>{autoDispatchOptionRu("turn")} · выдержка {fpgaTurnDwellClamp(parseLocaleNumber(dwellMs))} мс.</span>
-              </button>
-            </div>
             <p className="cinema-gate-lead">
               {fpgaAirSupported(sdrId)
-                ? `взгляд ${clampAirBwMhz(parseLocaleNumber(windowMhz), analogMax)} МГц · гейт ${
-                    airTractParams(parseLocaleNumber(windowMhz), analogMax, detShift).windowUs.toFixed(1)
-                  } мкс · обзор коридора — шаги LO, мс · ноутбук наблюдает и стопит`
+                ? `Сейчас ${f1 || "—"}–${Number.isFinite(parseFloat(f1)) ? parseFloat(f1) + SMART_CORRIDOR_MHZ : "—"} МГц. Прошивка на плате пока 34 МГц.`
                 : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 — выбирается на вкладке SDR в Настройках."}
             </p>
             <p className="cinema-gate-warn">{SELF_EXCITE_WARN}</p>
@@ -445,7 +407,7 @@ export function StartGate({ mode, onClose }: Props) {
             <p className="cinema-kicker">Умный · FPGA</p>
             <h2 id={titleId}>Режим работы</h2>
             <p className="cinema-gate-lead">
-              {FPGA_AIR_MODE_RU}: Старт — слух Soapy, Подтвердить коридор — ARM плате (USB не в круге увидел→TX).
+              {FPGA_AIR_MODE_RU}: коридор 56 МГц, DRFM со сдвигом, удар 0,5 МГц до Стоп.
               Эфир + FPGA и Только FPGA работают без онбордового обзора: USB один —
               либо Soapy ставит LO, либо агент держит FPGA.
             </p>
@@ -456,12 +418,11 @@ export function StartGate({ mode, onClose }: Props) {
                 aria-checked={path === "auto"}
                 className={path === "auto" ? "cinema-path on" : "cinema-path"}
                 onClick={() => setPath("auto")}
-                title="Старт — слух Soapy. Подтвердить коридор — ARM. Ноутбук — рубильник."
+                title="Коридор 56 МГц. Принять находит скачок и бьёт 0,5 МГц до Стоп."
               >
                 <strong>{FPGA_AIR_MODE_RU}</strong>
                 <span>
-                  Антенна на RX SMA. Старт слушает Soapy и собирает карточку.
-                  Подтвердить коридор сжимает hop-set и отдаёт ARM плате. USB не в круге «увидел → усилитель».{" "}
+                  Антенна на RX SMA. Коридор всегда 56 МГц. DRFM со сдвигом бьёт 0,5 МГц по скачку до Стоп.{" "}
                   {fpgaAirSupported(sdrId)
                     ? "Эта плата в ревизии legion."
                     : "Нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40."}
@@ -497,6 +458,21 @@ export function StartGate({ mode, onClose }: Props) {
                 <span>
                   Эфир не слушаем. Генерация сигнала в FPGA (тон или волна из памяти) по сетке
                   коридор÷окно. Одна стоянка или прыжки LO без перезаписи волны.
+                </span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={path === "digital"}
+                className={path === "digital" ? "cinema-path on" : "cinema-path"}
+                onClick={() => setPath("digital")}
+                title="Профиль подавления, очередь retune, волна на каждой частоте."
+              >
+                <strong>{DIGITAL_MODE_RU}</strong>
+                <span>
+                  Коридоры оператора. Ширина окна из профиля (по умолчанию 7 МГц).
+                  Приоритет выше — слоты 20 мкс AD9361, остальные NIOS.
+                  На каждой частоте пила, чирп, шум, тон или FM. Не DRFM и не обычная атака.
                 </span>
               </button>
             </div>

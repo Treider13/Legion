@@ -111,23 +111,18 @@ import {
   planOnboardIntercept,
 } from "../sense/fpgaFastpath";
 import {
-  armClassOk,
   bandTouchesC58,
   gridFromMeasuredFhss,
   matchSmartGrid,
-  SMART_ARM_CLASS_RU,
   SMART_GRID_ANALOG_RU,
-  SMART_GRID_EMPTY_RU,
   SMART_X40_C58_RU,
   type SmartGridCard,
 } from "../sense/smartGrid";
 import {
-  SMART_ARM_NEED_FHSS_RU,
-  SMART_ARM_PEAK_CLOSED_RU,
   fhssArmGate,
   pickFhssLook,
 } from "../sense/fhssArmGate";
-import { collapseHopTape, evalFhssConfirm, fhssCorridorBand } from "../sense/fhssCorridor";
+import { evalFhssConfirm } from "../sense/fhssCorridor";
 import { maskOwnTxOccupancy, occupancyHopCount } from "../sense/chHitsMask";
 import { fhssPersistOf, listenPersistHops } from "../sense/fhssPersist";
 import { openLoopShelfTxPlan } from "../sense/txShelf";
@@ -149,11 +144,13 @@ import {
   shouldContinuePriorityTick,
 } from "../sense/hold";
 import {
+  DIGITAL_MODE_RU,
   FPGA_AIR_MODE_RU,
   FPGA_AI_LABEL_RU,
   SMART_ARM_NEED_ACCEPT_RU,
   fpgaInnerDispatch,
   fpgaRunModeRu,
+  isDigitalPattern,
   isFpgaAirPattern,
   modeConflict,
   modeOf,
@@ -167,6 +164,7 @@ import {
   type AutoDispatch,
   type SdrWalkPattern,
 } from "../sense/modes";
+import type { DigitalChirpDir, DigitalCorridor, DigitalPresetId, DigitalWalk, DigitalWave } from "../sense/digitalMode";
 import {
   OWN_TX_GUARD_MHZ,
   markForwarded,
@@ -332,6 +330,19 @@ interface LegionStore {
   txGainMin: number;
   txGainMax: number;
   scanPattern: ScanPattern;
+  /** Цифровой режим: очередь профилей, не DRFM и не хост-атака. */
+  digitalLive: boolean;
+  digitalWalk: DigitalWalk;
+  digitalWave: DigitalWave;
+  digitalCorridors: DigitalCorridor[];
+  digitalStaticIndex: number;
+  digitalChirpDir: DigitalChirpDir;
+  digitalSawPeriodUs: number;
+  digitalAmp: number;
+  digitalToneWidthMhz: number;
+  digitalPreset: DigitalPresetId;
+  digitalProfileMhz: number;
+  digitalDwellMs: number;
   /** Фаза 1 умной атаки: Soapy слух, TX выкл, карточка живая. */
   smartListenLive: boolean;
   /** Фаза 2: карточка заморожена, ARM разрешён. */
@@ -493,6 +504,17 @@ interface LegionStore {
   setScanSensitivity(sens: number): void;
   setTxGain(db: number): Promise<void>;
   setScanPattern(p: ScanPattern): void;
+  setDigitalWalk(v: DigitalWalk): void;
+  setDigitalWave(v: DigitalWave): void;
+  setDigitalCorridors(v: DigitalCorridor[]): void;
+  setDigitalStaticIndex(v: number): void;
+  setDigitalChirpDir(v: DigitalChirpDir): void;
+  setDigitalSawPeriodUs(v: number): void;
+  setDigitalAmp(v: number): void;
+  setDigitalToneWidthMhz(v: number): void;
+  setDigitalPreset(v: DigitalPresetId): void;
+  setDigitalProfileMhz(v: number): void;
+  setDigitalDwellMs(v: number): void;
   setSmartPeakOverride(v: boolean): void;
   /** Заморозить карточку и ARM. Старт сам не ARM'ит. */
   acceptSmartGridAndArm(opts?: { peak?: boolean; acceptO4?: boolean }): Promise<boolean>;
@@ -913,6 +935,7 @@ const gAttackMemory = new AttackSessionMemory();
 /** Стоп обхода по замыслу гасит опрос статуса, не второй сканер. */
 let gDesignStop: (() => void) | null = null;
 let gDesignState = "";
+let gDesignNote = "";
 /** Записанные частоты обхода. Передать бьёт по ним. */
 let gDesignHopsMhz: number[] = [];
 let gDesignDwellUs = 1000;
@@ -1504,7 +1527,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     const gen = ++gLiveWave;
     const st = get();
     if (!st.transmitArmed || !gLive) return;
-    if (isFpgaAirPattern(st.scanPattern)) return;
+    if (isFpgaAirPattern(st.scanPattern) || isDigitalPattern(st.scanPattern)) return;
     const mhz = st.lastForwardMhz;
     if (mhz == null) return;
     const analog = catalogCaps(st.sdrId).analogBwMhz;
@@ -2678,6 +2701,18 @@ export const useLegion = create<LegionStore>((set, get) => {
     txGainMin: -23.75,
     txGainMax: 66,
     scanPattern: "auto",
+    digitalLive: false,
+    digitalWalk: "sequential",
+    digitalWave: "chirp",
+    digitalCorridors: [],
+    digitalStaticIndex: 0,
+    digitalChirpDir: "up",
+    digitalSawPeriodUs: 10,
+    digitalAmp: 0.9,
+    digitalToneWidthMhz: 0.5,
+    digitalPreset: "elrs_250",
+    digitalProfileMhz: 7,
+    digitalDwellMs: 4,
     smartListenLive: false,
     smartGridAccepted: false,
     smartGridCard: null,
@@ -2918,6 +2953,17 @@ export const useLegion = create<LegionStore>((set, get) => {
       });
       pushLog("sys", r.reason);
     },
+    setDigitalWalk: (v) => set({ digitalWalk: v }),
+    setDigitalWave: (v) => set({ digitalWave: v }),
+    setDigitalCorridors: (v) => set({ digitalCorridors: v }),
+    setDigitalStaticIndex: (v) => set({ digitalStaticIndex: Math.max(0, Math.floor(v)) }),
+    setDigitalChirpDir: (v) => set({ digitalChirpDir: v }),
+    setDigitalSawPeriodUs: (v) => set({ digitalSawPeriodUs: Number.isFinite(v) && v > 0 ? v : 10 }),
+    setDigitalAmp: (v) => set({ digitalAmp: Math.min(0.9, Math.max(0.05, v)) }),
+    setDigitalToneWidthMhz: (v) => set({ digitalToneWidthMhz: Number.isFinite(v) && v > 0 ? v : 0.5 }),
+    setDigitalPreset: (v) => set({ digitalPreset: v }),
+    setDigitalProfileMhz: (v) => set({ digitalProfileMhz: Number.isFinite(v) && v > 0 ? v : 7 }),
+    setDigitalDwellMs: (v) => set({ digitalDwellMs: Number.isFinite(v) && v > 0 ? v : 4 }),
     setScanPattern: (p) => {
       if (p === "auto") {
         gSmartAccepted = null;
@@ -2926,6 +2972,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           scanPattern: p,
           fpgaClass: null,
           smartListenLive: false,
+          digitalLive: false,
           smartGridAccepted: false,
           ...EMPTY_FHSS_PERSIST,
           ...(survey ?? {}),
@@ -2943,6 +2990,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         set({
           scanPattern: p,
           smartListenLive: false,
+          digitalLive: false,
           smartGridAccepted: false,
           smartGridCard: smart.smartGridCard,
           fhssCorridorReady: smart.fhssCorridorReady,
@@ -2967,6 +3015,7 @@ export const useLegion = create<LegionStore>((set, get) => {
       set({
         scanPattern: p,
         smartListenLive: false,
+        digitalLive: false,
         smartGridAccepted: false,
         smartGridCard: null,
         smartPeakOverride: false,
@@ -2997,122 +3046,45 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ARM уже идёт или плата занята`);
         return false;
       }
-      const seenDesign = gDesignHopsMhz.filter((hz) => hz > 0).slice(0, 256);
-      if (s.smartListenLive && s.scanRunning && seenDesign.length > 0) {
-        const seen = seenDesign;
-        const lo = Math.min(...seen);
-        const hi = Math.max(...seen);
-        const spanLo = seen.length === 1 ? lo - 0.5 : lo;
-        const spanHi = seen.length === 1 ? hi + 0.5 : hi;
-        gAcceptedHopsMhz = seen;
-        const analogLive = catalogCaps(s.sdrId).analogBwMhz;
-        const narrowedLive = fhssCorridorBand({
-          f1Mhz: spanLo,
-          f2Mhz: spanHi,
-          lookMhz: Math.max(0.2, spanHi - spanLo),
-          windowLimited: spanHi - spanLo > analogLive + 0.5,
-        });
-        set({
-          sdrBands: [narrowedLive],
-          sdrF1: String(Math.round(spanLo * 1000) / 1000),
-          sdrF2: String(Math.round(spanHi * 1000) / 1000),
-          smartGridAccepted: true,
-          fhssCorridorReady: true,
-          smartListenLive: true,
-          scanRunning: true,
-        });
-        pushLog(
-          "sys",
-          `${FPGA_AIR_MODE_RU}: коридор на экране ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Обход пишет дальше. Передать — удар по записанным частотам.`,
-        );
-        return true;
+      const f1 = parseFloat(String(s.sdrF1).replace(",", "."));
+      if (!Number.isFinite(f1)) {
+        pushLog("sys", `${FPGA_AIR_MODE_RU}: задайте начало коридора`);
+        return false;
       }
-      if (opts?.peak || s.smartPeakOverride) {
-        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_PEAK_CLOSED_RU}`);
-      }
-      const bands = get().sdrBands;
-      const analog = catalogCaps(s.sdrId).analogBwMhz;
+      const f2 = f1 + 56;
+      const band = { f1Mhz: f1, f2Mhz: f2 };
+      const bands = s.sdrBands.length > 0 ? s.sdrBands : [band];
       const card = publishSmartListen(s.sdrId, bands, { acceptO4: opts?.acceptO4 });
       if (card.analog) {
         gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false, fhssCorridorReady: false });
+        set({ smartGridCard: card, smartGridAccepted: false, fhssCorridorReady: false });
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ${card.reason || SMART_GRID_ANALOG_RU}`);
         return false;
       }
-      if (s.sdrId === "bladerf-x40" && (bandTouchesC58(bands) || card.reason === SMART_X40_C58_RU)) {
+      if (s.sdrId === "bladerf-x40" && (bandTouchesC58(bands) || bandTouchesC58([band]) || card.reason === SMART_X40_C58_RU)) {
         gSmartAccepted = null;
-        set({ smartGridCard: card, smartGridAccepted: false, smartPeakOverride: false, fhssCorridorReady: false });
+        set({ smartGridCard: card, smartGridAccepted: false, fhssCorridorReady: false });
         pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_X40_C58_RU}`);
         return false;
       }
-      const look = pickFhssLook(gSmartListen.looks);
-      const ev = evalFhssConfirm({
-        look,
-        hopsMhz: gSmartListen.hopsMhz,
-        analogMhz: analog,
-        persistPenalty: s.fhssPersistPenalty,
-      });
-      const armCard = ev.card;
-      if (!ev.ready || !ev.corridor || !armCard) {
-        gSmartAccepted = null;
-        set({
-          smartGridCard: card,
-          smartGridAccepted: false,
-          smartPeakOverride: false,
-          fhssCorridorReady: false,
-        });
-        pushLog(
-          "sys",
-          `${FPGA_AIR_MODE_RU}: ${ev.gate.reason || (card.empty ? card.reason || SMART_GRID_EMPTY_RU : SMART_ARM_NEED_FHSS_RU)}`,
-        );
-        return false;
-      }
-      if (!armClassOk(armCard)) {
-        gSmartAccepted = null;
-        set({
-          smartGridCard: card,
-          smartGridAccepted: false,
-          smartPeakOverride: false,
-          fhssCorridorReady: false,
-        });
-        pushLog("sys", `${FPGA_AIR_MODE_RU}: ${SMART_ARM_CLASS_RU}`);
-        return false;
-      }
-      captureSmartSurvey(s);
-      const seen = collapseHopTape(gSmartListen.hopsMhz);
-      if (seen.length < 1) {
-        pushLog("sys", `${FPGA_AIR_MODE_RU}: участок пуст — принять нечего`);
-        return false;
-      }
-      gSmartAccepted = armCard;
+      gSmartAccepted = null;
+      if (s.scanRunning || s.smartListenLive) get().stopScan();
       set({
-        smartGridCard: armCard,
+        sdrF1: String(f1),
+        sdrF2: String(f2),
+        sdrBands: [band],
+        scanPattern: "fpga",
+      });
+      get().startScan();
+      set({
+        smartListenLive: true,
         smartGridAccepted: true,
-        smartPeakOverride: false,
-        smartListenLive: false,
         fhssCorridorReady: true,
-        fpgaAirBwMhz: String(ev.corridor.lookMhz),
+        scanRunning: true,
       });
-      const lo = Math.min(...seen);
-      const hi = Math.max(...seen);
-      const spanLo = seen.length === 1 ? lo - 0.5 : lo;
-      const spanHi = seen.length === 1 ? hi + 0.5 : hi;
-      gAcceptedHopsMhz = seen;
-      const narrowed = fhssCorridorBand({
-        f1Mhz: spanLo,
-        f2Mhz: spanHi,
-        lookMhz: ev.corridor.lookMhz,
-        windowLimited: spanHi - spanLo > analog + 0.5,
-      });
-      set({
-        sdrBands: [narrowed],
-        sdrF1: String(Math.round(spanLo * 1000) / 1000),
-        sdrF2: String(Math.round(spanHi * 1000) / 1000),
-      });
-      get().stopScan();
       pushLog(
         "sys",
-        `${FPGA_AIR_MODE_RU}: коридор сужен ${spanLo.toFixed(3)}…${spanHi.toFixed(3)} МГц · ${seen.length} прыжков. Передать — удар по этому участку.`,
+        `${FPGA_AIR_MODE_RU}: коридор ${f1.toFixed(3)}…${f2.toFixed(3)} МГц, DRFM сдвиг 15000 Гц, удар 0.5 МГц, до Стоп`,
       );
       return true;
     },
@@ -5550,12 +5522,29 @@ export const useLegion = create<LegionStore>((set, get) => {
           pushLog("sys", txClock);
           return;
         }
+        if (isDigitalPattern(get().scanPattern) && s.sdrEmulation) {
+          pushLog("sys", `${DIGITAL_MODE_RU}: нужен bladeRF, не эмуляция`);
+          return;
+        }
+        if (isDigitalPattern(get().scanPattern) && !s.sdrEmulation) {
+          try {
+            const rx = await import("../sense/rxTest");
+            const note = await rx.startDigital();
+            set({ scanRunning: true, digitalLive: true, smartListenLive: false, scanSweepBins: [] });
+            pushLog("sys", note);
+            rx.watchDesignRx();
+          } catch (err) {
+            set({ scanRunning: false, digitalLive: false });
+            pushLog("sys", err instanceof Error ? err.message : String(err));
+          }
+          return;
+        }
         if (isFpgaAirPattern(get().scanPattern) && !s.sdrEmulation) {
           try {
             const rx = await import("../sense/rxTest");
             const note = await rx.startLive();
             set({ scanRunning: true, smartListenLive: true, scanSweepBins: [] });
-            pushLog("sys", `${note}. Окна 34 МГц, стоянка 4 мс, ряд клеится по отсчётам.`);
+            pushLog("sys", note);
             rx.watchDesignRx();
           } catch (err) {
             set({ scanRunning: false, smartListenLive: false });
@@ -5860,6 +5849,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         state?: string;
         windows?: number;
         window_i?: number;
+        note?: string;
       };
       try {
         msg = JSON.parse(line) as typeof msg;
@@ -5918,6 +5908,22 @@ export const useLegion = create<LegionStore>((set, get) => {
           `FHSS: ${hops.length} прыжков, задержка ${gDesignDwellUs} мкс. Передать открывает TX.`,
         );
       }
+      if (msg.note && msg.note !== gDesignNote) {
+        gDesignNote = msg.note;
+        pushLog("sys", msg.note);
+        const proposed = /коридор предложен ([\d.]+)-([\d.]+)/.exec(msg.note);
+        if (proposed) {
+          const a = Number(proposed[1]);
+          const b = Number(proposed[2]);
+          if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
+            set({
+              sdrF1: String(a),
+              sdrF2: String(b),
+              sdrBands: [{ f1Mhz: a, f2Mhz: b }],
+            });
+          }
+        }
+      }
       const state = msg.state ?? "";
       if (state && state !== gDesignState) {
         gDesignState = state;
@@ -5931,6 +5937,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     stopScan: () => {
       gDesignStop?.();
       gDesignState = "";
+      gDesignNote = "";
       gDesignHopsMhz = [];
       gDesignDwellUs = 1000;
       gDesignReady = false;
@@ -5941,7 +5948,9 @@ export const useLegion = create<LegionStore>((set, get) => {
         gScanTimer = null;
       }
       gWalker = null;
-      if (get().scanRunning || get().smartListenLive) set({ scanRunning: false, smartListenLive: false });
+      if (get().scanRunning || get().smartListenLive || get().digitalLive) {
+        set({ scanRunning: false, smartListenLive: false, digitalLive: false });
+      }
       // СТОП СКАН гасит только хост-FFT. FPGA+сканер стопается с вкладки СКАН
       // (fpgaDisarm) или СТОП ПЕРЕДАЧУ. Нельзя гасить PLAYER/NCO только потому,
       // что в меню выбран пункт «Умная атака».
@@ -5957,8 +5966,12 @@ export const useLegion = create<LegionStore>((set, get) => {
       if (isFpgaAirPattern(s.scanPattern)) {
         pushLog(
           "sys",
-          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}»: нижняя кнопка Передать бьёт по частотам, которые коридор уже записал`,
+          `ПЕРЕДАТЬ в режиме «${FPGA_AIR_MODE_RU}»: коридор задаёт Скан или поле от, удар — кнопка Принять`,
         );
+        return;
+      }
+      if (isDigitalPattern(s.scanPattern)) {
+        pushLog("sys", `ПЕРЕДАТЬ в режиме «${DIGITAL_MODE_RU}»: старт — Запустить, не эта кнопка`);
         return;
       }
       if (s.flashBusy) {

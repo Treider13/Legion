@@ -2,8 +2,22 @@
 import { bindDesignStop, useLegion } from "../state/store";
 import { hostClose } from "../sdr/hostClient";
 import { isTauriRuntime } from "../transport/types";
+import { autoTuneDigital, defaultDigitalCorridors, digitalTuneLine, type DigitalCorridor } from "./digitalMode";
 
-export const rxFields = { jam: 15, mute: 0, lna: 20 };
+export const SMART_CORRIDOR_MHZ = 56;
+export const SMART_JAM_MHZ = 0.5;
+export const SMART_SHIFT_HZ = 15000;
+export const SMART_LOOK_EVERY_MS = 100;
+export const SMART_LOOK_FOR_MS = 2;
+
+export const rxFields = {
+  shiftHz: SMART_SHIFT_HZ,
+  lookEveryMs: SMART_LOOK_EVERY_MS,
+  lookForMs: SMART_LOOK_FOR_MS,
+  lna: 20,
+  searchLo: "",
+  searchHi: "",
+};
 
 let replayArmed = false;
 const watchers = new Set<() => void>();
@@ -42,11 +56,8 @@ export function rxAvailable(): boolean {
 function corridorHz(): { fStartHz: number; fEndHz: number } | string {
   const s = useLegion.getState();
   const a = parseFloat(String(s.sdrF1).replace(",", "."));
-  const b = parseFloat(String(s.sdrF2).replace(",", "."));
-  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
-    return "коридор от и до — числа, до больше от";
-  }
-  return { fStartHz: a * 1e6, fEndHz: b * 1e6 };
+  if (!Number.isFinite(a)) return "коридор: задайте начало в мегагерцах";
+  return { fStartHz: a * 1e6, fEndHz: (a + SMART_CORRIDOR_MHZ) * 1e6 };
 }
 
 export async function primeAccepted(
@@ -76,14 +87,104 @@ export async function startLive(): Promise<string> {
   await invoke("legion_rx_test_start", {
     fStartHz: band.fStartHz,
     fEndHz: band.fEndHz,
-    jamDurationS: rxFields.jam,
-    muteNs: rxFields.mute,
+    jamDurationS: 0,
+    muteNs: 0,
     lnaGainDb: rxFields.lna,
     fromLog: false,
     live: true,
+    shiftHz: rxFields.shiftHz,
+    lookEveryMs: rxFields.lookEveryMs,
+    lookForMs: rxFields.lookForMs,
   });
   watchers.forEach((fn) => fn());
-  return "коридор: окна 34 МГц";
+  const mhz = band.fStartHz / 1e6;
+  return `коридор ${mhz.toFixed(3)}–${(mhz + SMART_CORRIDOR_MHZ).toFixed(3)} МГц, DRFM сдвиг ${rxFields.shiftHz} Гц, удар ${SMART_JAM_MHZ} МГц, до Стоп`;
+}
+
+export async function startDigital(): Promise<string> {
+  if (!rxAvailable()) return "это основное приложение, не браузер";
+  const s = useLegion.getState();
+  const f1 = parseFloat(String(s.sdrF1).replace(",", "."));
+  const f2 = parseFloat(String(s.sdrF2).replace(",", "."));
+  const corridors: DigitalCorridor[] = s.digitalCorridors.length
+    ? s.digitalCorridors
+    : defaultDigitalCorridors(f1, f2);
+  for (const c of corridors) {
+    if (!(c.endMhz > c.startMhz) || c.endMhz - c.startMhz > 56 + 1e-6) {
+      return "цифровой: каждый коридор не шире 56 МГц, конец больше начала";
+    }
+    if (!(c.priority > 0)) return "цифровой: приоритет должен быть больше нуля";
+  }
+  bindDesignStop(stopDesignWatch);
+  stopDesignWatch();
+  useLegion.getState().stopScan();
+  await hostClose();
+  try {
+    await invoke("legion_rx_test_stop");
+  } catch {
+    /* прошлого разбора нет */
+  }
+  await invoke("legion_rx_digital_start", {
+    job: {
+      corridors: corridors.map((c) => ({
+        start_hz: c.startMhz * 1e6,
+        end_hz: c.endMhz * 1e6,
+        priority: c.priority,
+      })),
+      walk: s.digitalWalk,
+      wave: s.digitalWave,
+      static_index: s.digitalStaticIndex,
+      chirp_dir: s.digitalChirpDir,
+      saw_period_s: s.digitalSawPeriodUs * 1e-6,
+      amp: s.digitalAmp,
+      tone_width_hz: s.digitalToneWidthMhz * 1e6,
+      seed: 1,
+      preset: s.digitalPreset,
+      profile_hz: s.digitalProfileMhz * 1e6,
+      dwell_s: s.digitalDwellMs * 1e-3,
+    },
+  });
+  watchers.forEach((fn) => fn());
+  watchDesignRx();
+  const tune = autoTuneDigital(corridors, s.digitalDwellMs, s.digitalProfileMhz);
+  return (
+    `цифровой: ${s.digitalPreset}, ${corridors.length} коридор(ов), ` +
+    `${digitalTuneLine(tune)}, ${s.digitalWalk}, ${s.digitalWave}, до Стоп`
+  );
+}
+
+export async function startSurvey(): Promise<string> {
+  if (!rxAvailable()) return "это основное приложение, не браузер";
+  const a = parseFloat(String(rxFields.searchLo).replace(",", "."));
+  const b = parseFloat(String(rxFields.searchHi).replace(",", "."));
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
+    return "скан: задайте поиск от и до, до больше от";
+  }
+  bindDesignStop(stopDesignWatch);
+  stopDesignWatch();
+  useLegion.getState().stopScan();
+  await hostClose();
+  try {
+    await invoke("legion_rx_test_stop");
+  } catch {
+    /* прошлого разбора нет */
+  }
+  await invoke("legion_rx_test_start", {
+    fStartHz: a * 1e6,
+    fEndHz: b * 1e6,
+    jamDurationS: 0,
+    muteNs: 0,
+    lnaGainDb: rxFields.lna,
+    fromLog: false,
+    live: true,
+    shiftHz: rxFields.shiftHz,
+    lookEveryMs: rxFields.lookEveryMs,
+    lookForMs: rxFields.lookForMs,
+    survey: true,
+  });
+  watchers.forEach((fn) => fn());
+  watchDesignRx();
+  return `скан ${a.toFixed(3)}–${b.toFixed(3)} МГц, коридор предложит сам`;
 }
 
 export async function startRx(fromLog: boolean): Promise<string> {
@@ -95,10 +196,13 @@ export async function startRx(fromLog: boolean): Promise<string> {
   await invoke("legion_rx_test_start", {
     fStartHz: band.fStartHz,
     fEndHz: band.fEndHz,
-    jamDurationS: rxFields.jam,
-    muteNs: rxFields.mute,
+    jamDurationS: 0,
+    muteNs: 0,
     lnaGainDb: rxFields.lna,
     fromLog,
+    shiftHz: rxFields.shiftHz,
+    lookEveryMs: rxFields.lookEveryMs,
+    lookForMs: rxFields.lookForMs,
   });
   watchers.forEach((fn) => fn());
   return fromLog ? "удар по загруженному логу" : "тест идёт — включи ELRS рядом";

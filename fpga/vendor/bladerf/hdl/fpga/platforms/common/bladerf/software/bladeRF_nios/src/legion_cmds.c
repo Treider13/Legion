@@ -177,6 +177,7 @@ static uint32_t legion_grid_pri_us;
 static int32_t  legion_grid_shift_hz;
 static uint32_t legion_grid_flags;
 static uint32_t legion_grid_rsv;
+static uint32_t legion_digital_ctrl;
 static uint32_t legion_ch_pwr_thr;
 static uint32_t legion_aim_ch = LEGION_AIM_NONE;
 static uint16_t legion_pwr[LEGION_CH_N];
@@ -899,6 +900,11 @@ static void legion_pio_poke(uint8_t addr, uint32_t data)
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80u | addr);
     IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x00);
+}
+
+bool legion_digital_on(void)
+{
+    return (legion_digital_ctrl & 1u) != 0;
 }
 
 void legion_hop_mute_arm(void)
@@ -3558,6 +3564,21 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
             }
             return legion_air_down();
 
+        case LEGION_REG_DIGITAL:
+            /* Третий режим. Не умная атака: LUT/walker/mute не трогают LO.
+             * CTRL в HDL = PASS, без air_down (эфир держит libbladeRF). */
+            legion_digital_ctrl = data & 1u;
+            if (legion_digital_ctrl) {
+                legion_scan_ctrl &= ~LEGION_SCAN_CTRL_EN;
+                legion_armed = false;
+                if ((legion_grid_flags & LEGION_GRID_FLAG_AUTONOMOUS) != 0) {
+                    legion_grid_flags &= ~LEGION_GRID_FLAG_AUTONOMOUS;
+                    legion_pio_poke(LEGION_REG_GRID_FLAGS, legion_grid_flags);
+                }
+                legion_pio_poke(LEGION_REG_CTRL, 0u);
+            }
+            return true;
+
         case LEGION_REG_CTRL:
 #if defined(BOARD_BLADERF_MICRO)
             /* ARM loopback без поднятого эфира — молчаливый отказ: иначе
@@ -3588,6 +3609,7 @@ bool legion_reg_write(uint8_t addr, uint32_t data)
                 /* DISARM: цифру гасим сразу (mux нули), эфир — честно.
                  * STANDBY отказ → запись CTRL=0 уже ушла, write не ok. */
                 legion_armed = false;
+                legion_digital_ctrl = 0;
                 legion_aim_clear();
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_WDATA_BASE, data);
                 IOWR_ALTERA_AVALON_PIO_DATA(LEGION_AWS_BASE, 0x80 | addr);
@@ -3844,6 +3866,10 @@ bool legion_reg_read(uint8_t addr, uint32_t *data)
         *data = legion_aim_ch;
         return true;
     }
+    if (addr == LEGION_REG_DIGITAL) {
+        *data = legion_digital_ctrl;
+        return true;
+    }
     if (addr == LEGION_REG_LT_STATUS) {
         *data = legion_mux_word(addr);
         return true;
@@ -4030,8 +4056,11 @@ static void legion_hop_on_slice_end(void)
 
 void legion_work(void)
 {
-    /* Граница стоянки не ждёт CTRL.ARM: удар идёт по FLAGS bit4. */
-    legion_hop_on_slice_end();
+    /* Граница стоянки не ждёт CTRL.ARM: удар идёт по FLAGS bit4.
+     * Цифровой режим эту сетку не трогает — у него schedule_retune. */
+    if (!legion_digital_on()) {
+        legion_hop_on_slice_end();
+    }
     /* Deadman без хоста: watchdog в FPGA сработал (heartbeat пропал), а ARM
      * жив → сам DISARM. Цифру mux уже заглушил (нули с каденсом); здесь
      * гасим остальное: CTRL=0 снимает ARM (expired липкий — без этого
@@ -4054,5 +4083,7 @@ void legion_work(void)
 #endif
         return;
     }
-    legion_scan_walk();
+    if (!legion_digital_on()) {
+        legion_scan_walk();
+    }
 }

@@ -183,7 +183,10 @@ package legion_pkg is
     constant LEGION_REG_HOP_STROBE_DATA  : natural := 16#62#;
     constant LEGION_REG_HOP_STROBE_APPLY : natural := 16#63#;
     constant LEGION_REG_HOP_MUTE_NS    : natural := 16#64#;
-    constant LEGION_REG_MAX            : natural := 16#64#;
+    -- Цифровой режим: только NIOS (HDL when others). bit0 = вкл.
+    -- schedule_retune не смешивается с hop LUT умной атаки.
+    constant LEGION_REG_DIGITAL        : natural := 16#65#;
+    constant LEGION_REG_MAX            : natural := 16#65#;
 
     constant LEGION_DRFM_STEP_SRC_LAB   : natural := 0;
     constant LEGION_DRFM_STEP_SRC_PROTO : natural := 1;

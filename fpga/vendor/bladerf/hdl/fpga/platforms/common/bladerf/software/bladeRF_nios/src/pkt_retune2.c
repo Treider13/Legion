@@ -210,12 +210,13 @@ static inline void profile_activate(bladerf_module module, fastlock_profile *p)
     rfic_invalidate_frequency(module);
 #endif  // BLADERF_NIOS_LIBAD936X
 
-    /* Молчание до отзыва, затем lo_khz в FPGA на той же метке. */
-    if (module == BLADERF_MODULE_TX) {
+    /* Умная атака: молчание и LUT на той же метке. Цифровой режим —
+     * только ADI recall, иначе mute глушит хост-волну на каждом шаге. */
+    if (module == BLADERF_MODULE_TX && !legion_digital_on()) {
         legion_hop_mute_arm();
     }
     adi_fastlock_recall(module, p);
-    if (module == BLADERF_MODULE_TX) {
+    if (module == BLADERF_MODULE_TX && !legion_digital_on()) {
         legion_hop_commit_lo(p->profile_num);
     }
 

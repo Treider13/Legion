@@ -22,11 +22,15 @@ export function bandListFor(mode: LegionMode): "sdrBands" | "allowBands" {
 /** Нельзя крутить коридор ESP32 и TX SDR одновременно — разные тракты. */
 /** Слушать антенну / обход полосы — не TX. ПЕРЕДАТЬ — авто на усилитель. */
 export type SdrRunIntent = "listen" | "transmit";
-export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop" | "fpga";
+export type SdrWalkPattern = "auto" | "sweep" | "band" | "hop" | "fpga" | "digital";
 export type AutoDispatch = "priority" | "turn" | "park";
 
 export function isFpgaAirPattern(pattern: SdrWalkPattern): boolean {
   return pattern === "fpga";
+}
+
+export function isDigitalPattern(pattern: SdrWalkPattern): boolean {
+  return pattern === "digital";
 }
 
 export function runIntentArmsTx(intent: SdrRunIntent): boolean {
@@ -59,13 +63,17 @@ export const FPGA_AIR_MODE_RU = "Умная атака";
 export const FPGA_AIR_MODE_RU_CAPS = "УМНАЯ АТАКА";
 export const FPGA_AIR_MODE_START_RU = "СТАРТ УМНОЙ АТАКИ";
 /** Фаза 2: подтвердить hop-коридор и ARM. Старт сам не ARM'ит. */
-export const FPGA_AIR_MODE_ACCEPT_RU = "Подтвердить коридор";
+export const FPGA_AIR_MODE_ACCEPT_RU = "Принять";
 export const SMART_ARM_NEED_ACCEPT_RU = "ARM без Подтвердить коридор запрещён";
 export const SMART_PEAK_OVERRIDE_RU = "пик без сетки закрыт — нужен FHSS";
 
 /** Имя хост-режима для оператора. Wire id — scanPattern="auto". */
 export const HOST_ATTACK_MODE_RU = "Атака";
 export const HOST_ATTACK_MODE_RU_CAPS = "АТАКА";
+
+/** Третий режим. Wire id — scanPattern="digital". Не умная и не обычная. */
+export const DIGITAL_MODE_RU = "Цифровой";
+export const DIGITAL_MODE_RU_CAPS = "ЦИФРОВОЙ";
 
 /** Короткое имя в UI. sweep = качание (реверс на краю), не «туда-сюда». */
 export function patternLabelRu(pattern: SdrWalkPattern): string {
@@ -80,6 +88,8 @@ export function patternLabelRu(pattern: SdrWalkPattern): string {
       return "СЛУЧАЙНАЯ";
     case "fpga":
       return FPGA_AIR_MODE_RU_CAPS;
+    case "digital":
+      return DIGITAL_MODE_RU_CAPS;
   }
 }
 
@@ -94,12 +104,14 @@ export function patternOptionRu(pattern: SdrWalkPattern): string {
     case "hop":
       return "СЛУЧАЙНАЯ TX (слух классов — СКАНИРОВАТЬ)";
     case "fpga":
-      return `${FPGA_AIR_MODE_RU} (слух Soapy → Подтвердить коридор → плата; USB не в круге)`;
+      return `${FPGA_AIR_MODE_RU} (коридор 56 МГц, DRFM, удар 0,5 МГц до Стоп)`;
+    case "digital":
+      return `${DIGITAL_MODE_RU} (профиль подавления → окна, очередь retune, волна на каждой частоте)`;
   }
 }
 
 export function scanRefusedReason(pattern: SdrWalkPattern): string | null {
-  if (detectorListens(pattern) || isFpgaAirPattern(pattern)) return null;
+  if (detectorListens(pattern) || isFpgaAirPattern(pattern) || isDigitalPattern(pattern)) return null;
   return `СКАНИРОВАТЬ: в режиме ${patternLabelRu(pattern)} слуха нет`;
 }
 
@@ -136,16 +148,27 @@ export function planSdrWork(pattern: SdrWalkPattern, dispatch: AutoDispatch = "t
   useFpgaAir: boolean;
   reason: string;
 } {
+  if (pattern === "digital") {
+    return {
+      useScanner: false,
+      openLoopTx: false,
+      useFpgaAir: false,
+      reason:
+        `${DIGITAL_MODE_RU}: коридоры оператора → профиль подавления задаёт ширину окна ` +
+        "(по умолчанию 7 МГц) и N. Очередь schedule_retune. " +
+        "На каждой частоте выбранная волна. Смена волны — стоп и старт. " +
+        "Умная атака и обычная атака сюда не входят.",
+    };
+  }
   if (pattern === "fpga") {
     return {
       useScanner: false,
       openLoopTx: false,
       useFpgaAir: true,
       reason:
-        `${FPGA_AIR_MODE_RU}: Старт — слух Soapy по F1…F2, TX выкл, пока FHSS или отмена. ` +
-        "Подтвердить коридор сжимает F1…F2 в hop-set и отдаёт один взгляд плате (lb_gated). " +
-        "Класс ≠ FHSS / unique < 3 / нет карточки look — ARM нет, GRID нет. Пик без сетки закрыт. " +
-        "Гейт в текущем взгляде — микросекунды. Живой канал last_live 1.5 с. USB не в круге увидел→усилитель.",
+        `${FPGA_AIR_MODE_RU}: Принять ставит коридор 56 МГц. ` +
+        "DRFM со сдвигом бьёт 0,5 МГц по найденному скачку до Стоп. " +
+        "Иногда TX молчит, чтобы приём увидел энергию. USB не в круге увидел→усилитель.",
     };
   }
   if (pattern === "auto") {

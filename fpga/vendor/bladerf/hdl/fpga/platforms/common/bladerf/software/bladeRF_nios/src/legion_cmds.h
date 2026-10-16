@@ -128,6 +128,9 @@
 #define LEGION_REG_HOP_STROBE_DATA  0x62
 #define LEGION_REG_HOP_STROBE_APPLY 0x63
 #define LEGION_REG_HOP_MUTE_NS    0x64
+/* Цифровой режим. Только NIOS (HDL when others). bit0=вкл.
+ * schedule_retune не зовёт hop mute/LUT умной атаки. mux → PASS. */
+#define LEGION_REG_DIGITAL        0x65  /* bit0: цифровой обход профилей */
 
 #define LEGION_SCAN_CTRL_EN       (1u << 0)
 #define LEGION_SCAN_CTRL_TURN     (1u << 1)
@@ -166,7 +169,7 @@
 #define LEGION_WALK_CTL_EN        (1u << 0)
 #define LEGION_WALK_CTL_AUTO      (1u << 1)
 #define LEGION_WALK_CTL_HOLD      (1u << 2)
-#define LEGION_REG_MAX            LEGION_REG_HOP_MUTE_NS
+#define LEGION_REG_MAX            LEGION_REG_DIGITAL
 #define LEGION_CH_ELRS_N          80u
 #define LEGION_CH_MODE_OCUSYNC    0u
 #define LEGION_CH_MODE_ELRS       1u
@@ -237,6 +240,8 @@ bool legion_reg_write(uint8_t addr, uint32_t data);
 /* Метка retune TX: молчание, затем lo_khz из таблицы профиля (0..7). */
 void legion_hop_mute_arm(void);
 void legion_hop_commit_lo(uint8_t profile_num);
+/* Цифровой режим (0x65 bit0): retune2 без hop, walker/LUT молчат. */
+bool legion_digital_on(void);
 bool legion_reg_read(uint8_t addr, uint32_t *data);
 
 /* Эфир micro: подъём/стендбай воздушного тракта через Nuand RFIC-интерфейс

@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 
 import { catalogById } from "../../sdr/catalog";
 import { rxStatus } from "../../sense/rxTest";
-import { isFpgaAirPattern, modeOf } from "../../sense/modes";
-import { recordedDesign, useLegion } from "../../state/store";
+import { isDigitalPattern, isFpgaAirPattern, modeOf } from "../../sense/modes";
+import { useLegion } from "../../state/store";
 import { connectionLabel } from "../graphite/connectionLabel";
-import { cinemaIsLive, type CinemaMode, runAcceptedTransmit, runCinemaStop, runSmartAccept } from "./run";
+import { cinemaIsLive, type CinemaMode, runCinemaStop, runSmartAccept, runSmartSurvey } from "./run";
 
 interface Props {
   mode: CinemaMode;
@@ -17,8 +17,7 @@ interface Props {
 export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
   const scanPattern = useLegion((s) => s.scanPattern);
   const smartListenLive = useLegion((s) => s.smartListenLive);
-  const fhssCorridorReady = useLegion((s) => s.fhssCorridorReady);
-  const smartGridAccepted = useLegion((s) => s.smartGridAccepted);
+  const digitalLive = useLegion((s) => s.digitalLive);
   const scanRunning = useLegion((s) => s.scanRunning);
   const transmitArmed = useLegion((s) => s.transmitArmed);
   const corridorRunning = useLegion((s) => s.corridorRunning);
@@ -51,7 +50,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
       stop = true;
     };
   }, []);
-  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending, smartListenLive }) || rxRun;
+  const live = cinemaIsLive({ scanRunning, transmitArmed, corridorRunning, signalTxActive, fpgaArmed, fpgaBusy, fpgaStopPending, smartListenLive, digitalLive }) || rxRun;
   const message = fpgaStopPending
     ? fpgaReleasing
       ? `Освобождаем соединение: ${fpgaStopReason ?? "ожидаем подтверждение шлюза"}`
@@ -60,7 +59,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
   return (
     <footer className="cinema-dock">
-      {mode === "sdr" && !isFpgaAirPattern(scanPattern) && (
+      {mode === "sdr" && !isFpgaAirPattern(scanPattern) && !isDigitalPattern(scanPattern) && (
         <label
           className="cinema-shelf"
           title="Ширина горба на анализаторе: часы и фильтр TX. Шум занимает это число. Тон и QPSK — нет. Шаг коридора только двигает центр."
@@ -107,30 +106,26 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Запустить
           </button>
         )}
-        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !smartGridAccepted && (scanRunning || smartListenLive) && !fpgaArmed && !fpgaBusy ? (
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
           <button
             type="button"
             className="cinema-go"
-            disabled={fpgaStopPending || !fhssCorridorReady}
+            disabled={fpgaStopPending}
             onClick={() => void runSmartAccept()}
-            title={fhssCorridorReady
-              ? "Сузить коридор до найденного участка FHSS"
-              : "Скан ещё идёт по всему коридору, не только по началу"}
+            title="Коридор 56 МГц. DRFM со сдвигом бьёт 0,5 МГц по скачку до Стоп"
           >
-            Принять коридор
+            Принять
           </button>
         ) : null}
-        {mode === "sdr" && isFpgaAirPattern(scanPattern) && (smartGridAccepted || scanRunning || smartListenLive) && !fpgaArmed && !fpgaBusy ? (
+        {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
           <button
             type="button"
             className="cinema-go"
-            disabled={fpgaStopPending || !recordedDesign().ready}
-            onClick={() => void runAcceptedTransmit()}
-            title={recordedDesign().ready
-              ? `${recordedDesign().hopsMhz.length} прыжков, задержка ${recordedDesign().dwellUs} мкс. Открыть TX`
-              : "Считаю число прыжков и задержку"}
+            disabled={fpgaStopPending}
+            onClick={() => void runSmartSurvey()}
+            title="Найти скачки в диапазоне поиска и предложить коридор 56 МГц. Ряд частот не склеивается."
           >
-            Передать
+            Скан
           </button>
         ) : null}
         {mode === "sdr" && isFpgaAirPattern(scanPattern) && !fpgaArmed && !fpgaBusy ? (
@@ -144,7 +139,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
             Шлюз
           </button>
         ) : null}
-        {mode === "sdr" && isFpgaAirPattern(scanPattern) ? null : transmitArmed ? (
+        {mode === "sdr" && (isFpgaAirPattern(scanPattern) || isDigitalPattern(scanPattern)) ? null : transmitArmed ? (
           <button type="button" className="cinema-go stop" onClick={() => void useLegion.getState().stopTransmit()}>
             Стоп передачу
           </button>
@@ -157,7 +152,7 @@ export function CinemaDock({ mode, onMode, onStart, onSettings }: Props) {
 
       <div className="cinema-dock-end">
         <p className="cinema-whisper" title={message}>
-            {message || "Запустить пишет прыжки по коридору. Передать бьёт по записанным частотам, умная атака."}
+            {message || "Скан предлагает коридор 56 МГц, либо задайте его сами. Принять включает DRFM, умная атака."}
         </p>
         <button type="button" className="cinema-btn ghost" onClick={onSettings}>
           Настройки

@@ -32,6 +32,7 @@ pub fn run() {
       legion_build::legion_build_status,
       legion_build::legion_build_cancel,
       rx_test::legion_rx_prime,
+      rx_test::legion_rx_digital_start,
       rx_test::legion_rx_test_start,
       rx_test::legion_rx_test_status,
       rx_test::legion_rx_test_stop,

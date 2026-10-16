@@ -21,6 +21,11 @@ QUEUE_SLOTS = 16
 MAX_PAIRS = 8
 # libbladeRF.h: принять «сейчас», не ждать метку 0 (она уже в прошлом → -14).
 BLADERF_META_FLAG_RX_NOW = 1 << 31
+BLADERF_META_FLAG_TX_BURST_START = 1 << 0
+BLADERF_META_FLAG_TX_BURST_END = 1 << 1
+BLADERF_META_FLAG_TX_NOW = 1 << 2
+BLADERF_TX = 1
+NIOS_SLOTS = 256
 # Коды libbladeRF.h. Отдельного кода «PLL» в API нет.
 BLADERF_ERR_UNEXPECTED = -1
 BLADERF_ERR_IO = -5
@@ -69,6 +74,14 @@ _LIB.bladerf_set_gain.restype = c_int
 _LIB.bladerf_sync_rx.argtypes = [
     c_void_p, c_void_p, c_uint, c_void_p, c_uint]
 _LIB.bladerf_sync_rx.restype = c_int
+_LIB.bladerf_sync_tx.argtypes = [
+    c_void_p, c_void_p, c_uint, c_void_p, c_uint]
+_LIB.bladerf_sync_tx.restype = c_int
+_LIB.bladerf_get_timestamp.argtypes = [c_void_p, c_int, POINTER(c_uint64)]
+_LIB.bladerf_get_timestamp.restype = c_int
+_LIB.bladerf_cancel_scheduled_retunes.argtypes = [c_void_p, c_int]
+_LIB.bladerf_cancel_scheduled_retunes.restype = c_int
+BLADERF_RETUNE_NOW = 0
 
 
 class _Meta(ctypes.Structure):
@@ -95,6 +108,7 @@ class UsbOwner:
         self.last_rc = 0
         self.last_fallback = False
         self.tune_fails = 0
+        self.digital_tunes: dict[int, _QuickTune] = {}
 
     def acquire(self, ident: str = "") -> int:
         rc = _LIB.bladerf_open(ctypes.byref(self.dev), ident.encode() or None)
@@ -108,10 +122,11 @@ class UsbOwner:
         self.dev = c_void_p()
 
     def configure(self, lo_hz: int, fs_hz: int, bw_hz: int,
-                  lna_db: int = 20) -> int:
-        """Частота, полоса и LNA на уже открытой плате. Консоль к этому моменту закрыта."""
+                  lna_db: int = 20, tx_only: bool = False) -> int:
+        """Частота и полоса. tx_only — цифровой режим: RX не поднимаем."""
         actual = c_uint()
-        for ch in (CH_RX, CH_TX):
+        chans = (CH_TX,) if tx_only else (CH_RX, CH_TX)
+        for ch in chans:
             rc = _LIB.bladerf_set_sample_rate(
                 self.dev, ch, c_uint(int(fs_hz)), ctypes.byref(actual))
             if rc != 0:
@@ -123,6 +138,8 @@ class UsbOwner:
             rc = _LIB.bladerf_set_frequency(self.dev, ch, c_uint64(int(lo_hz)))
             if rc != 0:
                 return int(rc)
+        if tx_only:
+            return 0
         return int(_LIB.bladerf_set_gain(self.dev, CH_RX, c_int(int(lna_db))))
 
     def set_frequency(self, lo_hz: int) -> int:
@@ -252,3 +269,73 @@ class UsbOwner:
             if rc != 0:
                 return rc
         return 0
+
+    def capture_one(self, key: int, lo_hz: int) -> int:
+        """Снимок только TX. Ключ 0..255, не лимит 8 слотов кристалла.
+
+        capture_pair не трогает. Повтор того же nios_profile — отказ.
+        """
+        key = int(key)
+        if not 0 <= key < NIOS_SLOTS:
+            return BLADERF_ERR_UNEXPECTED
+        qt = _QuickTune()
+        rc = self._set_frequency(CH_TX, lo_hz)
+        if rc != 0:
+            return rc
+        rc = int(_LIB.bladerf_get_quick_tune(
+            self.dev, CH_TX, ctypes.byref(qt)))
+        if rc != 0:
+            return rc
+        for other, prev in self.digital_tunes.items():
+            if other == key:
+                continue
+            if int(prev.nios_profile) == int(qt.nios_profile):
+                return BLADERF_ERR_UNEXPECTED
+        self.digital_tunes[key] = qt
+        return 0
+
+    def schedule_one(self, key: int, lo_hz: int, timestamp: int) -> int:
+        """Только TX. Одно место очереди. NULL quick_tune на xA4 не передаём."""
+        ts = c_uint64(int(timestamp))
+        freq = c_uint64(int(lo_hz))
+        self.last_fallback = False
+        qt = self.digital_tunes.get(int(key))
+        if qt is None:
+            self.last_fallback = True
+            return self._set_frequency(CH_TX, lo_hz)
+        rc = int(_LIB.bladerf_schedule_retune(
+            self.dev, CH_TX, ts, freq, ctypes.byref(qt)))
+        self.last_rc = rc
+        return rc
+
+    def cancel_one(self) -> int:
+        """Снять очередь TX. RX умной атаки не трогает."""
+        return int(_LIB.bladerf_cancel_scheduled_retunes(self.dev, CH_TX))
+
+    def get_timestamp(self, direction: int = BLADERF_TX) -> tuple[int, int]:
+        ts = c_uint64(0)
+        rc = int(_LIB.bladerf_get_timestamp(
+            self.dev, c_int(int(direction)), ctypes.byref(ts)))
+        return rc, int(ts.value)
+
+    def arm_tx_meta_stream(self) -> int:
+        """TX SC16_Q11_META. Нужен schedule_retune. RX-поток умной атаки не меняет."""
+        return int(_LIB.bladerf_sync_config(
+            self.dev, LAYOUT_TX_X1, FORMAT_SC16_Q11_META,
+            32, 8192, 16, 1000))
+
+    def write_sc16_tx(self, raw: bytes, timeout_ms: int = 1000,
+                      start: bool = False, end: bool = False) -> int:
+        """Первый кусок — старт пачки. Дальше без TX_NOW, чтобы метка росла."""
+        n = len(raw) // 4
+        if n <= 0:
+            return BLADERF_ERR_UNEXPECTED
+        buf = (ctypes.c_int16 * (n * 2)).from_buffer_copy(raw)
+        meta = _Meta()
+        if start:
+            meta.flags = BLADERF_META_FLAG_TX_BURST_START | BLADERF_META_FLAG_TX_NOW
+        elif end:
+            meta.flags = BLADERF_META_FLAG_TX_BURST_END
+        return int(_LIB.bladerf_sync_tx(
+            self.dev, ctypes.cast(buf, c_void_p), c_uint(n),
+            ctypes.byref(meta), c_uint(int(timeout_ms))))

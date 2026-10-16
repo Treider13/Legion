@@ -570,6 +570,35 @@ def run_test_headless(args) -> int:
     return 0 if app.fsm.test_file else 1
 
 
+def run_digital_headless(args) -> int:
+    """Цифровой режим. Умную атаку (--live) не вызывает."""
+    from .digital import job_from_args, run_live
+
+    cfg = _cfg_from_args(args)
+    job = job_from_args(args)
+    if job["corridors"]:
+        cfg["f_start_hz"] = float(job["corridors"][0].get("start_hz") or cfg["f_start_hz"])
+        cfg["f_end_hz"] = float(job["corridors"][0].get("end_hz") or cfg["f_end_hz"])
+        save_config(cfg)
+
+    stop = threading.Event()
+
+    def _stop(signum, frame):
+        stop.set()
+
+    install_shutdown(_stop)
+
+    def _note(line: str) -> None:
+        print(json.dumps({"kind": "rx", "running": True, "note": line, "digital": True},
+                         ensure_ascii=False), flush=True)
+
+    try:
+        return run_live(job, stop, note=_note)
+    finally:
+        print(json.dumps({"kind": "rx", "running": False, "note": "цифровой: стоп",
+                          "digital": True}, ensure_ascii=False), flush=True)
+
+
 def run_live_headless(args) -> int:
     """Коридор ровно 56 МГц от заданного начала. Удар до Стоп."""
     from .smart56 import CORRIDOR_HZ
@@ -653,11 +682,27 @@ def main() -> None:
     p.add_argument("--look-every-ms", type=float, default=None)
     p.add_argument("--look-for-ms", type=float, default=None)
     p.add_argument("--survey", action="store_true")
+    p.add_argument("--digital", action="store_true")
+    p.add_argument("--digital-walk", default=None)
+    p.add_argument("--digital-wave", default=None)
+    p.add_argument("--digital-static", type=int, default=0)
+    p.add_argument("--digital-chirp", default=None)
+    p.add_argument("--digital-saw-us", type=float, default=None)
+    p.add_argument("--digital-amp", type=float, default=None)
+    p.add_argument("--digital-tone-mhz", type=float, default=None)
+    p.add_argument("--digital-preset", default=None)
+    p.add_argument("--digital-profile-mhz", type=float, default=None)
+    p.add_argument("--digital-dwell-ms", type=float, default=None)
+    p.add_argument("--digital-refresh-s", type=float, default=None)
+    p.add_argument("--digital-collapse", type=int, default=None,
+                   help="1 схлопнуть одинаковые частоты, 0 оставить дубли")
     args = p.parse_args()
     if args.load:
         raise SystemExit(run_load(args.load))
     if args.test:
         raise SystemExit(run_test_headless(args))
+    if args.digital:
+        raise SystemExit(run_digital_headless(args))
     if args.live:
         raise SystemExit(run_live_headless(args))
     if args.run:

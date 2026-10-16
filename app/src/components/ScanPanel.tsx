@@ -3,11 +3,11 @@ import {
   autoDispatchOptionRu,
   FPGA_AIR_MODE_RU,
   FPGA_AIR_MODE_RU_CAPS,
-  FPGA_AI_OPTION_RU,
   FPGA_AIR_MODE_START_RU,
   FPGA_AIR_MODE_ACCEPT_RU,
   HOST_ATTACK_MODE_RU_CAPS,
-  fpgaInnerDispatch,
+  DIGITAL_MODE_RU_CAPS,
+  isDigitalPattern,
   isFpgaAirLive,
   isFpgaAirPattern,
   isFpgaTaskLive,
@@ -16,9 +16,9 @@ import {
   scannerParticipates,
   type AutoDispatch,
 } from "../sense/modes";
-import { airTractParams, FPGA_SURVEY_GONE_MS, fpgaAirSupported, fpgaObserveLine, fpgaTurnDwellClamp, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
+import { airTractParams, fpgaAirSupported, fpgaObserveLine, parseLocaleNumber, parkSpanMhz } from "../sense/fpgaFastpath";
 import type { ScanPattern } from "../sense/scan";
-import { stopRx } from "../sense/rxTest";
+import { SMART_CORRIDOR_MHZ, SMART_JAM_MHZ, SMART_LOOK_EVERY_MS, SMART_LOOK_FOR_MS, SMART_SHIFT_HZ, rxFields, stopRx } from "../sense/rxTest";
 import { catalogCaps } from "../sdr/hostClient";
 import { parseSdrRxBand } from "../sdr/catalog";
 import { WAVE_CATALOG, clampParams, waveMeta, type WaveKind } from "../sdr/waveforms";
@@ -44,6 +44,7 @@ import { useLegion } from "../state/store";
 import { LabJournalPanel } from "./LabJournalPanel";
 import { SpectrumScope } from "./SpectrumScope";
 import { SmartAttackFields } from "./cinema/SmartAttackStrip";
+import { DigitalFields } from "./cinema/DigitalStrip";
 
 export function ScanPanel() {
   const s = useLegion();
@@ -51,13 +52,13 @@ export function ScanPanel() {
   const f2 = s.sdrBands.length ? Math.max(...s.sdrBands.map((b) => b.f2Mhz)) : parseFloat(s.sdrF2) || 2500;
   const holdSec = s.sdrHoldSince != null ? Math.floor((Date.now() - s.sdrHoldSince) / 1000) : 0;
   const fpgaAir = isFpgaAirPattern(s.scanPattern);
+  const digital = isDigitalPattern(s.scanPattern);
   const airLive = isFpgaAirLive(s.fpgaArmed, s.fpgaMode);
   const taskLive = isFpgaTaskLive(s.fpgaArmed, s.fpgaMode);
   const listenLive = s.smartListenLive;
   const auto = scannerParticipates(s.scanPattern) && !taskLive && !airLive;
   const classLive = (detectorListens(s.scanPattern) || listenLive) && !taskLive && !airLive;
-  const interceptSetup = fpgaAir && !taskLive && !airLive;
-  const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed || listenLive;
+  const busy = s.scanRunning || s.transmitArmed || s.fpgaArmed || listenLive || s.digitalLive;
   const analogBw = catalogCaps(s.sdrId).analogBwMhz;
   const fpgaBands = s.sdrBands.length
     ? s.sdrBands
@@ -85,13 +86,45 @@ export function ScanPanel() {
     </label>
   );
 
+  if (digital && !taskLive) {
+    return (
+      <section className="panel" aria-label="Настройки цифрового режима">
+        <span className="panel-title">{DIGITAL_MODE_RU_CAPS}</span>
+        <p className="panel-note">
+          Коридоры любые, каждый не шире 56 МГц. Ширина окна — из профиля подавления
+          (по умолчанию 7 МГц). Плата скачет по снятым профилям и шлёт выбранный сигнал.
+          Умная атака и обычная сюда не входят.
+        </p>
+        <DigitalFields />
+        <div className="corr-grid">
+          <label>
+            РЕЖИМ
+            <select
+              aria-label="Режим работы SDR"
+              value={s.scanPattern}
+              onChange={(e) => s.setScanPattern(e.target.value as ScanPattern)}
+              disabled={busy}
+            >
+              <option value="auto">{patternOptionRu("auto")}</option>
+              <option value="fpga">{patternOptionRu("fpga")}</option>
+              <option value="digital">{patternOptionRu("digital")}</option>
+              <option value="sweep">{patternOptionRu("sweep")}</option>
+              <option value="band">{patternOptionRu("band")}</option>
+              <option value="hop">{patternOptionRu("hop")}</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    );
+  }
+
   if (fpgaAir && !taskLive) {
     return (
       <section className="panel" aria-label="Настройки умной атаки">
         <span className="panel-title">УМНАЯ АТАКА</span>
         <p className="panel-note">
-          Коридор, сколько секунд бить, пауза на смену стоянки и усиление приёма.
-          Окно приёма 34 МГц, его не меняют. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
+          Коридор любой, ширина всегда {SMART_CORRIDOR_MHZ} МГц. Принять находит скачок,
+          DRFM со сдвигом бьёт {SMART_JAM_MHZ} МГц до Стоп. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA.
         </p>
         <SmartAttackFields />
         <div className="corr-grid">
@@ -105,6 +138,7 @@ export function ScanPanel() {
             >
               <option value="auto">{patternOptionRu("auto")}</option>
               <option value="fpga">{patternOptionRu("fpga")}</option>
+              <option value="digital">{patternOptionRu("digital")}</option>
               <option value="sweep">{patternOptionRu("sweep")}</option>
               <option value="band">{patternOptionRu("band")}</option>
               <option value="hop">{patternOptionRu("hop")}</option>
@@ -130,7 +164,7 @@ export function ScanPanel() {
         {taskLive
           ? `Идёт FPGA-задача с вкладки ТИП СИГНАЛА (генерация/постоянная ретрансляция). Это не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан. Стоп — там или кнопкой ниже.`
           : fpgaAir
-            ? `${FPGA_AIR_MODE_RU}: Старт — слух Soapy по F1…F2, TX выкл. Подтвердить коридор сжимает hop-set и ARM (один взгляд). Класс ≠ FHSS / пустая / аналог 5.8 / x40+C58 — ARM нет. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. Гейт в текущем взгляде — микросекунды. Живой канал last_live ${FPGA_SURVEY_GONE_MS} мс. USB не в круге «увидел → усилитель».`
+            ? `${FPGA_AIR_MODE_RU}: коридор любой, ширина всегда ${SMART_CORRIDOR_MHZ} МГц. Принять находит скачок, DRFM со сдвигом ${SMART_SHIFT_HZ} Гц бьёт ${SMART_JAM_MHZ} МГц до Стоп. TX молчит каждые ${SMART_LOOK_EVERY_MS} мс на ${SMART_LOOK_FOR_MS} мс. Антенна на RX1 / RX SMA, усилитель на TX1 / TX SMA. USB не в круге «увидел → усилитель».`
             : airLive
               ? `Автономный эфир: детектор в FPGA, ретрансляция RX→TX по энергии на стоянке или обходе коридора с ноутбука (tune). Это не ${FPGA_AIR_MODE_RU.toLowerCase()}. Стоп — кнопкой ниже.`
               : `${HOST_ATTACK_MODE_RU_CAPS}: без рамки слух до ${ATTACK_LISTEN_ANALOG_MHZ} МГц. Рамка мышкой — коридор (может быть шире ${ATTACK_TX_MAX_MHZ} МГц; одно окно USB FD ≤${ATTACK_TX_MAX_MHZ}). Полка — горб на найденном, тип волны — чем заливаем полку. Выдержка — на каждой засечке, сессию гасит только Стоп передачу. Пунктир — предложение, не рамка. Без рамки — авто-handoff живой засечки той же полкой. Хост-скан и FPGA вместе не работают (один USB).`}
@@ -202,6 +236,7 @@ export function ScanPanel() {
           >
             <option value="auto">{patternOptionRu("auto")}</option>
             <option value="fpga">{patternOptionRu("fpga")}</option>
+            <option value="digital">{patternOptionRu("digital")}</option>
             <option value="sweep">{patternOptionRu("sweep")}</option>
             <option value="band">{patternOptionRu("band")}</option>
             <option value="hop">{patternOptionRu("hop")}</option>
@@ -209,101 +244,52 @@ export function ScanPanel() {
         </label>
         {fpgaAir && !taskLive && (
           <>
-            <label title="Минимальная энергия I²+Q², при которой открывается гейт. В перехвате порог задаёт оператор (полка USB-IQ в круге больше не меряется).">
-              ПОРОГ ЧУВСТВИТЕЛЬНОСТИ
-              <input
-                aria-label="Порог чувствительности детектора FPGA"
-                type="number"
-                min={1}
-                step={100}
-                value={s.fpgaDetThr}
-                onChange={(e) => s.setFpgaDetThr(parseFloat(e.target.value))}
-                disabled={busy || s.fpgaBusy}
-              />
+            <label title="Ширина коридора умной атаки. Всегда 56 МГц.">
+              КОРИДОР, МГц
+              <input aria-label="Ширина коридора умной атаки" value={String(SMART_CORRIDOR_MHZ)} readOnly />
             </label>
-            <label title="Ширина одного взгляда платы и шаг сетки LO (аналоговый фильтр). Уже — соседние частоты как разные стоянки; шире потолка платы — урежется.">
-              ВЗГЛЯД, МГц
+            <label title="Сдвиг DRFM. 15000 Гц.">
+              СДВИГ DRFM, Гц
               <input
-                aria-label="Ширина взгляда платы (аналоговый фильтр)"
-                type="number"
-                min={0.2}
-                max={analogBw}
-                step={0.2}
-                value={s.fpgaAirBwMhz}
-                onChange={(e) => s.setFpgaAirBwMhz(e.target.value)}
-                disabled={busy || s.fpgaBusy}
-              />
-            </label>
-            <label title="Лабораторный параметр: за какое окно сэмплов детектор усредняет энергию (2^N сэмплов). Больше окно — стабильнее порог, но медленнее реакция. Обычно менять не нужно.">
-              УСРЕДНЕНИЕ ДЕТЕКТОРА
-              <input
-                aria-label="Окно детектора FPGA"
-                type="number"
-                min={4}
-                max={12}
-                step={1}
-                value={s.fpgaDetShift}
-                onChange={(e) => s.setFpgaDetShift(parseFloat(e.target.value))}
-                disabled={busy || s.fpgaBusy}
-              />
-            </label>
-            <label title="Сколько миллисекунд держать усилитель на найденном сигнале внутри окна. Обычный и приоритет.">
-              ВЫДЕРЖКА НА СИГНАЛ мс
-              <input
-                aria-label="Выдержка на сигнал внутри окна"
-                type="number"
-                min={0.1}
-                max={60000}
-                step={0.1}
-                value={s.fpgaTurnDwellMs}
-                onChange={(e) => s.setFpgaTurnDwellMs(e.target.value)}
-                disabled={busy || s.fpgaBusy}
-              />
-            </label>
-            <label title="NIOS RESURVEY: occupancy текущего канала last_live 1.5 с. Не таймер периода прохода.">
-              ЖИВОЙ КАНАЛ
-              <input
-                aria-label="Occupancy last_live, не таймер сканирования"
-                value={`${FPGA_SURVEY_GONE_MS} мс last_live`}
-                readOnly
-                disabled
-              />
-            </label>
-            <label title="Живая линия задержки RX→TX после CDC. Не walk-off снимок. 0 — обход. 4096 сэмплов @ 2 MSPS ≈ 2 мс.">
-              DRFM ЗАДЕРЖКА
-              <input
-                aria-label="Живая задержка loopback в сэмплах"
+                aria-label="Сдвиг DRFM в герцах"
                 inputMode="numeric"
-                value={s.fpgaLbDelay}
-                onChange={(e) => s.setFpgaLbDelay(e.target.value)}
-                disabled={busy || s.fpgaBusy}
-              />
-            </label>
-            <label title="Частотный сдвиг после delayline (mesarcik). FTW=round(Гц/fs·2³²). 0 — обход смесителя.">
-              DRFM СДВИГ Гц
-              <input
-                aria-label="Частотный сдвиг loopback в герцах"
-                inputMode="numeric"
-                value={s.fpgaLbShiftHz}
-                onChange={(e) => s.setFpgaLbShiftHz(e.target.value)}
-                disabled={busy || s.fpgaBusy}
-              />
-            </label>
-          </>
-        )}
-        {interceptSetup && (
-          <>
-            <label>
-              В ОКНЕ
-              <select
-                aria-label="Обычный или приоритет внутри окна"
-                value={fpgaInnerDispatch(s.autoDispatch)}
-                onChange={(e) => s.setAutoDispatch(e.target.value as AutoDispatch)}
+                defaultValue={String(rxFields.shiftHz)}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value.replace(",", "."));
+                  if (Number.isFinite(n) && n >= 0) rxFields.shiftHz = n;
+                }}
                 disabled={busy}
-              >
-                <option value="turn">{autoDispatchOptionRu("turn")}</option>
-                <option value="priority">{autoDispatchOptionRu("priority")}</option>
-              </select>
+              />
+            </label>
+            <label title="Ширина удара по найденному скачку.">
+              УДАР, МГц
+              <input aria-label="Ширина удара" value={String(SMART_JAM_MHZ)} readOnly />
+            </label>
+            <label title="Как часто TX молчит, чтобы RX увидел энергию.">
+              ВЗГЛЯД КАЖДЫЕ, мс
+              <input
+                aria-label="Пауза TX для взгляда, период"
+                inputMode="decimal"
+                defaultValue={String(rxFields.lookEveryMs)}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value.replace(",", "."));
+                  if (Number.isFinite(n) && n > 0) rxFields.lookEveryMs = n;
+                }}
+                disabled={busy}
+              />
+            </label>
+            <label title="Сколько миллисекунд TX молчит во время взгляда.">
+              ВЗГЛЯД, мс
+              <input
+                aria-label="Длительность взгляда"
+                inputMode="decimal"
+                defaultValue={String(rxFields.lookForMs)}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value.replace(",", "."));
+                  if (Number.isFinite(n) && n > 0) rxFields.lookForMs = n;
+                }}
+                disabled={busy}
+              />
             </label>
           </>
         )}
@@ -448,11 +434,7 @@ export function ScanPanel() {
         {taskLive
           ? `FPGA-задача с вкладки ТИП СИГНАЛА — не ${FPGA_AIR_MODE_RU.toLowerCase()} и не хост-скан`
           : fpgaAir
-          ? `ретрансляция в FPGA, окно ${fpgaWindowUs.toFixed(1)} µs. ${FPGA_AI_OPTION_RU}. ${
-              fpgaInnerDispatch(s.autoDispatch) === "turn"
-                ? `Обычный: выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс на сигнал · last_live ${FPGA_SURVEY_GONE_MS} мс`
-                : `Приоритет: сильнее — перескок и новая выдержка ${fpgaTurnDwellClamp(parseLocaleNumber(s.fpgaTurnDwellMs))} мс · last_live ${FPGA_SURVEY_GONE_MS} мс`
-            }${s.smartGridCard ? ` · ${s.smartGridCard.reason}` : ""}`
+          ? `коридор ${SMART_CORRIDOR_MHZ} МГц, DRFM сдвиг ${SMART_SHIFT_HZ} Гц, удар ${SMART_JAM_MHZ} МГц, взгляд каждые ${SMART_LOOK_EVERY_MS} мс на ${SMART_LOOK_FOR_MS} мс, до Стоп`
           : auto
             ? s.attackPaint
               ? "Атака: рамка — где ищем. Полка и волна — что уходит на найденное. ПЕРЕДАТЬ жмёте вы."
@@ -573,11 +555,9 @@ export function ScanPanel() {
               </button>
               <button
                 className="btn-primary"
-                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId) || !s.fhssCorridorReady}
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
                 onClick={() => void s.acceptSmartGridAndArm()}
-                title={s.fhssCorridorReady
-                  ? "Сжать F1…F2 в hop-set и ARM. Один взгляд платы."
-                  : "Ждём класс FHSS (unique ≥ 3) или отмену слуха."}
+                title="Коридор 56 МГц. DRFM со сдвигом, удар 0,5 МГц до Стоп."
               >
                 {FPGA_AIR_MODE_ACCEPT_RU}
               </button>
@@ -588,17 +568,15 @@ export function ScanPanel() {
                 className="btn-primary"
                 disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
                 onClick={() => void s.startScan()}
-                title="Слух Soapy по коридору, TX выкл. ARM только после Подтвердить коридор."
+                title="Коридор 56 МГц. Принять находит скачок и бьёт 0,5 МГц до Стоп."
               >
                 {FPGA_AIR_MODE_START_RU}
               </button>
               <button
                 className="btn-ghost"
-                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId) || !s.fhssCorridorReady}
+                disabled={s.fpgaBusy || !fpgaAirSupported(s.sdrId)}
                 onClick={() => void s.acceptSmartGridAndArm()}
-                title={s.fhssCorridorReady
-                  ? "Подтвердить hop-коридор без нового слуха."
-                  : "Нет FHSS look — подтвердить нельзя."}
+                title="Коридор 56 МГц. DRFM со сдвигом, удар 0,5 МГц до Стоп."
               >
                 {FPGA_AIR_MODE_ACCEPT_RU}
               </button>
@@ -645,7 +623,7 @@ export function ScanPanel() {
       </div>
       {fpgaAir && !taskLive && (
         <p className="sens-hint">
-          {FPGA_AIR_MODE_RU}: окно {fpgaWindowUs.toFixed(1)} µs · канал {tract.bwMhz} МГц · коридор{" "}
+          {FPGA_AIR_MODE_RU}: коридор {SMART_CORRIDOR_MHZ} МГц, удар {SMART_JAM_MHZ} МГц, до Стоп. Коридор{" "}
           {fpgaSpan > 0 ? fpgaSpan.toFixed(1) : "—"} / analog {analogBw} МГц
           {!fpgaAirSupported(s.sdrId)
             ? " — нужен bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR"
@@ -709,7 +687,7 @@ export function ScanPanel() {
               ? s.lastCueReason ||
                 (!fpgaAirSupported(s.sdrId)
                   ? `${FPGA_AIR_MODE_RU}: выберите bladeRF 2.0 micro xA4/xA9 или bladeRF 1 x40 на вкладке SDR`
-                  : `${FPGA_AIR_MODE_RU}: СТАРТ — слух Soapy, Подтвердить коридор — ARM${s.smartGridCard ? ` · ${s.smartGridCard.reason}` : ""}`)
+                  : `${FPGA_AIR_MODE_RU}: коридор 56 МГц, DRFM, удар 0,5 МГц до Стоп`)
               : s.lastCueReason || "режим и ПЕРЕДАТЬ — решение оператора"}
       </p>
       {airLive && s.fpgaStatus && (

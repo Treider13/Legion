@@ -285,6 +285,38 @@ static int rfic_idx(uint8_t cmd, uint8_t ch, uint64_t want)
     }
     return -1;
 }
+
+/* hop_recall в legion_cmds.c тянет fastlock. На ПК это стабы, не эфир. */
+fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
+fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
+
+void rfic_invalidate_frequency(bladerf_module module)
+{
+    (void)module;
+}
+
+void adi_fastlock_load(bladerf_module m, fastlock_profile *p)
+{
+    (void)m;
+    (void)p;
+}
+
+void adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
+{
+    (void)m;
+    (void)p;
+}
+
+void adi_rfport_select(fastlock_profile *p)
+{
+    (void)p;
+}
+
+void adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
+{
+    (void)m;
+    (void)p;
+}
 #endif /* HAVE_RFIC */
 
 /* ---------------- Мини-раннер ---------------- */
@@ -2531,6 +2563,51 @@ int main(void)
     legion_reg_write(LEGION_REG_GRID_F0_HZ, 0);
     legion_reg_write(LEGION_REG_GRID_STEP_HZ, 0);
     legion_reg_write(LEGION_REG_CTRL, 0);
+
+    /* Цифровой режим: защёлка 0x65. Walker и hop LUT умной атаки молчат. */
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+    legion_reg_write(LEGION_REG_GRID_FLAGS, LEGION_GRID_FLAG_AUTONOMOUS);
+    pio_n = 0;
+    CHECK("цифровой: запись", legion_reg_write(LEGION_REG_DIGITAL, 1));
+    {
+        uint32_t d = 0, sc = 0, gf = 0;
+        CHECK("цифровой: readback",
+              legion_reg_read(LEGION_REG_DIGITAL, &d) && d == 1);
+        CHECK("цифровой: SCAN снят",
+              legion_reg_read(LEGION_REG_SCAN_CTRL, &sc) &&
+              (sc & LEGION_SCAN_CTRL_EN) == 0);
+        CHECK("цифровой: hop LUT снят",
+              legion_reg_read(LEGION_REG_GRID_FLAGS, &gf) &&
+              (gf & LEGION_GRID_FLAG_AUTONOMOUS) == 0);
+    }
+    CHECK("цифровой: mux PASS без air_down",
+          pio_wrote_reg(LEGION_REG_CTRL, 0));
+    legion_reg_write(LEGION_REG_SCAN_F1_KHZ, 2400000);
+    legion_reg_write(LEGION_REG_SCAN_F2_KHZ, 2500000);
+    legion_reg_write(LEGION_REG_AIR_BW_HZ, 28000000);
+    legion_reg_write(LEGION_REG_SCAN_CTRL, LEGION_SCAN_CTRL_EN);
+#ifdef HAVE_RFIC
+    rfic_n = 0;
+#else
+    lms_n = 0;
+#endif
+    CHECK("цифровой: ARM после защёлки",
+          legion_reg_write(LEGION_REG_CTRL, 0x1u));
+    t_status = 0;
+    t_tamer += (uint64_t)34000000 * 20 / 1000 + 1;
+    legion_work();
+#ifdef HAVE_RFIC
+    CHECK("цифровой: scan не шагает LO", rfic_n == 0);
+#else
+    CHECK("цифровой: scan не шагает LO", lms_n == 0);
+#endif
+    CHECK("цифровой: DISARM", legion_reg_write(LEGION_REG_CTRL, 0));
+    {
+        uint32_t d = 1;
+        CHECK("цифровой: DISARM снимает защёлку",
+              legion_reg_read(LEGION_REG_DIGITAL, &d) && d == 0);
+    }
+    legion_reg_write(LEGION_REG_SCAN_CTRL, 0);
 
     printf(fails ? "NIOS WORK: %d FAILURES\n" : "NIOS WORK: ALL PASS\n", fails);
     return fails ? 1 : 0;

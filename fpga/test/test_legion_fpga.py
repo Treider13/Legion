@@ -191,6 +191,7 @@ py_map = {
     "LEGION_REG_LT_WIDTH": lf.REG_LT_WIDTH,
     "LEGION_REG_LT_STATUS": lf.REG_LT_STATUS,
     "LEGION_REG_HOP_LUT": lf.REG_HOP_LUT,
+    "LEGION_REG_DIGITAL": lf.REG_DIGITAL,
 }
 
 v, n = vhdl_consts(), nios_consts()

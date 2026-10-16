@@ -186,9 +186,11 @@ import {
   autoDispatchLabelRu,
   autoDispatchOptionRu,
   FPGA_AI_LABEL_RU,
+  DIGITAL_MODE_RU_CAPS,
   FPGA_AIR_MODE_ACCEPT_RU,
   SMART_ARM_NEED_ACCEPT_RU,
   fpgaInnerDispatch,
+  isDigitalPattern,
   hostListenActive,
   autoForwardAllowed,
   bandListFor,
@@ -209,6 +211,12 @@ import {
   shouldKeepTransmit,
   walkPatternArmsTx,
 } from "../src/sense/modes";
+import {
+  DIGITAL_PRESETS,
+  autoTuneDigital,
+  corridorCentersMhz,
+  digitalWalkUs,
+} from "../src/sense/digitalMode";
 import {
   decideCue,
   decideForward,
@@ -693,6 +701,31 @@ async function main(): Promise<void> {
   check("FPGA+сканер стартует (не хост-FFT)", scanRefusedReason("fpga") === null);
   check("онбордовый перехват: хост-сканер не в круге", scannerParticipates("fpga") === false);
   check("умная атака имя", patternLabelRu("fpga") === "УМНАЯ АТАКА");
+  check("цифровой имя", patternLabelRu("digital") === DIGITAL_MODE_RU_CAPS);
+  check("цифровой не умная и не сканер", isDigitalPattern("digital") && !isFpgaAirPattern("digital") && !scannerParticipates("digital"));
+  check("СКАНИРОВАТЬ в цифровом можно", scanRefusedReason("digital") === null);
+  check("hostListenActive цифровой выкл", !hostListenActive("digital") && !hostListenActive("digital", true));
+  check("planSdrWork цифровой: не сканер не FPGA",
+    !planSdrWork("digital").useScanner && !planSdrWork("digital").useFpgaAir && !planSdrWork("digital").openLoopTx);
+  const digitalOne = [{ startMhz: 2400, endMhz: 2456, priority: 1 }];
+  const tune250 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_250.dwellMs, DIGITAL_PRESETS.elrs_250.profileMhz);
+  const tune500 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_500.dwellMs, DIGITAL_PRESETS.elrs_500.profileMhz);
+  const tune50 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_50.dwellMs, DIGITAL_PRESETS.elrs_50.profileMhz);
+  check("цифровой автонастройка 250: 8 окон 160 мкс 25 кругов",
+    tune250.n === 8 && tune250.walkUs === 160 && tune250.budgetUs === 1000 && tune250.fits && tune250.circles === 25);
+  check("цифровой автонастройка 500: 12 кругов влезает",
+    tune500.n === 8 && tune500.budgetUs === 500 && tune500.circles === 12 && tune500.fits);
+  check("цифровой автонастройка 50 Гц: 16 окон 3.5 МГц",
+    tune50.n === 16 && tune50.profileMhz === 3.5 && tune50.walkUs === 960 && tune50.fits);
+  check("цифровой сетка 7 МГц 2400–2456",
+    corridorCentersMhz(2400, 2456, 7)[0] === 2403.5 && corridorCentersMhz(2400, 2456, 7).at(-1) === 2452.5);
+  check("цифровой бюджет 8/16/32",
+    digitalWalkUs(8) === 160 && digitalWalkUs(16) === 960 && digitalWalkUs(32) === 2560);
+  check("цифровой без выдуманного Crossfire 915",
+    !("crossfire_915" in DIGITAL_PRESETS) && "crossfire_868_150" in DIGITAL_PRESETS);
+  check("цифровой Crossfire 868 из 1/150 и 1/50",
+    Math.abs(DIGITAL_PRESETS.crossfire_868_150.dwellMs - 1000 / 150) < 1e-9
+    && DIGITAL_PRESETS.crossfire_868_50.dwellMs === 20);
   check("isFpgaAirPattern", isFpgaAirPattern("fpga") && !isFpgaAirPattern("auto"));
   check("FPGA без сканера = player/nco/always", isFpgaTaskMode("player") && isFpgaTaskMode("nco") && isFpgaTaskMode("lb_always"));
   check("lb_gated не задача с ноутбука", isFpgaTaskMode("lb_gated") === false);
@@ -704,10 +737,10 @@ async function main(): Promise<void> {
   check("planSdrWork FPGA: плата смотрит эфир, хост-сканер не в круге",
     fpgaWork.useFpgaAir && !fpgaWork.useScanner && !fpgaWork.openLoopTx);
   check("planSdrWork FPGA: USB не в круге увидел→усилитель", fpgaWork.reason.includes("USB не в круге"));
-  check("planSdrWork FPGA: две фазы Старт/Подтвердить коридор", fpgaWork.reason.includes("Подтвердить коридор") && fpgaWork.reason.includes("last_live"));
+  check("planSdrWork FPGA: коридор 56 МГц и Принять", fpgaWork.reason.includes("56") && fpgaWork.reason.includes("Принять"));
   check("hostListenActive: fpga только в фазе слуха",
     !hostListenActive("fpga") && hostListenActive("fpga", true) && hostListenActive("auto"));
-  check("Подтвердить коридор подпись", FPGA_AIR_MODE_ACCEPT_RU === "Подтвердить коридор");
+  check("Принять подпись", FPGA_AIR_MODE_ACCEPT_RU === "Принять");
   check("ARM без Подтвердить коридор — строка", SMART_ARM_NEED_ACCEPT_RU.includes("Подтвердить коридор"));
   check("occupancy last_live 1.5 с, не SCAN_SURVEY", FPGA_SURVEY_GONE_MS === 1500);
   check("СКАНИРОВАТЬ в качании — слух классов", scanRefusedReason("sweep") === null);
@@ -2409,12 +2442,14 @@ async function main(): Promise<void> {
   check("кино перехват: scanPattern=fpga, карточка не принята",
     autoSt.scanPattern === "fpga" && autoSt.smartGridAccepted === false && autoSt.fpgaArmed === false);
   const denyEmpty = await runSmartAccept();
-  check("кино Подтвердить пустую сетку — отказ, ARM нет",
-    denyEmpty === false && useLegion.getState().fpgaArmed === false && peekSmartAccepted() === null);
+  const emptyNow = useLegion.getState();
+  check("кино Принять без сетки ставит коридор 56 МГц, ARM нет",
+    denyEmpty === true && emptyNow.fpgaArmed === false && peekSmartAccepted() === null
+    && emptyNow.sdrBands.length === 1
+    && Math.abs(emptyNow.sdrBands[0]!.f2Mhz - emptyNow.sdrBands[0]!.f1Mhz - 56) < 0.01);
   const peakAcc = await runSmartAccept({ peak: true });
-  check("кино пик без сетки закрыт — ARM нет",
-    peakAcc === false && useLegion.getState().smartGridAccepted === false && useLegion.getState().fpgaArmed === false
-    && peekSmartAccepted() === null);
+  check("кино пик не мешает Принять, ARM нет",
+    peakAcc === true && useLegion.getState().fpgaArmed === false && peekSmartAccepted() === null);
   useLegion.getState().setSdrAllowField("sdrF1", "2000");
   useLegion.getState().setSdrAllowField("sdrF2", "3000");
   useLegion.getState().clearSdrBands();
@@ -2422,12 +2457,12 @@ async function main(): Promise<void> {
   seedSmartListenForTest(sampleFhssAttackLook(), [2400.4, 2401.4, 2410.4, 2450.4]);
   const fhssAcc = await runSmartAccept();
   const afterFhss = useLegion.getState();
-  check("кино Подтвердить FHSS: коридор сжат, один взгляд, эмуляция ARM нет",
+  check("кино Принять: коридор 2000–2056, сетка не нужна, ARM нет",
     fhssAcc === true && afterFhss.smartGridAccepted === true && afterFhss.fpgaArmed === false
-    && peekSmartAccepted() != null && peekSmartAccepted()!.n === 51
+    && peekSmartAccepted() === null
     && afterFhss.sdrBands.length === 1
-    && afterFhss.sdrBands[0]!.f2Mhz - afterFhss.sdrBands[0]!.f1Mhz <= 56.5
-    && Number(afterFhss.fpgaAirBwMhz) <= 56);
+    && afterFhss.sdrBands[0]!.f1Mhz === 2000
+    && afterFhss.sdrBands[0]!.f2Mhz === 2056);
   await useLegion.getState().stopFpgaAir();
   useLegion.setState({ sdrId: "bladerf-x40", sdrBands: [{ f1Mhz: 5725, f2Mhz: 5850 }] });
   useLegion.getState().setScanPattern("fpga");
@@ -2736,12 +2771,32 @@ async function main(): Promise<void> {
   check("cinema air: окно шага → канал подавления", runSrc.includes("setFpgaAirBwMhz(opts.windowMhz)"));
   check("cinema: путь умной атаки в мастере",
     gateSrc.includes("FPGA_AIR_MODE_RU") && gateSrc.includes('path === "auto"'));
+  check("cinema: путь цифрового в мастере",
+    gateSrc.includes('path === "digital"') && gateSrc.includes("DIGITAL_MODE_RU") && runSrc.includes('opts.path === "digital"'));
+  const digitalScan = storeSrc.slice(storeSrc.indexOf("isDigitalPattern(get().scanPattern) && !s.sdrEmulation"), storeSrc.indexOf("if (isFpgaAirPattern(get().scanPattern) && !s.sdrEmulation)"));
+  check("startScan цифровой не ставит smartListenLive",
+    digitalScan.includes("digitalLive: true") && digitalScan.includes("startDigital") && !digitalScan.includes("smartListenLive: true"));
+  const digitalStripSrc = readFileSync(join(here, "../src/components/cinema/DigitalStrip.tsx"), "utf8");
+  const digitalRxSrc = readFileSync(join(here, "../src/sense/rxTest.ts"), "utf8");
+  const digitalPySrc = readFileSync(join(here, "../../host/legion_rx/digital.py"), "utf8");
+  check("цифровой UI: профиль подавления и ширина окна",
+    digitalStripSrc.includes("Профиль подавления") && digitalStripSrc.includes("DIGITAL_PRESETS")
+    && digitalStripSrc.includes("setPreset(\"custom\")"));
+  check("startDigital шлёт preset/profile/dwell",
+    digitalRxSrc.includes("preset: s.digitalPreset") && digitalRxSrc.includes("profile_hz:")
+    && digitalRxSrc.includes("dwell_s:"));
+  check("store держит digitalPreset",
+    storeSrc.includes("digitalPreset: \"elrs_250\"") && storeSrc.includes("setDigitalPreset"));
+  check("digital.py: пресеты и TX-only, без 915",
+    digitalPySrc.includes("def apply_preset") && digitalPySrc.includes("tx_only=True")
+    && !digitalPySrc.includes("crossfire_915") && digitalPySrc.includes("crossfire_868_150"));
+  check("cinema digital: заголовок профиль подавления",
+    gateSrc.includes("Профиль подавления") && !gateSrc.includes("Профили 7 МГц"));
   check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
     gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
-  check("cinema перехват: стратегии приоритет/обычный на шаге walk",
-    gateSrc.includes("autoDispatchOptionRu") && gateSrc.includes('setDispatch("turn")')
-    && gateSrc.includes('setDispatch("priority")') && !gateSrc.includes('setDispatch("park")')
-    && (gateSrc.split("fpgaTurnDwellClamp").length - 1) >= 3);
+  check("cinema перехват: коридор 56 МГц, удар 0,5, до Стоп",
+    gateSrc.includes("56") && gateSrc.includes("0,5") && gateSrc.includes("Стоп")
+    && !gateSrc.includes('setDispatch("park")'));
   const autoBlock = runSrc.slice(runSrc.indexOf('opts.path === "auto"'), runSrc.indexOf("s.armTxWave"));
   check("cinema auto: startScan, не startFpgaPath",
     autoBlock.includes("s.startScan()") && !autoBlock.includes("startFpgaPath"));
@@ -2767,8 +2822,8 @@ async function main(): Promise<void> {
     gateSrc.includes("Порог чувствительности") && runSrc.includes("setFpgaDetThr(parseFloat(opts.detThr))"));
   // Регрессия: окно детектора в мастере — от реального канала (fs следует за
   // полосой), а не фиксированные 8 мкс при любом канале.
-  check("cinema перехват: окно детектора от канала (airTractParams), не константа",
-    gateSrc.includes("airTractParams(parseLocaleNumber(windowMhz), analogMax, detShift)"));
+  check("cinema перехват: ширина коридора 56, не окно детектора",
+    gateSrc.includes("SMART_CORRIDOR_MHZ") && !gateSrc.includes("airTractParams("));
   const navSrc = readFileSync(join(here, "../src/components/WorkspaceNav.tsx"), "utf8");
   const fieldSrc = readFileSync(join(here, "../src/components/cinema/FrequencyField.tsx"), "utf8");
   const scopeSrc = readFileSync(join(here, "../src/components/SpectrumScope.tsx"), "utf8");
@@ -2786,7 +2841,7 @@ async function main(): Promise<void> {
     gateSrc.includes("TX1 / TX SMA"));
   check("UI не врёт «сканирование каждые»",
     !gateSrc.includes("сканирование каждые") && !scanSrc.includes("сканирование каждые")
-    && gateSrc.includes("last_live") && scanSrc.includes("last_live")
+    && scanSrc.includes("56 МГц") && scanSrc.includes("0,5")
     && scanSrc.includes("FPGA_AIR_MODE_ACCEPT_RU") && dockSrc.includes("runSmartAccept"));
   const fastpathSrc = readFileSync(join(here, "../src/sense/fpgaFastpath.ts"), "utf8");
   check("жаргон убран: WorkspaceNav без «FPGA+сканер»", !navSrc.includes("FPGA+сканер"));
@@ -2886,14 +2941,14 @@ async function main(): Promise<void> {
     storeSrc.includes("SMART_ARM_NEED_ACCEPT_RU") &&
     storeSrc.slice(storeSrc.indexOf("const startOnboardIntercept"), storeSrc.indexOf("const fpgaReturnToScan"))
       .includes("smartGridAccepted"));
-  check("acceptSmartGridAndArm замораживает карточку look",
-    storeSrc.includes("acceptSmartGridAndArm") && storeSrc.includes("gSmartAccepted = armCard"));
+  check("acceptSmartGridAndArm не собирает старую карточку прыжков",
+    storeSrc.includes("acceptSmartGridAndArm") && !storeSrc.includes("gSmartAccepted = armCard"));
   {
     const acceptFn = storeSrc.slice(storeSrc.indexOf("acceptSmartGridAndArm:"), storeSrc.indexOf("setAttackPaint:"));
-    check("Подтвердить: analog / x40+C58 / нет FHSS отказ; peak закрыт",
+    check("Принять: analog и x40+C58 отказ, коридор 56 МГц",
       acceptFn.includes("card.analog") && acceptFn.includes("SMART_X40_C58_RU")
-      && acceptFn.includes("evalFhssConfirm") && acceptFn.includes("SMART_ARM_PEAK_CLOSED_RU")
-      && acceptFn.includes("fhssCorridorBand") && acceptFn.includes("acceptO4"));
+      && acceptFn.includes("acceptO4") && acceptFn.includes("f1 + 56")
+      && !acceptFn.includes("evalFhssConfirm") && !acceptFn.includes("fhssCorridorBand"));
   }
   {
     const onboard = storeSrc.slice(

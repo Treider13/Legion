@@ -3,11 +3,12 @@
 import { WAVE_AMP_MAX, type WaveKind } from "../../sdr/waveforms";
 import type { FpgaSoloPattern } from "../../sense/fpgaSoloWalk";
 import type { AutoDispatch } from "../../sense/modes";
-import { primeAccepted, stopRx } from "../../sense/rxTest";
-import { recordedDesign, useLegion } from "../../state/store";
+import { SMART_CORRIDOR_MHZ, startSurvey, stopRx } from "../../sense/rxTest";
+import { defaultDigitalCorridors } from "../../sense/digitalMode";
+import { useLegion } from "../../state/store";
 
 export type CinemaMode = "sdr" | "esp32";
-export type FpgaStartPath = "solo" | "air" | "auto";
+export type FpgaStartPath = "solo" | "air" | "auto" | "digital";
 
 export async function runSmartStart(opts: {
   f1: string;
@@ -33,8 +34,23 @@ export async function runSmartStart(opts: {
   s.setSdrAllowField("sdrF2", opts.f2);
   s.clearSdrBands();
   s.setSdrLoad(opts.loadOk);
+  if (opts.path === "digital") {
+    const f1n = parseFloat(String(opts.f1).replace(",", "."));
+    const f2n = parseFloat(String(opts.f2).replace(",", "."));
+    s.setScanPattern("digital");
+    if (!s.digitalCorridors.length) s.setDigitalCorridors(defaultDigitalCorridors(f1n, f2n));
+    s.startScan();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8000) {
+      const st = useLegion.getState();
+      if (st.digitalLive || st.scanRunning) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  }
   if (opts.path === "auto") {
-    // Фаза 1: слух Soapy. ARM только после Подтвердить коридор.
+    const f1n = parseFloat(String(opts.f1).replace(",", "."));
+    if (Number.isFinite(f1n)) s.setSdrAllowField("sdrF2", String(f1n + SMART_CORRIDOR_MHZ));
     s.setScanPattern("fpga");
     if (opts.dispatch) s.setAutoDispatch(opts.dispatch === "priority" ? "priority" : "turn");
     if (opts.windowMhz !== undefined) s.setFpgaAirBwMhz(opts.windowMhz);
@@ -80,28 +96,10 @@ export async function runSmartAccept(opts?: { peak?: boolean; acceptO4?: boolean
   return useLegion.getState().acceptSmartGridAndArm(opts);
 }
 
-export async function runAcceptedTransmit(): Promise<string> {
-  const s = useLegion.getState();
-  const { hopsMhz, dwellUs, ready } = recordedDesign();
-  if (!ready || hopsMhz.length < 2) {
-    s.noteSys("Передать: ещё считаю число прыжков и задержку");
-    return "ещё считаю";
-  }
-  const a = parseFloat(String(s.sdrF1).replace(",", "."));
-  const b = parseFloat(String(s.sdrF2).replace(",", "."));
-  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) {
-    s.noteSys("Передать: коридор от и до пуст");
-    return "коридор пуст";
-  }
-  try {
-    await primeAccepted(a * 1e6, b * 1e6, hopsMhz, dwellUs);
-  } catch (err) {
-    const text = err instanceof Error ? err.message : "не записал ряд";
-    s.noteSys(`Передать: ${text}`);
-    return text;
-  }
-  s.noteSys(`Передать: ${hopsMhz.length} прыжков, задержка ${dwellUs} мкс, TX открыт`);
-  return `удар по ${hopsMhz.length} прыжкам`;
+export async function runSmartSurvey(): Promise<string> {
+  const note = await startSurvey();
+  useLegion.getState().noteSys(note);
+  return note;
 }
 
 export async function runSimpleStart(opts: { f1: string; f2: string; loadOk: boolean }): Promise<void> {
@@ -142,6 +140,7 @@ export function cinemaIsLive(s: {
   fpgaBusy: boolean;
   fpgaStopPending?: boolean;
   smartListenLive?: boolean;
+  digitalLive?: boolean;
 }): boolean {
-  return s.scanRunning || s.smartListenLive === true || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending === true;
+  return s.scanRunning || s.smartListenLive === true || s.digitalLive === true || s.transmitArmed || s.corridorRunning || s.signalTxActive || s.fpgaArmed || s.fpgaBusy || s.fpgaStopPending === true;
 }
