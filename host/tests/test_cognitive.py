@@ -706,6 +706,25 @@ def _freqs_inside(fsm, n, start_mhz=2410.0, step=0.5):
     return out
 
 
+def test_column_gap_is_not_the_hop_delay():
+    """31 мкс — соседний столбец БПФ, не задержка прыжка. На плате так
+    первая стоянка кончается сразу и HDL молчит до Стоп."""
+    fpga = lf.LegionFpga(FakeTransport(board="bladerf2"))
+    fsm = CognitiveFSM(PatternStore(), M, 34e6, 2440e6, fpga=fpga,
+                       scan_corridor=(2400e6, 2500e6), ibw_hz=34e6)
+    fsm.sweeper.setup(2400e6, 2500e6)
+    hops = []
+    t = 1.0
+    for _ in range(8):
+        hops.append({"t_start": t, "window": 0, "freq_mhz": 2410.0, "hole": False})
+        t += 31e-6
+        hops.append({"t_start": t, "window": 0, "freq_mhz": 2420.0, "hole": False})
+        t += 1.0e-3
+    fsm._note_hop_gaps(hops)
+    med = fsm._hop_period_s()
+    assert 200e-6 < med < 2e-3, med
+
+
 def test_operator_replay_opens_tx_on_the_recorded_list():
     """Пока кнопки нет, обход молчит. Передать открывает удар по записанному ряду.
     В записи с кнопки нет sequence_type: из-за этого живое радио падало
@@ -817,24 +836,20 @@ def test_narrow_cycle_closes_on_repeat_and_partial_does_not_count():
 
 
 def test_live_radio_loop_imports_listening():
-    """Живой цикл сравнивает состояние LISTENING. Имя обязано быть импортировано,
-    иначе поток радио падает и коридор остаётся на стартовой строке."""
-    import ast
+    """Живой коридор — умная атака 56 МГц, не обход окон и не список прыжков."""
     import inspect
-    import textwrap
 
     from legion_rx.pipeline import _run_cognitive_live
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(_run_cognitive_live)))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "cognitive":
-            imported.update(alias.name for alias in node.names)
-    assert {"LISTENING", "INITIAL_SCAN", "LEARNING", "CONFIRMING"} <= imported
+    src = inspect.getsource(_run_cognitive_live)
+    assert "run_live" in src
+    assert "smart56" in src
+    assert "LISTENING" not in src
 
 
-def test_live_retune_keeps_rx_running():
-    """Смена окна не гасит приём. Иначе после первого окна кадров больше нет."""
+def test_live_retune_rearms_the_stream_after_the_lo():
+    """set_frequency на живом sync_rx не возвращается. Поток гасим, несём
+    частоту и поднимаем sync заново. Иначе коридор навсегда на первом окне."""
     from legion_rx.pipeline import retune_live_lo
 
     order = []
@@ -847,8 +862,46 @@ def test_live_retune_keeps_rx_running():
             order.append(("lo", int(hz)))
             return 0
 
+        def arm_meta_stream(self):
+            order.append(("arm",))
+            return 0
+
     assert retune_live_lo(_Usb(), 2412000000) == 0
-    assert order == [("lo", 2412000000)]
+    assert order == [
+        ("rx", False), ("lo", 2412000000), ("arm",), ("rx", True)]
+
+
+def test_live_retune_writes_tx_lo_while_rx_is_down():
+    """xA4: гетеродин передачи отдельный. Пока приём погашен, та же частота
+    пишется и в него. Скан без also_tx передачу не трогает."""
+    from legion_rx.pipeline import retune_live_lo
+
+    order = []
+
+    class _Usb:
+        def enable_rx(self, on):
+            order.append(("rx", bool(on)))
+
+        def set_frequency(self, hz):
+            order.append(("rx-lo", int(hz)))
+            return 0
+
+        def set_tx_frequency(self, hz):
+            order.append(("tx-lo", int(hz)))
+            return 0
+
+        def arm_meta_stream(self):
+            order.append(("arm",))
+            return 0
+
+    assert retune_live_lo(_Usb(), 2412000000, also_tx=True) == 0
+    assert order == [
+        ("rx", False),
+        ("rx-lo", 2412000000),
+        ("tx-lo", 2412000000),
+        ("arm",),
+        ("rx", True),
+    ]
 
 
 def test_weak_burst_beside_loud_one_is_kept_and_one_frame_is_not():

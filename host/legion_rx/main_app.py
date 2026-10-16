@@ -440,35 +440,21 @@ def _cfg_from_args(args) -> dict:
         cfg["mute_ns"] = int(args.mute)
     if args.lna is not None:
         cfg["lna_gain_db"] = float(args.lna)
+    if getattr(args, "shift_hz", None) is not None:
+        cfg["freq_shift_hz"] = float(args.shift_hz)
+    if getattr(args, "look_every_ms", None) is not None:
+        cfg["look_every_s"] = float(args.look_every_ms) / 1000.0
+    if getattr(args, "look_for_ms", None) is not None:
+        cfg["look_for_s"] = float(args.look_for_ms) / 1000.0
+    cfg["survey"] = bool(getattr(args, "survey", False))
     save_config(cfg)
     return cfg
 
 
 def _design_hops(fsm) -> list:
-    """Записанные частоты коридора. Кнопка Передать бьёт по этому списку."""
-    ready = getattr(fsm, "_heard_ready", None)
-    if ready:
-        return [round(float(x), 3) for x in list(ready)[:256]]
-    order = getattr(fsm, "_bin_order", None) or []
-    hits = getattr(fsm, "_bin_hits", None) or {}
-    mhz = getattr(fsm, "_bin_mhz", None) or {}
-    heard = [round(float(mhz[b]), 3) for b in order
-             if hits.get(b, 0) >= 1 and b in mhz]
-    if heard:
-        return heard[:256]
-    sweeper = getattr(fsm, "sweeper", None)
-    if sweeper is None:
-        return []
-    try:
-        rows = sweeper.stitch()
-    except Exception:
-        return []
-    out = []
-    for hop in rows:
-        freq = hop.get("freq_mhz")
-        if freq:
-            out.append(round(float(freq), 3))
-    return out[:256]
+    """Умная атака не собирает ряд частот и не склеивает окна."""
+    del fsm
+    return []
 
 
 def _emit_rx(app: App, running: bool) -> None:
@@ -534,7 +520,8 @@ def _stream(app: App, until_file: bool) -> None:
     from .test_capture import maybe_save_test
 
     while not app._stop_live.is_set():
-        _take_operator_go(app)
+        if until_file:
+            _take_operator_go(app)
         _emit_rx(app, True)
         if until_file and getattr(app.fsm, "test_file", None):
             break
@@ -584,16 +571,23 @@ def run_test_headless(args) -> int:
 
 
 def run_live_headless(args) -> int:
-    """Коридор F1–F2, lo_sweep по 34 МГц, пока не придёт Стоп."""
+    """Коридор ровно 56 МГц от заданного начала. Удар до Стоп."""
+    from .smart56 import CORRIDOR_HZ
     from .test_capture import clear_replay
 
     cfg = _cfg_from_args(args)
+    if not cfg.get("survey"):
+        cfg["f_end_hz"] = float(cfg["f_start_hz"]) + CORRIDOR_HZ
+        save_config(cfg)
     clear_replay()
     app = App(cfg, True)
     _arm_operator(app)
     app.fsm.replay_pattern = None
     app.fsm.test_on = False
-    app.fsm.test_note = "коридор: окна 34 МГц, 4 мс"
+    app.fsm.test_note = (
+        f"коридор {cfg['f_start_hz'] / 1e6:.3f}–{cfg['f_end_hz'] / 1e6:.3f} МГц, "
+        "DRFM, удар 0,5 МГц, до Стоп"
+    )
 
     def _stop(signum, frame):
         app._stop_live.set()
@@ -655,6 +649,10 @@ def main() -> None:
     p.add_argument("--jam", type=float)
     p.add_argument("--mute", type=int)
     p.add_argument("--lna", type=float)
+    p.add_argument("--shift-hz", type=float, default=None)
+    p.add_argument("--look-every-ms", type=float, default=None)
+    p.add_argument("--look-for-ms", type=float, default=None)
+    p.add_argument("--survey", action="store_true")
     args = p.parse_args()
     if args.load:
         raise SystemExit(run_load(args.load))

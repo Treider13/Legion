@@ -126,11 +126,23 @@ class UsbOwner:
         return int(_LIB.bladerf_set_gain(self.dev, CH_RX, c_int(int(lna_db))))
 
     def set_frequency(self, lo_hz: int) -> int:
-        """Только LO. set_sample_rate на живом потоке срывает окно."""
+        """Только LO приёма. set_sample_rate на живом потоке срывает окно."""
         return int(_LIB.bladerf_set_frequency(self.dev, CH_RX, c_uint64(int(lo_hz))))
+
+    def set_tx_frequency(self, lo_hz: int) -> int:
+        """LO передачи. На xA4 он отдельный от приёма."""
+        return self._set_frequency(CH_TX, int(lo_hz))
 
     def enable_rx(self, on: bool = True) -> int:
         return int(_LIB.bladerf_enable_module(self.dev, CH_RX, on))
+
+    def enable_tx(self, on: bool = True) -> int:
+        return int(_LIB.bladerf_enable_module(self.dev, CH_TX, on))
+
+    def set_bandwidth(self, ch: int, hz: int) -> int:
+        actual = c_uint()
+        return int(_LIB.bladerf_set_bandwidth(
+            self.dev, int(ch), c_uint(int(hz)), ctypes.byref(actual)))
 
     def read_sc16(self, n_samples: int, timeout_ms: int = 1000):
         """SC16_Q11_META. Буфер — голые IQ, метка в metadata.timestamp."""

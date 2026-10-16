@@ -876,9 +876,8 @@ class _UsbLive:
                     else:
                         req = int(self._tune_req)
                         if req and req != applied:
-                            # Между кадрами, модуль не гасим. enable_rx(False)
-                            # на каждом окне обрывает sync_rx: дальше кадров нет,
-                            # и коридор навсегда остаётся на первом окне.
+                            # set_frequency на живом sync_rx не возвращается,
+                            # насос держит блокировку, коридор замирает.
                             retune_live_lo(self.usb, req)
                             applied = req
                             self._tune_done = req
@@ -1023,381 +1022,45 @@ def frame_air_span(sample_count: int, n_samples: int, fs_hz: float):
     return t0, t0 + float(n_samples) / float(fs_hz)
 
 
-def retune_live_lo(usb, lo_hz: int) -> int:
-    """Несущая между кадрами, в потоке приёма. Модуль остаётся включённым.
+def retune_live_lo(usb, lo_hz: int, also_tx: bool = False) -> int:
+    """Несущая между кадрами. Поток останавливаем, частоту меняем, поток поднимаем.
 
-    Выключение приёма на каждом окне обрывает sync_rx: следующие кадры
-    не приходят, водопад замирает на первом окне коридора.
+    set_frequency поверх живого sync_rx не возвращается: насос держит
+    блокировку, на экране остаётся начало коридора. enable_rx(True) без
+    нового sync_config кадры не возвращает — окно так и не сменяется.
+    also_tx — тот же герц в канал передачи, пока приём ещё выключен.
+    На xA4 это другой гетеродин: запись только приёма оставляет передачу
+    на прежней стоянке.
     """
-    return int(usb.set_frequency(int(lo_hz)))
+    def _code(v) -> int:
+        return 0 if v is None else int(v)
+
+    usb.enable_rx(False)
+    rc = _code(usb.set_frequency(int(lo_hz)))
+    tx_rc = 0
+    if also_tx and hasattr(usb, "set_tx_frequency"):
+        tx_rc = _code(usb.set_tx_frequency(int(lo_hz)))
+    armed = _code(usb.arm_meta_stream())
+    enabled = _code(usb.enable_rx(True))
+    if rc != 0:
+        return rc
+    if tx_rc != 0:
+        return tx_rc
+    if armed != 0:
+        return armed
+    return enabled
 
 
 def _run_cognitive_live(args, log: JsonLog, pub: "UdpPublisher | None",
-                        fsm=None, stop_event=None, note=None) -> int:
-    """Живой IQ: UsbOwner → FIFO → C-читатель → спектр кадра → FSM."""
-    from .cognitive import (CONFIRMING, CognitiveFSM, INITIAL_SCAN, LEARNING,
-                             LISTENING)
-    from .lo_sweep import plan_windows, stitch_power, window_hz
-    from .pattern_store import PatternStore
-    from . import fpga_control as fc
-
+                         fsm=None, stop_event=None, note=None) -> int:
+    """Умная атака: коридор 56 МГц, один скачок, DRFM, до Стоп."""
     span = _corridor_span(args)
     if span is None:
-        print("cognitive --live: нужен --corridor F_START F_END",
-              file=sys.stderr)
+        if note:
+            note("коридор не задан")
         return 2
-    f1, f2 = span
-    fs = float(fc.AIR_FS_HZ)
-    ibw = window_hz(fc.AIR_FS_HZ)
-    # Фильтр платы = окно обхода. 20 МГц здесь оставляло дыры между стоянками.
-    args.bw = ibw
-    windows = plan_windows(f1, f2, ibw)
-    lo = float(windows[0]["f_center"])
-    log.write({"kind": "live", "f_start": f1, "f_end": f2,
-               "fs_rx_hz": fs, "fpga_fs_hz": fc.AIR_FS_HZ,
-               "usb_owner": "libbladeRF",
-               "lo_hz": lo, "windows": len(windows),
-               "lo_sweep": (f2 - f1) > ibw})
-    if not _preflight(args, log):
-        return 2
-    radio = _UsbLive(args, fs, lo)
-    radio.start()
-    fpga = _UsbHandoff(radio)
-    if fsm is None:
-        store = PatternStore()
-        fsm = CognitiveFSM(store, args.n_chans, fs, lo, fpga=fpga, pub=pub,
-                           radio=_RxProxy(radio), scan_corridor=(f1, f2),
-                           frame_dt_s=args.frame_samples / fs,
-                           frame_samples=args.frame_samples, ibw_hz=ibw)
-    else:
-        store = fsm.store
-        fsm.lo_hz = lo
-        fsm.fs_hz = fs
-        fsm.ibw_hz = ibw
-        fsm.fpga = fpga
-        fsm.pub = pub
-        fsm.sweeper.ibw_hz = ibw
-        fsm.sweeper.fs_hz = fs
-        fsm.sweeper.radio = _RxProxy(radio)
-    fsm.usb = radio.usb
-    fsm.usb_io = radio
-    fsm.fpga_fs_hz = fc.AIR_FS_HZ
-    fsm.lna_gain_db = float(getattr(args, "lna", 20))
-    frames = 0
-    if (f2 - f1) > ibw:
-        fsm.sweeper.arm_sample_dwell()
-    _LIVE["fsm"] = fsm
-    _LIVE["radio"] = radio
-    paint_q: queue.Queue = queue.Queue(maxsize=1)
-    log_q: queue.Queue = queue.Queue(maxsize=64)
-    side_stop = threading.Event()
-    win_acc: dict = {}
-
-    def _paint_log() -> None:
-        while not side_stop.is_set() or not paint_q.empty() or not log_q.empty():
-            item = None
-            try:
-                item = paint_q.get(timeout=0.05)
-            except queue.Empty:
-                item = None
-            if item is not None and pub is not None:
-                kind = item[0]
-                if kind == "pass":
-                    _tag, segments, wins = item
-                    stitched = stitch_power(segments, wins, fs)
-                    if stitched is not None:
-                        row, f_a, f_b = stitched
-                        pub.send_wf_row(row, f_start_hz=f_a, f_end_hz=f_b)
-                        pub.send_spec(row)
-                else:
-                    _tag, spec, lo_hz = item
-                    spec = np.asarray(spec, dtype=np.float64)
-                    half = 0.5 * float(fs)
-                    pub.send_wf_row(
-                        spec,
-                        f_start_hz=float(lo_hz) - half,
-                        f_end_hz=float(lo_hz) + half)
-                    pub.send_spec(spec)
-            try:
-                rec_line = log_q.get_nowait()
-            except queue.Empty:
-                rec_line = None
-            if rec_line is not None:
-                log.write(rec_line)
-            if side_stop.is_set() and paint_q.empty() and log_q.empty():
-                break
-
-    side = threading.Thread(target=_paint_log, daemon=True, name="live-paint")
-    side.start()
-    tail = {"freqs": None, "t": 0.0}
-    glimpse_n = {"n": 0}
-
-    def _glimpse(iq, lo_hz: float) -> None:
-        """Короткий спектр кадра, пока ряд ещё считается. Водопад не ждёт БПФ стоянки."""
-        nfft = 1024
-        wins_now = fsm.sweeper.windows
-        if (pub is None or int(getattr(iq, "size", 0)) < nfft
-                or len(wins_now) < 2):
-            return
-        if fsm.state not in (INITIAL_SCAN, LEARNING, CONFIRMING):
-            return
-        window = np.hanning(nfft)
-        chunk = np.asarray(iq[:nfft], dtype=np.complex64)
-        spec = np.fft.fftshift(np.fft.fft(chunk * window))
-        lin = np.abs(spec).astype(np.float64) ** 2
-        idx = int(fsm.sweeper.idx)
-        slot = win_acc.get(idx)
-        if slot is None:
-            win_acc[idx] = [lin, 1, float(lo_hz)]
-        else:
-            slot[0] = slot[0] + lin
-            slot[1] += 1
-            slot[2] = float(lo_hz)
-        segments = {
-            int(i): (float(lo_i), np.array(s / c, copy=True))
-            for i, (s, c, lo_i) in win_acc.items() if c
-        }
-        wins = [{
-            "index": int(w["index"]),
-            "f_start": float(w["f_start"]),
-            "f_end": float(w["f_end"]),
-            "f_center": float(w["f_center"]),
-        } for w in wins_now]
-        if paint_q.full():
-            try:
-                paint_q.get_nowait()
-            except queue.Empty:
-                pass
-        try:
-            paint_q.put_nowait(("pass", segments, wins))
-        except queue.Full:
-            pass
-
-    def _on_iq(iq, fr) -> None:
-        nonlocal frames
-        nfft = 1024
-        rec = {"state": fsm.state, "jams_sent": fsm.jams_sent, "pdr": fsm.eff.pdr}
-        if int(iq.size) >= nfft:
-            spec = np.asarray(stft_db(iq, nfft, nfft, np), dtype=np.float64)
-            lin = np.power(10.0, np.maximum(spec, -120.0) / 10.0)
-            n_bins, n_col = lin.shape
-            lo_cap = float(fsm.lo_hz)
-            freqs = lo_cap + (np.arange(n_bins) - n_bins / 2.0) * (fs / n_bins)
-            t_rf0, t_rf1 = frame_air_span(int(fr.sample_count), int(iq.size), fs)
-            tail["freqs"] = freqs
-            tail["t"] = t_rf1
-            idx_before = int(fsm.sweeper.idx)
-            try:
-                for col in range(n_col):
-                    t_col = t_rf0 + (col + 1) * (t_rf1 - t_rf0) / n_col
-                    # Ряд слышит вспышки. Картинка остаётся на полном спектре.
-                    heard = isolate_bursts(lin[:, col])
-                    if col + 1 == n_col:
-                        rec = fsm.tick(heard, freqs, t_col)
-                    else:
-                        fsm.hear(heard, freqs, t_col)
-            finally:
-                fpga.end_tick()
-            mean = lin.mean(axis=1)
-            slot = win_acc.get(idx_before)
-            if slot is None:
-                win_acc[idx_before] = [mean, 1, lo_cap]
-            else:
-                slot[0] = slot[0] + mean
-                slot[1] += 1
-                slot[2] = lo_cap
-            frames += 1
-            nwin = len(fsm.sweeper.windows)
-            scanning = (nwin > 1 and fsm.state in
-                        (INITIAL_SCAN, LEARNING, CONFIRMING))
-            idx = int(fsm.sweeper.idx)
-            if pub is not None:
-                segments = {
-                    int(i): (float(lo_i), np.array(s / c, copy=True))
-                    for i, (s, c, lo_i) in win_acc.items() if c
-                }
-                wins = [{
-                    "index": int(w["index"]),
-                    "f_start": float(w["f_start"]),
-                    "f_end": float(w["f_end"]),
-                    "f_center": float(w["f_center"]),
-                } for w in fsm.sweeper.windows]
-                item = None
-                if scanning and idx < idx_before and segments:
-                    item = ("pass", segments, wins)
-                    win_acc.clear()
-                elif scanning and (idx != idx_before or frames % 4 == 0):
-                    item = ("pass", segments, wins)
-                elif not scanning and fsm.state not in (
-                        "JAMMING", "MULTI_LO", "TIMER", "MONITORING"):
-                    # Во время удара узкое окно первой стоянки не подменяет
-                    # коридор: иначе водопад заливает только его начало.
-                    db = 10.0 * np.log10(np.maximum(mean, 1e-12))
-                    item = ("live", db, lo_cap)
-                    win_acc.clear()
-                if item is not None:
-                    if paint_q.full():
-                        try:
-                            paint_q.get_nowait()
-                        except queue.Empty:
-                            pass
-                    try:
-                        paint_q.put_nowait(item)
-                    except queue.Full:
-                        pass
-        else:
-            fpga.end_tick()
-        try:
-            from .test_capture import maybe_save_test
-            maybe_save_test(fsm, pub)
-        except Exception:
-            pass
-        if frames % 20 == 0:
-            try:
-                log_q.put_nowait({
-                    "kind": "tick", "i": frames, "state": rec["state"],
-                    "lo_hz": fsm.lo_hz, "fs_hz": fsm.fpga_fs_hz,
-                    "jams_sent": rec["jams_sent"], "pdr": rec["pdr"]})
-            except queue.Full:
-                pass
-
-    try:
-        radio.start()
-        t0 = time.perf_counter()
-        rx_miss = 0
-        while stop_event is None or not stop_event.is_set():
-            if stop_event is None and time.perf_counter() - t0 >= args.duration_s:
-                break
-            if radio.fault == "usb":
-                fsm._stop_jam(time.time(), "usb")
-                fsm._rescan_origin(time.time(), "usb")
-                radio.fault = ""
-                break
-            listen = fsm.state in (LISTENING, INITIAL_SCAN, LEARNING, CONFIRMING)
-            if listen:
-                # Сначала забираем 4 мс эфира подряд, спектр — после.
-                # Иначе стоянка кончается по часам компьютера, а не по отсчётам.
-                need = fsm.sweeper.dwell_need()
-                block = []
-                got = 0
-                while got < need:
-                    if stop_event is not None and stop_event.is_set():
-                        break
-                    fr = radio.read_frame()
-                    if fr is None:
-                        if radio.src is not None and radio.src.eof:
-                            break
-                        rx_miss += 1
-                        if rx_miss == 8:
-                            if note is not None:
-                                nwin = max(1, len(fsm.sweeper.windows))
-                                note(
-                                    "приём молчит, окно "
-                                    f"{int(fsm.sweeper.idx) + 1}/{nwin}")
-                            if getattr(radio, "_paused", False):
-                                radio.resume_after_pio(reconfigure=True)
-                        continue
-                    rx_miss = 0
-                    if (int(radio._tune_req)
-                            and int(radio._tune_done) != int(radio._tune_req)):
-                        continue
-                    iq = np.asarray(fr.complex64())
-                    if int(iq.size) < 1:
-                        continue
-                    glimpse_n["n"] += 1
-                    if glimpse_n["n"] % 2 == 0:
-                        _glimpse(iq, float(radio.lo))
-                    block.append((iq, fr))
-                    got += int(iq.size)
-                if not block:
-                    if radio.src is not None and radio.src.eof:
-                        break
-                    continue
-                n_before = len(fsm.rec.hops) if fsm.rec is not None else 0
-                fsm.sweeper._hold_dwell = True
-                try:
-                    for iq, fr in block:
-                        if fsm.sweeper._count_samples:
-                            fsm.sweeper.add_samples(int(iq.size))
-                        _on_iq(iq, fr)
-                finally:
-                    fsm.sweeper._hold_dwell = False
-                if (fsm.sweeper._count_samples
-                        and fsm.state in (INITIAL_SCAN, LEARNING, CONFIRMING)
-                        and fsm.sweeper.dwell_done(0.0, 0.0)):
-                    freqs = tail["freqs"]
-                    if freqs is None:
-                        freqs = np.asarray([fsm.lo_hz], dtype=np.float64)
-                    fsm._advance_scan(freqs, float(tail["t"]))
-                    # Круг кончился уже после спектра кадра. Старые суммы
-                    # окна не смешиваем со следующим кругом.
-                    if (pub is not None and win_acc
-                            and int(fsm.sweeper.idx) == 0):
-                        segments = {
-                            int(i): (float(lo_i), np.array(s / c, copy=True))
-                            for i, (s, c, lo_i) in win_acc.items() if c
-                        }
-                        wins = [{
-                            "index": int(w["index"]),
-                            "f_start": float(w["f_start"]),
-                            "f_end": float(w["f_end"]),
-                            "f_center": float(w["f_center"]),
-                        } for w in fsm.sweeper.windows]
-                        if segments and paint_q.full():
-                            try:
-                                paint_q.get_nowait()
-                            except queue.Empty:
-                                pass
-                        if segments:
-                            try:
-                                paint_q.put_nowait(("pass", segments, wins))
-                            except queue.Full:
-                                pass
-                        win_acc.clear()
-                elif (not fsm._wide() and fsm.rec is not None
-                      and fsm.state in (LEARNING, CONFIRMING)):
-                    fresh = [float(h["freq_mhz"])
-                             for h in fsm.rec.hops[n_before:]]
-                    if fresh:
-                        fsm.feed_freqs(fresh, float(tail["t"]))
-            else:
-                fr = radio.read_frame()
-                if fr is None:
-                    if radio.src is not None and radio.src.eof:
-                        break
-                    rx_miss += 1
-                    if rx_miss == 8 and note is not None:
-                        note("приём молчит во время удара")
-                    continue
-                rx_miss = 0
-                _on_iq(np.asarray(fr.complex64()), fr)
-        verdict = {
-            "live": True, "frames": frames,
-            "f_start": f1, "f_end": f2, "lo_hz": fsm.lo_hz,
-            "fs_rx_hz": fs, "fpga_fs_hz": fsm.fpga_fs_hz,
-            "lo_sweep_windows": len(windows),
-            "states_path": [t["to"] for t in fsm.transitions],
-            "final_state": fsm.state, "jams_sent": fsm.jams_sent,
-            "overruns": int(radio.usb.overruns),
-            "usb_owner": "libbladeRF",
-        }
-        log.write({"kind": "verdict", **verdict})
-        print(json.dumps(verdict, ensure_ascii=False, indent=1, default=str))
-        return 0
-    finally:
-        side_stop.set()
-        side.join(timeout=0.3)
-        try:
-            fsm._stop_jam(time.time(), "shutdown")
-        except Exception:
-            pass
-        try:
-            fsm.store.save()
-        except Exception:
-            pass
-        fpga.close()
-        radio.stop()
-        _LIVE.clear()
+    from .smart56 import run_live
+    return run_live(span, args, log, pub, stop_event, note)
 
 
 def live_from_app(app, stop_event) -> int:
@@ -1417,13 +1080,22 @@ def live_from_app(app, stop_event) -> int:
         device=None,
         bw=20.0e6,
         lna=int(app.cfg.get("lna_gain_db") or 20),
+        shift_hz=float(app.cfg.get("freq_shift_hz") or 15000),
+        look_every_s=float(app.cfg.get("look_every_s") or 0.1),
+        look_for_s=float(app.cfg.get("look_for_s") or 0.002),
+        survey=bool(app.cfg.get("survey")),
         mode="cognitive",
     )
     log = JsonLog("gui")
+
+    def _note(line: str) -> None:
+        app.fsm.test_note = line
+        app._log(line)
+
     try:
         return _run_cognitive_live(
             args, log, app.bus.viz, fsm=app.fsm, stop_event=stop_event,
-            note=app._log)
+            note=_note)
     finally:
         log.close()
 
