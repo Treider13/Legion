@@ -1,4 +1,5 @@
 import {
+  DIGITAL_HOP_DWELL_US,
   DIGITAL_MAX_CORRIDOR_MHZ,
   DIGITAL_PRESETS,
   DIGITAL_PRESET_IDS,
@@ -12,7 +13,8 @@ import {
   type DigitalWalk,
   type DigitalWave,
 } from "../../sense/digitalMode";
-import { DIGITAL_MODE_RU } from "../../sense/modes";
+import { DIGITAL_MODE_RU, isDigitalPattern } from "../../sense/modes";
+import { TxGainControl } from "../TxGainControl";
 import { useLegion } from "../../state/store";
 
 export function DigitalFields() {
@@ -27,6 +29,7 @@ export function DigitalFields() {
   const preset = useLegion((s) => s.digitalPreset);
   const profileMhz = useLegion((s) => s.digitalProfileMhz);
   const dwellMs = useLegion((s) => s.digitalDwellMs);
+  const hopUs = useLegion((s) => s.digitalHopDwellUs);
   const setCorridors = useLegion((s) => s.setDigitalCorridors);
   const setWalk = useLegion((s) => s.setDigitalWalk);
   const setWave = useLegion((s) => s.setDigitalWave);
@@ -38,6 +41,7 @@ export function DigitalFields() {
   const setPreset = useLegion((s) => s.setDigitalPreset);
   const setProfileMhz = useLegion((s) => s.setDigitalProfileMhz);
   const setDwellMs = useLegion((s) => s.setDigitalDwellMs);
+  const setHopUs = useLegion((s) => s.setDigitalHopDwellUs);
   const f1 = useLegion((s) => s.sdrF1);
   const f2 = useLegion((s) => s.sdrF2);
   const rows = corridors.length
@@ -50,7 +54,7 @@ export function DigitalFields() {
         ),
         priority: 1,
       }];
-  const tune = autoTuneDigital(rows, dwellMs, profileMhz);
+  const tune = autoTuneDigital(rows, dwellMs, profileMhz, hopUs);
 
   const pickPreset = (id: DigitalPresetId) => {
     const spec = DIGITAL_PRESETS[id];
@@ -106,6 +110,15 @@ export function DigitalFields() {
           />
         </label>
       ) : null}
+      <label>
+        СТОЯНКА, мкс
+        <input
+          aria-label="Стоянка цифрового"
+          value={String(hopUs)}
+          onChange={(e) => setHopUs(parseFloat(e.target.value.replace(",", ".")))}
+          inputMode="numeric"
+        />
+      </label>
       {rows.map((row, i) => (
         <div key={`d-c-${i}`} className="corr-grid">
           <label>
@@ -242,12 +255,24 @@ export function DigitalFields() {
       </label>
       <p className="panel-note">
         {DIGITAL_PRESETS[preset].label}. {digitalTuneLine(tune)}.
-        Приоритет выше — слоты 20 мкс. Амплитуда ≤ 0.9 (потолок ЦАП).
+        Стоянка по умолчанию {DIGITAL_HOP_DWELL_US} мкс (PLL ~20 мкс). Амплитуда 0.1…0.9 (потолок ЦАП).
         Случайный: коридор ∝ приоритет, внутри равномерно.
         Перекрытие схлопывается (остаётся больший приоритет).
         Журнал: шаг, очередь, срыв USB. Стоп снимает очередь и TX.
         Смена сигнала — стоп и старт.
       </p>
     </div>
+  );
+}
+
+export function DigitalStrip() {
+  const pattern = useLegion((s) => s.scanPattern);
+  if (!isDigitalPattern(pattern)) return null;
+  return (
+    <section className="smart-attack-strip" aria-label={DIGITAL_MODE_RU}>
+      <p>Профиль подавления. Старт ставит очередь retune и волну. Стоп снимает очередь и TX.</p>
+      <TxGainControl tone="cinema" />
+      <DigitalFields />
+    </section>
   );
 }

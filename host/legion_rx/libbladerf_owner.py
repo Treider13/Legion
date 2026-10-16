@@ -109,6 +109,7 @@ class UsbOwner:
         self.last_fallback = False
         self.tune_fails = 0
         self.digital_tunes: dict[int, _QuickTune] = {}
+        self.last_bw = 0
 
     def acquire(self, ident: str = "") -> int:
         rc = _LIB.bladerf_open(ctypes.byref(self.dev), ident.encode() or None)
@@ -126,18 +127,20 @@ class UsbOwner:
         """Частота и полоса. tx_only — цифровой режим: RX не поднимаем."""
         actual = c_uint()
         chans = (CH_TX,) if tx_only else (CH_RX, CH_TX)
+        # sample_rate сбрасывает analog LPF — bandwidth только после него и после LO.
         for ch in chans:
             rc = _LIB.bladerf_set_sample_rate(
                 self.dev, ch, c_uint(int(fs_hz)), ctypes.byref(actual))
+            if rc != 0:
+                return int(rc)
+            rc = _LIB.bladerf_set_frequency(self.dev, ch, c_uint64(int(lo_hz)))
             if rc != 0:
                 return int(rc)
             rc = _LIB.bladerf_set_bandwidth(
                 self.dev, ch, c_uint(int(bw_hz)), ctypes.byref(actual))
             if rc != 0:
                 return int(rc)
-            rc = _LIB.bladerf_set_frequency(self.dev, ch, c_uint64(int(lo_hz)))
-            if rc != 0:
-                return int(rc)
+            self.last_bw = int(actual.value)
         if tx_only:
             return 0
         return int(_LIB.bladerf_set_gain(self.dev, CH_RX, c_int(int(lna_db))))
@@ -158,8 +161,11 @@ class UsbOwner:
 
     def set_bandwidth(self, ch: int, hz: int) -> int:
         actual = c_uint()
-        return int(_LIB.bladerf_set_bandwidth(
+        rc = int(_LIB.bladerf_set_bandwidth(
             self.dev, int(ch), c_uint(int(hz)), ctypes.byref(actual)))
+        if rc == 0:
+            self.last_bw = int(actual.value)
+        return rc
 
     def read_sc16(self, n_samples: int, timeout_ms: int = 1000):
         """SC16_Q11_META. Буфер — голые IQ, метка в metadata.timestamp."""

@@ -343,6 +343,7 @@ interface LegionStore {
   digitalPreset: DigitalPresetId;
   digitalProfileMhz: number;
   digitalDwellMs: number;
+  digitalHopDwellUs: number;
   /** Фаза 1 умной атаки: Soapy слух, TX выкл, карточка живая. */
   smartListenLive: boolean;
   /** Фаза 2: карточка заморожена, ARM разрешён. */
@@ -515,6 +516,7 @@ interface LegionStore {
   setDigitalPreset(v: DigitalPresetId): void;
   setDigitalProfileMhz(v: number): void;
   setDigitalDwellMs(v: number): void;
+  setDigitalHopDwellUs(v: number): void;
   setSmartPeakOverride(v: boolean): void;
   /** Заморозить карточку и ARM. Старт сам не ARM'ит. */
   acceptSmartGridAndArm(opts?: { peak?: boolean; acceptO4?: boolean }): Promise<boolean>;
@@ -963,16 +965,6 @@ let gSweepSerial = 0;
 let gCorridorCovered = false;
 let gCorridorBins: ScanBin[] = [];
 let gSmartSurvey: { bands: AllowBand[]; f1: string; f2: string; airBw: string } | null = null;
-
-function captureSmartSurvey(s: { sdrBands: AllowBand[]; sdrF1: string; sdrF2: string; fpgaAirBwMhz: string }): void {
-  if (gSmartSurvey) return;
-  gSmartSurvey = {
-    bands: s.sdrBands.map((b) => ({ ...b })),
-    f1: s.sdrF1,
-    f2: s.sdrF2,
-    airBw: s.fpgaAirBwMhz,
-  };
-}
 
 function consumeSmartSurvey(): {
   sdrBands: AllowBand[];
@@ -2713,6 +2705,7 @@ export const useLegion = create<LegionStore>((set, get) => {
     digitalPreset: "elrs_250",
     digitalProfileMhz: 7,
     digitalDwellMs: 4,
+    digitalHopDwellUs: 100,
     smartListenLive: false,
     smartGridAccepted: false,
     smartGridCard: null,
@@ -2959,11 +2952,14 @@ export const useLegion = create<LegionStore>((set, get) => {
     setDigitalStaticIndex: (v) => set({ digitalStaticIndex: Math.max(0, Math.floor(v)) }),
     setDigitalChirpDir: (v) => set({ digitalChirpDir: v }),
     setDigitalSawPeriodUs: (v) => set({ digitalSawPeriodUs: Number.isFinite(v) && v > 0 ? v : 10 }),
-    setDigitalAmp: (v) => set({ digitalAmp: Math.min(0.9, Math.max(0.05, v)) }),
+    setDigitalAmp: (v) => set({ digitalAmp: Math.min(0.9, Math.max(0.1, v)) }),
     setDigitalToneWidthMhz: (v) => set({ digitalToneWidthMhz: Number.isFinite(v) && v > 0 ? v : 0.5 }),
     setDigitalPreset: (v) => set({ digitalPreset: v }),
     setDigitalProfileMhz: (v) => set({ digitalProfileMhz: Number.isFinite(v) && v > 0 ? v : 7 }),
     setDigitalDwellMs: (v) => set({ digitalDwellMs: Number.isFinite(v) && v > 0 ? v : 4 }),
+    setDigitalHopDwellUs: (v) => set({
+      digitalHopDwellUs: Number.isFinite(v) ? Math.min(10000, Math.max(20, Math.round(v))) : 100,
+    }),
     setScanPattern: (p) => {
       if (p === "auto") {
         gSmartAccepted = null;
@@ -3335,7 +3331,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         labPlaylistIdx: index,
       });
       pushLog("sys", patch.reason);
-      if (get().scanRunning && !isFpgaAirPattern(get().scanPattern)) {
+      if (get().scanRunning && !isFpgaAirPattern(get().scanPattern) && !isDigitalPattern(get().scanPattern)) {
         get().stopScan();
         get().startScan();
         pushLog("sys", "playlist: хост-скан перезапущен на новый коридор (старый walker не пишет в чужую ось)");
@@ -3751,7 +3747,7 @@ export const useLegion = create<LegionStore>((set, get) => {
 
     applyDroneSurvey: () => {
       const s = get();
-      if (s.scanRunning || s.transmitArmed || s.fpgaArmed || s.fpgaBusy) {
+      if (s.scanRunning || s.digitalLive || s.transmitArmed || s.fpgaArmed || s.fpgaBusy) {
         pushLog("sys", "полосы дронов: сначала СТОП");
         return;
       }
@@ -3913,7 +3909,7 @@ export const useLegion = create<LegionStore>((set, get) => {
         pushLog("sys", "ЗАШИТЬ: FPGA ARM занял USB — сначала ОСТАНОВИТЬ FPGA");
         return;
       }
-      if (s.scanRunning) {
+      if (s.scanRunning || s.digitalLive) {
         pushLog("sys", "ЗАШИТЬ: сканер работает — сначала СТОП на вкладке СКАН + TX SDR");
         return;
       }
@@ -5530,7 +5526,7 @@ export const useLegion = create<LegionStore>((set, get) => {
           try {
             const rx = await import("../sense/rxTest");
             const note = await rx.startDigital();
-            set({ scanRunning: true, digitalLive: true, smartListenLive: false, scanSweepBins: [] });
+            set({ scanRunning: false, digitalLive: true, smartListenLive: false, scanSweepBins: [] });
             pushLog("sys", note);
             rx.watchDesignRx();
           } catch (err) {

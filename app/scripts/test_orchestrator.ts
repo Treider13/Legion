@@ -711,16 +711,17 @@ async function main(): Promise<void> {
   const tune250 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_250.dwellMs, DIGITAL_PRESETS.elrs_250.profileMhz);
   const tune500 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_500.dwellMs, DIGITAL_PRESETS.elrs_500.profileMhz);
   const tune50 = autoTuneDigital(digitalOne, DIGITAL_PRESETS.elrs_50.dwellMs, DIGITAL_PRESETS.elrs_50.profileMhz);
-  check("цифровой автонастройка 250: 8 окон 160 мкс 25 кругов",
-    tune250.n === 8 && tune250.walkUs === 160 && tune250.budgetUs === 1000 && tune250.fits && tune250.circles === 25);
-  check("цифровой автонастройка 500: 12 кругов влезает",
-    tune500.n === 8 && tune500.budgetUs === 500 && tune500.circles === 12 && tune500.fits);
+  check("цифровой автонастройка 250: 8 окон 800 мкс 5 кругов",
+    tune250.n === 8 && tune250.walkUs === 800 && tune250.hopUs === 100
+    && tune250.budgetUs === 1000 && tune250.fits && tune250.circles === 5);
+  check("цифровой автонастройка 500: 2 круга на грани",
+    tune500.n === 8 && tune500.budgetUs === 500 && tune500.circles === 2 && tune500.fits);
   check("цифровой автонастройка 50 Гц: 16 окон 3.5 МГц",
-    tune50.n === 16 && tune50.profileMhz === 3.5 && tune50.walkUs === 960 && tune50.fits);
+    tune50.n === 16 && tune50.profileMhz === 3.5 && tune50.walkUs === 1600 && tune50.fits);
   check("цифровой сетка 7 МГц 2400–2456",
     corridorCentersMhz(2400, 2456, 7)[0] === 2403.5 && corridorCentersMhz(2400, 2456, 7).at(-1) === 2452.5);
   check("цифровой бюджет 8/16/32",
-    digitalWalkUs(8) === 160 && digitalWalkUs(16) === 960 && digitalWalkUs(32) === 2560);
+    digitalWalkUs(8) === 800 && digitalWalkUs(16) === 1600 && digitalWalkUs(32) === 3200);
   check("цифровой без выдуманного Crossfire 915",
     !("crossfire_915" in DIGITAL_PRESETS) && "crossfire_868_150" in DIGITAL_PRESETS);
   check("цифровой Crossfire 868 из 1/150 и 1/50",
@@ -2530,6 +2531,9 @@ async function main(): Promise<void> {
   check("cinema СТОП бампает air gen без ARM", peekFpgaAirGen() === airBeforeCinema + 1);
   check("cinema СТОП бампает arm gen без ARM", peekFpgaArmGen() === armBeforeCinema + 1);
   check("cinema СТОП без ARM не ставит armed", useLegion.getState().fpgaArmed === false);
+  useLegion.setState({ digitalLive: true, scanRunning: false, smartListenLive: false });
+  await runCinemaStop();
+  check("cinema СТОП гасит digitalLive", useLegion.getState().digitalLive === false);
 
   const here = dirname(fileURLToPath(import.meta.url));
   const storeSrc = readFileSync(join(here, "../src/state/store.ts"), "utf8");
@@ -2625,6 +2629,9 @@ async function main(): Promise<void> {
   check("hero: idle → ОЖИДАНИЕ с частотой", heroIdle.kind === "idle" && heroIdle.text === "ОЖИДАНИЕ" && heroIdle.detail.includes("2475"));
   const heroSearch = heroStatusLine({ ...heroBase, scanRunning: true, scanCenterMhz: 2450 });
   check("hero: сканер → ПОИСК", heroSearch.kind === "search" && heroSearch.text === "ПОИСК" && heroSearch.detail.includes("2450"));
+  const heroDigital = heroStatusLine({ ...heroBase, digitalLive: true, scanCenterMhz: 2431.5 });
+  check("hero: цифровой → ПЕРЕДАЧА, не слух",
+    heroDigital.kind === "tx" && heroDigital.text === "ПЕРЕДАЧА" && heroDigital.detail.includes("не слух"));
   const heroRelay = heroStatusLine({
     ...heroBase, fpgaArmed: true, fpgaMode: "lb_gated",
     fpgaStatus: { ok: true, det_active: true }, lastForwardMhz: 2442.5,
@@ -2775,7 +2782,8 @@ async function main(): Promise<void> {
     gateSrc.includes('path === "digital"') && gateSrc.includes("DIGITAL_MODE_RU") && runSrc.includes('opts.path === "digital"'));
   const digitalScan = storeSrc.slice(storeSrc.indexOf("isDigitalPattern(get().scanPattern) && !s.sdrEmulation"), storeSrc.indexOf("if (isFpgaAirPattern(get().scanPattern) && !s.sdrEmulation)"));
   check("startScan цифровой не ставит smartListenLive",
-    digitalScan.includes("digitalLive: true") && digitalScan.includes("startDigital") && !digitalScan.includes("smartListenLive: true"));
+    digitalScan.includes("digitalLive: true") && digitalScan.includes("startDigital")
+    && digitalScan.includes("scanRunning: false") && !digitalScan.includes("smartListenLive: true"));
   const digitalStripSrc = readFileSync(join(here, "../src/components/cinema/DigitalStrip.tsx"), "utf8");
   const digitalRxSrc = readFileSync(join(here, "../src/sense/rxTest.ts"), "utf8");
   const digitalPySrc = readFileSync(join(here, "../../host/legion_rx/digital.py"), "utf8");
@@ -2784,14 +2792,37 @@ async function main(): Promise<void> {
     && digitalStripSrc.includes("setPreset(\"custom\")"));
   check("startDigital шлёт preset/profile/dwell",
     digitalRxSrc.includes("preset: s.digitalPreset") && digitalRxSrc.includes("profile_hz:")
-    && digitalRxSrc.includes("dwell_s:"));
+    && digitalRxSrc.includes("dwell_s:") && digitalRxSrc.includes("hop_dwell_us:"));
+  check("startDigital отказ бросает, не ставит live",
+    digitalRxSrc.includes("throw new Error(\"это основное приложение, не браузер\")")
+    && digitalRxSrc.includes("больше 256 профилей")
+    && digitalRxSrc.includes("digitalPoolCount"));
+  check("процесс цифрового умер — UI снимает digitalLive",
+    digitalRxSrc.includes("if (s.digitalLive || s.smartListenLive)")
+    && digitalRxSrc.includes("s.stopScan()"));
   check("store держит digitalPreset",
     storeSrc.includes("digitalPreset: \"elrs_250\"") && storeSrc.includes("setDigitalPreset"));
   check("digital.py: пресеты и TX-only, без 915",
     digitalPySrc.includes("def apply_preset") && digitalPySrc.includes("tx_only=True")
     && !digitalPySrc.includes("crossfire_915") && digitalPySrc.includes("crossfire_868_150"));
+  check("digital.py: 0x65 снимается даже если acquire не вышел",
+    digitalPySrc.indexOf("_fpga_digital(True)") < digitalPySrc.indexOf("usb.acquire()")
+    && digitalPySrc.includes("if usb.open:")
+    && digitalPySrc.includes("стоп во время снимков"));
+  const digitalRsSrc = readFileSync(join(here, "../src-tauri/src/rx_test.rs"), "utf8");
+  check("CLI без --digital-job не читает leftover JSON; кино передаёт путь",
+    digitalPySrc.includes("if job_path") && !digitalPySrc.includes("job = load_job()")
+    && digitalRsSrc.includes("--digital-job"));
   check("cinema digital: заголовок профиль подавления",
     gateSrc.includes("Профиль подавления") && !gateSrc.includes("Профили 7 МГц"));
+  check("главная: Цифровой в доке и Старт/Стоп",
+    dockSrc.includes("Цифровой") && dockSrc.includes("Старт")
+    && dockSrc.includes("disabled={live}") && dockSrc.includes("disabled={!live}"));
+  check("главная: Цифровой Старт без гейта",
+    appSrc.includes("cinemaMode === \"digital\"") && appSrc.includes("<DigitalStrip")
+    && appSrc.includes('setScanPattern(m === "digital" ? "digital" : "fpga")'));
+  check("cinema СТОП зовёт stopScan при digitalLive",
+    runSrc.includes("s.digitalLive) s.stopScan()"));
   check("мастер: предупреждение о самовозбуде в режимах с ретрансляцией (аудит P1-7)",
     gateSrc.includes("cinema-gate-warn") && gateSrc.includes("утечка собственного сигнала"));
   check("cinema перехват: коридор 56 МГц, удар 0,5, до Стоп",
@@ -2807,11 +2838,14 @@ async function main(): Promise<void> {
   const pkgSrc = readFileSync(join(here, "../../fpga/hdl/legion_pkg.vhd"), "utf8");
   check("FPGA: гейт lb_gated масштабирует на 0.9 Q15",
     pkgSrc.includes("LEGION_LB_AMP_Q15") && pkgSrc.includes("29491") &&
-    muxSrc.includes("lb_amp_q15") && muxSrc.includes("LEGION_MODE_LB_GATED"));
+    muxSrc.includes("LEGION_LB_AMP_Q15") && muxSrc.includes("use_amp") &&
+    muxSrc.includes("LEGION_MODE_LB_GATED"));
   check("FPGA pkg: live DRFM 0x24–0x2A",
     pkgSrc.includes("LEGION_REG_LB_DELAY") && pkgSrc.includes("LEGION_REG_WALK_FTW_STEP"));
   check("FPGA: NCO и lb_always тоже 0.9 на mux",
-    muxSrc.includes("lb_amp_q15(nco_i)") &&
+    muxSrc.includes("when LEGION_MODE_NCO | LEGION_MODE_AIM =>") &&
+    muxSrc.includes("use_amp <= '1'") &&
+    muxSrc.includes("mag_i * to_unsigned(LEGION_LB_AMP_Q15") &&
     muxSrc.includes("LEGION_MODE_LB_ALWAYS") &&
     !muxSrc.includes("lb_always остаётся 1:1"));
   check("cinema auto: ждёт слух, ARM без Подтвердить коридор — отказ",
@@ -2927,10 +2961,11 @@ async function main(): Promise<void> {
   check("fpgaArm после отзыва снимает прошедший ARM",
     armBlock.includes("if (r.ok) {") && armBlock.includes("await get().fpgaDisarm()"));
   check("кино-старт отказывает при живом ARM", startFn.includes("if (s0.fpgaArmed)"));
-  check("онбордовый старт: startOnboardIntercept, USB не отдаём хост-сканеру",
+  check("онбордовый ARM-рецепт на месте; cinema Start — startLive, не этот вызов",
     storeSrc.includes("const startOnboardIntercept") &&
-    storeSrc.includes("await startOnboardIntercept()") &&
     storeSrc.includes("scanEnable: true") &&
+    storeSrc.includes("void startOnboardIntercept") &&
+    !storeSrc.includes("await startOnboardIntercept()") &&
     !storeSrc.includes("USB release перед сканом"));
   {
     const startScanFn = storeSrc.slice(storeSrc.indexOf("startScan: ()"), storeSrc.indexOf("stopScan: ()"));

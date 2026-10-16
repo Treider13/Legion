@@ -19,9 +19,15 @@ PROFILE_HZ = 7.0e6
 MAX_CORRIDOR_HZ = 56.0e6
 HW_SLOTS = 8
 NIOS_SLOTS = 256
-QUEUE_AHEAD = 12
-HW_SWITCH_S = 20e-6
+QUEUE_AHEAD = 14
+# ADI EZ: PLL lock 15–20 µs. Это не длительность стоянки.
+PLL_LOCK_S = 20e-6
+HW_SWITCH_S = PLL_LOCK_S
 NIOS_SWITCH_S = 100e-6
+HOP_DWELL_US_DEFAULT = 100
+HOP_DWELL_US_MIN = 20
+HOP_DWELL_US_WARN = 30
+HOP_DWELL_US_MAX = 10000
 FS_HZ = 34.0e6
 TX_BW_HZ = PROFILE_HZ
 LEAD_S = 0.002
@@ -29,6 +35,7 @@ CHUNK = 8192
 # libbladeRF sync TX: больше буферов — запас на джиттер хоста, не отдельная железная FIFO.
 USB_TX_BUFFERS = 32
 USB_TX_XFER = 16
+AMP_MIN = 0.1
 AMP_MAX = 0.9
 # Повторный get_quick_tune. 15 мин — середина окна 10–30 мин. 0 = не обновлять.
 REFRESH_S = 900.0
@@ -179,21 +186,42 @@ def build_pool(corridors: list[dict], profile_hz: float = PROFILE_HZ,
     return pool
 
 
-def switch_s(key) -> float:
-    if isinstance(key, bool):
-        return HW_SWITCH_S if key else NIOS_SWITCH_S
-    return HW_SWITCH_S if int(key) < HW_SLOTS else NIOS_SWITCH_S
+def hop_dwell_us(raw) -> int:
+    """Стоянка на окне, мкс. 20 — наследие CLI; короче 30 — lock-time, игла на SA."""
+    us = int(round(float(raw)))
+    if us < HOP_DWELL_US_MIN:
+        raise ValueError(f"dwell короче {HOP_DWELL_US_MIN} мкс")
+    if us > HOP_DWELL_US_MAX:
+        raise ValueError(f"dwell длиннее {HOP_DWELL_US_MAX} мкс")
+    return us
 
 
-def walk_us(n: int) -> int:
-    n = max(0, int(n))
-    hw = min(n, HW_SLOTS) * int(HW_SWITCH_S * 1e6)
-    nios = max(0, n - HW_SLOTS) * int(NIOS_SWITCH_S * 1e6)
-    return hw + nios
+def hop_samples(hop_us, fs_hz: float = FS_HZ) -> int:
+    return max(1, int(round(float(hop_dwell_us(hop_us)) * float(fs_hz) / 1e6)))
 
 
-def beats_elrs(n: int) -> dict:
-    us = walk_us(n)
+def clamp_amp(raw) -> float:
+    a = float(raw)
+    if a < AMP_MIN - 1e-12:
+        raise ValueError(f"амплитуда меньше {AMP_MIN}")
+    if a > AMP_MAX + 1e-12:
+        raise ValueError(f"амплитуда больше {AMP_MAX}")
+    return min(AMP_MAX, max(AMP_MIN, a))
+
+
+def switch_s(key, hop_us=None) -> float:
+    """Длительность стоянки в секундах. key оставлен: слот HW/NIOS больше не режет dwell."""
+    del key
+    return hop_dwell_us(HOP_DWELL_US_DEFAULT if hop_us is None else hop_us) * 1e-6
+
+
+def walk_us(n: int, hop_us=None) -> int:
+    hop = hop_dwell_us(HOP_DWELL_US_DEFAULT if hop_us is None else hop_us)
+    return max(0, int(n)) * hop
+
+
+def beats_elrs(n: int, hop_us=None) -> dict:
+    us = walk_us(n, hop_us)
     return {
         "n": n,
         "walk_us": us,
@@ -203,26 +231,29 @@ def beats_elrs(n: int) -> dict:
 
 
 def _tune_one(corridors: list[dict], profile_hz: float, dwell_s: float,
-              collapse: bool = True) -> dict:
+              collapse: bool = True, hop_us=None) -> dict:
     step = clamp_profile_hz(profile_hz)
+    hop = hop_dwell_us(HOP_DWELL_US_DEFAULT if hop_us is None else hop_us)
     n = pool_n(corridors, step, collapse=collapse)
-    us = walk_us(n)
+    us = walk_us(n, hop)
     dwell_us = max(1, int(round(float(dwell_s) * 1e6)))
     budget_us = max(1, dwell_us // TUNE_MARGIN)
+    circles = (dwell_us // us) if us else 0
     return {
         "profile_hz": step,
         "n": n,
         "walk_us": us,
+        "hop_us": hop,
         "dwell_us": dwell_us,
         "budget_us": budget_us,
-        "fits": us <= budget_us,
-        "circles": (dwell_us // us) if us else 0,
+        "fits": circles >= 2,
+        "circles": circles,
     }
 
 
 def auto_tune(corridors: list[dict], dwell_s: float,
               profile_hz: float | None = None,
-              collapse: bool = True) -> dict:
+              collapse: bool = True, hop_us=None) -> dict:
     """Считает N и цикл. Круги = dwell/walk — арифметика, не эфир.
 
     Уже сетка не ускоряет цикл: меньше шаг → больше N → дольше обход.
@@ -230,8 +261,9 @@ def auto_tune(corridors: list[dict], dwell_s: float,
     или пресет медленный и бюджет позволяет мельче сетку.
     """
     chosen = clamp_profile_hz(profile_hz if profile_hz is not None else PROFILE_HZ)
-    main = _tune_one(corridors, chosen, dwell_s, collapse=collapse)
-    alts = [_tune_one(corridors, w, dwell_s, collapse=collapse) for w in PROFILE_WIDTHS_HZ]
+    main = _tune_one(corridors, chosen, dwell_s, collapse=collapse, hop_us=hop_us)
+    alts = [_tune_one(corridors, w, dwell_s, collapse=collapse, hop_us=hop_us)
+            for w in PROFILE_WIDTHS_HZ]
     main["alts"] = alts
     return main
 
@@ -239,17 +271,26 @@ def auto_tune(corridors: list[dict], dwell_s: float,
 def apply_preset(preset: str, corridors: list[dict],
                  profile_hz: float | None = None,
                  dwell_s: float | None = None,
-                 collapse: bool = True) -> dict:
+                 collapse: bool = True, hop_us=None) -> dict:
     if preset not in PRESETS:
         raise ValueError(f"профиль подавления {preset}")
     spec = PRESETS[preset]
     dwell = float(dwell_s) if dwell_s is not None else float(spec["dwell_s"])
     width = float(profile_hz) if profile_hz is not None else float(spec["profile_hz"])
-    tune = auto_tune(corridors, dwell, width, collapse=collapse)
+    tune = auto_tune(corridors, dwell, width, collapse=collapse, hop_us=hop_us)
     tune["preset"] = preset
     tune["label"] = spec["label"]
     tune["src"] = spec["src"]
     return tune
+
+
+def digital_status_note(tune: dict, walk: str, wave: str, amp: float) -> str:
+    return (
+        f"цифровой: {tune['label']}, {tune['n']} окон по {tune['profile_hz'] / 1e6:g} МГц, "
+        f"обход {walk}, волна {wave}, dwell {int(tune['hop_us'])} мкс, "
+        f"круг {tune['walk_us']} мкс, амплитуда {amp:g}, "
+        f"проходов за dwell {tune['circles']}"
+    )
 
 
 def next_index(walk: str, pool: list[dict], step: int, rng: np.random.Generator,
@@ -287,7 +328,7 @@ def make_wave(kind: str, n: int, fs_hz: float, amp: float = AMP_MAX,
               phase: float = 0.0, span_hz: float = PROFILE_HZ) -> np.ndarray:
     if kind not in WAVES:
         raise ValueError(f"тип сигнала {kind}")
-    a = min(AMP_MAX, max(0.05, float(amp)))
+    a = clamp_amp(amp)
     t = np.arange(int(n), dtype=np.float64) / float(fs_hz)
     span = clamp_profile_hz(span_hz)
     if kind == "tone":
@@ -335,23 +376,74 @@ def load_job(path: "Path | None" = None) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _band_corridor(start_hz: float, end_hz: float) -> list[dict]:
+    start = float(start_hz)
+    end = float(end_hz)
+    if end <= start:
+        end = start + MAX_CORRIDOR_HZ
+    if end - start > MAX_CORRIDOR_HZ:
+        end = start + MAX_CORRIDOR_HZ
+    return [{"start_hz": start, "end_hz": end, "priority": 1.0}]
+
+
 def job_from_args(args) -> dict:
-    job = load_job()
-    if not job.get("corridors"):
-        start = float(getattr(args, "f_start", None) or 2.4e9)
-        end = float(getattr(args, "f_end", None) or (start + MAX_CORRIDOR_HZ))
-        if end <= start:
-            end = start + MAX_CORRIDOR_HZ
-        if end - start > MAX_CORRIDOR_HZ:
-            end = start + MAX_CORRIDOR_HZ
-        job["corridors"] = [{"start_hz": start, "end_hz": end, "priority": 1.0}]
-    job.setdefault("walk", getattr(args, "digital_walk", None) or "sequential")
-    job.setdefault("wave", getattr(args, "digital_wave", None) or "chirp")
-    job.setdefault("static_index", int(getattr(args, "digital_static", 0) or 0))
-    job.setdefault("chirp_dir", getattr(args, "digital_chirp", None) or "up")
-    job.setdefault("saw_period_s", float(getattr(args, "digital_saw_us", 10.0) or 10.0) * 1e-6)
-    job.setdefault("amp", float(getattr(args, "digital_amp", AMP_MAX) or AMP_MAX))
-    job.setdefault("tone_width_hz", float(getattr(args, "digital_tone_mhz", None) or TONE_BW_HZ / 1e6) * 1e6)
+    """CLI бьёт файл. Файл читается только при --digital-job (кино пишет путь).
+
+    Иначе leftover digital_job.json глушил --digital-wave и --f-start/--f-end.
+    """
+    job_path = getattr(args, "digital_job", None)
+    job = load_job(Path(job_path)) if job_path else {}
+
+    f_start = getattr(args, "f_start", None)
+    f_end = getattr(args, "f_end", None)
+    if job_path and job.get("corridors"):
+        pass
+    elif f_start is not None or f_end is not None:
+        start = float(f_start if f_start is not None else 2.4e9)
+        end = float(f_end if f_end is not None else (start + MAX_CORRIDOR_HZ))
+        job["corridors"] = _band_corridor(start, end)
+    elif not job.get("corridors"):
+        job["corridors"] = _band_corridor(2.4e9, 2.4e9 + MAX_CORRIDOR_HZ)
+
+    wave = getattr(args, "digital_wave", None)
+    if wave:
+        job["wave"] = str(wave)
+    else:
+        job.setdefault("wave", "chirp")
+    walk = getattr(args, "digital_walk", None)
+    if walk:
+        job["walk"] = str(walk)
+    else:
+        job.setdefault("walk", "sequential")
+    static = getattr(args, "digital_static", None)
+    if static is not None:
+        job["static_index"] = int(static)
+    else:
+        job.setdefault("static_index", 0)
+    chirp = getattr(args, "digital_chirp", None)
+    if chirp:
+        job["chirp_dir"] = str(chirp)
+    else:
+        job.setdefault("chirp_dir", "up")
+    saw_us = getattr(args, "digital_saw_us", None)
+    if saw_us is not None:
+        job["saw_period_s"] = float(saw_us) * 1e-6
+    else:
+        job.setdefault("saw_period_s", 10e-6)
+    amp = getattr(args, "digital_amp", None)
+    if amp is None:
+        amp = getattr(args, "digital_amplitude", None)
+    if amp is not None:
+        job["amp"] = clamp_amp(amp)
+    elif "amp" in job:
+        job["amp"] = clamp_amp(job["amp"])
+    else:
+        job["amp"] = AMP_MAX
+    tone_mhz = getattr(args, "digital_tone_mhz", None)
+    if tone_mhz is not None:
+        job["tone_width_hz"] = float(tone_mhz) * 1e6
+    else:
+        job.setdefault("tone_width_hz", TONE_BW_HZ)
     job.setdefault("seed", 1)
     preset = str(getattr(args, "digital_preset", None) or job.get("preset") or "elrs_250")
     if preset not in PRESETS:
@@ -374,6 +466,13 @@ def job_from_args(args) -> dict:
         job["collapse"] = bool(args.digital_collapse)
     else:
         job.setdefault("collapse", True)
+    hop_cli = getattr(args, "digital_dwell_us", None)
+    if hop_cli is not None:
+        job["hop_dwell_us"] = hop_dwell_us(hop_cli)
+    elif "hop_dwell_us" in job:
+        job["hop_dwell_us"] = hop_dwell_us(job["hop_dwell_us"])
+    else:
+        job["hop_dwell_us"] = HOP_DWELL_US_DEFAULT
     return job
 
 
@@ -416,10 +515,11 @@ def run_live(job: dict, stop_event, note=None) -> int:
 
     preset = str(job.get("preset") or "elrs_250")
     collapse = bool(True if job.get("collapse") is None else job.get("collapse"))
+    hop_us = hop_dwell_us(job.get("hop_dwell_us", HOP_DWELL_US_DEFAULT))
     tune = apply_preset(
         preset, job["corridors"],
         job.get("profile_hz"), job.get("dwell_s"),
-        collapse=collapse,
+        collapse=collapse, hop_us=hop_us,
     )
     profile_hz = float(tune["profile_hz"])
     pool = build_pool(job["corridors"], profile_hz, collapse=collapse)
@@ -432,30 +532,34 @@ def run_live(job: dict, stop_event, note=None) -> int:
     static_k = int(job.get("static_index") or 0)
     chirp_dir = str(job.get("chirp_dir") or "up")
     saw_s = float(job.get("saw_period_s") or 10e-6)
-    amp = float(job.get("amp") or AMP_MAX)
+    amp = clamp_amp(job.get("amp", AMP_MAX))
     seed = int(job.get("seed") or 1)
     tone_bw = float(job.get("tone_width_hz") or TONE_BW_HZ)
     tone_bw = min(profile_hz, max(200e3, tone_bw))
     tx_bw = int(tone_bw) if wave == "tone" else int(profile_hz)
-    fit = "влезает" if tune["fits"] else "не влезает"
     refresh_s = float(job.get("refresh_s") if job.get("refresh_s") is not None else REFRESH_S)
-    _note(
-        f"цифровой: {tune['label']}, {len(pool)} окон по {profile_hz / 1e6:g} МГц, "
-        f"обход {walk}, волна {wave}, круг {tune['walk_us']} мкс, "
-        f"бюджет {tune['budget_us']} мкс ({fit}), "
-        f"кругов за dwell {tune['circles']} (расчёт, не эфир)"
-        + (", перекрытие схлопнуто" if collapse else "")
-        + (f", обновление профилей {refresh_s:.0f} с" if refresh_s > 0 else ", без обновления профилей")
-    )
+    _note(digital_status_note(tune, walk, wave, amp))
+    if hop_us < HOP_DWELL_US_WARN:
+        _note(f"предупреждение: dwell {hop_us} мкс короче {HOP_DWELL_US_WARN} мкс — lock-time PLL")
+    if tune["circles"] < 2:
+        _note("предупреждение: проходов за dwell меньше 2")
+    if collapse:
+        _note("цифровой: перекрытие схлопнуто")
+    if refresh_s > 0:
+        _note(f"цифровой: обновление профилей {refresh_s:.0f} с")
+    else:
+        _note("цифровой: без обновления профилей")
 
-    from .libbladerf_owner import UsbOwner, CH_TX, BLADERF_RETUNE_NOW
+    from .libbladerf_owner import (
+        BLADERF_ERR_TIME_PAST, BLADERF_RETUNE_NOW, CH_TX, UsbOwner,
+    )
 
     _fpga_digital(True)
     usb = UsbOwner()
-    rc = usb.acquire()
-    if rc:
-        raise RuntimeError(f"плата не открылась {rc}")
     try:
+        rc = usb.acquire()
+        if rc:
+            raise RuntimeError(f"плата не открылась {rc}")
         first = int(round(pool[0]["hz"]))
         rc = usb.configure(first, int(FS_HZ), int(tx_bw), tx_only=True)
         if rc:
@@ -465,6 +569,9 @@ def run_live(job: dict, stop_event, note=None) -> int:
             raise RuntimeError(f"полоса TX {rc}")
         captured = 0
         for p in pool:
+            if stop_event.is_set():
+                _note("цифровой: стоп во время снимков")
+                return 0
             rc = usb.capture_one(int(p["index"]), int(round(p["hz"])))
             if rc:
                 _note(
@@ -473,18 +580,27 @@ def run_live(job: dict, stop_event, note=None) -> int:
                 )
                 continue
             captured += 1
+        if stop_event.is_set():
+            _note("цифровой: стоп до потока TX")
+            return 0
         _note(f"снято профилей {captured} из {len(pool)}")
         rc = usb.arm_tx_meta_stream()
         if rc:
             raise RuntimeError(f"поток TX {rc}")
         loaded = 0
         for p in pool:
+            if stop_event.is_set():
+                _note("цифровой: стоп во время загрузки слотов")
+                return 0
             if not p["hw"] or int(p["index"]) not in usb.digital_tunes:
                 continue
             rc = usb.schedule_one(int(p["index"]), int(round(p["hz"])),
                                   BLADERF_RETUNE_NOW)
             if rc == 0:
                 loaded += 1
+        if stop_event.is_set():
+            _note("цифровой: стоп до TX")
+            return 0
         _note(f"в слоты AD9361 загружено {loaded}")
         rc = usb.enable_tx(True)
         if rc:
@@ -496,17 +612,27 @@ def run_live(job: dict, stop_event, note=None) -> int:
         if ts_rc:
             raise RuntimeError(f"метка {ts_rc}")
         t = int(now) + int(LEAD_S * FS_HZ)
+        step_samp = hop_samples(hop_us)
 
         def _push() -> None:
             nonlocal step, t
+            ts_rc, now = usb.get_timestamp(1)
+            if ts_rc == 0 and t <= int(now):
+                t = int(now) + int(LEAD_S * FS_HZ)
+                _note("ошибка: метка в прошлом, сдвиг вперёд")
             idx = next_index(walk, pool, step, rng, static_k)
             hz = int(round(pool[idx]["hz"]))
             rc = usb.schedule_one(idx, hz, t)
+            if rc == BLADERF_ERR_TIME_PAST:
+                ts_rc, now = usb.get_timestamp(1)
+                if ts_rc == 0:
+                    t = int(now) + int(LEAD_S * FS_HZ)
+                rc = usb.schedule_one(idx, hz, t)
             if rc:
                 _note(f"очередь {rc}")
                 return
             queued.append((t, idx))
-            t += max(1, int(round(switch_s(bool(pool[idx]["hw"])) * FS_HZ)))
+            t += step_samp
             step += 1
 
         while len(queued) < min(QUEUE_AHEAD, max(1, len(pool))) and not stop_event.is_set():
@@ -536,6 +662,9 @@ def run_live(job: dict, stop_event, note=None) -> int:
             usb.digital_tunes.clear()
             got = 0
             for p in pool:
+                if stop_event.is_set():
+                    _note("цифровой: стоп во время обновления профилей")
+                    return
                 rc = usb.capture_one(int(p["index"]), int(round(p["hz"])))
                 if rc:
                     _note(f"обновление профиля {p['index']} не вышло {rc}")
@@ -543,11 +672,16 @@ def run_live(job: dict, stop_event, note=None) -> int:
                 got += 1
             loaded = 0
             for p in pool:
+                if stop_event.is_set():
+                    _note("цифровой: стоп во время обновления слотов")
+                    return
                 if not p["hw"] or int(p["index"]) not in usb.digital_tunes:
                     continue
                 if usb.schedule_one(int(p["index"]), int(round(p["hz"])),
                                     BLADERF_RETUNE_NOW) == 0:
                     loaded += 1
+            if stop_event.is_set():
+                return
             usb.enable_tx(True)
             queued = []
             ts_rc, now = usb.get_timestamp(1)
@@ -563,9 +697,7 @@ def run_live(job: dict, stop_event, note=None) -> int:
                 last_refresh = time.monotonic()
             ts_rc, now = usb.get_timestamp(1)
             if ts_rc == 0:
-                while queued and queued[0][0] + int(
-                    switch_s(bool(pool[queued[0][1]]["hw"])) * FS_HZ
-                ) < int(now):
+                while queued and queued[0][0] + step_samp < int(now):
                     queued.pop(0)
             while len(queued) < QUEUE_AHEAD and not stop_event.is_set():
                 before = len(queued)
@@ -576,7 +708,7 @@ def run_live(job: dict, stop_event, note=None) -> int:
             if not queued:
                 empty_n += 1
                 if empty_n == 1 or empty_n % 50 == 0:
-                    _note(f"очередь пуста ({empty_n}), цикл рвётся")
+                    _note(f"ошибка: очередь пуста ({empty_n}), цикл рвётся")
             if wave == "fm" and queued and queued[0][1] != last_idx:
                 hop_phase = float(rng.uniform(0.0, 2.0 * np.pi))
                 buf = to_sc16(make_wave(
@@ -612,13 +744,14 @@ def run_live(job: dict, stop_event, note=None) -> int:
         )
         return 0
     finally:
-        try:
-            usb.cancel_one()
-        except Exception:
-            pass
-        try:
-            usb.enable_tx(False)
-        except Exception:
-            pass
-        usb.release()
+        if usb.open:
+            try:
+                usb.cancel_one()
+            except Exception:
+                pass
+            try:
+                usb.enable_tx(False)
+            except Exception:
+                pass
+            usb.release()
         _fpga_digital(False)

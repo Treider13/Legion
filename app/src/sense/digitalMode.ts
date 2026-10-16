@@ -1,8 +1,12 @@
 export const DIGITAL_PROFILE_MHZ = 7;
 export const DIGITAL_MAX_CORRIDOR_MHZ = 56;
 export const DIGITAL_HW_SLOTS = 8;
+/** PLL lock AD9361, не стоянка. */
 export const DIGITAL_HW_SWITCH_US = 20;
 export const DIGITAL_NIOS_SWITCH_US = 100;
+export const DIGITAL_HOP_DWELL_US = 100;
+export const DIGITAL_HOP_DWELL_US_MIN = 20;
+export const DIGITAL_HOP_DWELL_US_MAX = 10000;
 export const DIGITAL_TUNE_MARGIN = 4;
 export const DIGITAL_PROFILE_WIDTHS_MHZ = [7, 3.5, 1.75] as const;
 
@@ -89,16 +93,18 @@ export function digitalPoolCount(
   return best.size;
 }
 
-export function digitalWalkUs(n: number): number {
-  const hw = Math.min(Math.max(0, n), DIGITAL_HW_SLOTS) * DIGITAL_HW_SWITCH_US;
-  const nios = Math.max(0, n - DIGITAL_HW_SLOTS) * DIGITAL_NIOS_SWITCH_US;
-  return hw + nios;
+export function digitalWalkUs(n: number, hopUs = DIGITAL_HOP_DWELL_US): number {
+  const hop = hopUs >= DIGITAL_HOP_DWELL_US_MIN && hopUs <= DIGITAL_HOP_DWELL_US_MAX
+    ? hopUs
+    : DIGITAL_HOP_DWELL_US;
+  return Math.max(0, n) * hop;
 }
 
 export interface DigitalTune {
   profileMhz: number;
   n: number;
   walkUs: number;
+  hopUs: number;
   dwellMs: number;
   budgetUs: number;
   fits: boolean;
@@ -109,38 +115,44 @@ export function autoTuneDigital(
   corridors: DigitalCorridor[],
   dwellMs: number,
   profileMhz: number,
+  hopUs = DIGITAL_HOP_DWELL_US,
 ): DigitalTune {
   const n = digitalPoolCount(corridors, profileMhz);
-  const walkUs = digitalWalkUs(n);
+  const walkUs = digitalWalkUs(n, hopUs);
   const dwellUs = Math.max(1, Math.round(dwellMs * 1000));
   const budgetUs = Math.max(1, Math.floor(dwellUs / DIGITAL_TUNE_MARGIN));
+  const circles = walkUs ? Math.floor(dwellUs / walkUs) : 0;
   return {
     profileMhz,
     n,
     walkUs,
+    hopUs,
     dwellMs,
     budgetUs,
-    fits: walkUs <= budgetUs,
-    circles: walkUs ? Math.floor(dwellUs / walkUs) : 0,
+    fits: circles >= 2,
+    circles,
   };
 }
 
-export function digitalBeatLine(n: number, dwellMs = 4, profileMhz = DIGITAL_PROFILE_MHZ): string {
-  const us = digitalWalkUs(n);
+export function digitalBeatLine(
+  n: number,
+  dwellMs = 4,
+  profileMhz = DIGITAL_PROFILE_MHZ,
+  hopUs = DIGITAL_HOP_DWELL_US,
+): string {
+  const us = digitalWalkUs(n, hopUs);
   const dwellUs = Math.max(1, Math.round(dwellMs * 1000));
-  const budgetUs = Math.max(1, Math.floor(dwellUs / DIGITAL_TUNE_MARGIN));
   const circles = us ? Math.floor(dwellUs / us) : 0;
   return (
-    `${n} окон · ${profileMhz} МГц · круг ${us} мкс · бюджет ${budgetUs} мкс ` +
-    `${us <= budgetUs ? "влезает" : "не влезает"} · кругов за dwell ${circles} (расчёт, не эфир)`
+    `${n} окон · ${profileMhz} МГц · dwell ${hopUs} мкс · круг ${us} мкс · ` +
+    `проходов за dwell ${circles}`
   );
 }
 
 export function digitalTuneLine(tune: DigitalTune): string {
   return (
-    `${tune.n} окон · ${tune.profileMhz} МГц · круг ${tune.walkUs} мкс · ` +
-    `бюджет ${tune.budgetUs} мкс ${tune.fits ? "влезает" : "не влезает"} · ` +
-    `кругов за dwell ${tune.circles} (расчёт, не эфир)`
+    `${tune.n} окон · ${tune.profileMhz} МГц · dwell ${tune.hopUs} мкс · ` +
+    `круг ${tune.walkUs} мкс · проходов за dwell ${tune.circles}`
   );
 }
 

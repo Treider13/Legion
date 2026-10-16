@@ -2,7 +2,7 @@
 import { bindDesignStop, useLegion } from "../state/store";
 import { hostClose } from "../sdr/hostClient";
 import { isTauriRuntime } from "../transport/types";
-import { autoTuneDigital, defaultDigitalCorridors, digitalTuneLine, type DigitalCorridor } from "./digitalMode";
+import { autoTuneDigital, defaultDigitalCorridors, digitalPoolCount, digitalTuneLine, type DigitalCorridor } from "./digitalMode";
 
 export const SMART_CORRIDOR_MHZ = 56;
 export const SMART_JAM_MHZ = 0.5;
@@ -102,7 +102,7 @@ export async function startLive(): Promise<string> {
 }
 
 export async function startDigital(): Promise<string> {
-  if (!rxAvailable()) return "это основное приложение, не браузер";
+  if (!rxAvailable()) throw new Error("это основное приложение, не браузер");
   const s = useLegion.getState();
   const f1 = parseFloat(String(s.sdrF1).replace(",", "."));
   const f2 = parseFloat(String(s.sdrF2).replace(",", "."));
@@ -111,10 +111,15 @@ export async function startDigital(): Promise<string> {
     : defaultDigitalCorridors(f1, f2);
   for (const c of corridors) {
     if (!(c.endMhz > c.startMhz) || c.endMhz - c.startMhz > 56 + 1e-6) {
-      return "цифровой: каждый коридор не шире 56 МГц, конец больше начала";
+      throw new Error("цифровой: каждый коридор не шире 56 МГц, конец больше начала");
     }
-    if (!(c.priority > 0)) return "цифровой: приоритет должен быть больше нуля";
+    if (!(c.priority > 0)) throw new Error("цифровой: приоритет должен быть больше нуля");
   }
+  const n = digitalPoolCount(corridors, s.digitalProfileMhz);
+  if (n > 256) {
+    throw new Error("цифровой: больше 256 профилей: NIOS слоты 0…255, старт отвергнут");
+  }
+  if (!s.digitalCorridors.length) s.setDigitalCorridors(corridors);
   bindDesignStop(stopDesignWatch);
   stopDesignWatch();
   useLegion.getState().stopScan();
@@ -142,11 +147,11 @@ export async function startDigital(): Promise<string> {
       preset: s.digitalPreset,
       profile_hz: s.digitalProfileMhz * 1e6,
       dwell_s: s.digitalDwellMs * 1e-3,
+      hop_dwell_us: s.digitalHopDwellUs,
     },
   });
   watchers.forEach((fn) => fn());
-  watchDesignRx();
-  const tune = autoTuneDigital(corridors, s.digitalDwellMs, s.digitalProfileMhz);
+  const tune = autoTuneDigital(corridors, s.digitalDwellMs, s.digitalProfileMhz, s.digitalHopDwellUs);
   return (
     `цифровой: ${s.digitalPreset}, ${corridors.length} коридор(ов), ` +
     `${digitalTuneLine(tune)}, ${s.digitalWalk}, ${s.digitalWave}, до Стоп`
@@ -226,6 +231,8 @@ async function pullDesignRx(): Promise<void> {
   const st = await rxStatus();
   if (!st?.running) {
     stopDesignWatch();
+    const s = useLegion.getState();
+    if (s.digitalLive || s.smartListenLive) s.stopScan();
     return;
   }
   if (st.line) useLegion.getState().applyDesignRx(st.line);
